@@ -3,18 +3,28 @@
 Python 3 standard library only. Nothing here touches GitHub; the linter, the
 index and compile.py all parse the record through these functions, so they
 agree on what a section, an event or a figure is.
+
+A memory is an event comment of one of the seven MEMORY_TYPES. From 0.6.0 on it
+starts with a line in plain words (PLAIN_LABELS), may name earlier memories in
+its marker (LINK_KINDS, LINK_RULES), may list its evidence (an "Evidence" field)
+and may end with folded explanations of a project word or of its thread. The
+readers here are lenient: a part that does not match its form is ignored, and
+the comment stays an event of its type. The linter is the strict side.
 """
 
+import datetime
 import re
 
 import recortex
 
-EVENT_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "record", "triage")
-HEADED_TYPES = ("result", "decision", "failure", "checkpoint", "correction")
+EVENT_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question", "record", "triage")
+HEADED_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question")
+MEMORY_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question")
 ISO = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:Z|[+-][0-9]{2}:[0-9]{2})"
 STAMP = r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} (?:[A-Z]{2,5}|UTC[+-][0-9]{1,2}(?::[0-9]{2})?)\b"
 MARKER = re.compile(r"^<!-- ghim:event ((?:[a-z]+=\S+ )*[a-z]+=\S+) -->\s*$")
-EVENT_HEADING = re.compile(r"^### (Result|Decision|Failure|Checkpoint|Correction|Triage)( \(reconstructed\))?: (%s) - (.+?)\s*$"
+EVENT_HEADING = re.compile(r"^### (Result|Decision|Failure|Checkpoint|Correction|Idea|Question|Triage)( \(reconstructed\))?: "
+                           r"(%s) - (.+?)\s*$"
                            % STAMP)
 BLOCK_HEADING = re.compile(r"^### (Figure|Table): ([A-Za-z0-9][\w.-]*) - (.+?)\s*$")
 IMAGE = re.compile(r"!\[[^\]]*\]\((https://github\.com/([\w.-]+/[\w.-]+)/blob/([^/\s]+)/([^\s?)]+)\?raw=true)\)")
@@ -220,3 +230,501 @@ def mentions(body):
                 continue
             out.append({"target": int(match.group(1)), "cited": (match.group(2) or "").strip(), "line": number})
     return out
+
+
+# ---------------------------------------------------------------- times
+
+def to_iso(stamp):
+    """'2026-03-04 14:10 UTC' to ISO; other zones are kept as local date and time without offset."""
+    if not stamp:
+        return None
+    match = re.match(r"([0-9]{4}-[0-9]{2}-[0-9]{2}) ([0-9]{2}:[0-9]{2})", stamp)
+    if not match:
+        return None
+    return "%sT%s%s" % (match.group(1), match.group(2), "Z" if stamp.endswith("UTC") else "")
+
+
+def sort_key(at):
+    """Order ISO times with offsets, Z and naive local times on one UTC axis (naive counts as UTC)."""
+    if not at:
+        return ""
+    try:
+        value = datetime.datetime.fromisoformat(at.replace("Z", "+00:00"))
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=datetime.timezone.utc)
+        return value.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return at
+
+
+def event_at(event, created_at):
+    """The time of an event as the index keeps it: the marker's time, else the heading's, else GitHub's."""
+    return event["at"] or to_iso(event["heading_time"]) or created_at
+
+
+# ---------------------------------------------------------------- memories: links
+
+LINK_KINDS = ("because", "replaces", "instead", "checks")
+LINK_VALUE = re.compile(r"[1-9][0-9]{0,18}(?:,[1-9][0-9]{0,18}){0,3}")  # one to four comment ids; use fullmatch
+MARKER_KEYS = ("type", "at", "recorded", "source") + LINK_KINDS
+LINKABLE = ("result", "decision", "failure", "correction", "idea", "question")  # a checkpoint never links
+# key -> the kind of the memory that carries it -> the kinds it may point at
+LINK_RULES = {
+    "because": {kind: frozenset(LINKABLE) for kind in LINKABLE},
+    "replaces": dict({kind: frozenset([kind]) for kind in LINKABLE}, correction=frozenset(LINKABLE)),
+    "instead": {kind: frozenset(["idea", "decision"]) for kind in ("decision", "idea", "result")},
+    "checks": {"result": frozenset(["question", "idea", "decision"]),
+               "failure": frozenset(["question", "idea", "decision"]),
+               "decision": frozenset(["question"])},
+}
+
+
+def link_allowed(source_kind, key, target_kind):
+    """True when a memory of `source_kind` may carry `key` pointing at a memory of `target_kind`."""
+    return target_kind in LINK_RULES.get(key, {}).get(source_kind, ())
+
+
+def links(marker):
+    """[(key, comment id)] of the link keys of a parsed marker, in the order written. A key whose whole value is not
+    one to four comment ids is ignored; the others are kept."""
+    out = []
+    for key, value in (marker or {}).items():
+        if key in LINK_KINDS and LINK_VALUE.fullmatch(value or ""):
+            for part in value.split(","):
+                if (key, int(part)) not in out:
+                    out.append((key, int(part)))
+    return out
+
+
+# ---------------------------------------------------------------- memories: the lines of a comment
+
+PLAIN_LABELS = {
+    "result": "In plain words, we found that",
+    "decision": "In plain words, we decided to",
+    "failure": "In plain words, what went wrong",
+    "idea": "In plain words, we had the idea to",
+    "question": "In plain words, we asked",
+    "correction": "In plain words, we corrected ourselves",
+    "checkpoint": "In plain words, we paused here",
+}
+FIELD = re.compile(r"^\*\*([A-Z][^*\n]{0,60}):\*\*")
+EVIDENCE_LABEL = "Evidence"
+FENCE_LINE = re.compile(r"^\s*(```+|~~~+)(.*)$")  # as lint_drafts.split_regions reads a fence
+FOLD_START = re.compile(r"^\s*<details", re.I)
+FOLD_END = re.compile(r"^\s*</details", re.I)
+
+
+def body_lines(body):
+    return (body or "").replace("\r\n", "\n").split("\n")
+
+
+def code_lines(lines):
+    """Indexes of the lines inside fenced code blocks, the fence lines included."""
+    inside, fence = set(), None
+    for index, line in enumerate(lines):
+        match = FENCE_LINE.match(line)
+        if fence is None:
+            if match:
+                fence = match.group(1)
+                inside.add(index)
+            continue
+        inside.add(index)
+        if match and match.group(1).startswith(fence) and not match.group(2).strip():
+            fence = None
+    return inside
+
+
+def quote_lines(lines, code):
+    """Indexes of the lines of block quotes: each line that starts with '>', and the lines that continue its paragraph
+    without a blank line between (GitHub shows those inside the quote too)."""
+    inside, open_quote = set(), False
+    for index, line in enumerate(lines):
+        if index in code:
+            open_quote = False
+        elif line.lstrip(" ").startswith(">"):
+            inside.add(index)
+            open_quote = True
+        elif open_quote and line.strip() and not FOLD_START.match(line):
+            inside.add(index)
+        else:
+            open_quote = False
+    return inside
+
+
+def comment_lines(lines, code):
+    """Indexes of the lines of HTML comments that start a line (<!-- ... -->), which GitHub does not show."""
+    inside, open_comment = set(), False
+    for index, line in enumerate(lines):
+        if index in code:
+            continue
+        if not open_comment and line.lstrip(" ").startswith("<!--"):
+            open_comment = True
+        if open_comment:
+            inside.add(index)
+            if "-->" in line[line.find("<!--") + 4 if "<!--" in line else 0:]:
+                open_comment = False
+    return inside
+
+
+def fold_spans(body):
+    """[(first, last)] line indexes (0-based, inclusive) of every <details> block outside code, well formed or not:
+    from a line that starts with <details to the next line that starts with </details, or to the last line."""
+    lines = body_lines(body)
+    code = code_lines(lines)
+    spans, start = [], None
+    for index, line in enumerate(lines):
+        if index in code:
+            continue
+        if start is None and FOLD_START.match(line):
+            start = index
+        elif start is not None and FOLD_END.match(line):
+            spans.append((start, index))
+            start = None
+    if start is not None:
+        spans.append((start, len(lines) - 1))
+    return spans
+
+
+def scan_fields(body):
+    """The fields before the first fold, as dicts: label, first (the text on the label's line), text, line (index of
+    the label's line) and parts, the (line index, text) pieces the text is made of."""
+    lines = body_lines(body)
+    code = code_lines(lines)
+    quote = quote_lines(lines, code)
+    hidden = comment_lines(lines, code)
+    spans = fold_spans(body)
+    stop = spans[0][0] if spans else len(lines)
+    out = []
+    for index in range(stop):
+        line = lines[index]
+        if index in hidden:
+            continue
+        match = None if index in code or index in quote else FIELD.match(line)
+        if match:
+            out.append({"label": match.group(1), "first": line[match.end():].strip(), "line": index,
+                        "parts": [(index, line[match.end():])]})
+        elif out:
+            out[-1]["parts"].append((index, line))
+    for field in out:
+        field["text"] = "\n".join(text for _, text in field["parts"]).strip()
+    return out
+
+
+def fields(body):
+    """The `**Label:**` fields of an event comment in order, as (label, text). A field starts at a line that begins
+    with `**Label:**`, outside code, outside a block quote and before the first fold, and runs to the next field;
+    HTML comments are left out. The plain line is one of them, under its own label."""
+    return [(field["label"], field["text"]) for field in scan_fields(body)]
+
+
+def plain(body, kind):
+    """The plain line of a memory of `kind`: the text after the kind's label on the line of its first such field,
+    or None."""
+    label = PLAIN_LABELS.get(kind)
+    return next((field["first"] for field in scan_fields(body) if field["label"] == label), None)
+
+
+# ---------------------------------------------------------------- memories: words and citations in the text
+
+EXTENSIONS = ("py", "md", "json", "tsv", "csv", "txt", "yml", "yaml", "sh", "toml", "ipynb", "png", "pdf", "html", "log")
+FILE_WORD = re.compile(r".+\.(?:%s)" % "|".join(EXTENSIONS), re.I)
+ISSUE_NUMBER = re.compile(r"(?<![A-Za-z0-9_/&#])#[0-9]+\b")
+NUMBER_TOKEN = re.compile(r"(?<![A-Za-z0-9.,_])(?<![A-Za-z]-)[0-9]+(?:[.,][0-9]+)*")
+
+
+def looks_like_path(token):
+    """A token with / that also holds a ., a digit or a second /, or a word that ends in a file extension."""
+    token = token.strip(",;:!?()[]{}\"'")
+    slashed = token.rstrip(".")
+    if "/" in slashed and ("." in slashed or re.search(r"[0-9]", slashed) or slashed.count("/") > 1):
+        return True
+    return bool(FILE_WORD.fullmatch(token))
+
+
+def line_problems(text):
+    """What a plain line or a fold's summary may not hold: a backtick, an issue number, a URL, a path, a commit."""
+    found = []
+    if "`" in text:
+        found.append("a backtick")
+    if ISSUE_NUMBER.search(text):
+        found.append("an issue number (#N)")
+    if URL.search(text):
+        found.append("a URL")
+    if any(looks_like_path(token) for token in text.split()):
+        found.append("a path or file name")
+    if COMMIT.search(text):
+        found.append("a commit hash")
+    return found
+
+
+def number_tokens(text):
+    """The numbers in a text, as strings with thousands commas removed: "UTF-8", "v2" and "sha256" hold none; "22%",
+    "4GB", "3-5" and "0.3.0" do."""
+    return {match.group(0).replace(",", "") for match in NUMBER_TOKEN.finditer(text or "")}
+
+
+GITHUB_ADDRESS = re.compile(r"https://github\.com/([A-Za-z0-9][A-Za-z0-9_-]{0,38}/[A-Za-z0-9._-]{1,100})/(?:issues|pull)/"
+                            r"([0-9]{1,9})(?:#issuecomment-([0-9]{1,19}))?(?![A-Za-z0-9_/-])")
+SHORT_REFERENCE = re.compile(r"(?<![A-Za-z0-9_./-])([A-Za-z0-9][A-Za-z0-9_-]{0,38}/[A-Za-z0-9._-]{1,100})#([0-9]{1,9})"
+                             r"(?![0-9])")
+BARE_ISSUE = re.compile(r"(?<![A-Za-z0-9_/&#])#([0-9]+)\b")
+
+
+def masked(text):
+    """The text with fenced code and inline code replaced by spaces, so that offsets stay the same."""
+    lines = body_lines(text)
+    code = code_lines(lines)
+    out = []
+    for index, line in enumerate(lines):
+        out.append(" " * len(line) if index in code else re.sub(r"`[^`\n]*`", lambda m: " " * len(m.group(0)), line))
+    return "\n".join(out)
+
+
+def citations(text, repo):
+    """Issues and memories cited in a text, outside code, in order, as dicts with kind, issue, comment, start and end
+    (offsets in the text with LF line endings): kind "issue" for #N, for an issue or pull request address of `repo`
+    and for `repo`#N; "memory" for a comment address of `repo`; "elsewhere" for any other github.com issue or comment
+    address or owner/name#N."""
+    plain_text = masked(text)
+    home = (repo or "").lower()
+    found, taken = [], []
+    for match in GITHUB_ADDRESS.finditer(plain_text):
+        same = match.group(1).lower() == home
+        kind = ("memory" if match.group(3) else "issue") if same else "elsewhere"
+        found.append({"kind": kind, "issue": int(match.group(2)) if same else None,
+                      "comment": int(match.group(3)) if same and match.group(3) else None,
+                      "start": match.start(), "end": match.end()})
+        taken.append((match.start(), match.end()))
+    inside = lambda position: any(start <= position < end for start, end in taken)
+    for match in SHORT_REFERENCE.finditer(plain_text):
+        if inside(match.start()):
+            continue
+        same = match.group(1).lower() == home
+        found.append({"kind": "issue" if same else "elsewhere", "issue": int(match.group(2)) if same else None,
+                      "comment": None, "start": match.start(), "end": match.end()})
+        taken.append((match.start(), match.end()))
+    for match in BARE_ISSUE.finditer(plain_text):
+        if inside(match.start()) or len(match.group(1)) == 6:  # six digits after # read as a hex color
+            continue
+        found.append({"kind": "issue", "issue": int(match.group(1)), "comment": None,
+                      "start": match.start(), "end": match.end()})
+    return sorted(found, key=lambda item: item["start"])
+
+
+# ---------------------------------------------------------------- memories: evidence
+
+EVIDENCE_LINE = re.compile(
+    r"- (?:(table|figure) ([A-Za-z0-9][A-Za-z0-9_.-]{0,59})"
+    r"|code ([A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)*)#L([1-9][0-9]{0,6})(?:-L([1-9][0-9]{0,6}))? at ([0-9a-f]{7,40})"
+    r"(?: in ([^ ]+))?"
+    r"|pull ([1-9][0-9]{0,6})(?: in ([^ ]+))?)")
+EVIDENCE_MAX_LINES = 6
+CODE_MAX_LINES = 120
+
+
+def evidence_line(line):
+    """(row, None) for a line of an Evidence field in one of the four forms, else (None, why)."""
+    match = EVIDENCE_LINE.fullmatch(line.rstrip())
+    if not match:
+        return None, ("not one of the four forms: '- table <id>', '- figure <id>', "
+                      "'- code <path>#L<a>-L<b> at <commit>' or '- pull <n>'")
+    block, ident, path, first, last, commit, code_repo, pull, pull_repo = match.groups()
+    other = code_repo or pull_repo
+    if other is not None and not recortex.valid_repo(other):
+        return None, "'in' names a repository as owner/name"
+    if block:
+        return {"kind": block, "ident": ident, "repo": "", "ref": "", "path": "", "line_from": None,
+                "line_to": None}, None
+    if pull:
+        return {"kind": "pull", "ident": pull, "repo": other or "", "ref": "", "path": "", "line_from": None,
+                "line_to": None}, None
+    if len(path) > 200 or any(part in (".", "..") for part in path.split("/")):
+        return None, "a path is relative to the repository, at most 200 characters, with no '.' or '..' part"
+    first, last = int(first), int(last or first)
+    if last < first:
+        return None, "the line range ends before it starts"
+    if last - first + 1 > CODE_MAX_LINES:
+        return None, "the line range holds more than %d lines" % CODE_MAX_LINES
+    return {"kind": "code", "ident": "", "repo": other or "", "ref": commit, "path": path, "line_from": first,
+            "line_to": last}, None
+
+
+def evidence_text(body):
+    """The text of the first Evidence field, or None."""
+    for label, text in fields(body):
+        if label == EVIDENCE_LABEL:
+            return text
+    return None
+
+
+def evidence(body):
+    """The lines of the Evidence field in one of the four forms, as dicts: kind (table, figure, code or pull), ident,
+    repo, ref, path, line_from, line_to. Other lines are left out."""
+    rows = []
+    for line in (evidence_text(body) or "").split("\n"):
+        row, problem = evidence_line(line) if line.strip() else (None, None)
+        if row:
+            rows.append(row)
+    return rows
+
+
+# ---------------------------------------------------------------- memories: folds
+
+SUMMARY_LINE = re.compile(r"<summary>(.*)</summary>")
+WORD_STEM = re.compile(r'We (now )?use "([^"]*)" to mean (.*)')
+THREAD_STEM = re.compile(r"This thread is (now )?about (.*)")
+WORD_TEXT = re.compile(r"[A-Za-z0-9][^\"<>&`\x00-\x1f\x7f]{0,59}")
+WHY_LABELS = {"word": "Why it matters here", "thread": "Why we care"}
+ALSO_LABEL, STORY_LABEL = "Also called", "The longer story"
+HEADING_LINE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
+FOLD_TAG = re.compile(r"</?(?:details|summary)\b", re.I)
+WHY_LIMIT, STORY_LIMIT, MEANING_RANGE, ALSO_LIMIT = 400, 2500, (20, 200), 5
+
+
+def word_key(word):
+    """How a word is known: lowercase, inner spaces collapsed, a leading "the", "a" or "an" dropped."""
+    key = " ".join((word or "").lower().split())
+    return re.sub(r"^(?:the|a|an) ", "", key)
+
+
+def word_problems(word):
+    if not WORD_TEXT.fullmatch(word) or word != word.strip():
+        return ['a word is 1 to 60 characters that start with a letter or digit, without ", <, >, & or a backtick']
+    return []
+
+
+def meaning_problems(meaning):
+    found = []
+    if not MEANING_RANGE[0] <= len(meaning) <= MEANING_RANGE[1]:
+        found.append("the meaning is %d characters; write %d to %d" % ((len(meaning),) + MEANING_RANGE))
+    if meaning.endswith("."):
+        found.append("the meaning is one sentence without its period")
+    if re.search(r"[<>&]", meaning):
+        found.append("the meaning holds <, > or &")
+    found += ["the meaning holds %s" % what for what in line_problems(meaning)]
+    return found
+
+
+def parse_fold(lines):
+    """(explanation, problems) for the lines of one <details> block. The explanation is a dict (kind "word" or
+    "thread", word, revised, meaning, why, also, story) or None; problems are (offset, message) pairs, and the
+    explanation is given only when there are none."""
+    problems = []
+
+    def bad(offset, message):
+        problems.append((offset, message))
+
+    count = len(lines)
+    if lines[0].rstrip() != "<details>":
+        bad(0, "a fold starts with a line that holds only <details>")
+    closed = count > 1 and FOLD_END.match(lines[-1]) is not None
+    if not closed or lines[-1].rstrip() != "</details>":
+        bad(count - 1, "a fold ends with a line that holds only </details>")
+    inner = list(enumerate(lines[1:count - 1 if closed else count], 1))
+    fold = {"kind": None, "word": "", "revised": False, "meaning": "", "why": "", "also": [], "story": ""}
+    summary = SUMMARY_LINE.fullmatch(inner[0][1].rstrip()) if inner else None
+    if not summary:
+        bad(1, "the second line of a fold is <summary>...</summary>, on one line")
+    else:
+        text = summary.group(1)
+        word, thread = WORD_STEM.fullmatch(text), THREAD_STEM.fullmatch(text)
+        if word:
+            fold.update(kind="word", revised=bool(word.group(1)), word=word.group(2), meaning=word.group(3))
+            for message in word_problems(word.group(2)):
+                bad(1, message)
+        elif thread:
+            fold.update(kind="thread", revised=bool(thread.group(1)), meaning=thread.group(2))
+        else:
+            bad(1, 'a summary is \'We use "<word>" to mean <meaning>\', \'We now use "<word>" to mean <meaning>\', '
+                   "'This thread is about <meaning>' or 'This thread is now about <meaning>'")
+        for message in meaning_problems(fold["meaning"]) if fold["kind"] else []:
+            bad(1, message)
+        if FOLD_TAG.search(text):
+            bad(1, "the summary holds a <details> or <summary> tag")
+    if len(inner) > 1 and inner[1][1].strip():
+        bad(inner[1][0], "a blank line follows the summary line, or GitHub does not show what follows")
+    body = inner[2:]
+    paragraphs, current = [], []
+    for offset, line in body:
+        if line.strip():
+            current.append((offset, line))
+        elif current:
+            paragraphs.append(current)
+            current = []
+    if current:
+        paragraphs.append(current)
+    starts = set()
+    why = WHY_LABELS.get(fold["kind"], "Why it matters here")
+    step = 0
+    if paragraphs and paragraphs[0][0][1].startswith("**%s:**" % why):
+        part = paragraphs[0]
+        starts.add(part[0][0])
+        fold["why"] = "\n".join([part[0][1][len(why) + 5:]] + [line for _, line in part[1:]]).strip()
+        if not fold["why"]:
+            bad(part[0][0], "'%s' is empty" % why)
+        if len(fold["why"]) > WHY_LIMIT:
+            bad(part[0][0], "'%s' is %d characters; at most %d" % (why, len(fold["why"]), WHY_LIMIT))
+        step = 1
+    elif fold["kind"]:
+        bad(paragraphs[0][0][0] if paragraphs else count - 1,
+            "after the summary and a blank line comes '**%s:** <one paragraph>'" % why)
+    if step == 1 and fold["kind"] == "word" and len(paragraphs) > 1 \
+            and paragraphs[1][0][1].startswith("**%s:**" % ALSO_LABEL):
+        part = paragraphs[1]
+        starts.add(part[0][0])
+        if len(part) > 1:
+            bad(part[1][0], "'%s' is one line" % ALSO_LABEL)
+        names = [name.strip() for name in part[0][1][len(ALSO_LABEL) + 5:].split(",")]
+        if len(names) > ALSO_LIMIT:
+            bad(part[0][0], "'%s' names at most %d names" % (ALSO_LABEL, ALSO_LIMIT))
+        for name in names:
+            for message in word_problems(name):
+                bad(part[0][0], "in '%s': %s" % (ALSO_LABEL, message))
+        fold["also"] = names
+        step = 2
+    if step and len(paragraphs) > step and paragraphs[step][0][1].rstrip() == "**%s:**" % STORY_LABEL:
+        part = paragraphs[step]
+        starts.add(part[0][0])
+        if len(part) > 1:
+            bad(part[1][0], "a blank line follows '**%s:**'" % STORY_LABEL)
+        story = [line for offset, line in body if offset > part[0][0]]
+        fold["story"] = "\n".join(story).strip()
+        if not fold["story"]:
+            bad(part[0][0], "'%s' is empty" % STORY_LABEL)
+        if len(fold["story"]) > STORY_LIMIT:
+            bad(part[0][0], "'%s' is %d characters; at most %d" % (STORY_LABEL, len(fold["story"]), STORY_LIMIT))
+        step = len(paragraphs)
+    for part in paragraphs[step:] if step else []:
+        bad(part[0][0], "unexpected text in a fold: after '%s' come only '%s' (for a word) and '%s'"
+            % (why, ALSO_LABEL, STORY_LABEL))
+    for offset, line in body:
+        if HEADING_LINE.match(line):
+            bad(offset, "a fold holds no heading")
+        elif line.lstrip().startswith("<"):
+            bad(offset, "a line inside a fold does not start with <")
+        elif FENCE_LINE.match(line):
+            bad(offset, "a fold holds no code fence")
+        elif FOLD_TAG.search(re.sub(r"`[^`\n]*`", "", line)):
+            bad(offset, "a fold holds no other <details> or <summary> tag")
+        elif FIELD.match(line) and offset not in starts:
+            bad(offset, "a fold holds no field of the memory; fields stand before the folds")
+    if problems:
+        return None, problems
+    return fold, []
+
+
+def folds(body):
+    """Every <details> block of a comment: dicts with first, last (line indexes), explanation and problems."""
+    lines = body_lines(body)
+    out = []
+    for first, last in fold_spans(body):
+        explanation, problems = parse_fold(lines[first:last + 1])
+        out.append({"first": first, "last": last, "explanation": explanation,
+                    "problems": [(first + offset, message) for offset, message in problems]})
+    return out
+
+
+def explanations(body):
+    """The folds of a memory that match the grammar, as dicts: kind ("word" or "thread"), word, revised (bool),
+    meaning, why, also (list), story. A fold that does not match is left out."""
+    return [item["explanation"] for item in folds(body) if item["explanation"]]
