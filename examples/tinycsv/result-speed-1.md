@@ -1,6 +1,8 @@
 <!-- ghim:event type=result at=2026-03-04T14:10-08:00 -->
 ### Result: 2026-03-04 14:10 PST - first speed benchmark
 
+**In plain words, we found that:** tinycsv read the 100 MB file in a median of 1.84 s, against 1.21 s for the standard library
+
 **What ran:** `python bench/run.py --repeat 5` at commit 4f2a9c1, output in `bench/out/run-0304/`.
 
 **Configuration:** bench data v1 (1 MB, 10 MB, 100 MB), Python 3.12, one thread, one laptop.
@@ -20,3 +22,13 @@
 **Not established:** Memory use. Speed on other machines or Python versions.
 
 **Next step:** Rerun after the quoted-newline change, owner Claude session
+
+**Evidence:**
+- figure read-time
+
+<details>
+<summary>This thread is about how fast tinycsv reads a file compared with the csv module of the standard library</summary>
+
+**Why we care:** A reader that is much slower than the one that comes with Python is hard to recommend.
+
+</details>

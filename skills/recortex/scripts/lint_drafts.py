@@ -54,6 +54,13 @@ RESUME_FIELDS = [
     "**Holds:**",
 ]
 
+
+
+def plain_field(kind):
+    """The label of a memory's plain line, as it stands in the comment: **In plain words, ...:**"""
+    return "**%s:**" % record_format.PLAIN_LABELS[kind]
+
+
 KINDS = {
     "hub": {
         "sections": [
@@ -76,6 +83,7 @@ KINDS = {
     "result": {
         "header": "Result",
         "sections": [
+            plain_field("result"),
             "**What ran:**",
             "**Configuration:**",
             "**Numbers:**",
@@ -88,6 +96,7 @@ KINDS = {
     "decision": {
         "header": "Decision",
         "sections": [
+            plain_field("decision"),
             "**Decision:**",
             "**Decided by:**",
             "**Exact words:**",
@@ -99,6 +108,7 @@ KINDS = {
     "failure": {
         "header": "Failure",
         "sections": [
+            plain_field("failure"),
             "**What failed:**",
             "**What ran:**",
             "**Cause:**",
@@ -110,6 +120,7 @@ KINDS = {
     "checkpoint": {
         "header": "Checkpoint",
         "sections": [
+            plain_field("checkpoint"),
             "**State:**",
             "**Done since the last checkpoint:**",
             "**In progress:**",
@@ -120,11 +131,30 @@ KINDS = {
     "correction": {
         "header": "Correction",
         "sections": [
+            plain_field("correction"),
             "**Corrects:**",
             "**Was:**",
             "**Is:**",
             "**Why:**",
             "**Also updated:**",
+        ],
+    },
+    "idea": {
+        "header": "Idea",
+        "sections": [
+            plain_field("idea"),
+            "**Why it might help:**",
+            "**What it would take:**",
+            "**Next step:**",
+        ],
+    },
+    "question": {
+        "header": "Question",
+        "sections": [
+            plain_field("question"),
+            "**Why it matters:**",
+            "**What would answer it:**",
+            "**Next step:**",
         ],
     },
     "triage": {
@@ -452,6 +482,262 @@ def check_event_marker(text, kind, template, add):
             "heading as '### %s (reconstructed): <original time> - <title>'" % kind.capitalize())
 
 
+ARTICLE = {"result": "a result", "decision": "a decision", "failure": "a failure", "correction": "a correction",
+           "idea": "an idea", "question": "a question", "checkpoint": "a checkpoint", "triage": "a triage comment"}
+EVIDENCE_KINDS = ("result", "decision", "failure", "correction")
+STEM_REPEATS = {
+    "result": ("that", "we found"),
+    "decision": ("to", "we decided"),
+    "idea": ("to", "we had"),
+    "failure": ("what went wrong",),
+    "correction": ("we corrected",),
+    "checkpoint": ("we paused",),
+    "question": ("we asked",),
+}
+QUESTION_WORDS = ("whether", "why", "how", "what", "which", "who", "when", "where", "if")
+PLAIN_RANGE = (20, 200)
+NOT_CHECKED = ("links", "comment addresses", "evidence", "explanations")
+
+
+def is_reconstructed(text):
+    first, second = record_format.first_lines(text)
+    marker = record_format.parse_marker(first) or {}
+    return "(reconstructed):" in second or "recorded" in marker
+
+
+def listed(items):
+    items = list(items)
+    return items[0] if len(items) == 1 else "%s and %s" % (", ".join(items[:-1]), items[-1])
+
+
+def starts_with_words(text, phrase):
+    words = phrase.split()
+    return re.match(r"%s(?![A-Za-z0-9])" % "[ \t]+".join(re.escape(w) for w in words), text, re.I) is not None
+
+
+def check_marker_links(text, kind, add):
+    """Marker keys, link values, and who may carry which link (record_format.LINK_RULES)."""
+    first, second = record_format.first_lines(text)
+    match = record_format.MARKER.match(first.strip())
+    if not match:
+        return
+    pairs = [part.split("=", 1) for part in match.group(1).split()]
+    names = [key for key, _ in pairs]
+    for key in sorted({key for key in names if key not in record_format.MARKER_KEYS}):
+        add("error", "marker-key", 1, "the marker key %s= is not one of %s; a misspelled key would be lost silently"
+            % (key, ", ".join(k + "=" for k in record_format.MARKER_KEYS)))
+    for key in sorted({key for key in names if names.count(key) > 1}):
+        add("error", "marker-key", 1, "the marker key %s= appears more than once; write each key once" % key)
+    under = {}
+    for key, value in pairs:
+        if key not in record_format.LINK_KINDS:
+            continue
+        if not record_format.LINK_VALUE.fullmatch(value):
+            add("error", "link-value", 1, "%s=%s is not one to four comment ids separated by commas, for example "
+                "%s=2900000124 or %s=2900000124,2900000125" % (key, value[:60], key, key))
+            continue
+        for ident in value.split(","):
+            under.setdefault(ident, []).append(key)
+    for ident, keys in sorted(under.items()):
+        if len(keys) > 1:
+            add("error", "link-value", 1, "comment %s stands %s; an id stands under one key, once"
+                % (ident, "twice under %s=" % keys[0] if len(set(keys)) == 1 else "under %s"
+                   % listed(k + "=" for k in keys)))
+    carried = [key for key in record_format.LINK_KINDS if key in names]
+    if not carried:
+        return
+    if kind == "checkpoint":
+        add("error", "link-kind", 1, "a checkpoint carries no link (%s): a pause is a moment, not a step"
+            % listed(k + "=" for k in carried))
+    elif kind not in record_format.LINKABLE:
+        add("error", "link-kind", 1, "%s carries no link (%s); links belong to memories"
+            % (ARTICLE.get(kind, "this kind of comment"), listed(k + "=" for k in carried)))
+    elif is_reconstructed(text):
+        add("error", "link-kind", 1, "a reconstructed memory carries no link (%s) in this version; links for "
+            "reconstructed history wait for the later owner-approved pass" % listed(k + "=" for k in carried))
+    else:
+        for key in carried:
+            if kind not in record_format.LINK_RULES[key]:
+                carriers = [ARTICLE[k] for k in record_format.LINKABLE if k in record_format.LINK_RULES[key]]
+                add("error", "link-kind", 1, "%s does not carry %s=; it is carried by %s"
+                    % (ARTICLE[kind], key, listed(carriers).replace(" and ", " or ")))
+
+
+def check_plain(text, kind, template, add):
+    """The plain line: the first field, one line that completes its label, in words a reader away for a month can
+    follow, with every number also standing in a field."""
+    label = record_format.PLAIN_LABELS[kind]
+    lines = record_format.body_lines(text)
+    scanned = record_format.scan_fields(text)
+    position = next((index for index, field in enumerate(scanned) if field["label"] == label), None)
+    if position is None:
+        add("error", "plain", 0, "the first field is the plain line, '**%s:** <one line>', directly under the "
+            "heading" % label)
+        return
+    field = scanned[position]
+    number, value = field["line"] + 1, field["first"]
+    if template and "{{" in lines[field["line"]]:
+        return
+    if position:
+        add("error", "plain", number, "the plain line is the first field, directly under the heading")
+    if not value:
+        add("error", "plain", number, "the plain line is empty; it completes '%s'" % label)
+        return
+    following = next((index for index in range(field["line"] + 1, len(lines)) if lines[index].strip()), None)
+    sections = KINDS[kind]["sections"]
+    if field["line"] + 1 < len(lines) and lines[field["line"] + 1].strip() or following is not None and \
+            len(sections) > 1 and not lines[following].strip().startswith(sections[1]):
+        add("error", "plain", number, "the plain line is one line; a blank line and then '%s' follow it"
+            % (sections[1] if len(sections) > 1 else "the next field"))
+    if not PLAIN_RANGE[0] <= len(value) <= PLAIN_RANGE[1]:
+        add("error", "plain", number, "the plain line is %d characters; write %d to %d" % ((len(value),) + PLAIN_RANGE))
+    if value.endswith("."):
+        add("error", "plain", number, "the plain line ends without a period")
+    for what in record_format.line_problems(value):
+        add("error", "plain", number, "the plain line holds %s; it is plain words only: cite issues, paths and "
+            "commits in the fields below" % what)
+    stem = label[len("In plain words, "):]
+    for phrase in STEM_REPEATS[kind] + ("in plain words",):
+        if starts_with_words(value, phrase):
+            add("error", "plain", number, "the plain line repeats its label: '%s:' already says '%s'" % (label, stem))
+            break
+    if kind == "question" and not any(starts_with_words(value, word) for word in QUESTION_WORDS):
+        add("error", "plain", number, "the plain line of a question starts with %s"
+            % listed(QUESTION_WORDS).replace(" and ", " or "))
+    others = set()
+    for index, other in enumerate(scanned):
+        if index != position:
+            others |= record_format.number_tokens(other["text"])
+    missing = sorted(record_format.number_tokens(value) - others, key=lambda n: (len(n), n))
+    if missing:
+        add("error", "plain", number, "the number%s %s in the plain line stand%s in no field of this memory; put each "
+            "number in a field, with its source, or leave it out of the plain line"
+            % ("s" if len(missing) > 1 else "", listed(missing), "" if len(missing) > 1 else "s"))
+
+
+def check_quoted_fields(text, add):
+    """A field label right after a quote line, with no blank line between, is part of the quote on GitHub."""
+    lines = record_format.body_lines(text)
+    code = record_format.code_lines(lines)
+    for index in sorted(record_format.quote_lines(lines, code)):
+        match = record_format.FIELD.match(lines[index])
+        if match:
+            add("error", "field-quote", index + 1, "'**%s:**' follows a quote line with no blank line between, so "
+                "GitHub shows it inside the quote; leave a blank line before it" % match.group(1))
+
+
+def check_evidence(text, kind, template, add):
+    """The optional Evidence field: last, at most six lines, each one of the four forms."""
+    scanned = record_format.scan_fields(text)
+    found = [index for index, field in enumerate(scanned) if field["label"] == record_format.EVIDENCE_LABEL]
+    if not found:
+        return
+    field = scanned[found[0]]
+    number = field["line"] + 1
+    if kind not in EVIDENCE_KINDS:
+        add("error", "evidence", number, "only a result, a decision, a failure or a correction lists Evidence")
+        return
+    if is_reconstructed(text):
+        add("error", "evidence", number, "a reconstructed memory lists no Evidence in this version")
+        return
+    if len(found) > 1:
+        add("error", "evidence", scanned[found[1]]["line"] + 1, "a memory has one Evidence field")
+    if found[0] != len(scanned) - 1:
+        add("error", "evidence", number, "Evidence is the last field, after every field of the %s" % kind)
+    if template:
+        return
+    count = 0
+    for index, part in field["parts"]:
+        if not part.strip():
+            continue
+        count += 1
+        row, why = record_format.evidence_line(part)
+        if row is None:
+            add("error", "evidence", index + 1, "an Evidence line is %s" % why if why.startswith("not ") else why)
+    if not count:
+        add("error", "evidence", number, "Evidence is empty; delete the field when there is nothing to show")
+    if count > record_format.EVIDENCE_MAX_LINES:
+        add("error", "evidence", number, "Evidence has %d lines; at most %d" % (count, record_format.EVIDENCE_MAX_LINES))
+
+
+def word_pattern(name):
+    words = record_format.word_key(name).split()
+    return re.compile(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % "[ \t\n]+".join(re.escape(w) for w in words), re.I) \
+        if words else None
+
+
+def check_folds(text, kind, add):
+    """Folds: only on memories, only after the last field, each well formed, within the limits."""
+    lines = record_format.body_lines(text)
+    code = record_format.code_lines(lines)
+    found = record_format.folds(text)
+    covered = {index for item in found for index in range(item["first"], item["last"] + 1)}
+    for index, line in enumerate(lines):
+        if index not in code and index not in covered and record_format.FOLD_TAG.search(strip_inline_code(line)):
+            add("error", "fold-format", index + 1, "a <details> or <summary> tag outside a fold; a fold starts with a "
+                "line that holds only <details>")
+    if not found:
+        return
+    if kind not in record_format.MEMORY_TYPES:
+        add("error", "fold-format", found[0]["first"] + 1, "folds belong to memories; %s holds none"
+            % ARTICLE.get(kind, "this kind of comment"))
+        return
+    for item in found:
+        for index, message in item["problems"]:
+            add("error", "fold-format", index + 1, message)
+    stray = [index for index in range(found[0]["first"], len(lines)) if index not in covered and lines[index].strip()]
+    if stray:
+        if any(record_format.FIELD.match(lines[index]) and index not in code for index in stray):
+            add("error", "fold-format", found[0]["first"] + 1, "a fold stands before a field; folds come after the "
+                "last field")
+        else:
+            add("error", "fold-format", stray[0] + 1, "only folds follow the first fold; move this text into a field")
+    explained = [item for item in found if item["explanation"]]
+    words = [item for item in explained if item["explanation"]["kind"] == "word"]
+    threads = [item for item in explained if item["explanation"]["kind"] == "thread"]
+    if len(words) > 3:
+        add("error", "fold-format", words[3]["first"] + 1, "at most three words are explained in one memory")
+    if len(threads) > 1:
+        add("error", "fold-format", threads[1]["first"] + 1, "a memory holds at most one fold about its thread")
+    keys = {}
+    for item in words:
+        word = item["explanation"]["word"]
+        key = record_format.word_key(word)
+        if key in keys:
+            add("error", "fold-format", item["first"] + 1, "\"%s\" is explained twice in this memory" % word)
+        keys.setdefault(key, item)
+        outside = "\n".join(line for index, line in enumerate(lines) if not item["first"] <= index <= item["last"])
+        names = [word] + item["explanation"]["also"]
+        if not any(word_pattern(name) and word_pattern(name).search(outside) for name in names):
+            add("error", "fold-format", item["first"] + 1, "\"%s\" is not used in this memory outside its own fold; "
+                "explain a word where the memory uses it" % word)
+
+
+def needs_record(text, kind):
+    """What a draft holds that only the record can check: the subset of NOT_CHECKED."""
+    first, _ = record_format.first_lines(text)
+    found = set()
+    if record_format.links(record_format.parse_marker(first)):
+        found.add("links")
+    if any(item["kind"] == "memory" or item["kind"] == "elsewhere" and item["comment"] is None and
+           "#issuecomment-" in text[item["start"]:item["end"]]
+           for item in record_format.citations(text, None)):
+        found.add("comment addresses")
+    if any(row["kind"] in ("table", "figure") or row["kind"] == "pull" and not row["repo"]
+           for row in record_format.evidence(text)):
+        found.add("evidence")
+    if record_format.explanations(text):
+        found.add("explanations")
+    return found
+
+
+def not_checked(skipped, add):
+    if skipped:
+        names = [name for name in NOT_CHECKED if name in skipped]
+        add("warning", "not-checked", 0, "%s %s not checked against the record (use --index, or --online with --issue)"
+            % (listed(names), "was" if len(names) == 1 and not names[0].endswith("s") else "were"))
+
+
 def check_blocks(text, template, add):
     """Each figure block has a caption, an image at a ref and a Sources row; each table block a caption, a table
     or a linked file, and a Sources row."""
@@ -476,7 +762,7 @@ def check_blocks(text, template, add):
 
 def lint_text(text, kind="generic", template=False, allow_placeholders=False,
               known_keys=None, known_numbers=None, number_checker=None, config=None,
-              labels=None, profiles=None):
+              labels=None, profiles=None, lookup=None):
     """Return a list of Finding for one draft.
 
     known_numbers: set of issue numbers known to exist (offline check).
@@ -485,6 +771,9 @@ def lint_text(text, kind="generic", template=False, allow_placeholders=False,
     must agree with its section headings. None skips that comparison.
     profiles: the profiles whose section headings a final record may use;
     default: "profiles" of the project configuration.
+    lookup: a lookup.Lookup that answers what the record holds (link targets,
+    cited comments, evidence, explanations); without one, a draft that holds
+    any of these gets one "not-checked" warning.
     """
     config = config or {}
     if profiles is None:
@@ -576,7 +865,16 @@ def lint_text(text, kind="generic", template=False, allow_placeholders=False,
         check_blocks(text, template, add)
 
     if KINDS[kind].get("header") and kind != "resume":
+        text = text.replace("\r\n", "\n")
         check_event_marker(text, kind, template, add)
+        check_marker_links(text, kind, add)
+        if kind in record_format.MEMORY_TYPES:
+            check_plain(text, kind, template, add)
+            check_quoted_fields(text, add)
+        check_evidence(text, kind, template, add)
+        check_folds(text, kind, add)
+        if lookup is None:
+            not_checked(needs_record(text, kind), add)
 
     if kind != "resume" and (recortex.RESUME_START in text or recortex.RESUME_END in text):
         add("error", "resume-markers-misplaced", 0,

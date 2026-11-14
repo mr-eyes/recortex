@@ -159,7 +159,7 @@ class LintTests(unittest.TestCase):
                  "comment-result.md": "result", "comment-decision.md": "decision",
                  "comment-failure.md": "failure", "comment-checkpoint.md": "checkpoint",
                  "comment-correction.md": "correction", "comment-triage.md": "triage", "pointer-comment.md": "pointer",
-                 "resume-block.md": "resume"}
+                 "resume-block.md": "resume", "comment-idea.md": "idea", "comment-question.md": "question"}
         for name, kind in kinds.items():
             text = recortex.read_text(os.path.join(TEMPLATES, name))
             findings = self.lint(text, kind=kind, template=True, allow_placeholders=True)
@@ -187,7 +187,9 @@ class LintTests(unittest.TestCase):
         for item in manifest["issues"] + manifest["comments"]:
             findings = self.lint(recortex.read_text(item["_path"]), kind=item["kind"], config=EXAMPLE_CONFIG,
                                  allow_placeholders=True, known_keys=keys, labels=item.get("labels"))
-            self.assertEqual([], [str(f) for f in findings], item["body_file"])
+            # with no lookup, a memory with evidence or folds gets the one warning that they were not checked
+            expected = [("warning", "not-checked")] if item["kind"] in ("result", "decision") else []
+            self.assertEqual(expected, [(f.level, f.code) for f in findings], item["body_file"])
 
     def test_bare_reference(self):
         text = "See #12 and octo/other#7 and https://github.com/o/r/issues/3#issuecomment-99.\n"
@@ -3718,6 +3720,11 @@ class CompileTests(RecordSandbox):
         self.assertIn("thanks, looks good", recortex.read_text(os.path.join(out, "history", "timeline.md")).lower())
 
 
+def without_evidence(text):
+    """A memory's text without its Evidence field, which a reconstructed memory does not carry in this version."""
+    return re.sub(r"\n\*\*Evidence:\*\*\n(?:- .*\n)+", "\n", text)
+
+
 def index_sort_key(at):
     sys.path.insert(0, SCRIPTS)
     import index
@@ -3772,7 +3779,7 @@ class TriageAndFormatTests(unittest.TestCase):
     def test_reconstructed_events(self):
         sys.path.insert(0, SCRIPTS)
         import catchup
-        body = recortex.read_text(os.path.join(EXAMPLE, "result-speed-1.md")).split("\n", 2)[2]
+        body = without_evidence(recortex.read_text(os.path.join(EXAMPLE, "result-speed-1.md"))).split("\n", 2)[2]
         text = catchup.render_event("result", "2025-11-04T16:20:00+01:00", "first speed benchmark", "commit:4f2a9c1",
                                     body)
         lines = text.split("\n")
@@ -4287,7 +4294,8 @@ class CatchUpTests(Sandbox):
         root = self.repository()
         commit = subprocess.run(["git", "-C", root, "rev-parse", "--short", "HEAD"], capture_output=True,
                                 text=True).stdout.strip()
-        body = self.write("body.md", recortex.read_text(os.path.join(EXAMPLE, "result-speed-1.md")).split("\n", 2)[2])
+        body = self.write("body.md", without_evidence(recortex.read_text(os.path.join(EXAMPLE, "result-speed-1.md")))
+                          .split("\n", 2)[2])
         out = os.path.join(self.dir, "drafts", "event-01.md")
         args = ["event", "--type", "result", "--at", "2025-09-15T12:30:00Z", "--title", "first benchmark",
                 "--source", "commit:" + commit, "--body-file", body, "--out", out]
@@ -4837,6 +4845,493 @@ class EarlierNameTests(RecordSandbox):
         self.assertFalse(os.path.exists(planted))
 
 
+DECISION_060 = """<!-- ghim:event type=decision at=2026-03-07T09:30-08:00 because=9104 instead=9103 -->
+### Decision: 2026-03-07 09:30 PST - rewrite the reader as a state machine
+
+**In plain words, we decided to:** rewrite the reader so that it reads one character at a time, and stop patching the line splitter
+
+**Decision:** The reader is rewritten as a state machine; the line splitter is removed.
+
+**Decided by:** Sam Rivera, 2026-03-07 09:30 PST
+
+**Exact words:**
+
+> Stop patching the splitter. Write the state machine, it is the only version I will trust.
+
+**Where recorded:** Chat with the Claude session on 2026-03-07.
+
+**Effect:** Quoting and line endings are handled in one place. The task in #7 continues on the new reader; the failure that led here is https://github.com/example-org/tinycsv/issues/5#issuecomment-9104.
+
+**Next step:** Port the 53 conformance files to the new reader, owner Claude session
+
+**Evidence:**
+- table conformance
+- code tinycsv/reader.py#L41-L59 at 9c3e1ab
+- pull 2
+
+<details>
+<summary>We use "line splitter" to mean the first version of tinycsv's reader, which cut the file into lines before looking at quotes</summary>
+
+**Why it matters here:** Its failures are why the reader was rewritten.
+
+**Also called:** the splitter
+
+**The longer story:**
+
+tinycsv began as a few lines of code: split the file at every line break, then split each line at every comma.
+
+It breaks on quoting. That is what #7 is about.
+
+</details>
+
+<details>
+<summary>This thread is now about how tinycsv reads quoted fields, including line breaks inside them, one character at a time</summary>
+
+**Why we care:** Most CSV files that break a reader break on quoting.
+
+</details>
+"""
+FAILURE_060 = """<!-- ghim:event type=failure at=2026-03-06T11:05-08:00 checks=9103 -->
+### Failure: 2026-03-06 11:05 PST - an open quote across lines breaks mixed line endings
+
+**In plain words, what went wrong:** remembering an open quote from one line to the next broke files with mixed line endings: 4 of 6 failed
+
+**What failed:** 4 of the 6 conformance files with mixed line endings returned too few rows.
+
+**What ran:** Branch `quote-state`, conformance set v2.
+
+**Cause:** The reader splits lines before it knows whether a quote is open.
+
+**Impact:** The patch cannot be merged; 4 of 6 files regress.
+
+**Not established:** None; the cause was shown by a 3-line file.
+
+**Next step:** Decide whether to rewrite the reader, owner Sam Rivera
+"""
+CHECKPOINT_060 = """<!-- ghim:event type=checkpoint at=2026-03-05T17:30-08:00 -->
+### Checkpoint: 2026-03-05 17:30 PST - state machine half done
+
+**In plain words, we paused here:** the new reader passes 41 of the 53 conformance files and the 12 with line breaks inside quotes are still to do
+
+**State:** The new reader passes 41 of 53 conformance files.
+
+**Done since the last checkpoint:** The character loop and the quote state.
+
+**In progress:** Line breaks inside quotes, branch `state-machine`.
+
+**Next actions:** Finish the 12 files, owner Claude session.
+
+**Open questions:** None.
+"""
+CORRECTION_060 = """<!-- ghim:event type=correction at=2026-03-11T08:15-08:00 replaces=9106 -->
+### Correction: 2026-03-11 08:15 PST - 52 of 53 files pass, not 53
+
+**In plain words, we corrected ourselves:** 52 of the 53 conformance files pass, not 53; one file was skipped by the runner and counted as passing
+
+**Corrects:** https://github.com/example-org/tinycsv/issues/5#issuecomment-9106
+
+**Was:** 53 of 53 conformance files pass.
+
+**Is:** 52 of 53 conformance files pass (`tests/conformance/report-a1b2c3d.txt`).
+
+**Why:** The runner counted a skipped file as passing. It now fails on a skip.
+
+**Also updated:** The body of #5.
+"""
+RECONSTRUCTED_060 = """<!-- ghim:event type=failure at=2026-02-20T18:05:00Z recorded=2026-03-12T17:00:00Z source=commit:4f2a9c1 -->
+### Failure (reconstructed): 2026-02-20 18:05 UTC - first quoted-field patch reverted
+
+Reconstructed: recorded 2026-03-12T17:00:00Z from `commit:4f2a9c1`. The time above is the time of the source in UTC, not the time of this comment.
+
+**In plain words, what went wrong:** the first patch for quoted fields lost the last row of every file and was reverted
+
+**What failed:** The last row of each of the 6 sample files was missing.
+
+**What ran:** Commit 4f2a9c1 reverts the patch.
+
+**Cause:** Not established. The leading guess is the missing final line break, marked as a guess.
+
+**Impact:** 6 of 6 sample files lost a row.
+
+**Not established:** Whether files that end with a line break were affected.
+
+**Next step:** None, owner Claude session
+"""
+IDEA_060 = """<!-- ghim:event type=idea at=2026-03-05T10:00-08:00 -->
+### Idea: 2026-03-05 10:00 PST - remember an open quote across lines
+
+**In plain words, we had the idea to:** keep the current reader and remember from one line to the next whether a quoted field is still open
+
+**Why it might help:** It is a small patch, and the 12 failing files all have a line break inside quotes.
+
+**What it would take:** A flag passed from one line to the next.
+
+**Next step:** Try it on the conformance set, owner Claude session
+"""
+QUESTION_060 = """<!-- ghim:event type=question at=2026-03-10T09:15-08:00 because=9105 -->
+### Question: 2026-03-10 09:15 PST - streaming from a pipe
+
+**In plain words, we asked:** whether the new reader still works when the input is a pipe and not a file
+
+**Why it matters:** A pipe cannot be read twice, and the reader used to look ahead.
+
+**What would answer it:** The 3 pipe tests passing.
+
+**Next step:** Write the 3 pipe tests, owner Claude session
+"""
+MEMORY_DRAFTS = {"decision": DECISION_060, "failure": FAILURE_060, "checkpoint": CHECKPOINT_060,
+                 "correction": CORRECTION_060, "idea": IDEA_060, "question": QUESTION_060}
+
+
+class MemoryFormatTests(unittest.TestCase):
+    """The record format of 0.6.0: links, the plain line, Evidence, folds and citations; parser and linter in process."""
+
+    def setUp(self):
+        sys.path.insert(0, SCRIPTS)
+        import record_format
+        self.rf = record_format
+        self.result = recortex.read_text(os.path.join(EXAMPLE, "result-speed-1.md"))
+        self.drafts = dict(MEMORY_DRAFTS, result=self.result)
+
+    def findings(self, text, kind, code=None, **kw):
+        found = lint_drafts.lint_text(text, kind=kind, known_numbers={5, 7}, **kw)
+        return [f for f in found if f.level == "error" and (code is None or f.code == code)]
+
+    def assertQuiet(self, text, kind, code=None, **kw):
+        self.assertEqual([], [str(f) for f in self.findings(text, kind, code, **kw)])
+
+    def assertFires(self, text, kind, code, fragment=None, **kw):
+        found = self.findings(text, kind, code, **kw)
+        self.assertTrue(found, "no %s error" % code)
+        if fragment:
+            self.assertTrue(any(fragment in f.message for f in found), [str(f) for f in found])
+
+    # ------------------------------------------------------------ parser
+
+    def test_every_draft_kind_passes_with_its_plain_line(self):
+        for kind, text in self.drafts.items():
+            self.assertQuiet(text, kind)
+        self.assertQuiet(RECONSTRUCTED_060, "failure")
+
+    def test_the_parser_is_lenient_about_marker_keys(self):
+        parse = self.rf.parse_event
+        unknown = DECISION_060.replace("because=9104", "becuase=9104")
+        self.assertEqual(("decision", "2026-03-07T09:30-08:00"), (parse(unknown)["type"], parse(unknown)["at"]))
+        self.assertEqual([("instead", 9103)], self.rf.links(parse(unknown)["marker"]))
+        marker = self.rf.parse_marker("<!-- ghim:event type=decision at=2026-03-07T09:30-08:00 because=9104,9105 "
+                                      "instead=abc checks=0 replaces=9101,9102,9103,9104,9105 -->")
+        self.assertEqual([("because", 9104), ("because", 9105)], self.rf.links(marker))
+        self.assertEqual([], self.rf.links(None))
+        hyphen = DECISION_060.replace("because=9104", "tried-instead=9104")
+        self.assertEqual(("other", None), (parse(hyphen)["type"], parse(hyphen)["at"]))
+        self.assertEqual("idea", parse(IDEA_060)["type"])
+        self.assertEqual("question", parse(QUESTION_060)["type"])
+
+    def test_link_rules_are_exactly_the_table(self):
+        kinds = self.rf.MEMORY_TYPES + ("triage", "record", "other")
+        allowed = {(a, key, b) for a in kinds for key in self.rf.LINK_KINDS for b in kinds
+                   if self.rf.link_allowed(a, key, b)}
+        six = ("result", "decision", "failure", "correction", "idea", "question")
+        expected = {(a, "because", b) for a in six for b in six}
+        expected |= {(a, "replaces", a) for a in six} | {("correction", "replaces", b) for b in six}
+        expected |= {(a, "instead", b) for a in ("decision", "idea", "result") for b in ("idea", "decision")}
+        expected |= {(a, "checks", b) for a in ("result", "failure") for b in ("question", "idea", "decision")}
+        expected |= {("decision", "checks", "question")}
+        self.assertEqual(expected, allowed)
+
+    def test_fields_evidence_and_folds_read_the_same_with_crlf(self):
+        crlf = DECISION_060.replace("\n", "\r\n")
+        for name in ("fields", "evidence", "explanations"):
+            self.assertEqual(getattr(self.rf, name)(DECISION_060), getattr(self.rf, name)(crlf), name)
+        self.assertEqual(self.rf.plain(DECISION_060, "decision"), self.rf.plain(crlf, "decision"))
+        self.assertEqual(self.rf.citations(DECISION_060, REPO), self.rf.citations(crlf, REPO))
+        labels = [label for label, _ in self.rf.fields(DECISION_060)]
+        self.assertEqual(["In plain words, we decided to", "Decision", "Decided by", "Exact words", "Where recorded",
+                          "Effect", "Next step", "Evidence"], labels)
+        self.assertEqual("rewrite the reader so that it reads one character at a time, and stop patching the line "
+                         "splitter", self.rf.plain(DECISION_060, "decision"))
+        self.assertIsNone(self.rf.plain(DECISION_060, "result"))
+        self.assertEqual([("table", "conformance", "", ""), ("code", "", "9c3e1ab", "tinycsv/reader.py"),
+                          ("pull", "2", "", "")],
+                         [(r["kind"], r["ident"], r["ref"], r["path"]) for r in self.rf.evidence(DECISION_060)])
+        word, thread = self.rf.explanations(DECISION_060)
+        self.assertEqual(("word", "line splitter", False, ["the splitter"]),
+                         (word["kind"], word["word"], word["revised"], word["also"]))
+        self.assertTrue(word["story"].startswith("tinycsv began") and word["story"].endswith("#7 is about."))
+        self.assertEqual(("thread", True, "Most CSV files that break a reader break on quoting."),
+                         (thread["kind"], thread["revised"], thread["why"]))
+
+    def test_fields_skip_quotes_code_comments_and_folds(self):
+        text = DECISION_060.replace("**Where recorded:**", "> **Quoted:** not a field\n**Lazy:** still the quote\n\n"
+                                    "```\n**Coded:** not a field\n```\n\n<!-- **Hidden:** not a field -->\n\n"
+                                    "**Where recorded:**")
+        labels = [label for label, _ in self.rf.fields(text)]
+        for absent in ("Quoted", "Lazy", "Coded", "Hidden", "Why it matters here", "Also called"):
+            self.assertNotIn(absent, labels)
+        self.assertNotIn("Hidden", dict(self.rf.fields(text))["Exact words"])
+        self.assertIn("Lazy", dict(self.rf.fields(text))["Exact words"])
+
+    def test_a_fold_in_code_or_cut_short_is_not_an_explanation(self):
+        fenced = DECISION_060.replace("<details>\n<summary>We use", "```\n<details>\n<summary>We use", 1).replace(
+            "#7 is about.\n\n</details>", "#7 is about.\n\n</details>\n```", 1)
+        self.assertEqual(["thread"], [e["kind"] for e in self.rf.explanations(fenced)])
+        # a </details> inside a story ends the fold there, as on GitHub: the rest is text after the fold
+        cut = DECISION_060.replace("It breaks on quoting.", "</details>\n\nIt breaks on quoting.")
+        word, thread = self.rf.explanations(cut)
+        self.assertTrue(word["story"].endswith("at every comma."))
+        self.assertIn("fold-format", codes(lint_drafts.lint_text(cut, kind="decision")))
+
+    def test_words_are_known_by_their_key(self):
+        self.assertEqual("line splitter", self.rf.word_key("the Line  Splitter"))
+        self.assertEqual(self.rf.word_key("line splitter"), self.rf.word_key("  The  line splitter "))
+        self.assertEqual("splitter", self.rf.word_key("a splitter"))
+        self.assertEqual("theory", self.rf.word_key("theory"))
+
+    def test_citations_are_told_apart(self):
+        text = ("See #7, example-org/tinycsv#6, other-org/x#3, https://github.com/example-org/tinycsv/issues/5"
+                "#issuecomment-9104, https://github.com/example-org/tinycsv/pull/2, "
+                "https://github.com/other-org/x/issues/1#issuecomment-55 and `#9` in code; color #123456.")
+        found = [(c["kind"], c["issue"], c["comment"]) for c in self.rf.citations(text, REPO)]
+        self.assertEqual([("issue", 7, None), ("issue", 6, None), ("elsewhere", None, None), ("memory", 5, 9104),
+                          ("issue", 2, None), ("elsewhere", None, None)], found)
+        first = self.rf.citations(text, REPO)[0]
+        self.assertEqual("#7", text[first["start"]:first["end"]])
+
+    # ------------------------------------------------------------ marker links
+
+    def test_marker_keys_and_link_values(self):
+        cases = {  # changed marker -> (code, fragment of the message)
+            "becuase=9104": ("marker-key", "becuase="),
+            "because=09104": ("link-value", "because=09104"),
+            "because=abc": ("link-value", "because=abc"),
+            "because=9104,": ("link-value", None),
+            "because=9101,9102,9104,9105,9106": ("link-value", "one to four"),
+            "because=9104 instead=9104": ("link-value", "under because= and instead="),
+            "because=9104,9104": ("link-value", "twice"),
+            "because=9104 because=9105": ("marker-key", "more than once"),
+        }
+        marker = DECISION_060.split("\n", 1)[0]
+        for change, (code, fragment) in cases.items():
+            text = DECISION_060.replace("because=9104 instead=9103", change.replace("instead=9104", "instead=9104"), 1)
+            if "instead=" not in change:
+                text = text.replace(" instead=9103", "", 1)
+            self.assertNotEqual(marker, text.split("\n", 1)[0])
+            self.assertFires(text, "decision", code, fragment)
+        for quiet in ("because=9104", "because=9101,9102,9104,9105", "because=9104 instead=9103",
+                      "because=9104 instead=9103 replaces=9102 checks=9106"):
+            text = DECISION_060.replace("because=9104 instead=9103", quiet, 1)
+            self.assertQuiet(text, "decision")
+
+    def test_who_may_carry_a_link(self):
+        checkpoint = CHECKPOINT_060.replace("17:30-08:00 -->", "17:30-08:00 because=9104 -->", 1)
+        self.assertFires(checkpoint, "checkpoint", "link-kind", "a checkpoint carries no link")
+        self.assertQuiet(CHECKPOINT_060, "checkpoint")
+        triage = TRIAGE.replace("09:00-08:00 -->", "09:00-08:00 because=9104 -->", 1)
+        self.assertFires(triage, "triage", "link-kind", "a triage comment carries no link")
+        self.assertQuiet(TRIAGE, "triage")
+        rebuilt = RECONSTRUCTED_060.replace("source=commit:4f2a9c1 -->", "source=commit:4f2a9c1 because=9104 -->", 1)
+        self.assertFires(rebuilt, "failure", "link-kind", "later owner-approved pass")
+        self.assertQuiet(RECONSTRUCTED_060, "failure")
+        checks = IDEA_060.replace("10:00-08:00 -->", "10:00-08:00 checks=9102 -->", 1)
+        self.assertFires(checks, "idea", "link-kind", "an idea does not carry checks=")
+        self.assertQuiet(IDEA_060.replace("10:00-08:00 -->", "10:00-08:00 because=9102 instead=9101 -->", 1), "idea")
+        self.assertFires(QUESTION_060.replace("because=9105", "instead=9105"), "question", "link-kind")
+        self.assertFires(CORRECTION_060.replace("replaces=9106", "checks=9106"), "correction", "link-kind")
+
+    # ------------------------------------------------------------ the plain line
+
+    def with_plain(self, kind, line):
+        text = self.drafts[kind]
+        label = "**%s:**" % self.rf.PLAIN_LABELS[kind]
+        old = [l for l in text.split("\n") if l.startswith(label)][0]
+        return text.replace(old, (label + " " + line) if line is not None else "", 1)
+
+    def plain_errors(self, kind, line, text=None):
+        return [f.message for f in self.findings(text or self.with_plain(kind, line), kind, "plain")]
+
+    def test_the_plain_line_is_there_and_one_line(self):
+        self.assertTrue(self.plain_errors("result", None))
+        self.assertTrue(self.plain_errors("result", ""))
+        two = self.with_plain("decision", "make strict quoting the default mode\nof the reader")
+        self.assertIn("one line", " ".join(self.plain_errors("decision", None, two)))
+        paragraph = self.with_plain("decision", "make strict quoting the default mode of the reader\n\nMore words.")
+        self.assertIn("one line", " ".join(self.plain_errors("decision", None, paragraph)))
+        late = DECISION_060.replace("**In plain words, we decided to:** rewrite", "**Decision:** first\n\n"
+                                    "**In plain words, we decided to:** rewrite")
+        self.assertIn("first field", " ".join(self.plain_errors("decision", None, late)))
+        for kind in self.drafts:
+            self.assertEqual([], self.plain_errors(kind, None, self.drafts[kind]), kind)
+
+    def test_the_plain_line_rules(self):
+        base = "rewrite the reader so that it reads one character at a time"
+        firing = {
+            "x" * 19: "characters", "x" * 201: "characters", base + ".": "period",
+            base + " in `reader.py`": "backtick", base + " as #7 asked": "issue number",
+            base + " as https://example.org/x says": "URL", base + " in tinycsv/io/reader": "path", base + " in tinycsv/reader2": "path",
+            base + " in reader.py": "path", base + " at 9c3e1ab": "commit",
+            base + " for 22 files": "22", base + " for 4GB files": "4", base + " in steps 3-5": "3",
+        }
+        for line, fragment in firing.items():
+            found = self.plain_errors("decision", line, self.with_plain("decision", line).replace(
+                "### Decision: 2026-03-07", "### Decision: 2026-03-07", 1))
+            self.assertTrue(any(fragment in m for m in found), (line, found))
+        quiet = ["x" * 20, "x" * 200, base + " and/or read/write each byte", base + " for UTF-8 and v2 files",
+                 base + " with sha256 checks", base + " for the 53 conformance files"]
+        for line in quiet:
+            self.assertEqual([], self.plain_errors("decision", line, self.with_plain("decision", line).replace(
+                "**In plain words, we decided to:** " + line, "**In plain words, we decided to:** " + line)), line)
+
+    def test_the_plain_line_does_not_repeat_its_label(self):
+        doubled = {"result": ["that the reader is slow", "we found that the reader is slow"],
+                   "decision": ["to rewrite the reader at once", "We decided to rewrite the reader"],
+                   "idea": ["to keep the reader as it is", "we had the idea to keep the reader"],
+                   "failure": ["what went wrong is the reader", "What went wrong: the reader broke"],
+                   "correction": ["we corrected ourselves on the reader", "We corrected the count of files"],
+                   "checkpoint": ["we paused here with the reader", "we paused with the reader half done"],
+                   "question": ["we asked whether the reader works", "In plain words, whether it works"]}
+        for kind, lines in doubled.items():
+            for line in lines:
+                self.assertTrue(any("repeats its label" in m for m in self.plain_errors(kind, line)), (kind, line))
+        self.assertTrue(any("starts with whether" in m for m in self.plain_errors("question", "does it work with a pipe")))
+        for line in ("why the reader is slow on pipes", "if the reader works on a pipe", "How the reader handles a pipe"):
+            self.assertEqual([], self.plain_errors("question", line), line)
+        self.assertEqual([], self.plain_errors("decision", "today we rewrite the reader for good"))
+        self.assertEqual([], self.plain_errors("result", "thatched roofs are not involved in this result"))
+
+    def test_numbers_of_the_plain_line_stand_in_a_field(self):
+        line = "the reader passed the 77 files"
+        in_heading = self.with_plain("result", line).replace("first speed benchmark", "77 files", 1)
+        self.assertIn("77", " ".join(self.plain_errors("result", None, in_heading)))
+        in_fold = self.with_plain("result", line).replace("**Why we care:** A reader", "**Why we care:** 77 files. A reader")
+        self.assertIn("77", " ".join(self.plain_errors("result", None, in_fold)))
+        at_time = self.with_plain("result", "the reader was timed at 14:10 on one laptop")
+        self.assertIn("number 14 in", " ".join(self.plain_errors("result", None, at_time)))  # 10 is in "10 MB"
+        in_field = self.with_plain("result", line).replace("All 30 timed reads", "All 77 timed reads", 1)
+        self.assertEqual([], self.plain_errors("result", None, in_field))
+        decimals = self.with_plain("result", "tinycsv took 1.8 s on the 100 MB file")
+        self.assertIn("1.8", " ".join(self.plain_errors("result", None, decimals)))
+        self.assertEqual({"1234", "0.3.0", "22", "4", "3", "5"},
+                         self.rf.number_tokens("1,234 rows, version 0.3.0, 22% more, 4GB, steps 3-5, UTF-8, v2"))
+
+    # ------------------------------------------------------------ Evidence
+
+    def with_evidence(self, lines, text=None):
+        text = text or DECISION_060
+        old = "- table conformance\n- code tinycsv/reader.py#L41-L59 at 9c3e1ab\n- pull 2\n"
+        self.assertIn(old, text)
+        return text.replace(old, "".join(line + "\n" for line in lines))
+
+    def test_evidence_forms(self):
+        forms = ["- table conformance", "- figure read-time", "- code tinycsv/reader.py#L41-L59 at 9c3e1ab",
+                 "- code src/a_b/c@2+x.py#L7 at 0123456789abcdef0123456789abcdef01234567",
+                 "- code reader.py#L1-L120 at 9c3e1ab in other-org/tinycsv-tests", "- pull 2", "- pull 31 in other-org/x"]
+        self.assertQuiet(self.with_evidence(forms[:6]), "decision")
+        self.assertQuiet(self.with_evidence(forms[6:]), "decision")
+        rows = self.rf.evidence(self.with_evidence(forms[:6]))
+        self.assertEqual([("table", "conformance"), ("figure", "read-time"), ("code", ""), ("code", ""),
+                          ("code", ""), ("pull", "2")], [(r["kind"], r["ident"]) for r in rows])
+        self.assertEqual((41, 59), (rows[2]["line_from"], rows[2]["line_to"]))
+        self.assertEqual((7, 7), (rows[3]["line_from"], rows[3]["line_to"]))
+        self.assertEqual("other-org/tinycsv-tests", rows[4]["repo"])
+        firing = {
+            "- see the plot in the body": "four forms", "- table": "four forms",
+            "- code ../reader.py#L1 at 9c3e1ab": "'..'", "- code a/./b.py#L1 at 9c3e1ab": "'..'",
+            "- code /home/me/reader.py#L1 at 9c3e1ab": "four forms",
+            "- code reader.py#L1 at v1.2.0": "four forms", "- code reader.py#L1 at main": "four forms",
+            "- code reader.py#L1-L121 at 9c3e1ab": "more than 120", "- code reader.py#L59-L41 at 9c3e1ab": "ends before",
+            "- pull 2 in not a repo": "four forms", "- pull 2 in a/b/c": "owner/name", "* table conformance": "four forms",
+        }
+        for line, fragment in firing.items():
+            self.assertFires(self.with_evidence([line]), "decision", "evidence", fragment)
+        self.assertFires(self.with_evidence(["- pull %d" % n for n in range(1, 8)]), "decision", "evidence", "at most 6")
+        self.assertQuiet(self.with_evidence(["- pull %d" % n for n in range(1, 7)]), "decision")
+
+    def test_where_evidence_may_stand(self):
+        evidence = "\n\n**Evidence:**\n- pull 2\n"
+        self.assertFires(CHECKPOINT_060.rstrip("\n") + evidence, "checkpoint", "evidence", "only a result")
+        self.assertFires(IDEA_060.rstrip("\n") + evidence, "idea", "evidence", "only a result")
+        self.assertFires(RECONSTRUCTED_060.rstrip("\n") + evidence, "failure", "evidence", "reconstructed")
+        self.assertQuiet(FAILURE_060.rstrip("\n") + evidence, "failure")
+        early = FAILURE_060.replace("**Next step:**", "**Evidence:**\n- pull 2\n\n**Next step:**")
+        self.assertFires(early, "failure", "evidence", "last field")
+        self.assertFires(FAILURE_060.rstrip("\n") + "\n\n**Evidence:**\n", "failure", "evidence", "empty")
+
+    # ------------------------------------------------------------ folds
+
+    def test_the_folds_of_the_examples_pass(self):
+        decision = recortex.read_text(os.path.join(EXAMPLE, "decision-reader-1.md"))
+        self.assertQuiet(decision, "decision")
+        self.assertQuiet(self.result, "result")
+        self.assertEqual(["word", "thread"], [e["kind"] for e in self.rf.explanations(decision)])
+
+    def test_fold_rules(self):
+        word_fold = DECISION_060[DECISION_060.index("<details>"):DECISION_060.index("</details>") + 11]
+        cases = {
+            "no blank after the summary": DECISION_060.replace("splitter\" to mean the first version of tinycsv's "
+                                                               "reader, which cut the file into lines before looking "
+                                                               "at quotes</summary>\n\n",
+                                                               "splitter\" to mean the first version of tinycsv's "
+                                                               "reader, which cut the file into lines before looking "
+                                                               "at quotes</summary>\n", 1),
+            "two paragraphs of why": DECISION_060.replace("why the reader was rewritten.\n",
+                                                          "why the reader was rewritten.\n\nA second paragraph.\n", 1),
+            "a heading": DECISION_060.replace("It breaks on quoting.", "## It breaks on quoting."),
+            "a <b> line": DECISION_060.replace("It breaks on quoting.", "<b>It breaks on quoting.</b>"),
+            "a fence": DECISION_060.replace("It breaks on quoting.", "```\nIt breaks on quoting.\n```"),
+            "a field inside": DECISION_060.replace("It breaks on quoting.", "**Next step:** a field hidden here"),
+            "a #N in the summary": DECISION_060.replace("before looking at quotes</summary>",
+                                                        "before looking at quotes, see #7</summary>"),
+            "a URL in the summary": DECISION_060.replace("before looking at quotes</summary>",
+                                                         "before https://example.org/x</summary>"),
+            "a period in the summary": DECISION_060.replace("before looking at quotes</summary>",
+                                                            "before looking at quotes.</summary>"),
+            "a short meaning": DECISION_060.replace("to mean the first version of tinycsv's reader, which cut the "
+                                                    "file into lines before looking at quotes", "to mean the old one"),
+            "an odd stem": DECISION_060.replace('We use "line splitter" to mean', 'Word: "line splitter" -'),
+            "a bad word": DECISION_060.replace('We use "line splitter"', 'We use "<line splitter>"'),
+            "six other names": DECISION_060.replace("**Also called:** the splitter", "**Also called:** a, b, c, d, e, f"),
+            "too long a story": DECISION_060.replace("It breaks on quoting.", "x" * 2500),
+            "too long a why": DECISION_060.replace("Its failures are why", "x" * 400 + " Its failures are why"),
+            "a fold before the last field": DECISION_060.replace("**Evidence:**", word_fold + "\n\n**Evidence:**", 1),
+            "text after the last fold": DECISION_060.rstrip("\n") + "\n\nA closing remark.\n",
+            "a stray </details>": DECISION_060.replace("**Decided by:**", "</details>\n\n**Decided by:**"),
+            "an inline <summary>": DECISION_060.replace("**Where recorded:** Chat", "**Where recorded:** <summary>Chat"),
+            "a quoted <details>": DECISION_060.replace("> Stop patching", "> <details> Stop patching"),
+            "an open fold": DECISION_060.rstrip("\n").rsplit("</details>", 1)[0],
+            "a word not used outside": DECISION_060.replace('We use "line splitter"', 'We use "quote cutter"').replace(
+                "**Also called:** the splitter\n\n", ""),
+            "four words": DECISION_060.replace("**Evidence:**", "**Evidence:**", 1).rstrip("\n") + "\n\n" + "\n\n".join(
+                word_fold.replace("line splitter", name).replace("**Also called:** the splitter\n\n", "")
+                for name in ("decided", "reader", "patching")) + "\n",
+            "the same word twice": DECISION_060.rstrip("\n") + "\n\n" + word_fold + "\n",
+            "two thread folds": DECISION_060.rstrip("\n") + "\n\n" + DECISION_060[DECISION_060.rindex("<details>"):],
+        }
+        for name, text in cases.items():
+            self.assertTrue(self.findings(text, "decision", "fold-format"), name)
+        quiet = DECISION_060.rstrip("\n") + "\n\n" + "\n\n".join(
+            word_fold.replace("line splitter", name).replace("**Also called:** the splitter\n\n", "")
+            for name in ("decided", "reader")) + "\n"
+        self.assertQuiet(quiet, "decision")  # three words and one thread
+        other_name = DECISION_060.replace('We use "line splitter"', 'We use "quote cutter"').replace(
+            "**Also called:** the splitter", "**Also called:** the line splitter")
+        self.assertQuiet(other_name, "decision")  # used under its other name
+        triage = TRIAGE.rstrip("\n") + "\n\n" + word_fold.replace("line splitter", "reader").replace(
+            "**Also called:** the splitter\n\n", "") + "\n"
+        self.assertFires(triage, "triage", "fold-format", "folds belong to memories")
+
+    def test_one_warning_when_nothing_can_check_the_record(self):
+        found = lint_drafts.lint_text(DECISION_060, kind="decision", known_numbers={5, 7})
+        self.assertEqual([("warning", "not-checked")], [(f.level, f.code) for f in found])
+        self.assertIn("links, comment addresses, evidence and explanations were not checked", found[0].message)
+        self.assertEqual([], [str(f) for f in lint_drafts.lint_text(CHECKPOINT_060, kind="checkpoint")])
+        self.assertEqual([], [str(f) for f in lint_drafts.lint_text(IDEA_060, kind="idea")])
+        coded = self.with_evidence(["- code reader.py#L1 at 9c3e1ab", "- pull 3 in other-org/x"],
+                                   DECISION_060.split("\n<details>")[0].replace(" because=9104 instead=9103", "")
+                                   .replace("; the failure that led here is https://github.com/example-org/tinycsv/"
+                                            "issues/5#issuecomment-9104", ""))
+        self.assertEqual([], [str(f) for f in lint_drafts.lint_text(coded, kind="decision", known_numbers={7})])
+
+
 COMPAT = os.path.join(FIXTURES, "compat-0.5.0")
 COMPAT_SHA256 = {  # the four files as they are at 6979c65 (0.5.0); never edited
     "names.py": "bd1dc538ab698224081f12ece3a1706d6920d5ee2e26a5f7da54de4d2ae65c97",
@@ -4863,6 +5358,10 @@ for name, kind, text in json.loads(sys.stdin.read()):
     out[name] = row
 print(json.dumps(out))
 """
+
+
+def record_marker_time(text):
+    return re.search(r" at=([^ ]+)", text.split("\n", 1)[0]).group(1)
 
 
 class CompatTests(unittest.TestCase):
@@ -4892,6 +5391,25 @@ class CompatTests(unittest.TestCase):
                          found["result-speed-1.md"])
         self.assertEqual({"type": "decision", "at": "2026-03-04T15:55-08:00", "reconstructed": False, "errors": []},
                          found["decision-reader-1.md"])
+
+    def test_memories_of_this_version_read_as_events_of_their_type(self):
+        """The five kinds 0.5.0 knows keep their type and time and lint clean there; an idea and a question are
+        comments of type "other" at their marker time; a key with a hyphen costs the comment its type."""
+        drafts = [("decision", "decision", DECISION_060), ("failure", "failure", FAILURE_060),
+                  ("checkpoint", "checkpoint", CHECKPOINT_060), ("correction", "correction", CORRECTION_060),
+                  ("reconstructed", "failure", RECONSTRUCTED_060), ("idea", "idea", IDEA_060),
+                  ("question", "question", QUESTION_060),
+                  ("hyphen", "decision", DECISION_060.replace("instead=9103", "tried-instead=9103"))]
+        found = self.frozen(drafts)
+        for name, kind, text in drafts[:5]:
+            at = record_marker_time(text)
+            self.assertEqual((kind, at, []), (found[name]["type"], found[name]["at"], found[name]["errors"]), name)
+        self.assertTrue(found["reconstructed"]["reconstructed"])
+        for name in ("idea", "question"):
+            self.assertEqual(("other", record_marker_time(dict((n, t) for n, _, t in drafts)[name]), None),
+                             (found[name]["type"], found[name]["at"], found[name]["errors"]), name)
+        self.assertEqual(("other", None), (found["hyphen"]["type"], found["hyphen"]["at"]))
+        self.assertTrue(any(e.startswith("event-marker") for e in found["hyphen"]["errors"]))
 
 
 class PackagingTests(unittest.TestCase):
