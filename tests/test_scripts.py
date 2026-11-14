@@ -5583,6 +5583,29 @@ class MindIndexTests(RecordSandbox):
         self.assertNotIn(9301, found)
         self.assertIn("1 memory by accounts outside your allowed list is not listed.", self.recall().stdout)
 
+    def test_what_the_linter_refuses_by_kind_is_not_counted(self):
+        self.add_chain()
+        rebuilt = memory_draft("decision", "2026-03-20T10:00-08:00", "recorded=2026-04-01T10:00-08:00 "
+                               "source=commit:9c3e1ab replaces=9105").replace("### Decision:",
+                                                                              "### Decision (reconstructed):")
+        self.put(9301, 5, rebuilt + "\n**Evidence:**\n- pull 2\n")
+        self.put(9302, 5, memory_draft("idea", "2026-03-21T10:00-08:00") + "\n**Evidence:**\n- pull 2\n")
+        self.put(9303, 5, memory_draft("result", "2026-03-22T10:00-08:00", "replaces=9107"))  # a result replaces no decision
+        self.ready()
+        self.put(9304, 3, TRIAGE)  # not a memory: none of its fields is kept, by a partial derive or a full one
+        self.ready()
+        found = self.memories()
+        self.assertEqual([], found[9301]["links"])
+        self.assertEqual("stands", found[9105]["state"])
+        self.assertEqual([], found[9303]["links"])
+        self.assertEqual("stands", found[9107]["state"])
+        self.assertIn((9301, "replaces", 9105), self.sql("SELECT * FROM links"))  # stored as written
+        self.assertEqual([], self.sql("SELECT * FROM evidence WHERE comment IN (9301, 9302)"))
+        self.assertEqual([], self.sql("SELECT * FROM event_fields WHERE comment = 9304"))
+        whole = self.mind_rows()
+        self.tool("index.py", "sync", "--rebuild")
+        self.assertEqual(whole, self.mind_rows())
+
     def test_states_follow_the_counted_links(self):
         self.add_chain()
         self.ready()

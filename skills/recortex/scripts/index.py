@@ -1028,7 +1028,9 @@ def derive_mind(db, comments=None):
             db.execute("INSERT INTO event_fields VALUES (?,?,?,?)", (cid, ordinal, "plain" if label == own else label,
                                                                     text))
             ordinal += 1
-        for ordinal, item in enumerate(record_format.evidence(body)):
+        told = record_format.parse_event(body)
+        shown = kind in record_format.EVIDENCE_TYPES and not told["reconstructed"]  # as the linter allows it
+        for ordinal, item in enumerate(record_format.evidence(body) if shown else []):
             db.execute("INSERT INTO evidence VALUES (?,?,?,?,?,?,?,?,?)",
                        (cid, ordinal, item["kind"], item["ident"], item["repo"], item["ref"], item["path"],
                         item["line_from"], item["line_to"]))
@@ -1237,7 +1239,8 @@ def memories(db, allowed):
     title, plain (or None), reconstructed, author, links (the counted ones, as (key, target id)) and state.
 
     A link counts when both ends are memories in the index, the memory that carries it was written by an allowed
-    account, its target is another memory that is not later, and record_format.link_allowed holds. State, from the
+    account and is not reconstructed, its target is another memory that is not later, and record_format.link_allowed
+    holds. State, from the
     counted links that point at a memory, the first that applies: replaced, set aside, answered (a question) or
     tried (an idea) by a checks link; else open (a question), untried (an idea) or stands.
     """
@@ -1257,8 +1260,8 @@ def memories(db, allowed):
                       "reconstructed": bool(row["reconstructed"]), "author": row["author"], "links": [], "state": ""}
     for row in db.execute("SELECT source, kind, target FROM links ORDER BY rowid"):
         source, target = items.get(row["source"]), every.get(row["target"])
-        if source is None or target is None or row["source"] == row["target"]:
-            continue
+        if source is None or target is None or row["source"] == row["target"] or source["reconstructed"]:
+            continue  # a reconstructed memory carries no link in this version
         if sort_key(target["at"]) > source["time"] or not record_format.link_allowed(source["kind"], row["kind"],
                                                                                       target["type"]):
             continue

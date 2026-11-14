@@ -310,6 +310,7 @@ PLAIN_LABELS = {
 }
 FIELD = re.compile(r"^\*\*([A-Z][^*\n]{0,60}):\*\*")
 EVIDENCE_LABEL = "Evidence"
+EVIDENCE_TYPES = ("result", "decision", "failure", "correction")  # the kinds that may list Evidence
 FENCE_LINE = re.compile(r"^\s*(```+|~~~+)(.*)$")  # as lint_drafts.split_regions reads a fence
 FOLD_START = re.compile(r"^\s*<details", re.I)
 FOLD_END = re.compile(r"^\s*</details", re.I)

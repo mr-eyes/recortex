@@ -493,7 +493,7 @@ def check_event_marker(text, kind, template, add):
 
 ARTICLE = {"result": "a result", "decision": "a decision", "failure": "a failure", "correction": "a correction",
            "idea": "an idea", "question": "a question", "checkpoint": "a checkpoint", "triage": "a triage comment"}
-EVIDENCE_KINDS = ("result", "decision", "failure", "correction")
+EVIDENCE_KINDS = record_format.EVIDENCE_TYPES
 STEM_REPEATS = {
     "result": ("that", "we found"),
     "decision": ("to", "we decided"),
