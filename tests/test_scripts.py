@@ -5979,6 +5979,13 @@ class MindIndexTests(RecordSandbox):
         self.assertIn("HTTP 502", broken.stderr)
         self.assertEqual(4, len(self.calls("issue comment")))
 
+    def test_no_memory_id_when_the_stored_comment_differs(self):
+        self.ready()
+        differs = self.post(chain_text("1-idea.md"), "idea", env={"FAKE_GH_CORRUPT": "1"})
+        self.assertEqual(1, differs.returncode)
+        self.assertIn("MISMATCH", differs.stdout)
+        self.assertNotIn("memory id:", differs.stdout)
+
     def test_a_github_failure_is_never_read_as_not_found_from_a_number(self):
         data = self.repo()
         data["issues"]["404"] = dict(data["issues"]["7"], labels=["active", "topic:writer", "topic:columns"])
