@@ -19,6 +19,9 @@ Fault switches:
   FAKE_GH_SLEEP=5                sleep before answering
   FAKE_GH_RESUME_SLEEP=8         sleep before answering the hub comments query (the GraphQL call with a number)
   FAKE_GH_RESUME_FAIL=1          exit 1 for the hub comments query
+A comment of another repository is one whose state entry has a "repo" other than the repository in the request:
+reading it by id answers "Not Found", as for an id that does not exist, and the listings leave it out. A comment
+without "repo" belongs to every repository.
 """
 
 import json
@@ -83,8 +86,16 @@ def api_issue(state, repo, number):
     return out
 
 
+def elsewhere(comment, repo):
+    """True for a comment of another repository than `repo`."""
+    return "repo" in comment and comment["repo"].lower() != repo.lower()
+
+
 def api_comment(state, repo, cid):
-    comment = state["comments"][str(cid)]
+    comment = state["comments"].get(str(cid))
+    if comment is None or elsewhere(comment, repo):  # GitHub scopes the route to the repository
+        sys.stdout.write('{"message":"Not Found","status":"404"}')
+        fail("gh: Not Found (HTTP 404)")
     return {
         "id": int(cid), "body": comment["body"], "user": {"login": comment.get("user", ME)},
         "created_at": comment.get("created_at", "2026-01-07T09:15:00Z"),
@@ -257,7 +268,8 @@ def main():
             for alias, name, arguments, children in graphql_check.parse_query(fields["query"])[0][3][0][3]:
                 if name == "comments":
                     mine = [(c, state["comments"][c]) for c in sorted(state["comments"], key=int)
-                            if state["comments"][c]["issue"] == int(fields["number"])]
+                            if state["comments"][c]["issue"] == int(fields["number"])
+                            and not elsewhere(state["comments"][c], repo_of(fields))]
                     if os.environ.get("FAKE_GH_COMMENT_ORDER") == "reversed":
                         mine.reverse()
                     rows = mine[-int(arguments["last"]):] if "last" in arguments else mine[:int(arguments["first"])]
@@ -282,7 +294,8 @@ def main():
             return
         if listing:
             rows = [api_comment(state, listing.group(1), c) for c in sorted(state["comments"], key=int)
-                    if state["comments"][c]["issue"] == int(listing.group(2))]
+                    if state["comments"][c]["issue"] == int(listing.group(2))
+                    and not elsewhere(state["comments"][c], listing.group(1))]
             sys.stdout.write(json.dumps(rows))
             save(state)
             return
@@ -300,7 +313,8 @@ def main():
                 return
         elif re.fullmatch(r"repos/([^/]+/[^/]+)/issues/comments\?.*", path):
             api_repo = path.split("/issues")[0][6:]
-            rows = [api_comment(state, api_repo, c) for c in sorted(state["comments"], key=int)]
+            rows = [api_comment(state, api_repo, c) for c in sorted(state["comments"], key=int)
+                    if not elsewhere(state["comments"][c], api_repo)]
             rows = [r for r in rows if not since or r["updated_at"] >= since]
             rows.sort(key=lambda r: (r["updated_at"], r["id"]))
             if page_of(path):
