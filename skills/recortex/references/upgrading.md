@@ -66,7 +66,7 @@ From 0.6.0 a memory starts with a line in plain words, may link to earlier memor
 | The plain line and Evidence | Two more fields; their linter checks only the fields it requires, in order |
 | Folds | Text after the last field; only a final-record body may not hold a `<details>` block |
 | `#N` and comment addresses in fields | `#N` is checked as before; a comment address is a URL like any other |
-| An idea or a question | A comment of type `other` at its marker time, never dropped; they cannot write or lint one |
+| An idea or a question | A comment of type `other` at its marker time, never dropped; they cannot write or lint one. On an index shared with 0.6.0 an older version shows the type 0.6.0 wrote (`idea`, `question`) until its own full derive, and nothing breaks on it |
 | Four more tables and five triggers in a shared index | Left alone by their sync; the triggers record that it wrote, and the next sync of 0.6.0 derives everything again |
 | Hook payloads | The same: no payload reads the text of a comment other than the hub's checked resume block |
 

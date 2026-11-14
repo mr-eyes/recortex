@@ -153,7 +153,7 @@ Optional, on a result, decision, failure or correction, as the last field: up to
 | `- table <id>` | a table block of this thread's topic body |
 | `- figure <id>` | a figure block of this thread's topic body |
 | `- code <path>#L<a>-L<b> at <commit>` | lines of a file at a commit (`#L<a>` for one line; at most 120 lines) |
-| `- pull <n>` | a merged pull request |
+| `- pull <n>` | a pull request |
 
 `code` and `pull` may end with ` in <owner>/<name>` when the code lives in another repository; that name is recorded and not checked. A commit is 7 to 40 hexadecimal digits, never a tag or a branch, which could change. With the record at hand the linter checks that a table or figure is a block of the topic body and that a pull request exists and is one; code lines are checked for their form only. Copy each line from `git` output, never from memory: no line is better than a guessed one.
 
