@@ -840,8 +840,9 @@ def check_record(text, kind, lookup, add):
             add("error", "thread-known", 0, "memory %s (%s) already says what this thread is about; write 'This thread "
                 "is now about' only if that changed, else leave the fold out" % (opening["comment"], opening["date"]))
         elif threads[0]["revised"] and not opening:
-            add("error", "thread-new", 0, "nobody has written what this thread is about yet; write 'This thread is "
-                "about', not 'is now about'")
+            add("error", "thread-new", 0, "the local index holds no memory that says what this thread is about; if one "
+                "was posted since the last sync, run index.py sync, else write 'This thread is about', not 'is now "
+                "about'")
     for item in explanations:
         if item["kind"] != "word":
             continue
@@ -852,7 +853,8 @@ def check_record(text, kind, lookup, add):
             add("error", "word-known", 0, "\"%s\" is already explained in memory %s (%s); use it as written there, or "
                 "write 'We now use' if its meaning changed" % (item["word"], found["comment"], found["date"]))
         elif item["revised"] and not found:
-            add("error", "word-new", 0, "\"%s\" was never explained; write 'We use', not 'We now use'" % item["word"])
+            add("error", "word-new", 0, "the local index holds no explanation of \"%s\"; if one was posted since the "
+                "last sync, run index.py sync, else write 'We use', not 'We now use'" % item["word"])
     return skipped
 
 
