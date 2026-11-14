@@ -616,11 +616,14 @@ def check_plain(text, kind, template, add):
     others = set()
     for index, other in enumerate(scanned):
         if index != position:
-            others |= record_format.number_tokens(other["text"])
-    missing = sorted(record_format.number_tokens(value) - others, key=lambda n: (len(n), n))
+            others |= record_format.field_numbers(other["text"])
+    missing = []
+    for written, token, power in record_format.plain_numbers(value):
+        if written not in missing and not record_format.number_stands(token, power, others):
+            missing.append(written)
     if missing:
-        add("error", "plain", number, "the number%s %s in the plain line stand%s in no field of this memory; put each "
-            "number in a field, with its source, or leave it out of the plain line"
+        add("error", "plain", number, "the number%s %s in the plain line stand%s in no field of this memory, neither "
+            "as written nor rounded; put each number in a field, with its source, or leave it out of the plain line"
             % ("s" if len(missing) > 1 else "", listed(missing), "" if len(missing) > 1 else "s"))
 
 

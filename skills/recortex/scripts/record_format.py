@@ -13,6 +13,7 @@ the comment stays an event of its type. The linter is the strict side.
 """
 
 import datetime
+import decimal
 import re
 
 import recortex
@@ -461,6 +462,53 @@ def number_tokens(text):
     """The numbers in a text, as strings with thousands commas removed: "UTF-8", "v2" and "sha256" hold none; "22%",
     "4GB", "3-5" and "0.3.0" do."""
     return {match.group(0).replace(",", "") for match in NUMBER_TOKEN.finditer(text or "")}
+
+
+FIELD_NUMBER = re.compile(r"(?<![A-Za-z0-9.,_])[0-9]+(?:[.,][0-9]+)*")  # NUMBER_TOKEN without its hyphen rule
+SCALE_WORD = re.compile(r"[ \t]+(thousand|million|billion)(?![A-Za-z0-9])", re.I)
+SCALES = {"thousand": 3, "million": 6, "billion": 9}
+ROUNDING_TOLERANCE = decimal.Decimal("0.1")
+
+
+def field_numbers(text):
+    """The numbers in a field, with thousands commas removed. Unlike number_tokens, a number after a letter and a
+    hyphen counts ("release-0.3.0" holds 0.3.0), so that a number the field holds in that spelling is found."""
+    return {match.group(0).replace(",", "") for match in FIELD_NUMBER.finditer(text or "")}
+
+
+def plain_numbers(text):
+    """The numbers of a plain line as (as written, token, power of ten): "2 million" is ("2 million", "2", 6)."""
+    found = []
+    for match in NUMBER_TOKEN.finditer(text or ""):
+        scale = SCALE_WORD.match(text, match.end())
+        found.append((match.group(0) + (scale.group(0) if scale else ""), match.group(0).replace(",", ""),
+                      SCALES[scale.group(1).lower()] if scale else 0))
+    return found
+
+
+def number_stands(token, power, fields):
+    """True when a number of the plain line stands in the fields: as written; as the start of a longer version
+    number ("0.3" for "0.3.0"); or rounded, when a field holds a number that rounds to it at the precision the plain
+    line gives and differs from it by at most a tenth ("about 3 times" for 3.05, "40 MB" for 38 and 41 MB,
+    "2 million" for 2,000,000)."""
+    if not power and (token in fields or any(other.startswith(token + ".") and other.count(".") > 1 for other in fields)):
+        return True
+    if token.count(".") > 1:
+        return False
+    value = decimal.Decimal(token).scaleb(power)
+    if not value:
+        return False
+    # the precision the plain line gives: its last decimal as written, or its last digit that is not a zero
+    step = decimal.Decimal(1).scaleb(power - len(token.split(".")[1]) if "." in token
+                                     else value.normalize().as_tuple().exponent)
+    for other in fields:
+        if other.count(".") > 1 or re.fullmatch(r"0[0-9].*", other):
+            continue  # a version number, or the 03 of a date
+        number = decimal.Decimal(other)
+        rounded = (number / step).quantize(decimal.Decimal(1), rounding=decimal.ROUND_HALF_UP) * step
+        if rounded == value and abs(number - value) <= ROUNDING_TOLERANCE * value:
+            return True
+    return False
 
 
 GITHUB_ADDRESS = re.compile(r"https://github\.com/([A-Za-z0-9][A-Za-z0-9_-]{0,38}/[A-Za-z0-9._-]{1,100})/(?:issues|pull)/"

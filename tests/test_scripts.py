@@ -5214,10 +5214,34 @@ class MemoryFormatTests(unittest.TestCase):
         self.assertIn("number 14 in", " ".join(self.plain_errors("result", None, at_time)))  # 10 is in "10 MB"
         in_field = self.with_plain("result", line).replace("All 30 timed reads", "All 77 timed reads", 1)
         self.assertEqual([], self.plain_errors("result", None, in_field))
-        decimals = self.with_plain("result", "tinycsv took 1.8 s on the 100 MB file")
-        self.assertIn("1.8", " ".join(self.plain_errors("result", None, decimals)))
+        decimals = self.with_plain("result", "tinycsv took 1.5 s on the 100 MB file")
+        self.assertIn("1.5", " ".join(self.plain_errors("result", None, decimals)))
         self.assertEqual({"1234", "0.3.0", "22", "4", "3", "5"},
                          self.rf.number_tokens("1,234 rows, version 0.3.0, 22% more, 4GB, steps 3-5, UTF-8, v2"))
+
+    def test_a_number_of_the_plain_line_may_be_rounded_or_spelled_another_way(self):
+        def errors(line, field):
+            text = self.with_plain("result", line).replace("All 30 timed reads finished.", field, 1)
+            return " ".join(self.plain_errors("result", None, text))
+        quiet = [("the new reader is about 3 times faster than the old one", "A ratio of 3.05."),
+                 ("memory use stays flat at about 40 MB for every file", "Peak 38 to 41 MB."),
+                 ("the fuzzer found no crash in 2 million inputs", "2,000,000 inputs, no crash."),
+                 ("the fuzzer found no crash in 2.5 million inputs", "2,512,000 inputs, no crash."),
+                 ("the files read by the 0.3 release still read the same", "Compared with tinycsv 0.3.0."),
+                 ("the 0.3.0 branch reads every file of the test set", "Branch release-0.3.0."),
+                 ("tinycsv took 1.8 s on the big file of the benchmark", "No other number.")]  # 1.84 s is in Numbers
+        for line, field in quiet:
+            self.assertEqual("", errors(line, field), line)
+        firing = [("the reader passed the 77 files of the larger test set", "All 70 files passed.", "77"),
+                  ("the reader is slower on the top 20 files by size", "On 7 files.", "20"),
+                  ("the cost of the warning is under 6% of the read time", "A 0.5% difference.", "6"),
+                  ("the reader is slower on the 200 largest files of the set", "On 240 files.", "200"),  # a fifth away
+                  ("the reader failed on 7 files of the larger test set", "On 2026-07-04.", "7"),  # not the 07 of a date
+                  ("the reader failed on 9 files of the larger test set", "At commit 0c9e1ab.", "9"),
+                  ("the fuzzer found no crash in 2 million inputs", "200,000 inputs, no crash.", "2 million"),
+                  ("tinycsv took 1.5 s on the big file of the benchmark", "No other number.", "1.5")]
+        for line, field, number in firing:
+            self.assertIn("number %s in" % number, errors(line, field), line)
 
     # ------------------------------------------------------------ Evidence
 

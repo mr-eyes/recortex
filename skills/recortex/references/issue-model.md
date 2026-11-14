@@ -111,7 +111,7 @@ Directly under the heading, one line in plain words that completes a fixed label
 | Correction | `**In plain words, we corrected ourselves:**` | a statement |
 | Checkpoint | `**In plain words, we paused here:**` | a statement of where things stand |
 
-The linter refuses a plain line that is missing, longer than one line, under 20 or over 200 characters, ends with a period, holds a backtick, an issue number (`#N`), a URL, a path or file name, or a commit hash, repeats its label ("we decided to we decided"), or holds a number that stands in no field of the same memory. The heading, the marker and the folds do not count as fields: put the number in a field, with its source, or leave it out of the line. The line is a summary written for someone who was away for a month; the fields stay the record, and in a decision the quote stays the decision.
+The linter refuses a plain line that is missing, longer than one line, under 20 or over 200 characters, ends with a period, holds a backtick, an issue number (`#N`), a URL, a path or file name, or a commit hash, repeats its label ("we decided to we decided"), or holds a number that stands in no field of the same memory, neither as written nor rounded ("about 3 times" stands for a field's 3.05, "2 million" for 2,000,000). The heading, the marker and the folds do not count as fields: put the number in a field, with its source, or leave it out of the line. The line is a summary written for someone who was away for a month; the fields stay the record, and in a decision the quote stays the decision.
 
 ### Links between memories
 
