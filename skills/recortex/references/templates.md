@@ -12,6 +12,8 @@ All templates are in `templates/`. Fields to fill are written `{{like this}}`; t
 | `comment-failure.md` | `failure` | A failed run, approach or change |
 | `comment-checkpoint.md` | `checkpoint` | State of work in flight at the end of a stretch |
 | `comment-correction.md` | `correction` | A posted statement or number was wrong |
+| `comment-idea.md` | `idea` | A thought raised inside a thread's work that might help, not yet tried |
+| `comment-question.md` | `question` | A question raised inside a thread's work, not yet answered |
 | `comment-triage.md` | `triage` | An issue opened by hand: its type, route and what waits for confirmation |
 | `recortex-triage.yml` | | The optional GitHub Actions workflow that labels issues opened without a role label |
 | `resume-block.md` | `resume` | A resume comment on the hub: heading, markers and the block |
@@ -24,7 +26,17 @@ All templates are in `templates/`. Fields to fill are written `{{like this}}`; t
 
 ## Field notes
 
-**Event marker.** The first line of every event comment: `<!-- ghim:event type=<type> at=<YYYY-MM-DDTHH:MM+HH:MM> -->`, with the type in lower case (`result`, `decision`, `failure`, `checkpoint`, `correction`) and the same local date and time as the heading, followed by its UTC offset (`date '+%Y-%m-%dT%H:%M%:z'`). The linter rejects a comment whose marker is missing or disagrees with its heading. The marker prefix `ghim:` predates the plugin's name and is kept, so that comments posted before and after the rename are one format.
+**Event marker.** The first line of every event comment: `<!-- ghim:event type=<type> at=<YYYY-MM-DDTHH:MM+HH:MM> -->`, with the type in lower case (`result`, `decision`, `failure`, `checkpoint`, `correction`, `idea`, `question`) and the same local date and time as the heading, followed by its UTC offset (`date '+%Y-%m-%dT%H:%M%:z'`). The linter rejects a comment whose marker is missing or disagrees with its heading. The marker prefix `ghim:` predates the plugin's name and is kept, so that comments posted before and after the rename are one format.
+
+**The plain line.** The first field of every memory, directly under the heading: one line that completes the label of its kind, written for someone who was away for a month. Result: "In plain words, we found that: ..." (a statement); decision: "we decided to: ..." (a verb phrase); failure: "what went wrong: ..."; idea: "we had the idea to: ..." (a verb phrase); question: "we asked: ..." (a clause that starts with whether, why, how, what, which, who, when, where or if); correction: "we corrected ourselves: ..."; checkpoint: "we paused here: ..." (where things stand). 20 to 200 characters, no period at the end, no backtick, issue number, URL, path, file name or commit, and the label not repeated. Every number in it must also stand in a field of the memory; if the linter says one does not, put the number in a field with its source, or leave it out of the line. Do not count on the heading or a fold to carry it. A plain line is a summary, not the record: a decision's quote stays the decision.
+
+**Links.** Optional keys in the marker line, after `at=`: `because=`, `replaces=`, `instead=` and `checks=`, each with one to four comment ids separated by commas (`because=9104` or `because=9104,9105`). The table of who may link to what, and the question to ask for each kind, is in [issue-model.md](issue-model.md), "Links between memories". Take ids only from `index.py query recall --issue N` or from the `memory id:` line `post_verified.py` printed in this session. A checkpoint, a triage comment and a reconstructed memory carry none.
+
+**Evidence.** Optional, last field of a result, decision, failure or correction: `**Evidence:**` and up to six lines, each `- table <id>`, `- figure <id>`, `- code <path>#L<a>-L<b> at <commit>` (or `#L<a>` for one line) or `- pull <n>`; `code` and `pull` may end with ` in <owner>/<name>`. Copy the lines from `git` output (`git log -1 --format=%h`, `git blame -L`), never from memory: no line is better than a guessed one. Delete the field when there is nothing to show.
+
+**Folds.** After the last field, a word that cannot be understood without this project is explained where the memory first uses it, and a thread's opening goes into the first memory recorded on it from 0.6.0 on, when `query recall` says "About this thread: not written yet". The exact form and its limits are in [issue-model.md](issue-model.md), "Folds". "We use" for a new word, "We now use" for a word whose meaning changed; "This thread is about" and "This thread is now about" likewise. Use a word listed under "Words explained so far" as written there.
+
+**The note at the end of a template.** The HTML comment at the end of the memory templates says which parts are optional. Delete it; the linter rejects a draft that still holds its `{{delete this note}}` field.
 
 **Figures and tables.** In a body, a figure is a `### Figure: <id> - <title>` block inside its section: a caption with every number's denominator, then the image embedded from the commit or tag it was committed in. Its row under "Sources" starts with `Figure <id>` and gives `data` and `command` in backticks: ``| Figure read-time | data `bench/out/summary.tsv`; command `python bench/plot.py bench/out/summary.tsv`; commit 4f2a9c1 |``. A table block is the same with `### Table:` and a Markdown table or a link to a committed file. `compile.py` lists both, with their sources.
 

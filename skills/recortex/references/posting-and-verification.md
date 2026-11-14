@@ -22,6 +22,7 @@ Routine result and checkpoint comments need the source check but not always the 
 
 ```bash
 python3 scripts/lint_drafts.py --kind result --repo owner/name --online draft.md
+python3 scripts/lint_drafts.py --kind decision --index --issue 5 draft.md     # a memory, against the local index
 ```
 
 | Check | Level |
@@ -42,6 +43,12 @@ python3 scripts/lint_drafts.py --kind result --repo owner/name --online draft.md
 | Final record: a line that looks like a section heading but is not one (`### Results`, `##Results`, indented, underlined, inside a code block) | error |
 | Final record: a `## ` heading that is not a section heading of the project's profiles, or that two profiles share and the labels do not settle | error |
 | Final record: section labels that disagree with the headings (`--labels`, or the labels in a manifest) | error |
+| Memory: the marker holds only `type`, `at`, `recorded`, `source` and the link keys, each once; a link value is one to four comment ids; an id stands under one key; a link only on a kind that may carry it, never on a checkpoint, a triage comment or a reconstructed memory (`marker-key`, `link-value`, `link-kind`) | error |
+| Memory: the plain line, first, one line of 20 to 200 characters, without a final period, backtick, `#N`, URL, path or commit, not repeating its label, a question starting with a question word, every number also in a field (`plain`) | error |
+| Memory: Evidence on a result, decision, failure or correction only, last, at most six lines in the four forms, a line range of at most 120 lines, a commit and not a tag (`evidence`) | error |
+| Memory: folds after the last field, each well formed, within the limits, a word used outside its fold and explained once; no `<details>` or `<summary>` outside a fold; no fold on a triage comment (`fold-format`) | error |
+| Memory, with `--index` or `--online --issue N`: each link target exists in this repository, is a memory, is not later, may be linked, and was written by an allowed account (`link-target`); a cited comment exists on its issue (`citation`); a table or figure is a block of the topic body and a pull request is one (`evidence`); a thread fold stands on an issue with at most one `topic:` label (`thread-issue`); "We use" and "This thread is about" only for what is not explained yet, "We now use" and "is now about" only for what is (`word-known`, `word-new`, `thread-known`, `thread-new`) | error |
+| Memory, without a lookup, or where the lookup could not tell: one warning that names what was not checked (`not-checked`) | warning |
 | Secrets (common token formats) and the project's `restricted_patterns` | error |
 | The project's `banned_words` | error |
 
@@ -56,6 +63,8 @@ The linter does not judge content. It cannot know whether a number is right.
 | Replace an issue body | `post_verified.py body --issue N --kind <kind> --body-file <draft> --backup <file>`; for a final record it also moves the section labels to follow the headings, and removes one only with `--allow-label-removal` |
 | Convert a record body of an older form, keeping it as a comment | `convert_body.py --issue N --body-file <draft> --expected <saved live body> --note "<when and why>"` |
 | A new resume comment on the hub | `resume_block.py update --file <draft>` |
+
+`post_verified.py comment` lints a memory against GitHub, so a dangling link, a missing cited comment or a wrong evidence line stops the post; a failure of GitHub other than "Not Found" stops it too. With `--dry-run --offline` it checks against the local index instead and reads no network; without a usable index it says so in one line and gives the single `not-checked` warning. A memory of a kind that may link but carries no link gets one note before it is posted: "note: this memory links to no earlier one; ...". It is a note, not an error: add the link first if it follows from, replaces or tests an earlier memory. After a verified post of a memory it prints `memory id: <id>`, the id to link to it. `create_issues.py` lints offline first and checks each comment against GitHub just before posting it; a comment of a manifest cannot link to another comment of the same manifest, so post such a memory afterwards with `post_verified.py`.
 
 Run each with `--dry-run` first; it prints the exact `gh` commands. `post_verified.py body` prints a diff against the body now on GitHub and saves that body to the backup file before editing. To edit a body, start from the current one: `gh issue view N --json body --jq .body > draft.md`, or `gh api repos/owner/name/issues/N --jq .body`.
 

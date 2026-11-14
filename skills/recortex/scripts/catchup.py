@@ -19,7 +19,10 @@ event      Writes one reconstructed event comment draft: the original time in
            (git show) within one minute. A decision is quoted only when a '>'
            block stands directly under its "**Exact words:**" line; without
            one it is written as "Decision inferred from <source>", never as a
-           quote.
+           quote. The body file starts with the memory's plain line (for a
+           result "**In plain words, we found that:** ...") and may end with
+           folded explanations; a reconstructed memory carries no links and
+           no Evidence in this version, and the linter refuses them.
 
 Nothing here posts. Drafts go through the usual review and post_verified.py.
 

@@ -55,3 +55,19 @@ The session-start and subagent briefs carry one fixed sentence that the skill wa
 Through every 0.x release, and at least twelve months from 0.5.0. Reading an earlier name is removed only in a major version, after one minor version in which `hooks.py --doctor` reports it as a problem with the fix. The storage folders used in place and the `ghim:` markers have no end date. Until then `hooks.py --doctor` lists, as notes, every earlier name in use: the configuration file, the storage folders, the trusted list that names the repository and each `GHIM_` variable that is set (by name, never its value).
 
 The upgrade was checked on Claude Code 2.1.325. A client too old to know `renames` is likely to keep the installed 0.4.x under the old name and report that the marketplace no longer lists it; this is not documented by Claude Code.
+
+## Teams on mixed versions from 0.6.0
+
+From 0.6.0 a memory starts with a line in plain words, may link to earlier memories in its marker, may list Evidence and may end with folded explanations, and ideas and questions are kinds of memory ([issue-model.md](issue-model.md), "Events"). A teammate on 0.4.x or 0.5.0, on the same record or on the same machine, loses nothing:
+
+| What 0.6.0 writes | What 0.4.x and 0.5.0 make of it |
+|---|---|
+| Links in the marker (`because=`, `replaces=`, `instead=`, `checks=`) | Kept in the marker and ignored; the comment keeps its type and time, and their linter is silent |
+| The plain line and Evidence | Two more fields; their linter checks only the fields it requires, in order |
+| Folds | Text after the last field; only a final-record body may not hold a `<details>` block |
+| `#N` and comment addresses in fields | `#N` is checked as before; a comment address is a URL like any other |
+| An idea or a question | A comment of type `other` at its marker time, never dropped; they cannot write or lint one |
+| Four more tables and five triggers in a shared index | Left alone by their sync; the triggers record that it wrote, and the next sync of 0.6.0 derives everything again |
+| Hook payloads | The same: no payload reads the text of a comment other than the hub's checked resume block |
+
+What an older version cannot do: write an idea or a question, have links, Evidence or folds checked, or run `index.py query recall`. A memory written by an older version has no plain line, and `query recall` shows its title in its place. When an older version synced last, `query recall` of 0.6.0 says "the index was last written by an older version of the plugin, or never by this one; run index.py sync", and one `index.py sync` of 0.6.0 brings it back.

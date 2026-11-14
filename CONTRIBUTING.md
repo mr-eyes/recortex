@@ -8,7 +8,7 @@ python3 -m unittest tests.test_scripts.{LintTests,HelperTests,LabelTests,CreateI
 python3 -m unittest tests.test_scripts.{ResumeBlockTests,IndexTests,HookTests,StorageTests,GuardTests,BackgroundTests,DiscoveryTests,SetupTests,EarlierNameTests}
 ```
 
-The two commands hold every test class between them, and each takes a few minutes; `python3 -m unittest discover -s tests` runs the same tests in one command of about four and a half minutes. A new test class goes into one of the two lists. `mkdir -p .tmp` makes the folder that a test needs when its class runs first in a fresh clone.
+The two commands hold every test class between them, and each takes a few minutes; `python3 -m unittest discover -s tests` runs the same tests in one command of about five minutes. A new test class goes into one of the two lists. `mkdir -p .tmp` makes the folder that a test needs when its class runs first in a fresh clone.
 
 The tests run the scripts against `tests/fake_gh.py`, a local stand-in for `gh` selected with the `RECORTEX_GH` environment variable. They work in temporary folders under `.tmp/` and remove them afterwards; set `RECORTEX_TEST_KEEP=1` to keep them for inspection. No test may contact GitHub.
 
@@ -23,6 +23,10 @@ Check the packaging with `claude plugin validate .`.
 - No script deletes issues, comments or labels, or edits a posted comment. The only labels a script changes on an existing issue are section labels that follow its body's headings.
 - A new lint rule comes with a test that shows it firing and a test that shows it staying quiet.
 - A change to a template's sections is also a change to `KINDS` in `lint_drafts.py`, to `references/issue-model.md` and to the example drafts.
+- A link kind, or a change to who may link to what, is a change to `LINK_RULES` in `record_format.py`, to the linter's tests (`test_link_rules_are_exactly_the_table` holds the table as a literal), to the link tables in `references/issue-model.md`, and to its phrase on the mind page of the next round.
+- A plain-line label or a fold stem is a change to `record_format.py` (`PLAIN_LABELS`, `WORD_STEM`, `THREAD_STEM`), to the template, to `references/templates.md` and `references/issue-model.md`, and to the examples, and the example memories must still read under `tests/fixtures/compat-0.5.0/` (`CompatTests`).
+- `tests/fixtures/compat-0.5.0/` is a frozen copy of the 0.5.0 parser and linter, written with `git show 6979c65:skills/recortex/scripts/<name>` and never edited; a test checks its SHA-256 values. A change to the record format that an older reader cannot read turns `CompatTests` red: change the format, not the fixture.
+- Marker keys are lowercase letters only (`[a-z]+`): a key with a hyphen or an underscore makes the marker fail to parse on every version, and the comment loses its type and time. The columns of `events` and `FORMAT` in `index.py` stay as they are, since an older version on the same index writes ten values and refuses another format; new tables go into `SCHEMA` as `CREATE TABLE IF NOT EXISTS`, and triggers into `MIND_TRIGGERS`, which only `run_sync` runs.
 - A topic body is deliverable text: a change to the final-record template or to a profile's section labels keeps the headings in `profiles/*.json`, the label descriptions and `references/profiles.md` in step.
 - A GraphQL query uses only fields listed in `tests/fixtures/github-schema-excerpt.graphql`, which is copied from GitHub's public schema. Add the field's signature there, unchanged, when a query needs a new one; `tests/fake_gh.py` rejects anything else, as GitHub would.
 - The resume block is an append-only comment on the hub; no script edits one, and an edited one is never shown. Text printed by the hook stays inside its data frame, includes an issue title only when the issue was opened by an allowed account and never renamed by another, and is printed only for repositories the user trusted.

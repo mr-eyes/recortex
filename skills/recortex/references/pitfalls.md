@@ -60,6 +60,14 @@ A broken diagram shows as a red error box in place of the map, and the preview i
 | A deliverable body written into a task, the hub or an issue of another profile | Only an issue labeled `final-record`, and not `hub` or `active`, gets a deliverable body; section labels of profiles not in use stop the run | `post_verified.py body`, `convert_body.py` |
 | A body converted while someone else was editing it loses their edit | Draft from a saved copy of the live body; stop if the live body differs | `convert_body.py --expected` |
 
+## Memories and their links
+
+| Pitfall | Rule | Enforced by |
+|---|---|---|
+| A guessed link is a false memory: a cause that never was is recorded as fact, and a posted link cannot be edited away | Link only when the sentence "<the earlier memory>, so <this one>" is true; take ids only from `query recall` or a `memory id:` line of this session; link to the nearest cause; none is better than a guess | Linter: the target exists, is a memory of an allowed account, is not later, and the kinds may be linked |
+| A plain line is a summary, not the decision: a reader takes the summary for the words that were said | The quote stays the decision; the plain line only says in plain words what it means, and every number in it also stands in a field | Linter: the plain line's form and numbers; review reads it against the fields |
+| Explaining what everyone in the field knows buries the words that need it | Explain only what the project named: its own names, nicknames, abbreviations and ordinary words with its own meaning; never a general word of the field | Review |
+
 ## Decisions and people
 
 | Pitfall | Rule |

@@ -71,7 +71,7 @@ A body is at most 65,536 characters. A deliverable section that needs more is sp
 
 ## Events
 
-An event is something that happened and will matter later. Each one becomes a dated comment on its topic issue, never a new top-level issue and never text in a body. Five kinds, each with a template:
+An event is something that happened and will matter later. Each one becomes a dated comment on its topic issue, never a new top-level issue and never text in a body. Seven kinds of memory, and the triage comment, each with a template:
 
 | Kind | When | Template |
 |---|---|---|
@@ -80,6 +80,8 @@ An event is something that happened and will matter later. Each one becomes a da
 | Failure | A run, approach or change failed | `templates/comment-failure.md` |
 | Checkpoint | A working stretch ends with work in flight | `templates/comment-checkpoint.md` |
 | Correction | A posted statement or number was wrong | `templates/comment-correction.md` |
+| Idea | A thought raised inside a thread's work that might help, not yet tried | `templates/comment-idea.md` |
+| Question | A question raised inside a thread's work, not yet answered | `templates/comment-question.md` |
 | Triage | An issue opened by hand was given a type and a route | `templates/comment-triage.md` |
 
 Every event comment starts with a machine-readable marker line, then its heading:
@@ -92,6 +94,113 @@ Every event comment starts with a machine-readable marker line, then its heading
 The heading keeps the comment list of an issue readable as a timeline; the marker gives the type and the time with its offset, so the index and `compile.py` can order every event of the project exactly. Both carry the same local date and time, and the linter checks that they agree. The comment that keeps a former body during a conversion carries `type=record`. Resume comments keep their own heading first and have no marker, because the trust check reads that heading. A merged change is recorded as a result comment whose "What ran" names the pull request and commit.
 
 Comments are append-only. They are the history: results, decisions with the decider's exact words, failures, corrections. The decision record lives only in decision comments. Nobody rewrites them, and none of them is deliverable text.
+
+A memory is written in a fixed order: marker, heading, the plain line, the kind's fields, `**Evidence:**` when there is something to show, then the folds, then nothing. A memory recorded before 0.6.0 has no plain line and no links; it stays as it is.
+
+### The plain line
+
+Directly under the heading, one line in plain words that completes a fixed label. It is the first field of every kind:
+
+| Kind | The line starts with | And is |
+|---|---|---|
+| Result | `**In plain words, we found that:**` | a statement |
+| Decision | `**In plain words, we decided to:**` | a verb phrase |
+| Failure | `**In plain words, what went wrong:**` | a statement |
+| Idea | `**In plain words, we had the idea to:**` | a verb phrase |
+| Question | `**In plain words, we asked:**` | a clause that starts with whether, why, how, what, which, who, when, where or if |
+| Correction | `**In plain words, we corrected ourselves:**` | a statement |
+| Checkpoint | `**In plain words, we paused here:**` | a statement of where things stand |
+
+The linter refuses a plain line that is missing, longer than one line, under 20 or over 200 characters, ends with a period, holds a backtick, an issue number (`#N`), a URL, a path or file name, or a commit hash, repeats its label ("we decided to we decided"), or holds a number that stands in no field of the same memory. The heading, the marker and the folds do not count as fields: put the number in a field, with its source, or leave it out of the line. The line is a summary written for someone who was away for a month; the fields stay the record, and in a decision the quote stays the decision.
+
+### Links between memories
+
+A memory may say, in its marker, which earlier memories it follows from, replaces, was done instead of, or puts to the test:
+
+```
+<!-- ghim:event type=decision at=2026-03-07T09:30-08:00 because=9104 instead=9103 -->
+```
+
+The value is one to four comment ids separated by commas: the number after `#issuecomment-` in a memory's address, which `post_verified.py` prints as `memory id:` and `index.py query recall --issue N` lists. A link points back in time, to a memory of the same repository. For each candidate in the recall output, ask the question of each kind:
+
+| Key | Ask | Read as | Effect on the earlier memory |
+|---|---|---|---|
+| `because` | Did this happen as a consequence of that? | "That, so this." | none |
+| `replaces` | Did that once stand, and does this now stand in its place? | "Later that changed: this." | replaced |
+| `instead` | Was that an attempt or an idea that never held, and is this what we did in its place? | "That was set aside. Instead, this." | set aside |
+| `checks` | Does this put that question, idea or decision to the test? | "The answer came later" (question), "We tried it" (idea), "We checked it" (decision) | a question answered, an idea tried |
+
+Who may link to what (`LINK_RULES` in `scripts/record_format.py`, used by the linter and by every reader):
+
+| Key | The memory that carries it | May point at |
+|---|---|---|
+| `because` | result, decision, failure, correction, idea, question | any of those six kinds |
+| `replaces` | any of those six kinds | a memory of the same kind; a correction may point at any of the six |
+| `instead` | decision, idea, result | idea, decision |
+| `checks` | result, failure | question, idea, decision |
+| `checks` | decision | question |
+
+A result never replaces a decision: it `checks` it, and a new decision replaces it. A checkpoint carries no link and is never a target; triage and record comments carry none; a reconstructed memory carries none in this version. A key appears once, and an id stands under one key. The marker accepts only `type`, `at`, `recorded`, `source` and the four link keys, so a misspelled key is an error. Add a link only when its sentence read aloud is true; link to the nearest cause, not to its ancestors. Most memories have one link, and none is better than a guess: a posted link cannot be edited away (a correction can replace the memory that carried a wrong one).
+
+When it can ask the record (`post_verified.py`, `lint_drafts.py --index` or `--online --issue N`), the linter checks each target: it exists in this repository, it is a memory, it is not later than the draft, the rules above allow it, and, when the repository is in your trusted list, it was written by an allowed account. A memory by any other account is not told on the mind page, so a link to it would lead nowhere; if that account belongs to the project, add its login to the repository's line in your trusted list.
+
+### Evidence
+
+Optional, on a result, decision, failure or correction, as the last field: up to six lines in four forms, and nothing else.
+
+| Line | Means |
+|---|---|
+| `- table <id>` | a table block of this thread's topic body |
+| `- figure <id>` | a figure block of this thread's topic body |
+| `- code <path>#L<a>-L<b> at <commit>` | lines of a file at a commit (`#L<a>` for one line; at most 120 lines) |
+| `- pull <n>` | a merged pull request |
+
+`code` and `pull` may end with ` in <owner>/<name>` when the code lives in another repository; that name is recorded and not checked. A commit is 7 to 40 hexadecimal digits, never a tag or a branch, which could change. With the record at hand the linter checks that a table or figure is a block of the topic body and that a pull request exists and is one; code lines are checked for their form only. Copy each line from `git` output, never from memory: no line is better than a guessed one.
+
+### Folds: explanations kept inside the memory
+
+A word that cannot be understood without this project is explained in the memory that first uses it, in a fold at its end; a thread's opening, what the thread is about, goes into the first memory recorded on it from 0.6.0 on. Nothing else is posted for them. On GitHub a fold shows as one closed line that opens on a click:
+
+```
+<details>
+<summary>We use "line splitter" to mean the first version of tinycsv's reader, which cut the file into lines before looking at quotes</summary>
+
+**Why it matters here:** Its failures are why the reader was rewritten.
+
+**Also called:** the splitter
+
+**The longer story:**
+
+tinycsv began as a few lines of code: split the file at every line break, then split each line at every comma.
+
+</details>
+```
+
+The summary is one of `We use "<word>" to mean <meaning>`, `We now use "<word>" to mean <meaning>`, `This thread is about <meaning>` and `This thread is now about <meaning>`. A blank line follows it. Then `**Why it matters here:**` for a word or `**Why we care:**` for a thread, one paragraph of at most 400 characters; for a word optionally `**Also called:**` with up to five other names; optionally `**The longer story:**`, a blank line and paragraphs of plain text, at most 2,500 characters; then `</details>`.
+
+- The word: 1 to 60 characters, starting with a letter or digit, without `"`, `<`, `>`, `&` or a backtick. The meaning is the line shown on hover in the mind page: 20 to 200 characters, one sentence without its period, with the plain line's bans (no backtick, `#N`, URL, path or commit) and no `<`, `>` or `&`.
+- Inside a fold: no heading, no line that starts with `<` other than its own lines, no code fence, no field of the memory. Citations may stand in "Why it matters here", "Why we care" and the longer story, never in the summary.
+- At most three word folds and one thread fold in a memory; a word is explained once in it, and it is used in the memory outside its own fold, under its name or one of its other names.
+- A word is known by its key: lowercase, inner spaces collapsed, a leading "the", "a" or "an" dropped. The newest explanation of a key by an allowed account stands; earlier ones are what we meant before. A later memory that uses the word with a changed meaning writes `We now use`; `We use` for a word already explained is an error that names the memory, and `We now use` for a word never explained is an error. The same holds for `This thread is about` and `This thread is now about`. An explanation stands whatever becomes of the memory that holds it.
+- A thread fold needs an issue with at most one `topic:` label, or it could not say which thread it opens.
+
+Which words: only the project's own names for its test files, settings, earlier versions and internal parts, its nicknames and abbreviations, and ordinary words it uses with its own meaning. A general word of the field (streaming, delimiter, state machine) is never explained, however technical. Explain the word, not the project.
+
+### Citations
+
+`#N` for an issue of this repository and `https://github.com/<owner>/<name>/issues/<n>#issuecomment-<id>` for one memory may stand in every field and in a longer story, and GitHub links them. They never stand in the plain line or in a summary. `#N` is checked as before (`bare-ref`); a comment address of this repository is checked like a link target: the comment must exist on that issue.
+
+### A worked chain
+
+`examples/tinycsv/chain/` holds five memories posted one at a time on the reader topic, in this order:
+
+1. An idea: keep the current reader and remember across lines whether a quoted field is open (9103).
+2. A failure that `checks=9103`: the patch broke files with mixed line endings (9104).
+3. A decision, `because=9104 instead=9103`: rewrite the reader to read one character at a time. It explains "line splitter" in a fold and lists a table, code at a commit and a pull request as Evidence (9105).
+4. A question, `because=9105`: whether the new reader still works on a pipe (9106).
+5. A decision that `replaces=9102`, the earlier decision on strict quoting, and explains the word again with "We now use" (9107).
+
+`index.py query recall --issue 5` then shows the idea as set aside, the question as open and the first decision as replaced.
 
 ## Changing the deliverable text
 
@@ -138,6 +247,8 @@ Every pull request names its topic issue in its description ("Topic: #12"), carr
 | The owner said yes, no or "do it this way" | Decision comment with their exact words; in the body only what the deliverable now says, with a one-sentence reason |
 | A crash, a dead end, a rejected idea | Failure comment; in the body only a limitation of the final method or result that follows from it |
 | Work in development or an open question | An `active` issue that names its destination topic |
+| A thought or a question that comes up in the middle of a thread's work | An idea or question memory on that thread; a later result may `checks` it. Open work and the owner's decision list stay `active` issues |
+| A word that cannot be understood without this project | A fold in the memory that first uses it; afterwards it is used as written there |
 | A plan for the next hours | A new resume comment on the hub and, if work is in flight, a checkpoint comment |
 | A doubt about an earlier number | An `active` issue until checked; then a correction comment, and the body edited if the number was wrong |
 | A file, table, commit or tag behind a number | "Sources" of the body |

@@ -45,7 +45,7 @@ With the plugin installed, hooks do part of this for you: at every session start
 |---|---|
 | Hub | One pinned issue, label `hub`. The deliverable-text rule, project statement, Mermaid map, the issues of each deliverable section in deliverable order, active issues, pull requests, label legend, older-tracker map, recording rules. It repeats no numbers from the bodies |
 | Final record | One issue per topic, label `final-record`. Its body is the deliverable's text for the sections its section labels name, one `## ` heading per section, then "Sources": the current version only, ready to copy, with no history. Its comments are the history |
-| Event | A dated comment on the topic issue: result, decision, failure, checkpoint or correction. Comments are never deliverable text |
+| Event | A dated comment on the topic issue, a memory of seven kinds: result, decision, failure, checkpoint, correction, idea or question. Each starts with a line in plain words and may link to the earlier memories it builds on. Comments are never deliverable text |
 | Resume block | The newest comment on the hub that carries the resume markers and was posted by an allowed account, as found by `resume_block.py show`: current focus, active issues, last decisions, next actions, holds. Each update is a new comment; none is ever edited. A "Resume block" comment from anyone else is not it |
 | Active task | An issue labeled `active` for work in development, open questions or a list of decisions for the owner. It names its destination topic and carries no section labels; its result enters the topic's body only once it is adopted (merged, integrated, released) |
 | Labels | Role labels, deliverable-section labels from the profile, and `topic:` labels. Section labels follow the body's section headings. Every issue and pull request is labeled when opened; every pull request names its topic issue |
@@ -73,11 +73,20 @@ Step-by-step with commands: [references/bootstrap.md](references/bootstrap.md).
 Do this when an experiment finishes, a decision is made, something fails or a change is merged. Do it then, not at the end of the day.
 
 1. Pick the topic issue. If none fits, create a final record for the new topic first and add it to the hub.
-2. Copy the matching comment template to a draft file and fill every field. "None" with a reason is a valid entry; an empty field is not. Its first line is the event marker, `<!-- ghim:event type=<type> at=<ISO time with offset> -->`, at the same local time as the heading.
-3. Check every number against the file it comes from. Never from memory.
-4. For anything that will be cited or acted on, have an independent reviewer (a fresh agent that has not seen your reasoning) try to break the draft against the sources.
-5. `python3 ${CLAUDE_SKILL_DIR}/scripts/post_verified.py comment --issue N --kind <kind> --body-file <draft> --dry-run`, then for real. It lints, posts and compares the stored comment with the draft.
-6. If the event changes what the deliverable says, edit the topic's body (next workflow). A result of work in development stays in comments until it is adopted.
+2. Run `python3 ${CLAUDE_SKILL_DIR}/scripts/index.py sync`, then `python3 ${CLAUDE_SKILL_DIR}/scripts/index.py query recall --issue N`: the thread's newest memories with their state, open questions and untried ideas elsewhere, and the words explained so far.
+3. Copy the matching comment template to a draft file and fill every field, the plain line first. "None" with a reason is a valid entry; an empty field is not. Its first line is the event marker, `<!-- ghim:event type=<type> at=<ISO time with offset> -->`, at the same local time as the heading.
+4. Link it to what it builds on (below).
+5. Explain the project's own words (below) and, when recall says the thread has no opening yet, what the thread is about, in folds at the end. Add Evidence when there is a table, figure, code or pull request to show.
+6. Check every number against the file it comes from. Never from memory.
+7. For anything that will be cited or acted on, have an independent reviewer (a fresh agent that has not seen your reasoning) try to break the draft against the sources, and read the plain line against the fields.
+8. `python3 ${CLAUDE_SKILL_DIR}/scripts/post_verified.py comment --issue N --kind <kind> --body-file <draft> --dry-run`, then for real. It lints, checks links and evidence against the record, posts, compares the stored comment with the draft and prints `memory id: <id>`.
+9. If the event changes what the deliverable says, edit the topic's body (next workflow). A result of work in development stays in comments until it is adopted.
+
+Link it to what it builds on. For each candidate in the recall output ask the four questions of the link table in `issue-model.md`. Add a link only when you can say its sentence aloud and it is true: "<the earlier memory>, so <this one>". Take ids only from that output or from the `memory id:` line `post_verified.py` printed in this session, never from memory. Link to the nearest cause, not to its ancestors. Most memories have one link; none is better than a guess.
+
+Read your plain line as someone who was away for a month. A word that cannot be understood without this project (our name for a test file, a setting, an earlier version, an internal part, a nickname, an abbreviation used only here, or an ordinary word we use with our own meaning) is either under "Words explained so far", and then you use it as written there, or you explain it in a fold of this memory. Never explain a general word of the field. Explain the word, not the project.
+
+The plain line, links, Evidence and folds in full: [references/issue-model.md](references/issue-model.md), "Events"; how to fill them: [references/templates.md](references/templates.md).
 
 ### Change the deliverable text
 
@@ -89,7 +98,7 @@ Do this when an experiment finishes, a decision is made, something fails or a ch
 
 ### Bounded task
 
-Open an issue from [templates/active-task.md](templates/active-task.md) with label `active` and the topic label, never a section label. Open questions and open work get one such issue each, or one decision list for the owner. When the task ends: post the result as a result comment on the destination topic, edit the destination body if the result was adopted, write the result and that comment's link into the task's "Result" section, close the task, and post a new resume block.
+Open an issue from [templates/active-task.md](templates/active-task.md) with label `active` and the topic label, never a section label. Open questions and open work get one such issue each, or one decision list for the owner. A question or idea raised inside a thread's work is a question or idea memory on that thread; open work and a list of decisions for the owner stay an `active` issue. When the task ends: post the result as a result comment on the destination topic, edit the destination body if the result was adopted, write the result and that comment's link into the task's "Result" section, close the task, and post a new resume block.
 
 ### End of a working stretch
 
@@ -138,13 +147,13 @@ Why each rule exists, with the Mermaid and GitHub limits: [references/pitfalls.m
 | Script | Purpose | Writes to GitHub |
 |---|---|---|
 | `setup_labels.py` | Create the labels of the chosen profiles; idempotent | yes, `--dry-run` available |
-| `lint_drafts.py` | Check drafts: sections, placeholders, bare `#N`, length, Mermaid, secrets; history in a final record; section headings against labels | no |
+| `lint_drafts.py` | Check drafts: sections, placeholders, bare `#N`, length, Mermaid, secrets; history in a final record; section headings against labels; a memory's plain line, links, Evidence and folds, against the record with `--index` or `--online --issue N` | no |
 | `create_issues.py` | Create interlinked issues and comments from a manifest, replace placeholders, read back | yes, `--dry-run` available |
 | `post_verified.py` | Post one comment or replace one issue body, with lint, backup and read-back; a final record's section labels follow its headings | yes, `--dry-run` available |
 | `convert_body.py` | Replace a record body of an older form with deliverable text: live-body check, the former body kept as a comment, body and labels replaced and read back | yes, `--dry-run` available |
 | `resume_block.py` | `show` prints the newest resume comment by an allowed account, for trusted repositories only; `update` posts a new resume comment and reads it back | `update` only, `--dry-run` available |
 | `snapshot.py` | Save all issues and comments as local Markdown with an index | no |
-| `index.py` | Local SQLite index of the record: `sync` from GitHub; `query` consistency, impact, timeline, triage, brief | no (reads) |
+| `index.py` | Local SQLite index of the record: `sync` from GitHub; `query` consistency, impact, recall (what a new memory could link to), timeline, triage, brief | no (reads) |
 | `hooks.py`, `run_hook.sh` | The four hooks: SessionStart, SubagentStart, UserPromptSubmit, PreCompact; `hooks.py --print` shows the payloads | no |
 | `setup.py` | `detect` suggests deliverables from file names (read-only); `apply` makes the setup from confirmed answers | `apply` only, `--dry-run` available |
 | `catchup.py` | `inventory` and `gap` list earlier work (read-only); `event` drafts a reconstructed event comment | no |

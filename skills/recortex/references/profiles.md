@@ -4,6 +4,8 @@ A profile sets three things: the deliverable and its sections (which become sect
 
 Label definitions live in `profiles/*.json`. The `core` profile (role labels) is always applied.
 
+The kinds of memory are the same in every profile: result, decision, failure, checkpoint, correction, idea and question. A profile's "Events" line says which happenings count; ideas and questions raised inside a thread's work are memories in any profile.
+
 ## Software development (`software`)
 
 Deliverable: a release, meaning its changelog, documentation and known issues.

@@ -18,7 +18,7 @@ Setup is a short set of questions; issues people open by hand are flagged for tr
 | Hub issue | One pinned issue that is the entry point. It states the deliverable-text rule and holds the project statement, a Mermaid map, the issues of each deliverable section in order, the active issues, the pull requests, the labels and the recording rules. It repeats no numbers from the bodies |
 | Resume comments | The short "Resume block" (current focus, active issues, last decisions, next actions, holds) is posted as a new comment on the hub at the end of every working stretch. The newest one is what a fresh session reads first; older ones stay as history |
 | Topic issues | One issue per topic, labeled `final-record`. Its body is the deliverable's text for the sections it feeds (for a paper, for example `## Methods` and `## Results`), the current version only and ready to copy, followed by the sources of its numbers. Section labels such as `ms:methods` follow the body's headings |
-| Event comments | Dated comments on the topic issue for each result, decision, failure, checkpoint and correction, written from templates. They are the history and never deliverable text |
+| Event comments | Dated comments on the topic issue, written from templates: the memories of the project. Seven kinds: result, decision, failure, checkpoint, correction, idea and question. Each starts with one line in plain words and may name the earlier memories it follows from, replaces, was done instead of or tests. They are the history and never deliverable text |
 | Active tasks | Issues labeled `active` for work in development and open questions; each names the topic its result goes to and carries no section label |
 | Labels | Role labels, deliverable-section labels per project type, and topic labels |
 
@@ -113,6 +113,8 @@ Topic bodies that hold a full record (a dated current state, folded old text, de
 1. **Start.** The session reads the newest resume comment on the hub, then the open `active` issues, then the newest comments of the topics in play. With the hook this begins automatically.
 2. **Work.** When an experiment finishes, a decision is made, something fails or a change is merged, the session drafts a comment from the matching template, checks every number against its source file, lints the draft and posts it. The script reads the comment back from GitHub and compares it with the draft.
 3. **The deliverable text changes.** The topic's body is edited in place and its section labels follow its headings; the comment that caused the change is the record of why.
+
+Before a new memory is written, `index.py query recall --issue N` shows the newest memories of its thread with their state, the open questions and untried ideas elsewhere, and the words the project has explained. The session writes the plain line first, links the memory to the earlier one it builds on when that link is true, and explains in a fold at its end any word that cannot be understood without the project. The linter checks the plain line, the links and their targets, the Evidence lines and the folds before anything is posted, and the post prints the new memory's id for the next link.
 4. **Stop.** The session posts a checkpoint on each active issue and a new resume comment on the hub.
 
 ## What survives compaction, and why
@@ -157,13 +159,13 @@ All are in `skills/recortex/scripts/`, use only the Python standard library and 
 | Script | What it does | Writes to GitHub |
 |---|---|---|
 | `setup_labels.py` | Creates the labels of the chosen profiles. Existing labels are left alone unless `--update` | yes |
-| `lint_drafts.py` | Checks drafts: required sections, leftover placeholders, bare `#N`, body length, Mermaid rules, secrets, project-defined restricted patterns; history in a topic body; section headings against labels | no |
+| `lint_drafts.py` | Checks drafts: required sections, leftover placeholders, bare `#N`, body length, Mermaid rules, secrets, project-defined restricted patterns; history in a topic body; section headings against labels; a memory's plain line, links, Evidence and folds, against the record with `--index` or `--online` | no |
 | `create_issues.py` | Creates interlinked issues and comments from a manifest, replaces `NEW-<key>` placeholders with real numbers, reads every body and comment back, and can be rerun after a failure without duplicates or overwriting changed bodies | yes |
-| `post_verified.py` | Posts one comment or replaces one issue body, with lint, a backup of the replaced body and read-back; for a topic body, the section labels follow the headings | yes |
+| `post_verified.py` | Posts one comment or replaces one issue body, with lint, a backup of the replaced body and read-back; for a topic body, the section labels follow the headings; for a memory, its links and evidence are checked against GitHub and its id is printed | yes |
 | `convert_body.py` | Converts a record body of an older form into deliverable text: stops if the live body changed, keeps the former body as a comment, replaces the body and section labels, reads all back | yes |
 | `resume_block.py` | `show` prints the newest resume comment written by an allowed account, for trusted repositories only. `update` posts a new resume comment on the hub and reads it back; it never edits the hub or an earlier comment, and warns when the posting login is not allowed | `update` only |
 | `snapshot.py` | Saves all issues, pull requests and comments as local Markdown with an index, for offline reading and for surveying an old tracker | no |
-| `index.py` | Keeps the local index of the record: `sync` reads what changed on GitHub; `query` answers consistency, impact, timeline, triage and brief questions without network | no |
+| `index.py` | Keeps the local index of the record: `sync` reads what changed on GitHub; `query` answers consistency, impact, recall, timeline, triage and brief questions without network | no |
 | `hooks.py`, `run_hook.sh`, `session_start_hook.sh` | The four hooks; `hooks.py --print` shows their payloads | no |
 | `setup.py` | `detect` suggests deliverables from file names; `apply` makes the setup from answers you confirmed | `apply` |
 | `catchup.py` | Lists earlier work and work done since the newest recorded event; drafts reconstructed event comments | no |
@@ -207,7 +209,7 @@ The trust boundary is your allowed list, not write access to the repository. Any
 
 ## Worked example
 
-`examples/tinycsv/` holds the drafts for an invented project: a small CSV library preparing release 0.3.0, with a benchmark note. It has a hub with its first resume comment, two topics whose bodies are release-notes and benchmark-note text, one active task, one result and one decision.
+`examples/tinycsv/` holds the drafts for an invented project: a small CSV library preparing release 0.3.0, with a benchmark note. It has a hub with its first resume comment, two topics whose bodies are release-notes and benchmark-note text, one active task, one result and one decision. `examples/tinycsv/chain/` adds five memories that link to each other, posted one at a time after the manifest.
 
 ```bash
 cd examples/tinycsv

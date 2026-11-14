@@ -6,6 +6,12 @@ the issues, replaces every NEW-<key> with the real number (#N in prose,
 "Issue N" inside Mermaid), writes the final bodies, and reads each one back
 from the API to confirm it matches the draft.
 
+Every draft is linted before anything is posted, with no network; each one is
+linted again just before it is posted, when bare #N and a memory's links, cited
+comments, evidence and explanations are checked against GitHub. A comment of
+the manifest cannot link to another comment of the same manifest, whose id does
+not exist yet: post such a memory afterwards with post_verified.py.
+
 Only files named in the manifest are posted. Nothing is ever deleted. Progress
 is kept in <manifest>.state.json, so a rerun continues where a failed run
 stopped:
