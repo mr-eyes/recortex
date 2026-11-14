@@ -5414,6 +5414,9 @@ def memory_draft(kind, at, links="", plain=None, rest=None):
 class MindIndexTests(RecordSandbox):
     """What 0.6.0 records about memories, in the index, in query recall and at posting, on the example record."""
 
+    THREAD = ("\n<details>\n<summary>This thread is about how tinycsv writes files and how it names its columns"
+              "</summary>\n\n**Why we care:** Both matter.\n\n</details>\n")
+
     def put(self, cid, issue, body, user=None, created=None):
         """Add a comment to the fake repository as if it was posted, and move the fake's next id past it. Each comment
         is stamped a minute after the one before, so that an incremental sync reads it."""
@@ -5882,6 +5885,32 @@ class MindIndexTests(RecordSandbox):
         self.assertNotEqual(0, broken.returncode)
         self.assertIn("HTTP 502", broken.stderr)
         self.assertEqual(4, len(self.calls("issue comment")))
+
+    def test_a_github_failure_is_never_read_as_not_found_from_a_number(self):
+        data = self.repo()
+        data["issues"]["404"] = dict(data["issues"]["7"], labels=["active", "topic:writer", "topic:columns"])
+        data["next_issue"] = 405
+        self.save(data)
+        self.put(94041, 5, chain_text("1-idea.md"))
+        self.ready()
+        draft = memory_draft("idea", "2026-03-20T10:00-08:00") + self.THREAD
+        self.assertIn("[thread-issue]", self.post(draft, "idea", 404).stdout)
+        # a 502 on issue #404 stops the post; it is not read as "there is no issue"
+        broken = self.post(draft, "idea", 404, env={"FAKE_GH_FAIL_ON": "api repos/example-org/tinycsv/issues/404"})
+        self.assertNotEqual(0, broken.returncode)
+        self.assertIn("HTTP 502", broken.stderr)
+        self.assertEqual([], self.calls("issue comment"))
+        linked = chain_text("2-failure.md").replace("checks=9103", "checks=94041")
+        broken = self.post(linked, "failure",
+                           env={"FAKE_GH_FAIL_ON": "api repos/example-org/tinycsv/issues/comments/94041"})
+        self.assertIn("HTTP 502", broken.stderr)
+        self.assertNotIn("there is no comment", broken.stdout)
+        self.assertEqual([], self.calls("issue comment"))
+        self.assertFalse(recortex.not_found(recortex.GhError("gh api repos/a/b/issues/404 failed (exit 1): HTTP 502")))
+        self.assertTrue(recortex.not_found(recortex.GhError("gh api x failed (exit 1): gh: Not Found (HTTP 404)")))
+        absent = self.post(draft, "idea", 77, "--dry-run")
+        self.assertEqual(1, absent.returncode)
+        self.assertIn("there is no issue #77 in example-org/tinycsv", absent.stdout)
 
     def test_dry_run_offline_checks_against_the_index_and_reads_no_network(self):
         self.add_chain(2)

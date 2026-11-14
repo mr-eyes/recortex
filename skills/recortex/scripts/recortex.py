@@ -638,13 +638,19 @@ def read_comment_body(repo, comment_id):
     return data.get("body") or ""
 
 
+def not_found(error):
+    """True when a GhError is GitHub's "Not Found". Only the status gh prints counts: the message also holds the
+    path of the request, and an issue number, a comment id or a repository name may hold 404."""
+    return "(HTTP 404)" in str(error)
+
+
 def number_exists(repo, number):
     """True when issue or pull request `number` exists in `repo`."""
     try:
         gh(["api", "repos/%s/issues/%d" % (repo, number), "--jq", ".number"])
         return True
     except GhError as error:
-        if "404" in str(error) or "Not Found" in str(error):
+        if not_found(error):
             return False
         raise
 
@@ -655,7 +661,7 @@ def issue_kind(repo, number):
     try:
         data = json.loads(gh(["api", "repos/%s/issues/%d" % (repo, number)]))
     except GhError as error:
-        if "404" in str(error) or "Not Found" in str(error):
+        if not_found(error):
             return None, None
         raise
     except ValueError:

@@ -824,6 +824,9 @@ def check_record(text, kind, lookup, add):
         topics = [] if target in (None, unknown) else [l for l in target["labels"] if l.lower().startswith("topic:")]
         if target is unknown:
             skipped.add("explanations")
+        elif target is None:
+            add("error", "thread-issue", 0, "there is no issue #%d in %s%s, so a fold cannot say what its thread is about"
+                % (number, repo, sync))
         elif len(topics) > 1:
             add("error", "thread-issue", 0, "#%d carries %d topic: labels, so a fold cannot say which thread it opens; "
                 "write what a thread is about in a memory on an issue with one topic: label" % (number, len(topics)))

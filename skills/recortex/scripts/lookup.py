@@ -38,10 +38,6 @@ class Unavailable(Exception):
     """There is no usable local index; the message says why in fixed words."""
 
 
-def not_found(error):
-    return "404" in str(error) or "Not Found" in str(error)
-
-
 class Lookup:
     UNKNOWN = UNKNOWN
 
@@ -131,7 +127,7 @@ class Lookup:
         try:
             data = json.loads(recortex.gh(["api", "repos/%s/issues/comments/%d" % (self.repo, cid)]))
         except recortex.GhError as error:
-            if not_found(error):
+            if recortex.not_found(error):
                 return None
             raise
         except ValueError:
