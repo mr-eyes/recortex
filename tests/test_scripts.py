@@ -5244,6 +5244,12 @@ class MemoryFormatTests(unittest.TestCase):
                   ("tinycsv took 1.5 s on the big file of the benchmark", "No other number.", "1.5")]
         for line, field, number in firing:
             self.assertIn("number %s in" % number, errors(line, field), line)
+        # the decision draft holds no 100, and its year 2026 is in "Decided by"
+        effect = "Quoting and line endings are handled in one place."
+        for line, field, number in [("make 100% of the conformance files parse as they did before", "98.1% parse.", "100"),
+                                    ("try the new reader on 2000 files before the next release", "Nothing else.", "2000")]:
+            text = self.with_plain("decision", line).replace(effect, field, 1)
+            self.assertIn("number %s in" % number, " ".join(self.plain_errors("decision", None, text)), line)
 
     # ------------------------------------------------------------ Evidence
 

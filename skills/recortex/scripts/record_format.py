@@ -500,14 +500,14 @@ def number_stands(token, power, fields):
     if token.count(".") > 1:
         return False
     value = decimal.Decimal(token).scaleb(power)
-    if not value:
-        return False
+    if not value or value == 100:
+        return False  # 100 says "all" (100%, all 100 files): it stands only as written, never for 98
     # the precision the plain line gives: its last decimal as written, or its last digit that is not a zero
     step = decimal.Decimal(1).scaleb(power - len(token.split(".")[1]) if "." in token
                                      else value.normalize().as_tuple().exponent)
     for other in fields:
-        if other.count(".") > 1 or re.fullmatch(r"0[0-9].*", other):
-            continue  # a version number, or the 03 of a date
+        if other.count(".") > 1 or re.fullmatch(r"0[0-9].*|(?:19|20)[0-9]{2}", other):
+            continue  # a version number, the 03 of a date, or its year
         number = decimal.Decimal(other)
         rounded = (number / step).quantize(decimal.Decimal(1), rounding=decimal.ROUND_HALF_UP) * step
         if rounded == value and abs(number - value) <= ROUNDING_TOLERANCE * value:
