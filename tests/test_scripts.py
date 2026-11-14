@@ -5138,6 +5138,12 @@ class MemoryFormatTests(unittest.TestCase):
         self.assertFires(QUESTION_060.replace("because=9105", "instead=9105"), "question", "link-kind")
         self.assertFires(CORRECTION_060.replace("replaces=9106", "checks=9106"), "correction", "link-kind")
 
+    def test_a_field_right_after_a_quote_is_refused(self):
+        lazy = DECISION_060.replace("will trust.\n\n**Where recorded:**", "will trust.\n**Where recorded:**")
+        self.assertNotIn("Where recorded", dict(self.rf.fields(lazy)))  # GitHub shows it inside the quote
+        self.assertFires(lazy, "decision", "field-quote", "'**Where recorded:**' follows a quote line")
+        self.assertQuiet(DECISION_060, "decision", "field-quote")
+
     # ------------------------------------------------------------ the plain line
 
     def with_plain(self, kind, line):
