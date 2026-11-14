@@ -22,6 +22,9 @@ query    answers from the index alone, with no network:
                          older than their newest event, section labels that
                          disagree with headings, figures and tables without a source
            impact        bodies, figures, tables and events that cite --path or --commit
+           recall        for a new memory on --issue N: the newest memories of its thread
+                         with their state, open questions and untried ideas elsewhere,
+                         and the words explained so far
            timeline      every event in time order, filtered by --issue, --type, --since
            triage        open issues that need triage: those labeled triage, and those
                          with no role label (hub, final-record, active) and no closed-out
@@ -34,6 +37,7 @@ Examples:
   index.py query consistency
   index.py query impact --path bench/out/run-0304/summary.tsv
   index.py query timeline --issue 3 --type decision
+  index.py query recall --issue 5
 """
 
 import argparse
@@ -97,8 +101,32 @@ CREATE TABLE IF NOT EXISTS numbers(issue INTEGER, section TEXT, value TEXT, deno
   sentence TEXT);
 CREATE TABLE IF NOT EXISTS mentions(issue INTEGER, origin TEXT, target INTEGER, cited TEXT, line INTEGER);
 CREATE TABLE IF NOT EXISTS changes(event INTEGER, issue INTEGER, edited_at TEXT);
+CREATE TABLE IF NOT EXISTS links(source INTEGER, kind TEXT, target INTEGER);
+CREATE TABLE IF NOT EXISTS event_fields(comment INTEGER, ordinal INTEGER, label TEXT, text TEXT);
+CREATE TABLE IF NOT EXISTS evidence(comment INTEGER, ordinal INTEGER, kind TEXT, ident TEXT, repo TEXT, ref TEXT,
+  path TEXT, line_from INTEGER, line_to INTEGER);
+CREATE TABLE IF NOT EXISTS explanations(comment INTEGER, ordinal INTEGER, kind TEXT, word TEXT, revised INTEGER,
+  meaning TEXT, why TEXT, also TEXT, story TEXT);
 """
 DERIVED = ("labels", "sections", "events", "blocks", "sources", "refs", "numbers", "mentions", "changes")
+# What memories say (links, fields, evidence, explanations), kept by derive_mind per comment. An older version of the
+# plugin on the same index leaves these tables alone; the triggers below record that it wrote comments or events, and
+# a sync of this version then derives everything again. The triggers are not in SCHEMA, which a new index runs
+# statement by statement, split at each ";"; run_sync makes them under the sync lock.
+MIND = ("links", "event_fields", "evidence", "explanations")
+MIND_TRIGGERS = (
+    """CREATE TRIGGER IF NOT EXISTS mind_behind_ci AFTER INSERT ON comments
+  BEGIN UPDATE meta SET value = '0' WHERE key = 'mind_derived'; END""",
+    """CREATE TRIGGER IF NOT EXISTS mind_behind_cu AFTER UPDATE ON comments
+  BEGIN UPDATE meta SET value = '0' WHERE key = 'mind_derived'; END""",
+    """CREATE TRIGGER IF NOT EXISTS mind_behind_cd AFTER DELETE ON comments
+  BEGIN UPDATE meta SET value = '0' WHERE key = 'mind_derived'; END""",
+    """CREATE TRIGGER IF NOT EXISTS mind_behind_ei AFTER INSERT ON events
+  BEGIN UPDATE meta SET value = '0' WHERE key = 'mind_derived'; END""",
+    """CREATE TRIGGER IF NOT EXISTS mind_behind_ed AFTER DELETE ON events
+  BEGIN UPDATE meta SET value = '0' WHERE key = 'mind_derived'; END""",
+)
+NOT_READY = ("the index was last written by an older version of the plugin, or never by this one; run index.py sync")
 RAW = ("issues", "comments", "timeline", "meta")
 TIMELINE_KEEP = {"labeled", "unlabeled", "renamed", "closed", "reopened", "pinned", "unpinned",
                  "transferred", "milestoned", "demilestoned", "connected", "referenced"}
@@ -361,7 +389,11 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
             raise
 
     db = connect(repo)
-    full = rebuild or not get_meta(db, "synced_at") or get_meta(db, "derive_pending") == "1"
+    for statement in MIND_TRIGGERS:
+        db.execute(statement)
+    # Anything but "1" means that an older version wrote comments or events since this version's last derive, or
+    # that this version never derived this index: the tables of MIND are behind, so everything is derived again.
+    full = rebuild or not get_meta(db, "synced_at") or get_meta(db, "derive_pending") == "1" or not mind_ready(db)
     set_meta(db, "derive_pending", "1")  # cleared next to synced_at, once everything stored has been derived
     db.commit()
     summary = {"issues": 0, "comments": 0, "timelines": 0, "edits": 0, "complete": True, "pages": 0}
@@ -375,7 +407,7 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
                         for row in page]
             changed_issues, changed_comments = set(), set()
             try:  # one transaction: the old rows stay until the new ones are all in
-                for table in ("issues", "comments", "timeline") + DERIVED:
+                for table in ("issues", "comments", "timeline") + DERIVED + MIND:
                     db.execute("DELETE FROM %s" % table)
                 store_issue_page(db, issues, changed_issues)
                 store_comment_page(db, comments, changed_comments)
@@ -939,7 +971,7 @@ def derive(db, issues=None, comments=None):
             db.execute("INSERT INTO mentions VALUES (?,?,?,?,?)", (number, "body", row["target"], row["cited"], row["line"]))
     for comment in comment_rows:
         event = record_format.parse_event(comment["body"] or "")
-        at = event["at"] or to_iso(event["heading_time"]) or comment["created_at"]
+        at = record_format.event_at(event, comment["created_at"])
         db.execute("INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?)",
                    (comment["id"], comment["issue"], event["type"], at, event["recorded"],
                     1 if event["reconstructed"] else 0, event["title"], comment["author"], comment["url"],
@@ -958,30 +990,61 @@ def derive(db, issues=None, comments=None):
                             "('resume', 'other') ORDER BY created_at DESC LIMIT 1", (edit["issue"], edit["at"])).fetchone()
         if before:
             db.execute("INSERT INTO changes VALUES (?,?,?)", (before["comment"], edit["issue"], edit["at"]))
+    derive_mind(db, None if touched is None else comments)
+    set_meta(db, "mind_derived", "1")  # last, in the same transaction as the rows: the tables of MIND are current
     db.commit()
 
 
-def to_iso(stamp):
-    """'2026-03-04 14:10 UTC' to ISO; other zones are kept as local date and time without offset."""
-    if not stamp:
-        return None
-    match = re.match(r"([0-9]{4}-[0-9]{2}-[0-9]{2}) ([0-9]{2}:[0-9]{2})", stamp)
-    if not match:
-        return None
-    return "%sT%s%s" % (match.group(1), match.group(2), "Z" if stamp.endswith("UTC") else "")
+def derive_mind(db, comments=None):
+    """Rebuild the tables of MIND for the given comment ids (None: for every comment), from the stored bodies of the
+    comments whose event type is a memory. Links are kept as written, with no check of their target: a target that
+    arrives with a later sync counts from then on, and every reader decides what counts (see memories)."""
+    kinds = record_format.MEMORY_TYPES
+    if comments is None:
+        for table in MIND:
+            db.execute("DELETE FROM %s" % table)
+        rows = db.execute("SELECT c.id, c.body, e.type FROM comments c JOIN events e ON e.comment = c.id "
+                          "WHERE e.type IN (%s)" % ",".join("?" * len(kinds)), kinds).fetchall()
+    else:
+        rows = []
+        for cid in sorted(set(comments)):
+            db.execute("DELETE FROM links WHERE source = ?", (cid,))
+            for table in MIND[1:]:
+                db.execute("DELETE FROM %s WHERE comment = ?" % table, (cid,))
+            row = db.execute("SELECT c.id, c.body, e.type FROM comments c JOIN events e ON e.comment = c.id "
+                             "WHERE c.id = ?", (cid,)).fetchone()
+            if row is not None and row["type"] in kinds:
+                rows.append(row)
+    for row in rows:
+        cid, body, kind = row["id"], row["body"] or "", row["type"]
+        marker = record_format.parse_marker(record_format.first_lines(body)[0])
+        for key, target in record_format.links(marker):
+            db.execute("INSERT INTO links VALUES (?,?,?)", (cid, key, target))
+        own = record_format.PLAIN_LABELS[kind]
+        ordinal = 0
+        for label, text in record_format.fields(body):
+            if label == record_format.EVIDENCE_LABEL:
+                continue
+            db.execute("INSERT INTO event_fields VALUES (?,?,?,?)", (cid, ordinal, "plain" if label == own else label,
+                                                                    text))
+            ordinal += 1
+        for ordinal, item in enumerate(record_format.evidence(body)):
+            db.execute("INSERT INTO evidence VALUES (?,?,?,?,?,?,?,?,?)",
+                       (cid, ordinal, item["kind"], item["ident"], item["repo"], item["ref"], item["path"],
+                        item["line_from"], item["line_to"]))
+        for ordinal, item in enumerate(record_format.explanations(body)):
+            db.execute("INSERT INTO explanations VALUES (?,?,?,?,?,?,?,?,?)",
+                       (cid, ordinal, item["kind"], item["word"], 1 if item["revised"] else 0, item["meaning"],
+                        item["why"], json.dumps(item["also"]), item["story"]))
 
 
-def sort_key(at):
-    """Order ISO times with offsets, Z and naive local times on one UTC axis (naive counts as UTC)."""
-    if not at:
-        return ""
-    try:
-        value = datetime.datetime.fromisoformat(at.replace("Z", "+00:00"))
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=datetime.timezone.utc)
-        return value.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    except ValueError:
-        return at
+def mind_ready(db):
+    """True when this version's derive was the last to write comments or events (see MIND_TRIGGERS)."""
+    return get_meta(db, "mind_derived") == "1"
+
+
+to_iso = record_format.to_iso      # moved to record_format; kept here for the scripts and tests that use index.*
+sort_key = record_format.sort_key
 
 
 # ---------------------------------------------------------------- queries
@@ -1100,23 +1163,50 @@ def impact(db, path=None, commit=None):
     return unique
 
 
+def plain_lines(db):
+    """{comment id: plain line} from event_fields."""
+    found = {}
+    for row in db.execute("SELECT comment, text FROM event_fields WHERE label = 'plain' ORDER BY comment, ordinal"):
+        found.setdefault(row["comment"], row["text"])
+    return found
+
+
+def links_as_written(db):
+    """{comment id: "because=9104 instead=9103"}: the links of each memory, in the order of its marker."""
+    groups = {}
+    for row in db.execute("SELECT source, kind, target FROM links ORDER BY rowid"):
+        parts = groups.setdefault(row["source"], [])
+        if parts and parts[-1][0] == row["kind"]:
+            parts[-1][1].append(str(row["target"]))
+        else:
+            parts.append((row["kind"], [str(row["target"])]))
+    return {source: " ".join("%s=%s" % (kind, ",".join(ids)) for kind, ids in parts) for source, parts in groups.items()}
+
+
 def timeline(db, issue=None, kind=None, since=None):
-    """Every event comment and issue event in time order, as dicts."""
+    """Every event comment and issue event in time order, as dicts. An event comment also has its id (comment), its
+    plain line and its links as written; other rows have them empty, and so do all rows of an index that a version
+    without these tables wrote last (see mind_ready)."""
     rows = []
+    ready = mind_ready(db)
+    plains, written = (plain_lines(db), links_as_written(db)) if ready else ({}, {})
     for e in db.execute("SELECT e.*, i.title AS issue_title, i.labels AS labels FROM events e "
                         "LEFT JOIN issues i ON i.number = e.issue"):
         rows.append({"at": e["at"], "type": e["type"], "issue": e["issue"], "issue_title": e["issue_title"] or "",
                      "labels": ", ".join(json.loads(e["labels"] or "[]")), "title": e["title"], "author": e["author"],
-                     "url": e["url"], "recorded": e["recorded"] or "", "reconstructed": bool(e["reconstructed"])})
+                     "url": e["url"], "recorded": e["recorded"] or "", "reconstructed": bool(e["reconstructed"]),
+                     "comment": e["comment"] if ready else "", "plain": plains.get(e["comment"], ""),
+                     "links": written.get(e["comment"], "")})
     for t in db.execute("SELECT t.*, i.title AS issue_title, i.labels AS labels, i.url AS url FROM timeline t "
                         "LEFT JOIN issues i ON i.number = t.issue"):
         rows.append({"at": t["at"], "type": t["event"], "issue": t["issue"], "issue_title": t["issue_title"] or "",
                      "labels": ", ".join(json.loads(t["labels"] or "[]")), "title": t["detail"] or "",
-                     "author": t["actor"], "url": t["url"], "recorded": "", "reconstructed": False})
+                     "author": t["actor"], "url": t["url"], "recorded": "", "reconstructed": False,
+                     "comment": "", "plain": "", "links": ""})
     for i in db.execute("SELECT * FROM issues"):
         rows.append({"at": i["created_at"], "type": "opened", "issue": i["number"], "issue_title": i["title"],
                      "labels": ", ".join(json.loads(i["labels"] or "[]")), "title": i["title"], "author": i["author"],
-                     "url": i["url"], "recorded": "", "reconstructed": False})
+                     "url": i["url"], "recorded": "", "reconstructed": False, "comment": "", "plain": "", "links": ""})
     if issue is not None:
         rows = [r for r in rows if r["issue"] == issue]
     if kind:
@@ -1125,6 +1215,191 @@ def timeline(db, issue=None, kind=None, since=None):
         rows = [r for r in rows if sort_key(r["at"]) >= sort_key(since if "T" in since else since + "T00:00:00Z")]
     rows.sort(key=lambda r: (sort_key(r["at"]), r["issue"], r["type"]))
     return rows
+
+
+# ---------------------------------------------------------------- memories
+
+RECALL_MEMORIES, RECALL_OTHERS, RECALL_WORDS = 12, 12, 40
+
+
+def counts_for(allowed):
+    """Whether an author's memories count: every account when `allowed` is empty (the repository is not trusted, so
+    there is no list to filter by), else only the allowed logins."""
+    return lambda author: not allowed or (author or "").lower() in allowed
+
+
+def memories(db, allowed):
+    """The one place that decides which memories count, for query recall and the mind page.
+
+    Returns a dict: everyone (True when `allowed` is empty and memories of every account are listed), items
+    ({comment id: memory}) for the memories written by an allowed account, and hidden (how many memories other than
+    checkpoints were written by other accounts). A memory is a dict with id, issue, kind, at, time (sortable),
+    title, plain (or None), reconstructed, author, links (the counted ones, as (key, target id)) and state.
+
+    A link counts when both ends are memories in the index, the memory that carries it was written by an allowed
+    account, its target is another memory that is not later, and record_format.link_allowed holds. State, from the
+    counted links that point at a memory, the first that applies: replaced, set aside, answered (a question) or
+    tried (an idea) by a checks link; else open (a question), untried (an idea) or stands.
+    """
+    kinds = record_format.MEMORY_TYPES
+    counts = counts_for(allowed)
+    every = {row["comment"]: row for row in db.execute(
+        "SELECT comment, issue, type, at, title, author, reconstructed FROM events WHERE type IN (%s)"
+        % ",".join("?" * len(kinds)), kinds)}
+    plains = plain_lines(db)
+    items, hidden = {}, 0
+    for cid, row in every.items():
+        if not counts(row["author"]):
+            hidden += row["type"] != "checkpoint"
+            continue
+        items[cid] = {"id": cid, "issue": row["issue"], "kind": row["type"], "at": row["at"] or "",
+                      "time": sort_key(row["at"]), "title": row["title"] or "", "plain": plains.get(cid),
+                      "reconstructed": bool(row["reconstructed"]), "author": row["author"], "links": [], "state": ""}
+    for row in db.execute("SELECT source, kind, target FROM links ORDER BY rowid"):
+        source, target = items.get(row["source"]), every.get(row["target"])
+        if source is None or target is None or row["source"] == row["target"]:
+            continue
+        if sort_key(target["at"]) > source["time"] or not record_format.link_allowed(source["kind"], row["kind"],
+                                                                                      target["type"]):
+            continue
+        if (row["kind"], row["target"]) not in source["links"]:
+            source["links"].append((row["kind"], row["target"]))
+    pointing = {}
+    for item in items.values():
+        for key, target in item["links"]:
+            pointing.setdefault(target, set()).add(key)
+    for cid, item in items.items():
+        keys = pointing.get(cid, set())
+        if "replaces" in keys:
+            item["state"] = "replaced"
+        elif "instead" in keys:
+            item["state"] = "set aside"
+        elif "checks" in keys and item["kind"] in ("question", "idea"):
+            item["state"] = "answered" if item["kind"] == "question" else "tried"
+        else:
+            item["state"] = {"question": "open", "idea": "untried"}.get(item["kind"], "stands")
+    return {"everyone": not allowed, "items": items, "hidden": hidden}
+
+
+def explained(db, allowed, kind):
+    """The explanations of `kind` ("word" or "thread") written by allowed accounts (every account when `allowed` is
+    empty), oldest first, as dicts with comment, issue, at, word, key, revised, meaning, why, also and story."""
+    counts = counts_for(allowed)
+    kinds = record_format.MEMORY_TYPES
+    rows = []
+    for row in db.execute("SELECT x.*, e.issue, e.at, e.author FROM explanations x JOIN events e ON e.comment = "
+                          "x.comment WHERE x.kind = ? AND e.type IN (%s)" % ",".join("?" * len(kinds)),
+                          (kind,) + kinds):
+        if counts(row["author"]):
+            try:
+                also = [str(name) for name in json.loads(row["also"] or "[]")]
+            except (ValueError, TypeError):
+                also = []
+            rows.append({"comment": row["comment"], "issue": row["issue"], "at": row["at"] or "",
+                         "word": row["word"] or "", "key": record_format.word_key(row["word"]),
+                         "revised": bool(row["revised"]), "meaning": row["meaning"] or "", "why": row["why"] or "",
+                         "also": also, "story": row["story"] or "", "ordinal": row["ordinal"]})
+    return sorted(rows, key=lambda r: (sort_key(r["at"]), r["comment"], r["ordinal"]))
+
+
+def standing_words(db, allowed):
+    """{word key: the newest explanation of that word by an allowed account}."""
+    return {row["key"]: row for row in explained(db, allowed, "word")}
+
+
+def thread_of(db, number):
+    """(the topic: labels of issue `number`, the issues that share one of them), or ([], [number])."""
+    labels = sorted({l for l in issue_labels(db, number) if l.lower().startswith("topic:")})
+    if not labels:
+        return [], [number]
+    issues = {row["issue"] for row in db.execute("SELECT DISTINCT issue FROM labels WHERE label IN (%s)"
+                                                 % ",".join("?" * len(labels)), labels)}
+    return labels, sorted(issues | {number})
+
+
+def standing_opening(db, number, allowed):
+    """The newest "what this thread is about" of the thread of issue `number` by an allowed account, or None."""
+    issues = set(thread_of(db, number)[1])
+    found = [row for row in explained(db, allowed, "thread") if row["issue"] in issues]
+    return found[-1] if found else None
+
+
+def topic_issues(db, number):
+    """The issues labeled final-record that share a topic: label with `number`, or [number] when it carries
+    final-record itself; [] when there is none (or no such issue)."""
+    labels = [l.lower() for l in issue_labels(db, number)]
+    if "final-record" in labels:
+        return [number]
+    topics, issues = thread_of(db, number)
+    return [n for n in issues if n != number and "final-record" in {l.lower() for l in issue_labels(db, n)}] \
+        if topics else []
+
+
+def recall(db, number, allowed):
+    """What a new memory on issue `number` could link to and which words it may use, as a dict (see print_recall)."""
+    found = memories(db, allowed)
+    labels, issues = thread_of(db, number)
+    thread = sorted((m for m in found["items"].values() if m["issue"] in issues and m["kind"] != "checkpoint"),
+                    key=lambda m: (m["time"], m["id"]), reverse=True)
+    others = sorted((m for m in found["items"].values() if m["issue"] not in issues
+                     and (m["kind"], m["state"]) in (("question", "open"), ("idea", "untried"))),
+                    key=lambda m: (m["time"], m["id"]))
+    words = sorted(standing_words(db, allowed).values(), key=lambda r: r["key"])
+    return {"labels": labels, "issues": issues, "opening": standing_opening(db, number, allowed),
+            "memories": thread[:RECALL_MEMORIES], "more_memories": max(0, len(thread) - RECALL_MEMORIES),
+            "others": others[:RECALL_OTHERS], "more_others": max(0, len(others) - RECALL_OTHERS),
+            "words": words[:RECALL_WORDS], "more_words": max(0, len(words) - RECALL_WORDS),
+            "everyone": found["everyone"], "hidden": found["hidden"]}
+
+
+def plural(count, one, many):
+    return count, one if count == 1 else many, "is" if count == 1 else "are"
+
+
+def print_recall(found):
+    """The text of query recall: every value from the record through clean(), under DATA_HEADER."""
+    def told(memory):
+        return clean(memory["plain"]) if memory["plain"] else "(no plain line) " + clean(memory["title"])
+
+    thread = ", ".join(clean(label, 60) for label in found["labels"]) or "#" + clean(found["issues"][0], 12)
+    opening = found["opening"]
+    about = "%s (%s)" % (clean(opening["meaning"]), clean(opening["comment"], 30)) if opening else \
+        "not written yet; add it to the memory you are recording"
+    print(DATA_HEADER)
+    print("Thread %s (issue%s %s). About this thread: %s" % (thread, "s" if len(found["issues"]) > 1 else "",
+                                                            ", ".join("#" + clean(n, 12) for n in found["issues"]),
+                                                            about))
+    print("Memories of this thread, newest first: id, date, kind, state, plain line (or title)")
+    for memory in found["memories"]:
+        print("%s  %s  %-8s  %-9s  %s" % (clean(memory["id"], 30), clean(memory["at"][:10], 10),
+                                         clean(memory["kind"], 20), clean(memory["state"], 20), told(memory)))
+    if not found["memories"]:
+        print("(none yet)")
+    if found["more_memories"]:
+        print("%d older memor%s of this thread %s not listed." % plural(found["more_memories"], "y", "ies"))
+    print("Open questions and untried ideas in other threads:")
+    for memory in found["others"]:
+        print("%s  %s  %-8s  %-7s  #%s  %s" % (clean(memory["id"], 30), clean(memory["at"][:10], 10),
+                                              clean(memory["kind"], 20), clean(memory["state"], 20),
+                                              clean(memory["issue"], 12), told(memory)))
+    if not found["others"]:
+        print("(none)")
+    if found["more_others"]:
+        print("%d newer open question%s or untried idea%s %s not listed."
+              % (found["more_others"], "" if found["more_others"] == 1 else "s",
+                 "" if found["more_others"] == 1 else "s", "is" if found["more_others"] == 1 else "are"))
+    print("Words explained so far (use them as written):")
+    for word in found["words"]:
+        print("%s: %s (%s)" % (clean(word["word"], 60), clean(word["meaning"]), clean(word["comment"], 30)))
+    if not found["words"]:
+        print("(none yet)")
+    if found["more_words"]:
+        print("%d more word%s %s not listed." % (found["more_words"], "" if found["more_words"] == 1 else "s",
+                                                 "is" if found["more_words"] == 1 else "are"))
+    if found["everyone"]:
+        print("This repository is not in your trusted list, so memories of every account are listed.")
+    elif found["hidden"]:
+        print("%d memor%s by accounts outside your allowed list %s not listed." % plural(found["hidden"], "y", "ies"))
 
 
 def describe_index(db):
@@ -1159,7 +1434,7 @@ def main(argv=None):
                         "folder, for at most background_sync_seconds (default 300)")
     p.add_argument("--lock-held", action="store_true", help=argparse.SUPPRESS)
     p = sub.add_parser("query", help="answer from the index, with no network")
-    p.add_argument("name", choices=["brief", "consistency", "impact", "timeline", "triage"])
+    p.add_argument("name", choices=["brief", "consistency", "impact", "recall", "timeline", "triage"])
     p.add_argument("--path")
     p.add_argument("--commit")
     p.add_argument("--issue", type=int)
@@ -1224,6 +1499,18 @@ def main(argv=None):
             for row in rows:
                 print("#%d  %s  %s  %s" % (row["issue"], row["kind"], clean(row["where"]), clean(row["value"])))
             print("%d place(s) cite %s" % (len(rows), args.path or args.commit))
+        return 0
+    if args.name == "recall":
+        if args.issue is None:
+            parser.error("recall needs --issue N, the issue the new memory goes to")
+        if not mind_ready(db):
+            print(NOT_READY)
+            return 1
+        found = recall(db, args.issue, recortex.allowed_users(repo))
+        if args.json:
+            print(json.dumps(found, indent=1))
+        else:
+            print_recall(found)
         return 0
     if args.name == "triage":
         rows = triage(db, recortex.allowed_users(repo))

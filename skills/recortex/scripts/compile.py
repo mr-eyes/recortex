@@ -40,7 +40,8 @@ import index  # noqa: E402
 import record_format  # noqa: E402
 import storage  # noqa: E402
 
-TIMELINE_COLUMNS = ["at", "type", "issue", "issue_title", "labels", "title", "author", "url", "recorded", "reconstructed"]
+TIMELINE_COLUMNS = ["at", "type", "issue", "issue_title", "labels", "title", "author", "url", "recorded", "reconstructed",
+                    "comment", "plain", "links"]
 BLOCK_COLUMNS = ["id", "issue", "title", "section", "caption", "image", "ref", "path", "data", "command"]
 
 
@@ -150,12 +151,12 @@ def build(db, config, repo, hub, out, ref=None, dry_run=False):
         lines = ["# Timeline of %s" % repo, "",
                  "Every comment and issue event in time order. Times are as recorded: the event time from a comment's "
                  "marker or heading, else the time GitHub stored. Type \"other\" is a comment that is not a typed event.",
-                 "", "| Time | Type | Issue | Title | Author | Labels |", "|---|---|---|---|---|---|"]
+                 "", "| Time | Type | Issue | Title | In plain words | Author | Labels |", "|---|---|---|---|---|---|---|"]
         for row in rows:
-            lines.append("| %s | %s%s | [#%d](%s) | %s | %s | %s |" % (
+            lines.append("| %s | %s%s | [#%d](%s) | %s | %s | %s | %s |" % (
                 cell(row["at"]), row["type"], " (reconstructed)" if row["reconstructed"] == "yes" else "", row["issue"],
-                cell(row["url"]), cell(row["title"]).replace("|", "\\|"), cell(row["author"]),
-                cell(row["labels"]).replace("|", "\\|")))
+                cell(row["url"]), cell(row["title"]).replace("|", "\\|"), cell(row["plain"]).replace("|", "\\|"),
+                cell(row["author"]), cell(row["labels"]).replace("|", "\\|")))
         with open(files[-1], "w", encoding="utf-8") as handle:
             handle.write("\n".join(lines) + "\n")
 

@@ -3706,7 +3706,7 @@ class CompileTests(RecordSandbox):
         self.assertEqual(8, len(sources.strip().split("\n")) - 1)
         rows = [line.split("\t") for line in recortex.read_text(os.path.join(out, "history", "timeline.tsv")).strip().split("\n")]
         self.assertEqual(["at", "type", "issue", "issue_title", "labels", "title", "author", "url", "recorded",
-                          "reconstructed"], rows[0])
+                          "reconstructed", "comment", "plain", "links"], rows[0])
         types = [row[1] for row in rows[1:]]
         for kind in ("opened", "result", "decision", "failure", "checkpoint", "correction", "resume", "other",
                      "labeled", "renamed", "closed", "edited"):
