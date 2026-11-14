@@ -5124,7 +5124,7 @@ class MemoryFormatTests(unittest.TestCase):
 
     def test_who_may_carry_a_link(self):
         checkpoint = CHECKPOINT_060.replace("17:30-08:00 -->", "17:30-08:00 because=9104 -->", 1)
-        self.assertFires(checkpoint, "checkpoint", "link-kind", "a checkpoint carries no link")
+        self.assertFires(checkpoint, "checkpoint", "link-kind", "a pause is a moment, not a step")
         self.assertQuiet(CHECKPOINT_060, "checkpoint")
         triage = TRIAGE.replace("09:00-08:00 -->", "09:00-08:00 because=9104 -->", 1)
         self.assertFires(triage, "triage", "link-kind", "a triage comment carries no link")
@@ -5516,6 +5516,15 @@ class MindIndexTests(RecordSandbox):
             self.save(data)
             self.ready()
         self.assertEqual(whole, self.mind_rows())
+        # a memory edited on GitHub: its rows are replaced, not added to
+        data = self.repo()
+        data["comments"]["9107"]["body"] = chain_text("5-decision.md").split("\n<details>")[0] + "\n"
+        data["comments"]["9107"]["updated_at"] = "2026-04-20T10:00:00Z"
+        self.save(data)
+        self.ready()
+        edited = self.mind_rows()
+        self.assertEqual([row for row in whole["explanations"] if row[0] != 9107], edited["explanations"])
+        self.assertEqual(whole["event_fields"], edited["event_fields"])
 
     def test_links_count_only_between_memories_of_allowed_accounts_back_in_time(self):
         self.put(9105, 5, chain_text("3-decision.md"))  # its targets 9103 and 9104 are not there yet
@@ -6031,6 +6040,14 @@ class CompatTests(unittest.TestCase):
                              (found[name]["type"], found[name]["at"], found[name]["errors"]), name)
         self.assertEqual(("other", None), (found["hyphen"]["type"], found["hyphen"]["at"]))
         self.assertTrue(any(e.startswith("event-marker") for e in found["hyphen"]["errors"]))
+
+    def test_the_example_chain_reads_as_events_of_their_type(self):
+        drafts = [(name, kind, chain_text(name)) for name, kind in CHAIN]
+        found = self.frozen(drafts)
+        for name, kind, text in drafts:
+            known = kind not in ("idea", "question")
+            self.assertEqual((kind if known else "other", record_marker_time(text), [] if known else None),
+                             (found[name]["type"], found[name]["at"], found[name]["errors"]), name)
 
 
 class PackagingTests(unittest.TestCase):
