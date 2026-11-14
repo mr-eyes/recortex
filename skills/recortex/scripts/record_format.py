@@ -435,8 +435,11 @@ NUMBER_TOKEN = re.compile(r"(?<![A-Za-z0-9.,_])(?<![A-Za-z]-)[0-9]+(?:[.,][0-9]+
 
 
 def looks_like_path(token):
-    """A token with / that also holds a ., a digit or a second /, or a word that ends in a file extension."""
+    """A token with / that also holds a ., a digit or a second /, or a word that ends in a file extension. Two whole
+    numbers around one / ("1/3", "24/7") are a fraction or a rate, not a path."""
     token = token.strip(",;:!?()[]{}\"'")
+    if re.fullmatch(r"[0-9]+/[0-9]+", token):
+        return False
     slashed = token.rstrip(".")
     if "/" in slashed and ("." in slashed or re.search(r"[0-9]", slashed) or slashed.count("/") > 1):
         return True

@@ -5176,16 +5176,18 @@ class MemoryFormatTests(unittest.TestCase):
             base + " as https://example.org/x says": "URL", base + " in tinycsv/io/reader": "path", base + " in tinycsv/reader2": "path",
             base + " in reader.py": "path", base + " at 9c3e1ab": "commit",
             base + " for 22 files": "22", base + " for 4GB files": "4", base + " in steps 3-5": "3",
+            base + " at 10MB/s": "path", base + " for x86/arm": "path",  # only two whole numbers around / are spared
         }
         for line, fragment in firing.items():
-            found = self.plain_errors("decision", line, self.with_plain("decision", line).replace(
-                "### Decision: 2026-03-07", "### Decision: 2026-03-07", 1))
+            found = self.plain_errors("decision", line)
             self.assertTrue(any(fragment in m for m in found), (line, found))
         quiet = ["x" * 20, "x" * 200, base + " and/or read/write each byte", base + " for UTF-8 and v2 files",
-                 base + " with sha256 checks", base + " for the 53 conformance files"]
-        for line in quiet:
-            self.assertEqual([], self.plain_errors("decision", line, self.with_plain("decision", line).replace(
-                "**In plain words, we decided to:** " + line, "**In plain words, we decided to:** " + line)), line)
+                 base + " with sha256 checks", base + " for the 53 conformance files",
+                 base + " for about 1/3 of the rows", base + " so that it can run 24/7"]
+        for line in quiet:  # the fields hold 1 and 3, and 24 and 7, so the numbers stand
+            text = self.with_plain("decision", line).replace("**Effect:** Quoting", "**Effect:** 1 of 3 rows, 24 hours "
+                                                             "a day. Quoting", 1)
+            self.assertEqual([], self.plain_errors("decision", None, text), line)
 
     def test_the_plain_line_does_not_repeat_its_label(self):
         doubled = {"result": ["that the reader is slow", "we found that the reader is slow"],
