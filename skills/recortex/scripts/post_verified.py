@@ -2,7 +2,11 @@
 """Post one comment, or replace one issue body, with lint and read-back.
 
 comment: lints the draft, posts it with `gh issue comment --body-file`, fetches
-the stored comment from the API and compares it with the draft.
+the stored comment from the API and compares it with the draft. A memory's
+links, cited comments, evidence and explanations are checked against GitHub
+(against the local index with --dry-run --offline). A memory that links to no
+earlier one gets a note before it is posted; after a verified post the line
+`memory id: <id>` gives the id to link to it.
 
 body: lints the draft, prints a diff against the body now on GitHub, saves the
 old body to a backup file, edits the issue and reads it back. Use it when what
@@ -29,9 +33,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import recortex  # noqa: E402
 import lint_drafts  # noqa: E402
+import lookup as record_lookup  # noqa: E402
+import record_format  # noqa: E402
+
+NO_LINK = ("note: this memory links to no earlier one; if it follows from, replaces or tests an earlier memory, add "
+           "the link first (index.py query recall --issue %d)")
 
 
-def lint(path, text, kind, repo, config, offline, labels=None, profiles=None):
+def lint(path, text, kind, repo, config, offline, labels=None, profiles=None, lookup=None):
     cache = {}
 
     def checker(number):
@@ -40,7 +49,7 @@ def lint(path, text, kind, repo, config, offline, labels=None, profiles=None):
         return cache[number]
 
     findings = lint_drafts.lint_text(text, kind=kind, config=config, labels=labels, profiles=profiles,
-                                     number_checker=None if offline else checker)
+                                     number_checker=None if offline else checker, lookup=lookup)
     return lint_drafts.report(path, findings)
 
 
@@ -55,7 +64,8 @@ def main(argv=None):
         p.add_argument("--kind", required=True, choices=sorted(lint_drafts.KINDS), help="kind of draft, for lint")
         p.add_argument("--dry-run", action="store_true", help="lint and print the gh command; nothing is written")
         p.add_argument("--offline", action="store_true",
-                       help="with --dry-run: no network access at all (bare #N is not checked)")
+                       help="with --dry-run: no network access at all (bare #N is not checked; a comment's links, "
+                            "cited comments, evidence and explanations are checked against the local index)")
         if name == "body":
             p.add_argument("--backup", help="file that receives the body being replaced (required unless --dry-run)")
             p.add_argument("--profile", help="comma-separated profiles that define a final record's section "
@@ -93,12 +103,25 @@ def main(argv=None):
                   % (repo, args.issue, ", ".join(plan["foreign"]), ", ".join(profiles) or "none"))
             return 1
     wanted = plan["wanted"] if plan and plan["checked"] and not plan["problems"] else None
-    if lint(args.body_file, draft, args.kind, repo, config, args.offline, labels=wanted, profiles=profiles):
+    record = None
+    if args.command == "comment" and args.offline:
+        try:
+            record = record_lookup.local(repo, args.issue)
+        except record_lookup.Unavailable as error:
+            print("note: %s; links, cited comments, evidence and explanations are not checked" % error)
+    elif args.command == "comment":
+        record = record_lookup.github(repo, args.issue)
+    if lint(args.body_file, draft, args.kind, repo, config, args.offline, labels=wanted, profiles=profiles,
+            lookup=record):
         print("not posted: fix the errors above")
         return 1
 
     if args.command == "comment":
         command = ["issue", "comment", str(args.issue), "--repo", repo, "--body-file", args.body_file]
+        marker = record_format.parse_marker(record_format.first_lines(draft)[0]) or {}
+        if args.kind in record_format.LINKABLE and not lint_drafts.is_reconstructed(draft) \
+                and not any(key in marker for key in record_format.LINK_KINDS):
+            print(NO_LINK % args.issue)
         if args.dry_run:
             print("would run: " + recortex.show_command(command, "%d characters" % len(draft)))
             print("would read back: gh api repos/%s/issues/comments/<id> and compare with %s" % (repo, args.body_file))
@@ -110,6 +133,8 @@ def main(argv=None):
             print("MISMATCH: could not find the comment id in gh output, so the comment was not read back")
             return 1
         ok = recortex.verify_body(draft, recortex.read_comment_body(repo, match.group(1)), "comment %s" % url)
+        if ok and args.kind in record_format.MEMORY_TYPES:
+            print("memory id: %s" % match.group(1))
         return 0 if ok else 1
 
     command = ["issue", "edit", str(args.issue), "--repo", repo, "--body-file", args.body_file]

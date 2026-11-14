@@ -40,6 +40,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import recortex  # noqa: E402
 import lint_drafts  # noqa: E402
+import lookup as record_lookup  # noqa: E402
 
 STUB = "This issue is being created. Its full text follows within minutes."
 
@@ -76,12 +77,13 @@ def lint_all(manifest, config):
         findings = lint_drafts.lint_text(recortex.read_text(item["_path"]), kind=item["kind"],
                                          allow_placeholders=True, known_keys=keys, config=config,
                                          labels=item.get("labels") if item in manifest["issues"] else None)
-        findings = [f for f in findings if not (f.code == "bare-ref" and f.level == "warning")]
+        # offline: bare #N and what only the record can tell are checked at posting, against GitHub
+        findings = [f for f in findings if not (f.code in ("bare-ref", "not-checked") and f.level == "warning")]
         errors += lint_drafts.report(item["_path"], findings, quiet=True)
     return errors
 
 
-def final_lint(text, item, repo, numbers, config, checked):
+def final_lint(text, item, repo, numbers, config, checked, number=None):
     def checker(number):
         if number in numbers.values() and repo == item.get("_home"):
             return True
@@ -90,7 +92,8 @@ def final_lint(text, item, repo, numbers, config, checked):
         return checked[(repo, number)]
 
     findings = lint_drafts.lint_text(text, kind=item["kind"], number_checker=checker, config=config,
-                                     labels=item.get("labels") if "key" in item else None)
+                                     labels=item.get("labels") if "key" in item else None,
+                                     lookup=None if number is None else record_lookup.github(repo, number))
     return lint_drafts.report(item["_path"], findings, quiet=True)
 
 
@@ -260,7 +263,7 @@ def main(argv=None):
             failures += 1
             continue
         if not entry.get("url"):
-            if final_lint(body, item, target_repo, numbers if target_repo == repo else {}, config, checked):
+            if final_lint(body, item, target_repo, numbers if target_repo == repo else {}, config, checked, number):
                 print("not posted: %s fails lint after substitution" % label)
                 failures += 1
                 continue
