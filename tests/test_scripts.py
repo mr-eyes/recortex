@@ -5349,6 +5349,21 @@ class MemoryFormatTests(unittest.TestCase):
             "**Also called:** the splitter\n\n", "") + "\n"
         self.assertFires(triage, "triage", "fold-format", "folds belong to memories")
 
+    def test_a_fence_in_a_story_and_a_second_paragraph_are_refused_by_their_own_rules(self):
+        fence = DECISION_060.replace("That is what #7 is about.\n", "That is what #7 is about.\n\n```\nrows = text\n```\n",
+                                     1)
+        self.assertNotEqual(DECISION_060, fence)
+        self.assertEqual(["a fold holds no code fence"], sorted({f.message for f in self.findings(fence, "decision")}))
+        start = DECISION_060.index("**Also called:**")
+        second = DECISION_060[:start] + "A second paragraph.\n\n</details>\n"
+        self.assertEqual(1, second.count("<details>"))
+        found = [f.message for f in self.findings(second, "decision")]
+        self.assertEqual(1, len(found), found)
+        self.assertIn("unexpected text in a fold", found[0])
+        twice = DECISION_060.replace("**Next step:**", "**In plain words, we decided to:** rewrite the reader a second "
+                                     "time\n\n**Next step:**", 1)
+        self.assertFires(twice, "decision", "plain", "a memory has one plain line")
+
     def test_one_warning_when_nothing_can_check_the_record(self):
         found = lint_drafts.lint_text(DECISION_060, kind="decision", known_numbers={5, 7})
         self.assertEqual([("warning", "not-checked")], [(f.level, f.code) for f in found])

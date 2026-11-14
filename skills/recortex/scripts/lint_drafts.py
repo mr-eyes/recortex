@@ -589,6 +589,8 @@ def check_plain(text, kind, template, add):
         return
     if position:
         add("error", "plain", number, "the plain line is the first field, directly under the heading")
+    if sum(1 for other in scanned if other["label"] == label) > 1:
+        add("error", "plain", number, "a memory has one plain line; '**%s:**' stands more than once" % label)
     if not value:
         add("error", "plain", number, "the plain line is empty; it completes '%s'" % label)
         return
