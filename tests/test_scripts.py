@@ -4837,6 +4837,63 @@ class EarlierNameTests(RecordSandbox):
         self.assertFalse(os.path.exists(planted))
 
 
+COMPAT = os.path.join(FIXTURES, "compat-0.5.0")
+COMPAT_SHA256 = {  # the four files as they are at 6979c65 (0.5.0); never edited
+    "names.py": "bd1dc538ab698224081f12ece3a1706d6920d5ee2e26a5f7da54de4d2ae65c97",
+    "recortex.py": "73ad83a38f423d2bba360230e60099f0a00e73d3e56592928deaade02deea8f8",
+    "record_format.py": "01f919b9756350f2c5030c6191178e1075299a3fe7158ee6783685d327fa5db4",
+    "lint_drafts.py": "c5d861dfa15ca2b476873374b6720b98d2cd5200652af9d197a598af20228d2d",
+}
+COMPAT_RUNNER = r"""
+import json, os, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import record_format, lint_drafts
+assert os.path.dirname(os.path.abspath(record_format.__file__)) == os.path.abspath(sys.argv[1])
+assert os.path.dirname(os.path.abspath(lint_drafts.__file__)) == os.path.abspath(sys.argv[1])
+out = {}
+for name, kind, text in json.loads(sys.stdin.read()):
+    event = record_format.parse_event(text)
+    row = {"type": event["type"], "at": event["at"], "reconstructed": event["reconstructed"]}
+    if kind in lint_drafts.KINDS:
+        found = lint_drafts.lint_text(text, kind=kind, known_numbers={5, 7}, config={})
+        row["errors"] = sorted("%s: %s" % (f.code, f.message) for f in found if f.level == "error")
+    else:
+        row["errors"] = None
+    out[name] = row
+print(json.dumps(out))
+"""
+
+
+class CompatTests(unittest.TestCase):
+    """The parser and linter of 0.5.0, frozen in tests/fixtures/compat-0.5.0/, read what this version writes."""
+
+    def frozen(self, drafts):
+        """{name: row} from the frozen 0.5.0 modules for [(name, kind, text)], in a subprocess whose module path is
+        the fixture folder (and the standard library) only."""
+        env = environment_for(os.environ, {"PYTHONDONTWRITEBYTECODE": "1"})
+        run = subprocess.run([sys.executable, "-I", "-c", COMPAT_RUNNER, COMPAT], input=json.dumps(drafts),
+                             capture_output=True, text=True, env=env, cwd=COMPAT)
+        self.assertEqual(0, run.returncode, run.stderr)
+        return json.loads(run.stdout)
+
+    def test_the_frozen_files_are_unchanged(self):
+        import hashlib
+        self.assertEqual(sorted(COMPAT_SHA256), sorted(n for n in os.listdir(COMPAT) if n.endswith(".py")))
+        for name, digest in COMPAT_SHA256.items():
+            with open(os.path.join(COMPAT, name), "rb") as handle:
+                self.assertEqual(digest, hashlib.sha256(handle.read()).hexdigest(), name)
+
+    def test_the_example_memories_read_as_before(self):
+        drafts = [(name, kind, recortex.read_text(os.path.join(EXAMPLE, name)))
+                  for name, kind in (("result-speed-1.md", "result"), ("decision-reader-1.md", "decision"))]
+        found = self.frozen(drafts)
+        self.assertEqual({"type": "result", "at": "2026-03-04T14:10-08:00", "reconstructed": False, "errors": []},
+                         found["result-speed-1.md"])
+        self.assertEqual({"type": "decision", "at": "2026-03-04T15:55-08:00", "reconstructed": False, "errors": []},
+                         found["decision-reader-1.md"])
+
+
 class PackagingTests(unittest.TestCase):
     def read_json(self, *parts):
         return json.loads(recortex.read_text(os.path.join(ROOT, *parts)))
@@ -4894,6 +4951,7 @@ class PackagingTests(unittest.TestCase):
         where = lambda test: (lambda lines: {n for n, line in enumerate(lines) if test(line)})
         allowed = {  # path: the lines that may name an earlier name
             "skills/recortex/scripts/names.py": everywhere,
+            "tests/fixtures/compat-0.5.0/names.py": everywhere,  # the frozen 0.5.0 copy, never edited
             "skills/recortex/references/upgrading.md": everywhere,
             "tests/test_scripts.py": everywhere,  # the tests of the earlier names
             "skills/recortex/scripts/run_hook.sh": where(lambda line: "GHIM_HOOK_TIMEOUT" in line),
