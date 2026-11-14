@@ -649,6 +649,22 @@ def number_exists(repo, number):
         raise
 
 
+def issue_kind(repo, number):
+    """What `number` is in `repo`, from one REST read: ("issue" or "pull", the issue's data), or (None, None) when
+    GitHub answers Not Found. Any other failure raises GhError."""
+    try:
+        data = json.loads(gh(["api", "repos/%s/issues/%d" % (repo, number)]))
+    except GhError as error:
+        if "404" in str(error) or "Not Found" in str(error):
+            return None, None
+        raise
+    except ValueError:
+        raise GhError("GitHub's answer for %s#%d could not be read" % (repo, number))
+    if not isinstance(data, dict):
+        raise GhError("GitHub's answer for %s#%d could not be read" % (repo, number))
+    return ("pull" if data.get("pull_request") else "issue"), data
+
+
 def verify_body(expected, actual, what):
     """Return True when the returned text equals the sent text; print the gap otherwise."""
     left, right = normalize(expected), normalize(actual)

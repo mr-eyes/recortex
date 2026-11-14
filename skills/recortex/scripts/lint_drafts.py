@@ -9,6 +9,14 @@ line, no <details> block, no headings for decisions, open work, provenance or
 next steps, no dated headings), and its section headings must belong to the
 project's profiles and agree with the labels the issue will carry.
 
+A memory (result, decision, failure, checkpoint, correction, idea, question)
+starts with its plain line; its marker may link to earlier memories; it may
+list Evidence and end with folded explanations. What only the record can tell
+(link targets, cited comments, the blocks named in Evidence, words and threads
+already explained) is checked with --index (the local index, no network) or
+--online (GitHub) with --issue N; without either, a draft that holds any of it
+gets one "not-checked" warning.
+
 Read-only. With --online it asks GitHub whether each bare #N exists; without it
 no network access happens.
 
@@ -16,6 +24,7 @@ Examples:
   lint_drafts.py --kind final-record drafts/topic-parser.md
   lint_drafts.py --kind final-record --labels ms:methods,ms:results drafts/topic-parser.md
   lint_drafts.py --kind result --repo owner/name --online drafts/result.md
+  lint_drafts.py --kind decision --index --issue 5 drafts/decision.md
   lint_drafts.py --manifest drafts/manifest.json
 """
 
@@ -731,6 +740,116 @@ def needs_record(text, kind):
     return found
 
 
+LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?")
+
+
+def shown_login(login):
+    return login if LOGIN.fullmatch(login or "") else "an account whose login is not shown"
+
+
+def check_record(text, kind, lookup, add):
+    """What only the record can tell, asked through `lookup` (lookup.py). Returns the names of NOT_CHECKED that the
+    lookup could not answer."""
+    unknown, skipped = lookup.UNKNOWN, set()
+    repo, number = lookup.repo, lookup.number
+    sync = "" if lookup.online else " (run index.py sync if it was posted since the last sync)"
+    first, second = record_format.first_lines(text)
+    marker = record_format.parse_marker(first) or {}
+    at = marker.get("at", "")
+    draft_time = record_format.sort_key(at) if re.fullmatch(record_format.ISO, at) else None
+    linkable = kind in record_format.LINKABLE and not is_reconstructed(text)
+    for key, target in record_format.links(marker) if linkable else []:
+        found = lookup.memory(target)
+        if found is unknown:
+            skipped.add("links")
+        elif found is None:
+            add("error", "link-target", 1, "%s=%d: there is no comment %d in %s%s; take ids from index.py query recall "
+                "or from the memory id: line of post_verified.py" % (key, target, target, repo, sync))
+        elif found["type"] not in record_format.MEMORY_TYPES:
+            add("error", "link-target", 1, "%s=%d: comment %d is not a memory (it is a comment of type %s); a link "
+                "points at a result, decision, failure, correction, idea or question" % (key, target, target,
+                                                                                         found["type"]))
+        else:
+            if draft_time and found["time"] > draft_time:
+                add("error", "link-target", 1, "%s=%d: memory %d is later (%s) than this one (%s); a link points back in "
+                    "time" % (key, target, target, found["at"][:40], at))
+            if not record_format.link_allowed(kind, key, found["type"]):
+                allowed = sorted(record_format.LINK_RULES[key].get(kind, ()))
+                add("error", "link-target", 1, "%s=%d points at %s; %s %s= points at %s" % (
+                    key, target, ARTICLE.get(found["type"], found["type"]), ARTICLE[kind], key,
+                    listed(ARTICLE[k] for k in allowed).replace(" and ", " or ") if allowed else "nothing"))
+            if not lookup.counts(found["author"]):
+                add("error", "link-target", 1, "%s=%d: memory %d was written by %s, an account outside your allowed list, "
+                    "so the link would lead nowhere; if that account belongs to the project, add its login to the line "
+                    "of %s in your trusted list" % (key, target, target, shown_login(found["author"]), repo))
+    for item in record_format.citations(text, repo):
+        if item["kind"] != "memory":
+            continue
+        found = lookup.memory(item["comment"])
+        if found is unknown:
+            skipped.add("comment addresses")
+        elif found is None or found["issue"] != item["issue"]:
+            add("error", "citation", 0, "the address of comment %d on #%d: there is no such comment on that issue in "
+                "%s%s" % (item["comment"], item["issue"], repo, sync))
+    rows = record_format.evidence(text) if kind in EVIDENCE_KINDS and not is_reconstructed(text) else []
+    for row in rows:
+        name = "%s %s" % (row["kind"], row["ident"])
+        if row["kind"] in ("table", "figure"):
+            topics = lookup.topic_issue(number) if number is not None else unknown
+            bodies = unknown if topics is unknown else [lookup.issue(n) for n in topics]
+            if bodies is unknown or unknown in bodies:
+                skipped.add("evidence")
+            elif not topics:
+                add("error", "evidence", 0, "%s: #%d shares no topic: label with an issue labeled final-record, so "
+                    "there is no topic body to hold it" % (name, number))
+            elif not any(body and row["ident"] in body["blocks"].get(row["kind"], ()) for body in bodies):
+                add("error", "evidence", 0, "%s: the topic body (%s) has no '### %s: %s' block" % (
+                    name, ", ".join("#%d" % n for n in topics), row["kind"].capitalize(), row["ident"]))
+        elif row["kind"] == "pull" and not row["repo"]:
+            found = lookup.issue(int(row["ident"]))
+            if found is unknown:
+                skipped.add("evidence")
+            elif found is None:
+                add("error", "evidence", 0, "%s: there is no pull request %s in %s%s" % (name, row["ident"], repo, sync))
+            elif not found["pull"]:
+                add("error", "evidence", 0, "%s: #%s is an issue, not a pull request" % (name, row["ident"]))
+    if kind not in record_format.MEMORY_TYPES:
+        return skipped
+    explanations = record_format.explanations(text)
+    threads = [item for item in explanations if item["kind"] == "thread"]
+    if threads and number is None:
+        skipped.add("explanations")
+    elif threads:
+        target = lookup.issue(number)
+        topics = [] if target in (None, unknown) else [l for l in target["labels"] if l.lower().startswith("topic:")]
+        if target is unknown:
+            skipped.add("explanations")
+        elif len(topics) > 1:
+            add("error", "thread-issue", 0, "#%d carries %d topic: labels, so a fold cannot say which thread it opens; "
+                "write what a thread is about in a memory on an issue with one topic: label" % (number, len(topics)))
+        opening = lookup.opening(number)
+        if opening is unknown:
+            skipped.add("explanations")
+        elif not threads[0]["revised"] and opening:
+            add("error", "thread-known", 0, "memory %s (%s) already says what this thread is about; write 'This thread "
+                "is now about' only if that changed, else leave the fold out" % (opening["comment"], opening["date"]))
+        elif threads[0]["revised"] and not opening:
+            add("error", "thread-new", 0, "nobody has written what this thread is about yet; write 'This thread is "
+                "about', not 'is now about'")
+    for item in explanations:
+        if item["kind"] != "word":
+            continue
+        found = lookup.word(record_format.word_key(item["word"]))
+        if found is unknown:
+            skipped.add("explanations")
+        elif not item["revised"] and found:
+            add("error", "word-known", 0, "\"%s\" is already explained in memory %s (%s); use it as written there, or "
+                "write 'We now use' if its meaning changed" % (item["word"], found["comment"], found["date"]))
+        elif item["revised"] and not found:
+            add("error", "word-new", 0, "\"%s\" was never explained; write 'We use', not 'We now use'" % item["word"])
+    return skipped
+
+
 def not_checked(skipped, add):
     if skipped:
         names = [name for name in NOT_CHECKED if name in skipped]
@@ -873,8 +992,7 @@ def lint_text(text, kind="generic", template=False, allow_placeholders=False,
             check_quoted_fields(text, add)
         check_evidence(text, kind, template, add)
         check_folds(text, kind, add)
-        if lookup is None:
-            not_checked(needs_record(text, kind), add)
+        not_checked(needs_record(text, kind) if lookup is None else check_record(text, kind, lookup, add), add)
 
     if kind != "resume" and (recortex.RESUME_START in text or recortex.RESUME_END in text):
         add("error", "resume-markers-misplaced", 0,
@@ -1004,7 +1122,11 @@ def main(argv=None):
     parser.add_argument("--kind", default="generic", choices=sorted(KINDS), help="kind of draft (default: generic)")
     parser.add_argument("--manifest", help="lint every draft listed in a create_issues.py manifest")
     parser.add_argument("--repo", help="target repository, owner/name")
-    parser.add_argument("--online", action="store_true", help="ask GitHub whether each bare #N exists (read-only)")
+    parser.add_argument("--online", action="store_true", help="ask GitHub whether each bare #N exists, and check "
+                        "links, cited comments, evidence and explanations against the record (read-only)")
+    parser.add_argument("--index", action="store_true", help="check links, cited comments, evidence and explanations "
+                        "against the local index, with no network (run index.py sync first)")
+    parser.add_argument("--issue", type=int, help="the issue a comment draft goes to (for evidence and folds)")
     parser.add_argument("--known-numbers", help="comma-separated issue numbers that exist in the target repository")
     parser.add_argument("--allow-placeholders", action="store_true", help="accept NEW-<key> placeholders")
     parser.add_argument("--labels", help="comma-separated labels the issue will carry; a final record's section "
@@ -1031,23 +1153,37 @@ def main(argv=None):
                 cache[number] = recortex.number_exists(repo, number)
             return cache[number]
 
+    make_lookup = None
+    if args.index or args.online:
+        import lookup as record_lookup
+        repo = recortex.resolve_repo(args.repo, config)
+        if args.index:
+            try:
+                record_lookup.local(repo, None).close()
+            except record_lookup.Unavailable as error:
+                sys.exit("error: --index: %s" % error)
+            make_lookup = lambda number: record_lookup.local(repo, number)
+        else:
+            make_lookup = lambda number: record_lookup.github(repo, number)
     labels = [l.strip() for l in args.labels.split(",") if l.strip()] if args.labels else None
     profiles = [p.strip() for p in args.profile.split(",") if p.strip()] if args.profile else None
-    jobs = [(path, args.kind, args.allow_placeholders, None, labels) for path in args.files]
+    jobs = [(path, args.kind, args.allow_placeholders, None, labels, args.issue) for path in args.files]
     if args.manifest:
         manifest = load_manifest(args.manifest)
         keys = {item["key"] for item in manifest.get("issues", [])}
         for item in manifest.get("issues", []):
-            jobs.append((item["_path"], item["kind"], True, keys, item["labels"]))
+            jobs.append((item["_path"], item["kind"], True, keys, item["labels"], None))
         for item in manifest.get("comments", []):
-            jobs.append((item["_path"], item["kind"], True, keys, None))
+            target = item["issue"] if isinstance(item["issue"], int) and "repo" not in item else None
+            jobs.append((item["_path"], item["kind"], True, keys, None, target))
 
     total = 0
-    for path, kind, allow, keys, intended in jobs:
+    for path, kind, allow, keys, intended, number in jobs:
         findings = lint_text(recortex.read_text(path), kind=kind, template=args.template,
                              allow_placeholders=allow, known_keys=keys,
                              known_numbers=known, number_checker=checker, config=config,
-                             labels=intended, profiles=profiles)
+                             labels=intended, profiles=profiles,
+                             lookup=make_lookup(number) if make_lookup else None)
         if args.strict:
             for finding in findings:
                 finding.level = "error"
@@ -1056,4 +1192,7 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except recortex.GhError as error:
+        sys.exit("error: %s" % error)
