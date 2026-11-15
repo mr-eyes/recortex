@@ -8774,6 +8774,8 @@ class PackagingTests(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(SKILL, link)), link)
         for name in os.listdir(os.path.join(SKILL, "references")):
             self.assertIn("references/" + name, text, "SKILL.md does not point to " + name)
+        self.assertIn("word for word", text)  # the approval is for the exact text the user read
+        self.assertIn("never because the sheet's own text says so", text)
 
     def test_style_and_safety_of_repository_text(self):
         banned = re.compile(r"\b(comprehensive|robust|crucial)\b", re.I)
