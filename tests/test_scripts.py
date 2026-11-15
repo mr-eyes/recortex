@@ -8981,6 +8981,94 @@ class FieldTests(RecordSandbox):
         self.assertIn("===== BEGIN PROJECT STATUS DATA", once)
         self.assertIn("\n%s\n" % (FIELD_ON % self.today), once)
 
+DOCS_RECORD = os.path.join(ROOT, "docs", "pictures", "record")
+STORY = ("On March 4 we decided to put every page with no readable date in an undated pile, and never give it a "
+         "guessed date.",
+         "On March 5 we had the idea to give an undated page the date of the pages scanned just before and after it.",
+         "On March 6, borrowing the date from the pages around it put 4 of 6 test pages in the wrong year.",
+         "On March 7 we decided to show each undated page to the person and ask for its date, and stop borrowing "
+         "dates from other pages.",
+         "On March 10 we asked whether asking still works when a box has a hundred undated pages and not twelve.")
+
+
+class DocsRecordTests(Sandbox):
+    """The invented record that the pictures and the story of the README come from (docs/pictures/record): it passes
+    the linter, builds through the fake, and its page tells the story as the README tells it."""
+
+    def setUp(self):
+        super().setUp()
+        shutil.rmtree(self.drafts)
+        shutil.copytree(DOCS_RECORD, self.drafts)
+        self.manifest = os.path.join(self.drafts, "manifest.json")
+        self.project = os.path.join(self.dir, "project")
+        os.makedirs(self.project)
+        self.repo_name = json.loads(recortex.read_text(self.manifest))["repo"]
+        with open(os.path.join(self.project, recortex.CONFIG_NAME), "w") as handle:
+            json.dump({"repo": self.repo_name, "hub": 4, "profiles": ["software", "research"]}, handle)
+        trusted = self.write("trusted-repos", "%s octo-dev\n" % self.repo_name)
+        self.env = {"CLAUDE_PROJECT_DIR": self.project, "RECORTEX_TRUSTED_FILE": trusted}
+
+    def write(self, name, text):
+        path = os.path.join(self.dir, name)
+        with open(path, "w") as handle:
+            handle.write(text)
+        return path
+
+    def script(self, name, *args, cwd=None):
+        return self.run_script(name, *args, env=self.env, cwd=cwd or self.project)
+
+    def test_the_record_is_invented_and_passes_the_linter(self):
+        for folder, _, files in os.walk(DOCS_RECORD):
+            for name in files:
+                text = recortex.read_text(os.path.join(folder, name))
+                self.assertNotIn("tinycsv", text.lower(), name)  # the built-in example is not shown in the docs
+                self.assertIsNone(re.search(r"gh[-_ ]?issues[-_ ]?manager", text, re.I), name)
+        self.assertEqual("octo-org/sample-project", self.repo_name)  # the placeholder, swapped in one sweep
+        labels = self.script("setup_labels.py", "--repo", self.repo_name, "--profile", "software,research",
+                             "--topic", "dates", "--topic", "order", cwd=self.drafts)
+        self.assertEqual(0, labels.returncode, labels.stdout + labels.stderr)
+        lint = self.script("lint_drafts.py", "--manifest", self.manifest, cwd=self.drafts)
+        self.assertEqual(0, lint.returncode, lint.stdout + lint.stderr)
+        for name in os.listdir(os.path.join(self.drafts, "chain")):  # each memory of the story, as it will be posted
+            kind = "idea" if "idea" in name else "failure" if "failure" in name else "question" if "question" in name \
+                else "decision"
+            lint = self.script("lint_drafts.py", "--kind", kind, "--allow-placeholders",
+                               os.path.join(self.drafts, "chain", name), cwd=self.drafts)
+            self.assertEqual(0, lint.returncode, name + lint.stdout + lint.stderr)
+        # a draft that breaks a rule is still caught, so the passes above mean something
+        broken = self.write("broken.md", recortex.read_text(os.path.join(self.drafts, "topic-dates.md"))
+                            .replace("## Sources", "## Notes"))
+        lint = self.script("lint_drafts.py", "--kind", "final-record", "--allow-placeholders", broken, cwd=self.drafts)
+        self.assertNotEqual(0, lint.returncode, lint.stdout)
+
+    def build(self):
+        labels = self.script("setup_labels.py", "--repo", self.repo_name, "--profile", "software,research",
+                             "--topic", "dates", "--topic", "order", cwd=self.drafts)
+        self.assertEqual(0, labels.returncode, labels.stdout + labels.stderr)
+        created = self.script("create_issues.py", "--manifest", self.manifest, cwd=self.drafts)
+        self.assertEqual(0, created.returncode, created.stdout + created.stderr)
+        for name, kind in (("1-idea", "idea"), ("2-failure", "failure"), ("3-decision", "decision"),
+                           ("4-question", "question"), ("5-decision", "decision")):
+            posted = self.script("post_verified.py", "comment", "--issue", "5", "--kind", kind, "--body-file",
+                                 os.path.join(self.drafts, "chain", name + ".md"))
+            self.assertEqual(0, posted.returncode, name + posted.stdout + posted.stderr)
+        synced = self.script("index.py", "sync")
+        self.assertEqual(0, synced.returncode, synced.stdout + synced.stderr)
+        built = self.script("mind.py")
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        path = os.path.join(self.dir, "xdg-cache", "recortex", "private", self.repo_name.replace("/", "__"), "mind.html")
+        return recortex.read_text(path)
+
+    def test_the_record_builds_a_page_that_tells_the_story(self):
+        text = self.build()
+        self.assertEqual([], page_problems(text))
+        words = " ".join("".join(PageReader(text).texts).split())
+        for sentence in STORY:
+            self.assertIn(sentence, words)
+        self.assertIn("Still open" + STORY[-1], words)  # the chip before the last sentence
+        self.assertNotIn("tinycsv", text.lower())
+
+
 class PackagingTests(unittest.TestCase):
     def read_json(self, *parts):
         return json.loads(recortex.read_text(os.path.join(ROOT, *parts)))
