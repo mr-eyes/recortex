@@ -577,7 +577,7 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
         set_meta(db, "partial_at", now_utc())
     set_meta(db, "sync_complete", "1" if summary["complete"] else "0")
     db.commit()
-    board_step(db, repo, clock, timeout)
+    summary["board"] = board_step(db, repo, clock, timeout)
     db.close()
     return summary
 
@@ -606,10 +606,11 @@ def board_step(db, repo, clock, timeout):
         return
 
     def keep(code):
-        if code:
+        if code and code != "budget":
             db.execute("DELETE FROM board_cards")  # cards of an earlier read are not shown as current
         set_meta(db, "board_error", code)
         db.commit()
+        return code
 
     if state != "approved":
         return keep("unapproved" if state == "unapproved" else "entry")
@@ -640,7 +641,7 @@ def board_step(db, repo, clock, timeout):
                    [(n, c["kind"], c["item"], 1 if c["archived"] else 0, c["status"], c["why"])
                     for n, c in sorted(cards.items())])
     set_meta(db, "board_read_at", now_utc())
-    keep("")
+    return keep("")
 
 
 # ---------------------------------------------------------------- background sync

@@ -338,6 +338,8 @@ def produce(event, data, budget, config, repo, hub):
                 with alarm(share + max(1.0, budget / 4.0)):  # a safety net; the sync stops itself at `share`
                     summary = index.sync(repo, hub, timeout=share, deadline=share, timeline_cap=10, log=lambda *a: None)
                 fresh = True
+                if summary["complete"] and summary.get("board") == "budget":
+                    start_background(repo, config)  # the board did not fit in the half budget; the background reads it
                 if not summary["complete"]:
                     if summary.get("pages"):
                         fresh = "partial"  # part was read; the rest continues in the background
