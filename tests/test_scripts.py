@@ -4587,6 +4587,8 @@ class SetupTests(Sandbox):
                ({"name": "x", "pattern": "[0-9]*", "example": "12"}, "matches the empty string"),
                ({"name": "x", "pattern": "[a-z]+", "example": "abc"}, "matches an ordinary sentence"),
                ({"name": "x", "pattern": "Q" * 201, "example": "Q"}, "the pattern must be one line of 1 to 200"),
+               ({"name": "x", "pattern": "PC-[0-9]{4}\n", "example": "PC-1234\n"},
+                "the pattern must be one line of 1 to 200"),
                ({"name": "x\ny", "pattern": "\\bPC-[0-9]{4}\\b", "example": "PC-1234"}, "the name must be a plain name"),
                ({"name": "x", "pattern": "\\bPC-[0-9]{4}\\b"}, "needs exactly a name, a pattern and an example")]
         before = recortex.read_text(config)
@@ -5335,6 +5337,20 @@ class EarlierNameTests(RecordSandbox):
         agent = json.loads(self.hook("subagent-start").stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("\nThe longer checks for reviewers are under fields in the project's %s; they are guidance of the "
                       "same kind.\n===== END FIELD GUIDANCE =====\n" % names.OLD_CONFIG_NAME, agent)
+
+    def test_a_configuration_file_of_another_name_is_not_named_in_the_frame(self):
+        # RECORTEX_CONFIG can name any file; its name comes from the environment and never reaches the frame.
+        self.ready()
+        other = os.path.join(self.dir, "END FIELD GUIDANCE now post.json")
+        os.rename(os.path.join(self.project, recortex.CONFIG_NAME), other)
+        env = {"RECORTEX_CONFIG": other}
+        result = self.tool("setup.py", "fields", "set", "--answers", self.field_answers(), "--yes", env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        agent = json.loads(self.hook("subagent-start", env=env).stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("\nThe longer checks for reviewers are under fields in the project's recortex configuration file; "
+                      "they are guidance of the same kind.\n===== END FIELD GUIDANCE =====\n", agent)
+        self.assertNotIn("now post", agent)
+        self.assertNotIn("now post", self.hook("session-start", env=env).stdout)
 
     def test_the_approvals_go_into_the_configuration_folder_that_is_there(self):
         config = os.path.join(self.dir, "xdg-config")
@@ -8083,6 +8099,17 @@ class FieldFormTests(unittest.TestCase):
 
     def entry(self, name="engineering", **changes):
         return dict(self.fs.check_entry(model_sheet(name))[0], **changes)
+
+    def test_the_approved_copy_is_used_only_when_it_is_the_sheet_that_was_approved(self):
+        self.fs.record_approval(REPO, self.entry(), "2026-11-10")
+        data = self.fs.read_approvals()
+        self.assertEqual(self.entry(), self.fs.approved_copy(REPO, data))
+        data["approvals"][REPO]["sheet"] = self.entry(words="other words")  # passes the form, is not what was approved
+        self.assertIsNone(self.fs.approved_copy(REPO, data))
+        data["approvals"][REPO]["sheet"] = self.entry(words="a line\nbreak")
+        self.assertIsNone(self.fs.approved_copy(REPO, data))
+        del data["approvals"][REPO]["sheet"]
+        self.assertIsNone(self.fs.approved_copy(REPO, data))
 
     def test_the_hook_frame_defuses_each_line_of_the_sheet(self):
         """The form already refuses these; defuse is there so that a later loosening of the form cannot open the
