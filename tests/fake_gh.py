@@ -19,6 +19,7 @@ Fault switches:
   FAKE_GH_SLEEP=5                sleep before answering
   FAKE_GH_RESUME_SLEEP=8         sleep before answering the hub comments query (the GraphQL call with a number)
   FAKE_GH_RESUME_FAIL=1          exit 1 for the hub comments query
+  FAKE_GH_NO_PARENT_FIELD=1      a query that asks for an issue's parent fails as on a GitHub without sub-issues
 Projects and sub-issues (tests/fake_projects.py answers them, and lists its own fault switches): a closed issue has
 "closed_at", a merged pull request "merged_at", a sub-issue "parent" (the parent's number).
 The repository itself (`api repos/<owner>/<name>`, no further path) answers from the state's "private" key, default
@@ -217,6 +218,8 @@ def main():
     elif args[:2] == ["api", "graphql"]:
         fields = dict(a.split("=", 1) for a in option(args, "-f", many=True) + option(args, "-F", many=True))
         problems = graphql_check.check(fields["query"])
+        if os.environ.get("FAKE_GH_NO_PARENT_FIELD") and " parent {" in fields["query"]:  # a GitHub without sub-issues
+            problems.append("Field 'parent' doesn't exist on type 'Issue'")
         if problems:  # the real API rejects the whole query
             print(json.dumps({"errors": [{"message": m} for m in problems]}))
             fail("gh: " + problems[0])

@@ -22,7 +22,10 @@ stopped:
   the last text it posted); a body changed by anyone else is left alone;
 - a comment is identified by its target and its draft file, not by its
   position, so the manifest can grow;
-- a missing pin is retried on every run.
+- a missing pin is retried on every run;
+- each topic is made a sub-issue of the hub, and each active task a sub-issue of its destination topic (a "Destination
+  topic" section naming NEW-<key> or #N); a link GitHub refuses is reported in one fixed line and the hub's tables
+  stay the structure.
 
 Manifest (JSON):
   {"repo": "owner/name",
@@ -47,6 +50,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import recortex  # noqa: E402
 import lint_drafts  # noqa: E402
 import lookup as record_lookup  # noqa: E402
+import sub_issues  # noqa: E402
 
 STUB = "This issue is being created. Its full text follows within minutes."
 
@@ -74,6 +78,34 @@ def comment_id_from_url(url):
     if not match:
         raise recortex.GhError("could not read a comment id from gh output: %r" % url)
     return match.group(1)
+
+
+DESTINATION = re.compile(r"^## Destination topic[ \t]*\n(.*?)(?=^## |\Z)", re.M | re.S)
+TARGET = re.compile(r"NEW-([a-z0-9]+(?:-[a-z0-9]+)*)|(?<![A-Za-z0-9_/&#])#([0-9]{1,7})\b")
+
+
+def sub_issue_links(manifest, numbers, config, repo):
+    """[(child key, child number, parent number)]: each topic under the hub (the manifest's, else the project's),
+    each active task under the topic its "Destination topic" section names."""
+    hub = next((numbers[i["key"]] for i in manifest["issues"] if i["kind"] == "hub" and i["key"] in numbers), None)
+    if hub is None and str(config.get("repo", "")).lower() == repo.lower() and type(config.get("hub")) is int:
+        hub = config["hub"]
+    links = []
+    for item in manifest["issues"]:
+        child = numbers.get(item["key"])
+        if child is None:
+            continue
+        if item["kind"] == "final-record" and hub:
+            links.append((item["key"], child, hub))
+        elif item["kind"] == "active":
+            section = DESTINATION.search(recortex.read_text(item["_path"]))
+            found = TARGET.search(section.group(1)) if section else None
+            parent = None
+            if found:
+                parent = numbers.get(found.group(1)) if found.group(1) else int(found.group(2))
+            if parent and parent != child:
+                links.append((item["key"], child, parent))
+    return links
 
 
 def lint_all(manifest, config):
@@ -250,6 +282,22 @@ def main(argv=None):
                 print("NOT PINNED: #%d (%s); rerun to try again" % (number, key))
                 failures += 1
 
+    # 2b. Sub-issues. A refusal is one fixed line, not a failure: the hub's tables stay the structure.
+    for key, child, parent in sub_issue_links(manifest, numbers, config, repo):
+        entry = state["issues"][key]
+        if entry.get("parent") == parent:
+            continue
+        result = sub_issues.link(repo, parent, child)
+        if result in ("linked", "already"):
+            entry["parent"] = parent
+            save_state(state_path, state)
+            print("sub-issue: #%d is under #%d" % (child, parent))
+        elif result == "other":
+            print("sub-issue: #%d already has another parent on GitHub; left alone" % child)
+        else:
+            print(sub_issues.REFUSED)
+            break
+
     # 3. Post the comments. Each is known by its target and draft file.
     for index, item in enumerate(manifest["comments"]):
         target_repo = item.get("repo", repo)
@@ -331,6 +379,16 @@ def dry_run(manifest, repo, state):
               % (repo, key, item["body_file"]))
         if item.get("pin"):
             print("would run: " + recortex.show_command(["issue", "pin", "<number of NEW-%s>" % key, "--repo", repo]))
+    for item in manifest["issues"]:
+        if item["kind"] == "final-record":
+            print("would link: NEW-%s as a sub-issue of the hub (GraphQL addSubIssue, read back through Issue.parent)"
+                  % item["key"])
+        elif item["kind"] == "active":
+            section = DESTINATION.search(recortex.read_text(item["_path"]))
+            found = TARGET.search(section.group(1)) if section else None
+            if found:
+                print("would link: NEW-%s as a sub-issue of %s (GraphQL addSubIssue, read back through Issue.parent)"
+                      % (item["key"], "NEW-" + found.group(1) if found.group(1) else "#" + found.group(2)))
     for index, item in enumerate(manifest["comments"]):
         target = item["issue"]
         shown = str(target) if isinstance(target, int) else "<number of %s>" % target

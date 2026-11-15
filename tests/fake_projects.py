@@ -12,6 +12,7 @@ Fault switches (environment):
   FAKE_GH_FAIL_AFTER_MUTATION=name  the mutation acts, then fails (a timeout after GitHub acted)
   FAKE_GH_IGNORE_FIELD_WRITE=1   updateProjectV2ItemFieldValue answers as if it worked and changes nothing
   FAKE_GH_SUBISSUES=refuse       addSubIssue is refused (an older GitHub Enterprise Server)
+  FAKE_GH_IGNORE_SUBISSUE=1      addSubIssue answers as if it worked and changes nothing
   FAKE_GH_BOARD_PAGE_FAIL=2      exit 1 when page 2 of the items is read
   FAKE_GH_DEFAULT_PUBLIC=1       a new project is public (GitHub's default is not verified)
   FAKE_GH_OWNER_KIND=User        the owner of the repository is a user (default Organization)
@@ -340,7 +341,8 @@ def run_mutation(state, repo, name, args):
             raise Refused("Issue may not contain duplicate sub-issues and may only have one parent", 1)
         if len([i for i in state["issues"].values() if i.get("parent") == parent_number]) >= SUB_ISSUE_LIMIT:
             raise Refused("Sub-issues limit reached: an issue can have at most 100 sub-issues", 1)
-        child["parent"] = parent_number
+        if not os.environ.get("FAKE_GH_IGNORE_SUBISSUE"):
+            child["parent"] = parent_number
         return {"issue": issue_node(state, repo, parent_number)}
     raise Refused("fake gh: unsupported mutation %s" % name, 3)
 

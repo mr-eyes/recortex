@@ -9201,5 +9201,170 @@ class FakeProjectsTests(Sandbox):
         self.assertNotEqual(0, refused.returncode)
 
 
+class SubIssueTests(RecordSandbox):
+    """0.9.0: the hub's topics are sub-issues of the hub and each active task a sub-issue of its topic, kept in step
+    with the record by create_issues.py and by sub_issues.py; the index reads the parents."""
+
+    def parents(self):
+        return {int(n): i.get("parent") for n, i in self.repo()["issues"].items() if i.get("parent") is not None}
+
+    def clear_parents(self):
+        data = self.repo()
+        for issue in data["issues"].values():
+            issue.pop("parent", None)
+        self.save(data)
+
+    def test_create_issues_links_each_topic_to_the_hub_and_each_task_to_its_topic(self):
+        self.assertEqual({5: 4, 6: 4, 7: 5}, self.parents())
+
+    def test_a_rerun_of_create_issues_does_not_link_again(self):
+        box = Sandbox("run")
+        box.setUp()
+        box.add_labels()
+        self.addCleanup(box.doCleanups)
+        first = box.run_script("create_issues.py", "--manifest", box.manifest)
+        self.assertEqual(0, first.returncode, first.stdout + first.stderr)
+        data = box.repo()
+        data["log"] = []
+        with open(box.state, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+        again = box.run_script("create_issues.py", "--manifest", box.manifest)
+        self.assertEqual(0, again.returncode, again.stdout + again.stderr)
+        log = box.repo()["log"]
+        self.assertEqual([], [a for a in log if a[:2] == ["api", "graphql"] and "addSubIssue" in a[3]])
+        self.assertIn("sub-issue: #7 is under #5", first.stdout)
+
+    def test_the_dry_run_names_the_links_and_makes_no_call(self):
+        box = Sandbox("run")
+        box.setUp()
+        self.addCleanup(box.doCleanups)
+        result = box.run_script("create_issues.py", "--manifest", box.manifest, "--dry-run", gh="false")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("would link: NEW-reader as a sub-issue of the hub", result.stdout)
+        self.assertIn("would link: NEW-task-newlines as a sub-issue of NEW-reader", result.stdout)
+
+    def test_a_refusal_is_one_fixed_line_and_the_record_is_still_made(self):
+        box = Sandbox("run")
+        box.setUp()
+        box.add_labels()
+        self.addCleanup(box.doCleanups)
+        result = box.run_script("create_issues.py", "--manifest", box.manifest, env={"FAKE_GH_SUBISSUES": "refuse"})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(1, result.stdout.count("sub-issues: GitHub refused the link"))
+        self.assertIn("all items posted and verified", result.stdout)
+        self.assertEqual({}, {n: i.get("parent") for n, i in box.repo()["issues"].items() if i.get("parent")})
+
+    def test_plan_lists_the_missing_links_and_apply_adds_them_and_reads_them_back(self):
+        self.clear_parents()
+        self.ready()
+        plan = self.tool("sub_issues.py", "plan")
+        self.assertEqual(0, plan.returncode, plan.stdout + plan.stderr)
+        for line in ("#5 under #4: is not linked yet", "#6 under #4: is not linked yet",
+                     "#7 under #5: is not linked yet", "sub-issues: 0 of 3 link(s) are in place"):
+            self.assertIn(line, plan.stdout)
+        self.assertEqual({}, self.parents())
+        done = self.tool("sub_issues.py", "apply", "--pause", "0")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual({5: 4, 6: 4, 7: 5}, self.parents())
+        self.assertIn("linked: #7 is under #5", done.stdout)
+        again = self.tool("sub_issues.py", "plan")
+        self.assertIn("sub-issues: 3 of 3 link(s) are in place", again.stdout)
+
+    def test_the_dry_run_of_apply_prints_the_exact_commands_and_writes_nothing(self):
+        self.clear_parents()
+        self.ready()
+        before = len(self.repo()["log"])
+        result = self.tool("sub_issues.py", "apply", "--dry-run")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("would run: gh api graphql -f 'query=mutation { addSubIssue(input: {issueId: \"I_4\", "
+                      "subIssueId: \"I_5\"}) { issue { id } } }'", result.stdout)
+        self.assertEqual({}, self.parents())
+        self.assertEqual([], [a for a in self.repo()["log"][before:] if "mutation" in " ".join(a)])
+
+    def test_a_task_with_another_parent_is_reported_and_left_alone(self):
+        data = self.repo()
+        data["issues"]["7"]["parent"] = 6
+        self.save(data)
+        self.ready()
+        result = self.tool("sub_issues.py", "apply", "--pause", "0")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("#7 under #5: has another parent on GitHub (left alone)", result.stdout)
+        self.assertEqual(6, self.repo()["issues"]["7"]["parent"])
+
+    def test_a_refused_link_stops_apply_with_the_fixed_line(self):
+        self.clear_parents()
+        self.ready()
+        result = self.tool("sub_issues.py", "apply", "--pause", "0", env={"FAKE_GH_SUBISSUES": "refuse"})
+        self.assertEqual(1, result.returncode)
+        self.assertIn("sub-issues: GitHub refused the link", result.stdout)
+        self.assertEqual({}, self.parents())
+
+    def test_a_link_that_is_accepted_and_not_applied_is_caught_by_the_read_back(self):
+        self.clear_parents()
+        self.ready()
+        result = self.tool("sub_issues.py", "apply", "--pause", "0", env={"FAKE_GH_IGNORE_SUBISSUE": "1"})
+        self.assertEqual(1, result.returncode)
+        self.assertIn("MISMATCH: #5 does not read back under #4", result.stdout)
+
+    def test_the_sync_reads_the_parents_into_the_index(self):
+        self.ready()
+        self.assertEqual([(5, 4), (6, 4), (7, 5)], self.sql_rows("SELECT issue, parent FROM parents ORDER BY issue"))
+
+    def test_consistency_names_a_link_the_record_wants_and_github_lacks(self):
+        self.ready()
+        findings = self.query("consistency")
+        self.assertEqual([], [f for f in findings if f["kind"] == "sub-issue"])
+        data = self.repo()
+        data["issues"]["7"].pop("parent")
+        data["issues"]["7"]["updated_at"] = "2026-06-01T00:00:00Z"
+        self.save(data)
+        self.ready()
+        found = [f for f in self.query("consistency") if f["kind"] == "sub-issue"]
+        self.assertEqual(1, len(found))
+        self.assertIn("the record puts #7 under #5; GitHub shows no parent", found[0]["detail"])
+
+    def test_a_record_that_does_not_use_sub_issues_gets_no_finding(self):
+        self.clear_parents()
+        self.ready()
+        self.assertEqual([], [f for f in self.query("consistency") if f["kind"] == "sub-issue"])
+
+    def test_the_payloads_are_the_same_with_and_without_sub_issues(self):
+        self.ready()
+        with_links = self.tool("index.py", "query", "brief").stdout
+        self.clear_parents()
+        again = self.tool("index.py", "sync", "--rebuild")
+        self.assertEqual(0, again.returncode, again.stdout + again.stderr)
+        self.assertEqual([], self.sql_rows("SELECT * FROM parents"))
+        self.assertEqual(with_links, self.tool("index.py", "query", "brief").stdout)
+
+    def test_an_index_from_before_0_9_0_is_read_again_once_for_parents_and_merges(self):
+        self.ready()
+        self.sql_rows("DELETE FROM parents", "DELETE FROM meta WHERE key = 'links_ready'")
+        self.ready()
+        self.assertEqual([(5, 4), (6, 4), (7, 5)], self.sql_rows("SELECT issue, parent FROM parents ORDER BY issue"))
+        self.assertEqual("1", self.sql_rows("SELECT value FROM meta WHERE key = 'links_ready'")[0][0])
+
+    def sql_rows(self, *statements):
+        import sqlite3
+        path = os.path.join(self.data, "private", "example-org__tinycsv", "index.sqlite")
+        db = sqlite3.connect(path)
+        try:
+            out = None
+            for statement in statements:
+                out = db.execute(statement).fetchall()
+            db.commit()
+            return out
+        finally:
+            db.close()
+
+    def test_a_github_without_sub_issues_still_gets_its_body_edits_read(self):
+        result = self.tool("index.py", "sync", env={"FAKE_GH_NO_PARENT_FIELD": "1"})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("1", self.sql_rows("SELECT value FROM meta WHERE key = 'sync_complete'")[0][0])
+        self.assertEqual([], self.sql_rows("SELECT * FROM parents"))
+        self.assertEqual([(0,)], self.sql_rows("SELECT COUNT(*) FROM issues WHERE edits_read = 0 AND is_pr = 0"))
+
+
+
 if __name__ == "__main__":
     unittest.main()

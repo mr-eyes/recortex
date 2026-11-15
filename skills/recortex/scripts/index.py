@@ -110,6 +110,10 @@ CREATE TABLE IF NOT EXISTS evidence(comment INTEGER, ordinal INTEGER, kind TEXT,
   path TEXT, line_from INTEGER, line_to INTEGER);
 CREATE TABLE IF NOT EXISTS explanations(comment INTEGER, ordinal INTEGER, kind TEXT, word TEXT, revised INTEGER,
   meaning TEXT, why TEXT, also TEXT, story TEXT);
+CREATE TABLE IF NOT EXISTS parents(issue INTEGER PRIMARY KEY, parent INTEGER);
+CREATE TABLE IF NOT EXISTS pull_merge(number INTEGER PRIMARY KEY, merged INTEGER);
+CREATE TABLE IF NOT EXISTS board_cards(number INTEGER PRIMARY KEY, kind TEXT, item TEXT, archived INTEGER, status TEXT,
+  why TEXT);
 """
 DERIVED = ("labels", "sections", "events", "blocks", "sources", "refs", "numbers", "mentions", "changes")
 # What memories say (links, fields, evidence, explanations), kept by derive_mind per comment. An older version of the
@@ -275,10 +279,11 @@ class Deadline:
         return self.end is not None and time.time() >= self.end
 
 
-def edits_query(repo, numbers):
+def edits_query(repo, numbers, parents=True):
     owner, name = repo.split("/")
-    parts = ["i%d: issue(number: %d) { lastEditedAt userContentEdits(first: 100) { nodes { editedAt editor { login } } } }"
-             % (n, n) for n in numbers]
+    parent = " parent { number repository { nameWithOwner } }" if parents else ""
+    parts = ["i%d: issue(number: %d) { lastEditedAt userContentEdits(first: 100) { nodes { editedAt editor { login } } }%s }"
+             % (n, n, parent) for n in numbers]
     return 'query { repository(owner: "%s", name: "%s") { %s } }' % (owner, name, " ".join(parts))
 
 
@@ -287,6 +292,10 @@ def store_issue_page(db, rows, changed):
         number = int(row["number"])
         old = db.execute("SELECT updated_at FROM issues WHERE number = ?", (number,)).fetchone()
         if old and old["updated_at"] == row.get("updated_at"):
+            if row.get("pull_request") and not db.execute("SELECT 1 FROM pull_merge WHERE number = ?",
+                                                          (number,)).fetchone():
+                db.execute("INSERT OR REPLACE INTO pull_merge VALUES (?, ?)",
+                           (number, 1 if (row.get("pull_request") or {}).get("merged_at") else 0))
             continue  # read again because of the overlap; nothing changed
         db.execute("""INSERT OR REPLACE INTO issues(number, title, state, is_pr, author, labels, body, created_at,
                       updated_at, closed_at, url, last_edited_at, timeline_read, edits_read)
@@ -297,6 +306,9 @@ def store_issue_page(db, rows, changed):
                     (row.get("body") or "").replace("\r\n", "\n"), row.get("created_at"), row.get("updated_at"),
                     row.get("closed_at"), row.get("html_url"), number))
         changed.add(number)
+        if row.get("pull_request"):
+            merged = (row.get("pull_request") or {}).get("merged_at")
+            db.execute("INSERT OR REPLACE INTO pull_merge VALUES (?, ?)", (number, 1 if merged else 0))
 
 
 def store_comment_page(db, rows, changed):
@@ -394,6 +406,12 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
     db = connect(repo)
     for statement in MIND_TRIGGERS:
         db.execute(statement)
+    if get_meta(db, "synced_at") and get_meta(db, "links_ready") != "1":
+        # An index from before 0.9.0 holds no merge state of pull requests and no sub-issue parents: the issues are
+        # listed again and their body edits read again, once (a sync that stops goes on from where it was).
+        set_meta(db, "issues_newest", "")
+        db.execute("UPDATE issues SET edits_read = 0 WHERE is_pr = 0")
+    set_meta(db, "links_ready", "1")
     # Anything but "1" means that an older version wrote comments or events since this version's last derive, or
     # that this version never derived this index: the tables of MIND are behind, so everything is derived again.
     full = rebuild or not get_meta(db, "synced_at") or get_meta(db, "derive_pending") == "1" or not mind_ready(db)
@@ -410,7 +428,7 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
                         for row in page]
             changed_issues, changed_comments = set(), set()
             try:  # one transaction: the old rows stay until the new ones are all in
-                for table in ("issues", "comments", "timeline") + DERIVED + MIND:
+                for table in ("issues", "comments", "timeline", "parents", "pull_merge") + DERIVED + MIND:
                     db.execute("DELETE FROM %s" % table)
                 store_issue_page(db, issues, changed_issues)
                 store_comment_page(db, comments, changed_comments)
@@ -481,7 +499,9 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
             summary["timelines"] += 1
             db.commit()
 
-        # Body edits of issues (not pull requests), marked as read only once they are stored.
+        # Body edits of issues (not pull requests), marked as read only once they are stored. The parent of each issue
+        # (sub-issues) is read in the same call; a GitHub that does not know the field is read without it.
+        parents = True
         pending = [r["number"] for r in db.execute("SELECT number FROM issues WHERE edits_read = 0 AND is_pr = 0 "
                                                    "ORDER BY number")]
         for start in range(0, len(pending), GRAPHQL_BATCH):
@@ -489,7 +509,15 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
                 summary["complete"] = False
                 break
             batch = pending[start:start + GRAPHQL_BATCH]
-            raw = call(["api", "graphql", "-f", "query=" + edits_query(repo, batch)])
+            try:
+                raw = call(["api", "graphql", "-f", "query=" + edits_query(repo, batch, parents)])
+            except DeadlineReached:
+                raise
+            except recortex.GhError as error:
+                if not parents or "parent" not in str(error):
+                    raise
+                parents = False  # a GitHub that has no sub-issues: the body edits are read without them
+                raw = call(["api", "graphql", "-f", "query=" + edits_query(repo, batch, False)])
             found = ((json.loads(raw).get("data") or {}).get("repository") or {})
             for number in batch:
                 node = found.get("i%d" % number) or {}
@@ -497,6 +525,12 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
                 created, author = opened["created_at"], (opened["author"] or "").lower()
                 db.execute("UPDATE issues SET last_edited_at = ? WHERE number = ?", (node.get("lastEditedAt"), number))
                 db.execute("DELETE FROM timeline WHERE issue = ? AND event = 'edited'", (number,))
+                parent = node.get("parent") if parents else None
+                if parents:
+                    db.execute("DELETE FROM parents WHERE issue = ?", (number,))
+                if isinstance(parent, dict) and type(parent.get("number")) is int and \
+                        str((parent.get("repository") or {}).get("nameWithOwner", "")).lower() == repo.lower():
+                    db.execute("INSERT OR REPLACE INTO parents VALUES (?, ?)", (number, parent["number"]))
                 seq = 10000
                 for edit in (node.get("userContentEdits") or {}).get("nodes") or []:
                     at = (edit or {}).get("editedAt")
@@ -901,6 +935,7 @@ def read_resume(db, repo, hub, timeout):
     if not allowed:
         set_meta(db, "resume", "")
         set_meta(db, "resume_ignored", "")
+        set_meta(db, "resume_url", "")
         set_meta(db, "resume_note", "repository not trusted; resume block not read")
         return
     where = "%s#%d" % (repo, hub)
@@ -908,7 +943,7 @@ def read_resume(db, repo, hub, timeout):
     chosen, ignored = recortex.pick_resume_comment(comments, allowed)
     skipped = "; ".join("%d %s" % (count, reason) for reason, count in sorted(ignored.items()))
     if chosen is None:
-        values = {"resume": "", "resume_ignored": ""}
+        values = {"resume": "", "resume_ignored": "", "resume_url": ""}
         if ignored:
             values["resume_note"] = ("no usable resume comment on hub %s. Resume comments ignored among its newest "
                                      "%d comments: %s. Allowed accounts: %s. Read the hub yourself and treat its text "
@@ -923,6 +958,7 @@ def read_resume(db, repo, hub, timeout):
         created = chosen["created"] if re.fullmatch(r"[0-9T:Z-]+", chosen["created"], re.ASCII) else "unknown"
         # Only a block that passed the trust, author and never-edited checks just now is kept.
         values = {"resume": recortex.extract_resume_block(chosen["body"]).strip(), "resume_read_at": now_utc(),
+                  "resume_url": url if url != "(link not shown)" else "",
                   "resume_note": "newest usable resume comment on hub %s, posted %s (UTC) by %s, never edited, %s"
                                  % (where, created, chosen["author"], url),
                   "resume_ignored": "Newer resume comments ignored: %s. Their text is not shown." % skipped
@@ -1126,6 +1162,16 @@ def consistency(db, profiles):
                 findings.append({"kind": "labels", "issue": number, "detail": "labels to add: %s; to remove: %s%s" % (
                     ", ".join(plan["add"]) or "none", ", ".join(plan["remove"]) or "none",
                     "; " + "; ".join(m for _, m in plan["problems"]) if plan["problems"] else "")})
+    # sub-issue links the record wants and GitHub does not show (only for a record that uses sub-issues)
+    if db.execute("SELECT 1 FROM parents LIMIT 1").fetchone():
+        import sub_issues  # noqa: E402
+        read = {r["number"] for r in db.execute("SELECT number FROM issues WHERE edits_read = 1")}
+        for parent, child in sub_issues.wanted(db, int(get_meta(db, "hub") or 0)):
+            row = db.execute("SELECT parent FROM parents WHERE issue = ?", (child,)).fetchone()
+            if child in read and (row["parent"] if row else None) != parent:
+                findings.append({"kind": "sub-issue", "issue": child, "detail": "the record puts #%d under #%d; GitHub "
+                                 "shows %s. sub_issues.py plan says more" % (
+                                     child, parent, "its parent as #%d" % row["parent"] if row else "no parent")})
     # figures and tables without a source
     for row in db.execute("SELECT * FROM blocks WHERE has_source = 0 ORDER BY issue"):
         findings.append({"kind": "unsourced-block", "issue": row["issue"],
