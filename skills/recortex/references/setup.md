@@ -41,7 +41,7 @@ An answers file:
  "project": "A small library that reads CSV files, and a short benchmark note.",
  "deliverables": [{"kind": "software"},
                   {"kind": "paper", "sections": ["Background", "Methods", "Results", "Data availability"]}],
- "decision_makers": ["Sam Rivera"], "timezone": "US Pacific time, written as 2026-03-04 14:10 PST",
+ "decision_makers": ["the project lead"], "timezone": "US Pacific time, written as 2026-03-04 14:10 PST",
  "topics": ["reader"], "catch_up": false, "read_transcripts": false,
  "triage_workflow": true, "claude_md": true, "prompt_hook": {"enabled": true, "every": 10}, "trust": true}
 ```

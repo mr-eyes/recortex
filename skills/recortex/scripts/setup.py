@@ -26,7 +26,7 @@ Answers file (JSON):
    "record": "this" | "other" | "new",     this repository, another existing one, or a new private one
    "project": "One or two plain sentences on what the project is.",
    "deliverables": [{"kind": "paper", "sections": ["Background", "Methods", ...]}, ...],
-   "decision_makers": ["Sam Rivera", "@sam-rivera"],
+   "decision_makers": ["the project lead", "@octocat"],
    "timezone": "US Pacific time, written as 2026-03-04 14:10 PST",
    "topics": ["reader", "speed"],
    "catch_up": false, "read_transcripts": false,

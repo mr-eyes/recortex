@@ -163,7 +163,7 @@ A word that cannot be understood without this project is explained in the memory
 
 ```
 <details>
-<summary>We use "line splitter" to mean the first version of tinycsv's reader, which cut the file into lines before looking at quotes</summary>
+<summary>We use "line splitter" to mean the first version of octo-repo's reader, which cut the file into lines before looking at quotes</summary>
 
 **Why it matters here:** Its failures are why the reader was rewritten.
 
@@ -171,7 +171,7 @@ A word that cannot be understood without this project is explained in the memory
 
 **The longer story:**
 
-tinycsv began as a few lines of code: split the file at every line break, then split each line at every comma.
+octo-repo began as a few lines of code: split the file at every line break, then split each line at every comma.
 
 </details>
 ```
@@ -192,7 +192,7 @@ Which words: only the project's own names for its test files, settings, earlier 
 
 ### A worked chain
 
-`examples/tinycsv/chain/` holds five memories posted one at a time on the reader topic, in this order:
+`examples/octo-repo/chain/` holds five memories posted one at a time on the reader topic, in this order:
 
 1. An idea: keep the current reader and remember across lines whether a quoted field is open (9103).
 2. A failure that `checks=9103`: the patch broke files with mixed line endings (9104).

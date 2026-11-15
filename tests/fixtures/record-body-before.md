@@ -1,13 +1,13 @@
 ## Current state
 
-At commit 4f2a9c1, tinycsv reads the 100 MB benchmark file in a median of 1.84 s over 5 runs, against 1.21 s for the standard library on the same machine. tinycsv is slower on all 3 of 3 benchmark files.
+At commit 4f2a9c1, octo-repo reads the 100 MB benchmark file in a median of 1.84 s over 5 runs, against 1.21 s for the standard library on the same machine. octo-repo is slower on all 3 of 3 benchmark files.
 
 As of 2026-03-04 14:10 PST. Feeds: benchmark note, results. Hub: #1.
 
 <details>
 <summary>Replaced on 2026-03-04 14:10 PST: the first run used 3 repeats; rerun with 5</summary>
 
-At commit 4f2a9c1, tinycsv reads the 100 MB benchmark file in a median of 1.79 s over 3 runs.
+At commit 4f2a9c1, octo-repo reads the 100 MB benchmark file in a median of 1.79 s over 3 runs.
 
 </details>
 
@@ -19,9 +19,9 @@ At commit 4f2a9c1, tinycsv reads the 100 MB benchmark file in a median of 1.79 s
 
 | Measure | Value | Denominator | Run or version | Source path |
 |---|---|---|---|---|
-| Median read time, 100 MB, tinycsv | 1.84 s | 5 runs | run-0304, commit 4f2a9c1 | `bench/out/run-0304/summary.tsv` |
+| Median read time, 100 MB, octo-repo | 1.84 s | 5 runs | run-0304, commit 4f2a9c1 | `bench/out/run-0304/summary.tsv` |
 | Median read time, 100 MB, standard library | 1.21 s | 5 runs | run-0304 | `bench/out/run-0304/summary.tsv` |
-| Files where tinycsv is slower | 3 | 3 | run-0304 | `bench/out/run-0304/summary.tsv` |
+| Files where octo-repo is slower | 3 | 3 | run-0304 | `bench/out/run-0304/summary.tsv` |
 
 ## Decisions
 
@@ -29,7 +29,7 @@ None so far.
 
 ## Negative results and limitations
 
-tinycsv is slower than the standard library on every file measured. One machine, one Python version.
+octo-repo is slower than the standard library on every file measured. One machine, one Python version.
 
 ## Not established
 

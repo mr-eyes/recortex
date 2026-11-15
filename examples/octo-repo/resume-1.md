@@ -11,7 +11,7 @@
 |---|---|---|
 | Finish the state machine for quoted newlines and add the 12 test files | Claude session | NEW-task-newlines |
 | Rerun the speed benchmark after the reader change | Claude session | NEW-speed |
-| Choose a license before the release | Sam Rivera | this hub |
+| Choose a license before the release | the project lead | this hub |
 
-**Holds:** Do not tag 0.3.0 until Sam Rivera says so.
+**Holds:** Do not tag 0.3.0 until the project lead says so.
 <!-- ghim:resume:end -->

@@ -33,5 +33,5 @@ Files of the conformance set that the reader parses to the expected rows, by the
 |---|---|
 | 41 of 53 files pass; 12 fail, each with a newline inside a quoted field | `tests/conformance/report-4f2a9c1.txt`, conformance set v2, commit 4f2a9c1 |
 | 6 of 6 files with mixed line endings pass | `tests/conformance/report-4f2a9c1.txt`, commit 4f2a9c1 |
-| Strict quoting as the default | `tinycsv/reader.py`, commit 4f2a9c1 |
+| Strict quoting as the default | `octo_repo/reader.py`, commit 4f2a9c1 |
 | Table conformance | data `tests/conformance/report-4f2a9c1.txt`; command `python tests/conformance/run.py --summary`; commit 4f2a9c1 |

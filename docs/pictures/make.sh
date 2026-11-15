@@ -8,7 +8,7 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); R=$(cd "$HERE/../.." && pwd)
 REPO=${PICTURE_REPO:-octo-org/sample-project}   # the invented record's repository name; the drafts hold the same text
 mkdir -p "$R/.tmp"; D=$(mktemp -d "${1:-$R/.tmp}/pictures-XXXX")
 mkdir "$D/project" "$D/home"; cp "$HERE/state.json" "$D/state.json"; cp -r "$HERE/record" "$D/drafts"
-printf '%s octo-dev\n' "$REPO" > "$D/trusted"
+printf '%s octocat\n' "$REPO" > "$D/trusted"
 printf '{"repo": "%s", "hub": 4, "profiles": ["software", "research"]}\n' "$REPO" > "$D/project/.recortex.json"
 # every command runs in a clean environment: no variable of the plugin or of the real account reaches it
 run() {

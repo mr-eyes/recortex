@@ -35,14 +35,14 @@ skills/recortex/
 docs/                     the five pages the README links to
 docs/pictures/            the invented record behind the pictures, and the scripts that remake them
 assets/                   the lockups, the drawings and the story pictures the README uses
-examples/tinycsv/         the built-in example project, used by the tests
+examples/octo-repo/         the built-in example project, used by the tests
 tests/                    offline tests with a local stand-in for gh
 ```
 
 ## Trying the built-in example
 
 ```bash
-cd examples/tinycsv
+cd examples/octo-repo
 S=../../skills/recortex/scripts
 export RECORTEX_CONFIG=$PWD/.recortex.json   # the example is not at a project root
 

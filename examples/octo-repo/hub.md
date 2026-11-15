@@ -8,7 +8,7 @@ The current resume block is the newest comment on this issue that carries the re
 
 ## Project
 
-tinycsv is a small Python library that reads CSV files with no dependencies. The goal of the current cycle is release 0.3.0 with correct handling of quoted fields, plus a short benchmark note comparing read speed with the standard library. Sam Rivera owns the project and makes release decisions. Code lives in `example-org/tinycsv`; benchmark inputs live under `bench/data/` in the same repository.
+octo-repo is a small Python library that reads CSV files with no dependencies. The goal of the current cycle is release 0.3.0 with correct handling of quoted fields, plus a short benchmark note comparing read speed with the standard library. the project lead owns the project and makes release decisions. Code lives in `octo-org/octo-repo`; benchmark inputs live under `bench/data/` in the same repository.
 
 Times in this tracker are US Pacific time, written as 2026-03-04 14:10 PST. Times copied from GitHub or other tools in UTC are converted before they are written here.
 

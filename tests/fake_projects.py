@@ -25,7 +25,7 @@ import sys
 
 import graphql_check
 
-DEFAULT_REPO = "example-org/tinycsv"
+DEFAULT_REPO = "octo-org/octo-repo"
 DEFAULT_STATUS = ("Todo", "In Progress", "Done")
 SUB_ISSUE_LIMIT = 100
 
@@ -163,7 +163,7 @@ def run_query(state, repo, fields, selection):
     out = {}
     for alias, name, args, children in selection:
         if name == "viewer":
-            out[alias] = evaluate(state, repo, children, {"__typename": "User", "login": "octo-dev",
+            out[alias] = evaluate(state, repo, children, {"__typename": "User", "login": "octocat",
                                                           "projectsV2": {"totalCount": 0}}, "User", {})
         elif name == "repositoryOwner":
             login = graphql_check.literal(args["login"])

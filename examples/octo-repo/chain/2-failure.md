@@ -13,4 +13,4 @@
 
 **Not established:** Whether a smaller patch could avoid it.
 
-**Next step:** Decide whether to rewrite the reader, owner Sam Rivera
+**Next step:** Decide whether to rewrite the reader, owned by the project lead

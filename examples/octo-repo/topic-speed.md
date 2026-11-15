@@ -4,17 +4,17 @@ This body is the benchmark-note text for the sections below: the current version
 
 ## Methods
 
-Read speed was measured on three files of 1 MB, 10 MB and 100 MB. Each file was read 5 times by tinycsv and 5 times by the standard library's `csv` module, each read in a fresh process so that no read reuses the work of an earlier one, and the median wall time is reported. All reads ran on one laptop with Python 3.12 and one thread.
+Read speed was measured on three files of 1 MB, 10 MB and 100 MB. Each file was read 5 times by octo-repo and 5 times by the standard library's `csv` module, each read in a fresh process so that no read reuses the work of an earlier one, and the median wall time is reported. All reads ran on one laptop with Python 3.12 and one thread.
 
 ## Results
 
-tinycsv read the 100 MB file in a median of 1.84 s over 5 runs, against 1.21 s for the standard library. tinycsv was slower on 3 of 3 files.
+octo-repo read the 100 MB file in a median of 1.84 s over 5 runs, against 1.21 s for the standard library. octo-repo was slower on 3 of 3 files.
 
 ### Figure: read-time - Median read time by file size
 
-Median wall time of 5 reads per file for tinycsv and the standard library, on files of 1 MB, 10 MB and 100 MB.
+Median wall time of 5 reads per file for octo-repo and the standard library, on files of 1 MB, 10 MB and 100 MB.
 
-![Median read time of tinycsv and the standard library by file size](https://github.com/example-org/tinycsv/blob/4f2a9c1/bench/out/run-0304/read-time.png?raw=true)
+![Median read time of octo-repo and the standard library by file size](https://github.com/octo-org/octo-repo/blob/4f2a9c1/bench/out/run-0304/read-time.png?raw=true)
 
 ## Limitations
 

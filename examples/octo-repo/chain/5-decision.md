@@ -5,7 +5,7 @@
 
 **Decision:** Strict quoting stays the default. The lenient mode now warns once per stray quote, with its line and column.
 
-**Decided by:** Sam Rivera, 2026-03-12 10:10 PST
+**Decided by:** the project lead, 2026-03-12 10:10 PST
 
 **Exact words:**
 

@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fake_projects  # noqa: E402
 import graphql_check  # noqa: E402
 
-ME = "octo-dev"
+ME = "octocat"
 
 
 def load():
@@ -91,7 +91,7 @@ def api_issue(state, repo, number):
     out = {
         "number": int(number), "title": issue["title"], "state": issue.get("state", "open"),
         "body": issue["body"], "labels": [{"name": n} for n in issue.get("labels", [])],
-        "user": {"login": issue.get("user", "octo-dev")},
+        "user": {"login": issue.get("user", "octocat")},
         "created_at": issue.get("created_at", "2026-01-05T17:00:00Z"),
         "updated_at": issue.get("updated_at", "2026-01-06T18:30:00Z"), "closed_at": issue.get("closed_at"),
         "html_url": "https://github.com/%s/%s/%s" % (repo, kind, number),
