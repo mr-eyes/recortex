@@ -9458,6 +9458,7 @@ class SubIssueTests(RecordSandbox):
         result = self.tool("sub_issues.py", "apply", "--pause", "0", "--limit", "1")
         self.assertIn("linked: #5 is under #4", result.stdout)
         self.assertIn("2 more link(s) wait", result.stdout)
+        self.assertEqual({5: 4}, self.parents())
 
 
 def utc_ago(days, hours=0):
