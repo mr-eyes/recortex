@@ -6569,6 +6569,34 @@ class MindModelTests(MindSandbox):
         self.assertTrue(threads["topic:reader"]["shown"])  # the author's own edit in that minute is the creation
         self.assertIn("MARK-OWN", threads["topic:reader"]["name"])
 
+    def test_evidence_in_a_text_that_is_not_shown_says_so(self):
+        rest = ("**What ran:** The benchmark.\n\n**Configuration:** Python 3.12.\n\n**Numbers:** 3 of 3.\n\n**Exclusions "
+                "and failures:** None.\n\n**Cost:** 1 minute.\n\n**Not established:** Windows.\n\n**Next step:** None, "
+                "owner Claude session\n\n**Evidence:**\n- figure read-time\n- table nonesuch\n")
+        self.add_chain()
+        self.put(9600, 6, memory_draft("result", "2026-03-13T10:00-08:00", rest=rest))
+        self.ready()
+        evidence = self.told(self.model())[9600]["evidence"]
+        self.assertEqual([("figure", True, True), ("table", False, True)],
+                         [(e["kind"], e["found"], e["shown"]) for e in evidence])
+        data = self.repo()
+        speed = data["issues"]["6"]
+        speed["body"] = speed["body"].replace("Median read time by file size", "MARK-FIGURE Median read time")
+        speed["edits"] = [{"at": "2026-04-20T10:00:00Z", "by": "mallory"}, {"at": speed["created_at"], "by": "octo-dev"}]
+        speed["updated_at"] = "2026-04-20T10:00:00Z"
+        self.save(data)
+        self.ready()
+        model = self.model()
+        self.assertNotIn("MARK-FIGURE", json.dumps(model))
+        self.assertEqual([{"kind": "figure", "found": False, "shown": False},
+                          {"kind": "table", "found": False, "shown": False}], self.told(model)[9600]["evidence"])
+        text = self.page()
+        memory = text[text.index('id="m-9600"'):]
+        memory = memory[:memory.index("</article>")]
+        self.assertIn("This memory points to a figure in a text that this page does not show.", memory)
+        self.assertNotIn("no longer in what we say now", memory)  # the figure is still there; the page does not show it
+        self.assertNotIn("MARK-FIGURE", text)
+
 
 def index_not_ready():
     return ("the index was last written by an older version of the plugin, or never by this one; run index.py "

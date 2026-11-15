@@ -727,7 +727,7 @@ class Build:
         if kind in ("table", "figure"):
             topic = thread["topic"]
             if topic is None or not thread["shown"]:
-                return {"kind": kind, "found": False, "shown": topic is not None and not thread["shown"]}
+                return {"kind": kind, "found": False, "shown": False}  # no text of this thread is on the page
             block = self.blocks_of(topic).get((kind, row["ident"]))
             if block is None:
                 return {"kind": kind, "found": False, "shown": True}
