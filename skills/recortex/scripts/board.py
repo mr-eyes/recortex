@@ -324,10 +324,10 @@ def set_up(args):
         else:
             number = args.number
         project = board_api.read_project(owner, number)
-        board_api.graphql("mutation { updateProjectV2(input: {projectId: %s, public: false, shortDescription: %s, "
-                          "readme: %s}) { projectV2 { id } } }" % (board_api.quote(project["id"]),
-                                                                   board_api.quote(board_api.DESCRIPTION),
-                                                                   board_api.quote(board_api.README)))
+        texts = ", shortDescription: %s, readme: %s" % (board_api.quote(board_api.DESCRIPTION),
+                                                        board_api.quote(board_api.README)) if args.mode == "new" else ""
+        board_api.graphql("mutation { updateProjectV2(input: {projectId: %s, public: false%s}) { projectV2 { id } } }"
+                          % (board_api.quote(project["id"]), texts))
         project = board_api.read_project(owner, number)
         if project["public"]:
             raise board_api.BoardError("public")

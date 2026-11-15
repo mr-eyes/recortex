@@ -10073,6 +10073,15 @@ class BoardWriteTests(BoardSandbox):
         self.assertEqual(0, self.apply("--restore", "7").returncode)
         self.assertNotIn("moved by hand", self.tool("board.py", "plan").stdout)
 
+    def test_setup_of_an_existing_board_keeps_its_readme(self):
+        self.make_board()
+        data = self.repo()
+        data["projects"]["example-org/1"].update(readme="Team notes", shortDescription="Team board")
+        self.save(data)
+        self.assertEqual(0, self.tool("board.py", "setup", "--mode", "existing", "--number", "1", "--yes").returncode)
+        project = self.repo()["projects"]["example-org/1"]
+        self.assertEqual(("Team notes", "Team board"), (project["readme"], project["shortDescription"]))
+
 
 class BoardSyncTests(BoardSandbox):
     """The sync's board step, the two brief lines, --doctor and the resume reminder."""
