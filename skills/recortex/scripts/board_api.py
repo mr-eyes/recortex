@@ -45,6 +45,7 @@ GH_ID = re.compile(r"[A-Za-z0-9_=-]{1,100}")
 OWNER = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
 PAGE = 100
 WHY_CAP = 300
+MAX_PAGES = 500          # pages of cards read at most (50,000 cards, the most a board holds)
 DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 REASONS = {
@@ -252,7 +253,7 @@ def read_cards(project, repo, left=None, timeout=60):
     """The cards of the record's repository: {number: {"item", "kind", "archived", "status" ("" for none, a plugin
     status or "other"), "why"}}. Items of other repositories, drafts and redacted items are left out. `left` is a
     function that gives the seconds left (None for no limit) and raises BoardError('budget') when there are none."""
-    cards, after = {}, None
+    cards, after, pages = {}, None, 0
     names = project["status"]["options"] if project.get("status") else {}
     while True:
         seconds = timeout if left is None else left()
@@ -275,7 +276,9 @@ def read_cards(project, repo, left=None, timeout=60):
                              else "other",
                              "why": text[:WHY_CAP] if isinstance(text, str) else ""}
         page = items.get("pageInfo") or {}
-        if not page.get("hasNextPage") or not isinstance(page.get("endCursor"), str):
+        pages += 1
+        if not page.get("hasNextPage") or not isinstance(page.get("endCursor"), str) or page["endCursor"] == after \
+                or pages >= MAX_PAGES:
             return cards
         after = page["endCursor"]
 

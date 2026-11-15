@@ -301,6 +301,7 @@ def set_up(args):
             return 2
         print(failure(error.code))
         return 1
+    made_number = None
     try:
         info, _ = board_api.repo_ids(repo, [])
         if args.mode == "new":
@@ -311,6 +312,7 @@ def set_up(args):
             number = ((made.get("createProjectV2") or {}).get("projectV2") or {}).get("number")
             if type(number) is not int:
                 raise board_api.BoardError("github")
+            made_number = number
             print("created: a new board, number %d, linked to %s" % (number, repo))
         else:
             number = args.number
@@ -356,6 +358,9 @@ def set_up(args):
             raise board_api.BoardError("field" if not project["public"] else "public")
     except board_api.BoardError as error:
         print(failure(error.code))
+        if args.mode == "new" and type(made_number) is int:
+            print("board: the new board is number %d; run `board.py setup --mode existing --number %d --yes` to "
+                  "finish it" % (made_number, made_number))
         return 1
     print("private: the board is private (read back)")
     for line in board_api.lines_for(project):

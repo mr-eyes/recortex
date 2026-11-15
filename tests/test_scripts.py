@@ -9366,6 +9366,12 @@ class SubIssueTests(RecordSandbox):
         self.assertIn("sub-issues: GitHub refused the link", result.stdout)
         self.assertEqual({}, self.parents())
 
+    def test_plan_says_in_one_fixed_line_when_github_cannot_be_read(self):
+        self.ready()
+        result = self.tool("sub_issues.py", "plan", env={"FAKE_GH_FAIL_ON": "api graphql"})
+        self.assertEqual(1, result.returncode)
+        self.assertIn("sub-issues: GitHub could not be read just now; run the command again.", result.stdout)
+
     def test_a_link_that_is_accepted_and_not_applied_is_caught_by_the_read_back(self):
         self.clear_parents()
         self.ready()
@@ -9953,6 +9959,31 @@ class BoardWriteTests(BoardSandbox):
         untrusted = self.apply()
         self.assertNotEqual(0, untrusted.returncode)
         self.assertIn("is not in your trusted repositories", untrusted.stderr)
+
+    def test_a_failure_after_the_board_was_made_names_the_number_to_finish_it(self):
+        result = self.tool("board.py", "setup", "--mode", "new", "--yes",
+                           env={"FAKE_GH_FAIL_MUTATION": "createProjectV2Field"})
+        self.assertEqual(1, result.returncode)
+        self.assertIn("board: the new board is number 1; run `board.py setup --mode existing --number 1 --yes` to "
+                      "finish it", result.stdout)
+        finished = self.tool("board.py", "setup", "--mode", "existing", "--number", "1", "--yes")
+        self.assertEqual(0, finished.returncode, finished.stdout + finished.stderr)
+        self.assertEqual(1, len(self.repo()["projects"]))
+
+    def test_a_board_that_repeats_its_cursor_is_read_once_and_not_forever(self):
+        self.in_process()
+        import board_api
+        calls = []
+
+        def page(query, timeout=60):
+            calls.append(query)
+            return {"node": {"items": {"nodes": [], "pageInfo": {"hasNextPage": True, "endCursor": "same"}}}}
+
+        original = board_api.graphql
+        board_api.graphql = page
+        self.addCleanup(setattr, board_api, "graphql", original)
+        board_api.read_cards({"id": "PVT_1", "status": {"options": {}}}, REPO)
+        self.assertEqual(2, len(calls))
 
     def test_hooks_never_write_to_github(self):
         self.make_board()

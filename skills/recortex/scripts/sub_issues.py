@@ -29,6 +29,7 @@ import index  # noqa: E402
 import recortex  # noqa: E402
 
 BATCH = 40
+UNREAD = "sub-issues: GitHub could not be read just now; run the command again."
 REFUSED = ("sub-issues: GitHub refused the link (an older GitHub Enterprise Server, or more than 100 sub-issues "
            "under one parent); the hub's tables stay the structure.")
 MENTION = re.compile(r"(?<![\w/&#])#([0-9]{1,7})\b")
@@ -165,7 +166,7 @@ def main(argv=None):
     try:
         rows, ids = difference(repo, links)
     except board_api.BoardError:
-        print(REFUSED.replace("refused the link", "could not be read"))
+        print(UNREAD)
         return 1
     show(rows)
     if args.command == "plan":
@@ -187,7 +188,6 @@ def main(argv=None):
         if args.pause > 0:
             time.sleep(args.pause)
     if todo:
-        after, _ = read_parents(repo, [c for _, c in todo])[0], None
         _, parents = read_parents(repo, [c for _, c in todo])
         for parent, child in todo:
             if parents.get(child) == parent:
