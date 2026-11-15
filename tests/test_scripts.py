@@ -9150,6 +9150,14 @@ class DocsTests(unittest.TestCase):
                     "recortex-lockup.svg", "recortex-lockup-reversed.svg"), os.path.basename(dark), path)
             self.assertNotIn("![", text, path)  # a picture is a <picture>, so that dark mode has its own file
 
+    def test_the_plugin_has_a_square_icon(self):
+        with open(os.path.join(ROOT, ".claude-plugin", "icon.png"), "rb") as handle:
+            head = handle.read(24)
+        self.assertEqual(b"\x89PNG\r\n\x1a\n", head[:8])
+        width, height = int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+        self.assertEqual(width, height)
+        self.assertTrue(512 <= width <= 2048, width)
+
     def test_the_assets_folder_is_small_and_every_file_is_used(self):
         assets = os.path.join(ROOT, "assets")
         used = set()
