@@ -4811,6 +4811,13 @@ class SetupTests(Sandbox):
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn("board must be", result.stderr)
 
+    def test_a_reason_on_stderr_is_shown_and_the_new_board_is_named(self):
+        os.makedirs(os.path.join(self.dir, "xdg-config", "recortex", "private", "board-approvals.json"))
+        root, result = self.apply_with_board("new")
+        self.assertIn("your approval of the board was not recorded", result.stdout)
+        self.assertIn("board.py setup --mode existing --number 1 --yes", result.stdout)
+
+
 class CatchUpTests(Sandbox):
     def repository(self):
         root = os.path.join(self.dir, "work")

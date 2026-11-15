@@ -1104,14 +1104,20 @@ def board_step(board, root, python, dry):
     print("run: %s   # create or link the private board of the work" % " ".join(command + ["--yes"]))
     result = subprocess.run(command + ["--yes"], capture_output=True, text=True, cwd=root)
     print(result.stdout.rstrip())
+    if result.stderr.strip():
+        print(result.stderr.strip()[-1000:])
     if result.returncode != 0:
-        print("board: not set up; the rest of the setup is done. Run `board.py setup --mode %s%s --yes` when the "
-              "reason above is dealt with." % (board["mode"], " --number %d" % board["number"]
-                                               if board.get("number") else ""))
+        made = re.search(r"^created: a new board, number ([0-9]+),", result.stdout, re.M)
+        again = "existing --number %s" % made.group(1) if made else board["mode"] + (
+            " --number %d" % board["number"] if board.get("number") else "")
+        print("board: not set up; the rest of the setup is done. Run `board.py setup --mode %s --yes` when the "
+              "reason above is dealt with." % again)
         return
     print("run: board.py apply   # fill the board from the record")
     filled = subprocess.run([python, os.path.join(HERE, "board.py"), "apply"], capture_output=True, text=True, cwd=root)
     print(filled.stdout.rstrip())
+    if filled.stderr.strip():
+        print(filled.stderr.strip()[-1000:])
     if filled.returncode != 0:
         print("board: not filled yet; run `board.py apply` when the reason above is dealt with.")
 
