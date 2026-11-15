@@ -11,6 +11,9 @@ recortex is a Claude Code plugin. It keeps what a project knows in GitHub issues
 what was decided and why, what failed, and the current text of the paper, release notes or report. A new session, or
 one whose context was compacted, starts from that record.
 
+Continuity starts with what was posted. Work still only in the conversation can be lost if a session stops before
+recording it; the compaction hook asks Claude to preserve pending work but does not save it to GitHub itself.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works-dark.svg">
   <img src="assets/how-it-works-light.svg" alt="A session writes memories to GitHub issues. The record gives back a brief at every session start, the mind page, the finished text and a board.">
@@ -18,7 +21,7 @@ one whose context was compacted, starts from that record.
 
 ## What you get
 
-- A session that starts where the last one stopped. A short brief of the record opens every session and every subagent.
+- A session that starts from the last recorded state. A short brief of the record opens every session and every subagent.
 - A record you can read on GitHub. One pinned hub, one issue per topic, and a dated memory for each result, decision, failure, idea and question.
 - The mind page. One private local page that tells the memory in sentences: where things stand, how each thread got there, what went wrong, what is settled, what is open.
 - The finished work, compiled. Topic bodies hold the deliverable's current text, so the paper or the release notes are assembled from the issues.
@@ -102,6 +105,7 @@ Optional, off unless you choose it at setup, and private. The record decides whi
 | If you want to | Read |
 |---|---|
 | See how the issues are laid out | [How the record works](docs/how-it-works.md) |
+| Test recovery and measure a fresh Claude session | [Continuity demo](examples/continuity/README.md) |
 | Install as a plain skill, trust a shared repository, upgrade from before 0.5.0 | [Install and upgrade](docs/install.md) |
 | Start from months of work or an older tracker | [Starting from existing work](docs/existing-work.md) |
 | Know what the plugin will and will not do with untrusted text | [Safety and security](docs/security.md) |
