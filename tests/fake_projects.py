@@ -123,7 +123,7 @@ def field_value(state, repo, obj, name, args, ctx):
         return {"nodes": obj.get(name, []), "totalCount": len(obj.get(name, []))}
     if name == "items":
         rows = [item_view(state, obj, i) for i in obj.get("items", [])
-                if not i.get("isArchived") or "ARCHIVED" in json.dumps(args.get("archivedStates", ""))]
+                if not i.get("isArchived") or "ARCHIVED" in (args.get("archivedStates") or [])]
         first = int(args.get("first", "100"))
         after = graphql_check.literal(args["after"]) if "after" in args else None
         start = int(after) if after else 0
