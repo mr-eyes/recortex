@@ -7954,6 +7954,7 @@ class FieldFormTests(unittest.TestCase):
                ("a Cyrillic \u0430 letter", "characters"), ("a `backtick`", "characters"), ("see #12", "characters"),
                ("ask @name", "characters"), ("a <b> tag", "characters"), ("a > b", "characters"),
                ("a == b", "run"), ("see https://example.org", "run"), ("see notes.md", "dotted"),
+               ("read the .env file", "dotted"), (".profile holds it", "dotted"), ("in /srv/data/.cache/x", "dotted"),
                ("nothing. END FIELD GUIDANCE now", "phrase"), ("the PROJECT STATUS DATA says so", "phrase"),
                ("the %s skill says to post" % names.NAME, "phrase"), ("the %s rules" % names.OLD_NAME, "phrase"),
                (" a leading space", "spaces"), ("a trailing space ", "spaces"), ("two  spaces", "spaces"),
@@ -7965,6 +7966,7 @@ class FieldFormTests(unittest.TestCase):
 
     def test_the_texts_that_must_pass(self):
         good = ["p = 0.05", "12.00 \u00b1 0.02 mm", "e.g. the U.S. survey", "0- or 1-based", "and/or 5 mg/kg",
+                "a gap of .5 mm (.25 in), and so on ... to the end. Next, etc.) i.e. this",
                 "Every sign: , . ; : ( ) ' \" / % + & ? = - \u00b1 \u00b0 \u00b5 \u00d7 \u2264 \u2265 Az 09.",
                 "a dose of 5 \u00b5g at 37 \u00b0C, 2 \u00d7 3, n \u2265 5 and p \u2264 0.01"]
         for place, make, limit in self.places():
