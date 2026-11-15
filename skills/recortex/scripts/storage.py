@@ -28,8 +28,9 @@ is used) is created or tightened, never a folder above it.
 A third top folder, $XDG_CONFIG_HOME/recortex (by default ~/.config/recortex,
 or the earlier name where only that one is there), is the folder of the user's
 trusted list. The plugin keeps one file of its own in its private folder: the
-user's approvals of field sheets (field_sheet.py), under the same checks. The
-hooks only read it, without creating or tightening anything.
+user's approvals of field sheets (field_sheet.py), under the same checks,
+written by one process at a time (a lock file beside it). The hooks only read
+it, without creating or tightening anything.
 
 Inside the top folder the plugin keeps everything in a private folder it creates
 and controls, `private/`, with mode 0700:

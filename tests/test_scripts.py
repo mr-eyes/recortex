@@ -8095,6 +8095,32 @@ class FieldFormTests(unittest.TestCase):
         self.fs.record_approval("Example-Org/TinyCSV", self.entry(), "2026-11-11")
         self.assertEqual("2026-11-11", self.fs.approval_of(REPO)["approved"])  # keys are lowercase
 
+    def test_writers_at_the_same_moment_all_keep_their_approvals(self):
+        # Each writer waits between its read of the file and its write. Without the lock every writer starts from the
+        # same content, and the last write drops the others' approvals.
+        code = ("import json, sys, time\n"
+                "sys.path.insert(0, sys.argv[1])\n"
+                "import field_sheet\n"
+                "write = field_sheet.write_approvals\n"
+                "def slow(data):\n"
+                "    time.sleep(0.5)\n"
+                "    write(data)\n"
+                "field_sheet.write_approvals = slow\n"
+                "entry = field_sheet.check_entry(json.load(open(sys.argv[3], encoding='utf-8')))[0]\n"
+                "field_sheet.record_approval(sys.argv[2], entry, '2026-11-10')\n")
+        model = os.path.join(FIELD_DIR, "engineering.json")
+        self.fs.record_approval("example-org/first", self.entry(), "2026-11-09")
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+        writers = [subprocess.Popen([sys.executable, "-c", code, SCRIPTS, "example-org/writer%d" % number, model],
+                                    env=env) for number in range(3)]
+        for writer in writers:
+            self.assertEqual(0, writer.wait(timeout=60))
+        data = json.loads(recortex.read_text(self.approvals))
+        self.assertEqual(["example-org/first", "example-org/writer0", "example-org/writer1", "example-org/writer2"],
+                         sorted(data["approvals"]))
+        self.assertEqual([], [name for name in os.listdir(self.private) if name.startswith(".part-")])
+        self.assertEqual(0o600, os.stat(os.path.join(self.private, "field-approvals.lock")).st_mode & 0o777)
+
     def test_the_approvals_follow_no_symlink_and_replace_no_unreadable_file(self):
         import storage
         victim = os.path.join(self.dir, "victim.json")

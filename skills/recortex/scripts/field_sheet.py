@@ -14,6 +14,7 @@ file: state() takes the configuration the hook already parsed. Standard library
 only; it does not import brief, hooks, index or setup.
 """
 
+import contextlib
 import datetime
 import hashlib
 import json
@@ -23,6 +24,11 @@ import re
 import names
 import recortex
 import storage
+
+try:
+    import fcntl
+except ImportError:  # no flock on this system: two writers at one moment are then not kept apart
+    fcntl = None
 
 FORM = 1
 KEYS = ("form", "names", "sensitive", "brief", "checks", "words")
@@ -41,6 +47,7 @@ RESERVED = ("what counts as proof", "numbers", "failures", "never write down", "
 DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 APPROVALS = "field-approvals.json"
+APPROVALS_LOCK = "field-approvals.lock"
 OFFER_FILE = "field-offer.json"
 APPROVALS_CAP = 2 * 1024 * 1024  # far above what the plugin writes; a larger file is not read
 
@@ -319,24 +326,43 @@ def write_approvals(data):
     storage.write_file(os.path.join(private, APPROVALS), json.dumps(data, indent=1, sort_keys=True) + "\n")
 
 
+@contextlib.contextmanager
+def approvals_lock():
+    """One writer at a time: the approvals are read, changed and written under an exclusive lock on a file beside them,
+    so that two setups that finish at the same moment both keep their approval. The hooks never take it."""
+    private = storage.folder(storage.config_top())
+    path = os.path.join(private, APPROVALS_LOCK)
+    if os.path.lexists(path):
+        storage.check_path(path, "file")
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        if fcntl:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
+
+
 def record_approval(repo, entry, day=None):
     """Record the user's approval of `entry` (normalized) for `repo` on this machine; other repositories' entries are
     kept. A file that cannot be read stops it: it is never replaced on its own."""
     day = day or datetime.date.today().isoformat()
-    data = read_approvals(create=True)
-    data["approvals"][repo.lower()] = {"fingerprint": fingerprint(entry, repo), "approved": day,
-                                       "sensitive": list(entry["sensitive"]), "sheet": entry}
-    write_approvals(data)
+    with approvals_lock():
+        data = read_approvals(create=True)
+        data["approvals"][repo.lower()] = {"fingerprint": fingerprint(entry, repo), "approved": day,
+                                           "sensitive": list(entry["sensitive"]), "sheet": entry}
+        write_approvals(data)
     return data["approvals"][repo.lower()]["fingerprint"]
 
 
 def forget_approval(repo):
     """Remove this repository's approval. True when there was one."""
-    data = read_approvals(create=True)
-    if repo.lower() not in data["approvals"]:
-        return False
-    del data["approvals"][repo.lower()]
-    write_approvals(data)
+    with approvals_lock():
+        data = read_approvals(create=True)
+        if repo.lower() not in data["approvals"]:
+            return False
+        del data["approvals"][repo.lower()]
+        write_approvals(data)
     return True
 
 
