@@ -493,17 +493,19 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
             found = ((json.loads(raw).get("data") or {}).get("repository") or {})
             for number in batch:
                 node = found.get("i%d" % number) or {}
-                created = db.execute("SELECT created_at FROM issues WHERE number = ?", (number,)).fetchone()["created_at"]
+                opened = db.execute("SELECT created_at, author FROM issues WHERE number = ?", (number,)).fetchone()
+                created, author = opened["created_at"], (opened["author"] or "").lower()
                 db.execute("UPDATE issues SET last_edited_at = ? WHERE number = ?", (node.get("lastEditedAt"), number))
                 db.execute("DELETE FROM timeline WHERE issue = ? AND event = 'edited'", (number,))
                 seq = 10000
                 for edit in (node.get("userContentEdits") or {}).get("nodes") or []:
                     at = (edit or {}).get("editedAt")
-                    if not at or (created and at[:16] == created[:16]):
-                        continue  # the entry for the creation of the body
+                    editor = ((edit or {}).get("editor") or {}).get("login")
+                    if not at or (created and at[:16] == created[:16] and author and (editor or "").lower() == author):
+                        continue  # the entry for the creation of the body: the author's own, in the minute of the post
                     seq += 1
                     db.execute("INSERT OR REPLACE INTO timeline(issue, seq, event, at, actor, detail) VALUES (?,?,?,?,?,?)",
-                               (number, seq, "edited", at, ((edit.get("editor") or {}).get("login")), "body"))
+                               (number, seq, "edited", at, editor, "body"))
                     summary["edits"] += 1
                 db.execute("UPDATE issues SET edits_read = 1 WHERE number = ?", (number,))
                 changed_issues.add(number)

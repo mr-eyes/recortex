@@ -6549,6 +6549,26 @@ class MindModelTests(MindSandbox):
         self.ready()  # the sync chooses the pause again, for the list as it is now
         self.assertEqual((9100, False), (self.model()["last"]["id"], self.model()["not_told"]["pause"]))
 
+    def test_an_edit_by_another_account_in_the_minute_of_the_post_is_an_edit(self):
+        self.add_chain()
+        data = self.repo()
+        speed, reader = data["issues"]["6"], data["issues"]["5"]
+        for issue, mark, who in ((speed, "MARK-MINUTE", "mallory"), (reader, "MARK-OWN", "octo-dev")):
+            created = issue["created_at"]
+            issue["body"] = issue["body"].replace("# ", "# %s " % mark, 1)
+            issue["edits"] = [{"at": created[:17] + "59Z", "by": who}, {"at": created, "by": "octo-dev"}]
+            issue["updated_at"] = max(issue["updated_at"], created[:17] + "59Z")
+        self.save(data)
+        self.ready()
+        self.assertEqual([(6, "mallory")], [tuple(row) for row in self.sql(
+            "SELECT issue, actor FROM timeline WHERE event = 'edited' AND issue IN (5, 6)")])
+        model = self.model()
+        self.assertNotIn("MARK-MINUTE", json.dumps(model))
+        threads = {t["label"]: t for t in model["threads"]}
+        self.assertEqual((False, "speed"), (threads["topic:speed"]["shown"], threads["topic:speed"]["name"]))
+        self.assertTrue(threads["topic:reader"]["shown"])  # the author's own edit in that minute is the creation
+        self.assertIn("MARK-OWN", threads["topic:reader"]["name"])
+
 
 def index_not_ready():
     return ("the index was last written by an older version of the plugin, or never by this one; run index.py "

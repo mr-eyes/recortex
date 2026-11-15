@@ -66,6 +66,8 @@ A posted memory is never edited; a correction is a new memory. A memory changed 
 
 An edit made in the same second as the post leaves the two times equal and is not seen. Closing that gap needs the edit history of every comment, which a later round may read.
 
+The edit history of a topic's text is read up to its newest 100 edits. An edit by an account outside your allowed list that lies further back than that is not seen.
+
 ## What the session does
 
 When you ask to see or open the project's memory, the session runs `index.py sync`, then `mind.py --open`, and gives you the address. It does not read `mind.html`: to answer a question about the history it uses `index.py query recall`, `query timeline` and the issues.

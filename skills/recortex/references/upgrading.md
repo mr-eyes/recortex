@@ -77,3 +77,5 @@ What an older version cannot do: write an idea or a question, have links, Eviden
 0.7.0 adds the mind page: `mind.py` builds one private local file that tells the project's memory in sentences, beside the index ([mind.md](mind.md)). Nothing in the index changes: no table, column, trigger or meta key is added, and 0.4.x, 0.5.0 and 0.6.0 sync, rebuild and print their briefs on the same index as before and ignore the page. The hook payloads are the same.
 
 What changes for a memory edited on GitHub after it was posted (GitHub's `updated_at` differs from its `created_at`): when the repository is in your trusted list, `index.py query recall` of 0.7.0 no longer lists it, its links no longer count, its folds no longer explain a word or a thread, and the linter refuses a new link to it. `recall` closes with one line that says how many memories it left out for that reason. 0.6.0 on the same index keeps listing it.
+
+Run `python3 scripts/index.py sync --rebuild` once after the update: it reads the edit history of every topic again, and an edit that another account made in the minute an issue was opened is now seen.
