@@ -4418,6 +4418,20 @@ class SetupTests(Sandbox):
         self.assertNotIn("fields", json.loads(recortex.read_text(config)))
         self.assertIsNone(self.approved())
 
+    def test_no_particular_field_makes_nothing_in_the_configuration_folder(self):
+        nothing = {"names": [], "sensitive": []}
+        root = self.configured()
+        answers = self.write("nothing.json", json.dumps({"fields": nothing}))
+        result = self.fields(root, "set", "--answers", answers, "--yes")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        fresh = self.project()
+        applied = self.setup_script("apply", "--answers", self.write("apply-nothing.json", json.dumps(dict(
+            self.ANSWERS["combined"], fields=nothing))), "--root", fresh, "--yes", gh=FAKE,
+            env={"CLAUDE_PROJECT_DIR": fresh})
+        self.assertEqual(0, applied.returncode, applied.stdout + applied.stderr)
+        self.assertFalse(os.path.lexists(os.path.join(self.dir, "xdg-config", names.NAME)))  # nothing made or tightened
+        self.assertTrue(os.path.isfile(self.offer()))  # the question was asked
+
     def test_fields_set_and_apply_write_nothing_through_a_symlink(self):
         victim = self.write("victim.json", json.dumps({"repo": REPO, "hub": 4}))
         root = self.project()

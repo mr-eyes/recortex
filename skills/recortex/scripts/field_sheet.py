@@ -363,7 +363,10 @@ def record_approval(repo, entry, day=None):
 
 
 def forget_approval(repo):
-    """Remove this repository's approval. True when there was one."""
+    """Remove this repository's approval. True when there was one. Read first without creating anything, so that a
+    machine with no approval for it ("No particular field" and no mark) is left as it is."""
+    if repo.lower() not in read_approvals()["approvals"]:
+        return False
     with approvals_lock():
         data = read_approvals(create=True)
         if repo.lower() not in data["approvals"]:
