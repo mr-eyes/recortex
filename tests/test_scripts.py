@@ -5400,6 +5400,13 @@ class EarlierNameTests(RecordSandbox):
         self.assertIn("approved on", self.tool("setup.py", "fields", "show").stdout)
         os.makedirs(os.path.join(config, names.NAME), mode=0o700)  # both: read from both, written to the current one
         self.assertIn("approved on", self.tool("setup.py", "fields", "show").stdout)  # still found in the earlier one
+        other = os.path.join(self.dir, "elsewhere")
+        for name in (names.NAME, names.OLD_NAME):
+            os.makedirs(os.path.join(other, name), mode=0o700)
+        doctor = self.tool("hooks.py", "--doctor", env={"XDG_CONFIG_HOME": other}).stdout
+        self.assertIn("field guidance: not shown: no approval for this repository in your configuration folders (%s, %s)."
+                      % (os.path.join(other, names.NAME, "private", "field-approvals.json"),
+                         os.path.join(other, names.OLD_NAME, "private", "field-approvals.json")), doctor)
         self.ready()
         agent = json.loads(self.hook("subagent-start").stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("===== BEGIN FIELD GUIDANCE (recortex) =====", agent)

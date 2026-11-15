@@ -535,8 +535,10 @@ def field_line(config, repo):
                 "with setup.py fields show" % (info["approved"], info["approved_fingerprint"][:12],
                                                info["fingerprint"][:12]))
     elif kind == "new":
-        text = ("not shown: no approval for this repository in %s. Review it with setup.py fields show"
-                % field_sheet.approvals_path())
+        tops = field_sheet.approval_tops()
+        where = field_sheet.approvals_path() if len(tops) == 1 else "your configuration folders (%s)" % ", ".join(
+            os.path.join(top, storage.PRIVATE, field_sheet.APPROVALS) for top in tops)
+        text = "not shown: no approval for this repository in %s. Review it with setup.py fields show" % where
     elif kind == "malformed":
         text = "not shown: the fields entry is refused: %s" % field_sheet.problem_text(info["problems"])
     else:
