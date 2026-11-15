@@ -4268,6 +4268,420 @@ class SetupTests(Sandbox):
         self.assertLessEqual(len([e for e in found if e[1] == 0]), setup.TOP_LIMIT)
         self.assertLessEqual(len([e for e in found if e[1] == 1]), setup.INNER_LIMIT)
 
+    # ---------------------------------------------------------------- the field sheet (round 0.8.0)
+
+    def configured(self, config=None):
+        root = self.project()
+        with open(os.path.join(root, recortex.CONFIG_NAME), "w") as handle:
+            json.dump(config or {"repo": REPO, "hub": 4, "profiles": ["software"]}, handle)
+        return root
+
+    def fields(self, root, *args, gh=FAKE, env=None):
+        return self.setup_script("fields", *args, gh=gh, env=dict({"CLAUDE_PROJECT_DIR": root}, **(env or {})))
+
+    def field_answers(self, name="engineering", **changes):
+        entry = model_sheet(name)
+        entry.pop("form")
+        entry.update(changes)
+        return self.write("fields-%d.json" % len(os.listdir(self.dir)), json.dumps({"fields": entry}))
+
+    def approvals(self, top=names.NAME):
+        return os.path.join(self.dir, "xdg-config", top, "private", "field-approvals.json")
+
+    def offer(self):
+        return os.path.join(self.dir, "xdg-state", names.NAME, "private", "example-org__tinycsv", "field-offer.json")
+
+    def approved(self):
+        path = self.approvals()
+        if not os.path.exists(path):
+            return None
+        return json.loads(recortex.read_text(path))["approvals"].get(REPO, {}).get("fingerprint")
+
+    def set_public(self, public):
+        data = self.repo()
+        data["private"] = not public
+        with open(self.state, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+
+    def test_detect_suggests_a_field_from_names_only(self):
+        sys.path.insert(0, SCRIPTS)
+        import setup
+        examples = {"Snakefile": "Snakefile"}
+        for field, patterns in setup.FIELD_SIGNALS.items():
+            for pattern in patterns:
+                name = examples.get(pattern) or ("x" + pattern[1:] if pattern.startswith("*") else
+                                                 pattern.replace("*", "ing"))
+                found = setup.detect_fields(self.project([name]))
+                evidence = "1 %s file" % pattern[1:] if pattern.startswith("*") else \
+                    pattern if pattern.endswith("/") else "a " + pattern
+                self.assertEqual([{"field": field, "weak": field in ("business", "policy"), "evidence": [evidence]}],
+                                 found, pattern)
+        bio = self.project(["a.fastq.gz", "b.FASTQ.GZ", "data/README.FASTQ.GZ", "Snakefile", "pyproject.toml"])
+        text = self.setup_script("detect", "--root", bio).stdout
+        self.assertIn("suggested: software (profile software), because pyproject.toml\n", text)
+        self.assertIn("field suggested: bioinformatics, because 3 .fastq.gz files, a Snakefile\n", text)
+        self.assertIn("field perhaps: business, because market*/",
+                      self.setup_script("detect", "--root", self.project(["marketing/"])).stdout)
+        for nothing in ([".claude-plugin/marketplace.json"], ["src/Snakefile"], ["notes.fastq.txt"], []):
+            root = self.project(nothing)
+            self.assertEqual([], setup.detect_fields(root), nothing)
+            self.assertIn("no field suggestion: most fields leave no file names; ask the user\n",
+                          self.setup_script("detect", "--root", root).stdout)
+        plain = json.loads(self.setup_script("detect", "--root", bio, "--json").stdout)
+        self.assertEqual([{"kind": "software", "profile": "software", "evidence": ["pyproject.toml"]},
+                          {"kind": "report", "profile": "research", "evidence": ["a Snakefile"]}], plain)
+        fields = json.loads(self.setup_script("detect", "--root", bio, "--fields", "--json").stdout)
+        self.assertEqual([{"field": "bioinformatics", "weak": False, "evidence": ["3 .fastq.gz files", "a Snakefile"]}],
+                         fields)
+        self.assertEqual(["software", "report"], [s["kind"] for s in setup.uncovered_signals(bio, {"profiles": []})])
+        self.assertTrue(all("kind" in s and "field" not in s for s in setup.uncovered_signals(bio, {})))
+
+    def test_fields_set_dry_run_writes_nothing_and_yes_writes_the_entry(self):
+        root = self.configured({"repo": REPO, "hub": 4, "_note": "kept as it is", "profiles": ["software"],
+                                "restricted_patterns": ["\\bOLD-[0-9]+\\b"], "topics": ["reader"]})
+        config = os.path.join(root, recortex.CONFIG_NAME)
+        os.chmod(config, 0o640)
+        before = recortex.read_text(config)
+        pattern = {"name": "part code", "pattern": "\\bPC-[0-9]{4}\\b", "example": "PC-1234"}
+        answers = self.field_answers(restricted=[pattern])
+        dry = self.fields(root, "set", "--answers", answers, "--dry-run")
+        self.assertEqual(0, dry.returncode, dry.stdout + dry.stderr)
+        self.assertIn("===== BEGIN FIELD GUIDANCE (recortex) =====\n", dry.stdout)
+        self.assertIn("\nField: engineering.\n", dry.stdout)
+        self.assertIn("fingerprint: %s\n" % ENGINEERING_TINYCSV[:12], dry.stdout)
+        self.assertIn("pattern: part code: \\bPC-[0-9]{4}\\b   # matches its example; would add\n", dry.stdout)
+        self.assertIn("would record: your approval of this field guidance, fingerprint %s" % ENGINEERING_TINYCSV[:12],
+                      dry.stdout)
+        self.assertIn("dry run: nothing was written", dry.stdout)
+        self.assertEqual(before, recortex.read_text(config))
+        self.assertFalse(os.path.lexists(self.approvals()))
+        self.assertFalse(os.path.lexists(self.offer()))
+        real = self.fields(root, "set", "--answers", answers, "--yes")
+        self.assertEqual(0, real.returncode, real.stdout + real.stderr)
+        self.assertTrue(real.stdout.rstrip("\n").endswith("field guidance set and approved"), real.stdout)
+        data = json.loads(recortex.read_text(config))
+        self.assertEqual(model_sheet("engineering"), data["fields"])
+        self.assertEqual(["\\bOLD-[0-9]+\\b", {"name": "part code", "pattern": "\\bPC-[0-9]{4}\\b"}],
+                         data["restricted_patterns"])  # the example is not kept
+        self.assertNotIn("PC-1234", recortex.read_text(config))
+        kept = json.loads(before)
+        self.assertEqual(list(kept) + ["fields"], list(data))  # the same keys in the same order, then the entry
+        self.assertEqual({k: v for k, v in kept.items() if k != "restricted_patterns"},
+                         {k: v for k, v in data.items() if k not in ("fields", "restricted_patterns")})
+        self.assertEqual(0o640, os.stat(config).st_mode & 0o777)
+        self.assertEqual(ENGINEERING_TINYCSV, self.approved())
+        self.assertEqual({"offered": True}, json.loads(recortex.read_text(self.offer())))
+
+    def test_fields_set_replaces_only_when_asked(self):
+        root = self.configured()
+        config = os.path.join(root, recortex.CONFIG_NAME)
+        self.assertEqual(0, self.fields(root, "set", "--answers", self.field_answers(), "--yes").returncode)
+        engineering = recortex.read_text(config)
+        business = self.field_answers("business")
+        refused = self.fields(root, "set", "--answers", business, "--yes")
+        self.assertNotEqual(0, refused.returncode)
+        self.assertIn("this project already has field guidance; pass --replace to setup.py fields set", refused.stderr)
+        self.assertEqual((engineering, ENGINEERING_TINYCSV), (recortex.read_text(config), self.approved()))
+        dry = self.fields(root, "set", "--answers", business, "--dry-run", "--replace")
+        self.assertEqual(0, dry.returncode, dry.stdout + dry.stderr)
+        current, new = dry.stdout.split("new field sheet:\n")
+        self.assertIn("current field sheet:\n", current)
+        self.assertIn("Field: engineering.", current)
+        self.assertIn("Field: business.", new)
+        self.assertEqual(engineering, recortex.read_text(config))
+        replaced = self.fields(root, "set", "--answers", business, "--yes", "--replace")
+        self.assertEqual(0, replaced.returncode, replaced.stdout + replaced.stderr)
+        self.assertEqual(model_sheet("business"), json.loads(recortex.read_text(config))["fields"])
+        sys.path.insert(0, SCRIPTS)
+        import field_sheet
+        self.assertEqual(field_sheet.fingerprint(model_sheet("business"), REPO), self.approved())
+        # An equal sheet leaves the file's bytes alone and records the approval: here on a second machine.
+        stamp = os.stat(config).st_mtime_ns
+        before = recortex.read_text(config)
+        other = {"XDG_CONFIG_HOME": os.path.join(self.dir, "second-machine")}
+        equal = self.fields(root, "set", "--answers", business, "--yes", env=other)
+        self.assertEqual(0, equal.returncode, equal.stdout + equal.stderr)
+        self.assertIn("unchanged: %s" % config, equal.stdout)
+        self.assertEqual((before, stamp), (recortex.read_text(config), os.stat(config).st_mtime_ns))
+        second = os.path.join(self.dir, "second-machine", names.NAME, "private", "field-approvals.json")
+        self.assertIn(field_sheet.fingerprint(model_sheet("business"), REPO), recortex.read_text(second))
+        # "No particular field" and no mark, with --replace: the entry and the approval go.
+        nothing = self.write("nothing.json", json.dumps({"fields": {"names": [], "sensitive": []}}))
+        self.assertNotEqual(0, self.fields(root, "set", "--answers", nothing, "--yes").returncode)
+        removed = self.fields(root, "set", "--answers", nothing, "--yes", "--replace")
+        self.assertEqual(0, removed.returncode, removed.stdout + removed.stderr)
+        self.assertNotIn("fields", json.loads(recortex.read_text(config)))
+        self.assertIsNone(self.approved())
+
+    def test_fields_set_and_apply_write_nothing_through_a_symlink(self):
+        victim = self.write("victim.json", json.dumps({"repo": REPO, "hub": 4}))
+        root = self.project()
+        os.symlink(victim, os.path.join(root, recortex.CONFIG_NAME))
+        result = self.fields(root, "set", "--answers", self.field_answers(), "--yes")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("is a symlink", result.stderr)
+        self.assertEqual(json.dumps({"repo": REPO, "hub": 4}), recortex.read_text(victim))
+        self.assertFalse(os.path.lexists(self.approvals()))
+        top = os.path.join(self.dir, "xdg-config", names.NAME)
+        outside = os.path.join(self.dir, "outside")
+        os.makedirs(outside, mode=0o700)
+        apply_answers = self.write("apply-fields.json", json.dumps(dict(self.ANSWERS["combined"], fields={
+            k: v for k, v in model_sheet("engineering").items() if k != "form"})))
+        for where in ("file", "private", "not json"):
+            os.makedirs(os.path.join(top, "private"), mode=0o700, exist_ok=True)
+            path = self.approvals() if where != "private" else os.path.join(top, "private")
+            aside = path + ".aside"
+            if os.path.lexists(path):
+                os.rename(path, aside)
+            if where == "not json":
+                with open(path, "w") as handle:
+                    handle.write("{")
+                os.chmod(path, 0o600)
+            else:
+                os.symlink(os.path.join(outside, "approvals.json") if where == "file" else outside, path)
+            root = self.configured()
+            config = recortex.read_text(os.path.join(root, recortex.CONFIG_NAME))
+            for mode in ("--dry-run", "--yes"):
+                result = self.fields(root, "set", "--answers", self.field_answers(), mode)
+                self.assertNotEqual(0, result.returncode, (where, mode))
+                self.assertIn("error: the approvals file %s cannot be read (" % self.approvals(), result.stderr)
+                self.assertIn("move it aside by hand and run again", result.stderr)
+                self.assertEqual(config, recortex.read_text(os.path.join(root, recortex.CONFIG_NAME)), where)
+                fresh = self.project()
+                applied = self.setup_script("apply", "--answers", apply_answers, "--root", fresh, mode, gh=FAKE,
+                                            env={"CLAUDE_PROJECT_DIR": fresh})
+                self.assertNotEqual(0, applied.returncode, (where, mode))
+                self.assertIn("cannot be read", applied.stderr)
+                self.assertEqual([], os.listdir(fresh), (where, mode))  # stopped before any write
+            self.assertEqual([], os.listdir(outside), where)
+            os.unlink(path)
+            if os.path.lexists(aside):
+                os.rename(aside, path)
+        self.assertFalse(os.path.lexists(self.offer()))
+
+    def test_fields_approve_takes_only_the_fingerprint_that_was_shown(self):
+        sys.path.insert(0, SCRIPTS)
+        import field_sheet
+        root = self.configured({"repo": REPO, "hub": 4, "fields": model_sheet("engineering")})
+        config = os.path.join(root, recortex.CONFIG_NAME)
+        shown = self.fields(root, "show")
+        self.assertEqual(0, shown.returncode, shown.stdout + shown.stderr)
+        self.assertIn("fingerprint: %s\n" % ENGINEERING_TINYCSV[:12], shown.stdout)
+        other = field_sheet.fingerprint(model_sheet("business"), REPO)
+        for args, message in (([ENGINEERING_TINYCSV[:11], "--yes"], "takes 12 to 64 characters"),
+                              ([other[:12], "--yes"], "is not the one that was shown"),
+                              ([ENGINEERING_TINYCSV[:12]], "pass --yes")):
+            refused = self.fields(root, "approve", "--fingerprint", *args)
+            self.assertNotEqual(0, refused.returncode, args)
+            self.assertIn(message, refused.stderr, args)
+            self.assertFalse(os.path.lexists(self.approvals()), args)
+        with open(config, "w") as handle:  # changed after it was shown
+            json.dump({"repo": REPO, "hub": 4, "fields": dict(model_sheet("engineering"), words="other words")}, handle)
+        late = self.fields(root, "approve", "--fingerprint", ENGINEERING_TINYCSV[:12], "--yes")
+        self.assertNotEqual(0, late.returncode)
+        self.assertIn("the sheet in the project file is not the one that was shown; run setup.py fields show again",
+                      late.stderr)
+        self.assertFalse(os.path.lexists(self.approvals()))
+        with open(config, "w") as handle:
+            json.dump({"repo": REPO, "hub": 4, "fields": model_sheet("engineering")}, handle)
+        good = self.fields(root, "approve", "--fingerprint", ENGINEERING_TINYCSV[:12].upper(), "--yes")
+        self.assertEqual(0, good.returncode, good.stdout + good.stderr)
+        self.assertIn("recorded: your approval of this field guidance, fingerprint %s" % ENGINEERING_TINYCSV[:12],
+                      good.stdout)
+        self.assertIn("===== BEGIN FIELD GUIDANCE (recortex) =====", good.stdout)
+        self.assertEqual(ENGINEERING_TINYCSV, self.approved())
+        again = self.fields(root, "approve", "--fingerprint", ENGINEERING_TINYCSV, "--yes")
+        self.assertEqual(0, again.returncode)
+        self.assertIn("approved already", again.stdout)
+        with open(config, "w") as handle:
+            json.dump({"repo": REPO, "hub": 4, "fields": dict(model_sheet("engineering"), form=True)}, handle)
+        malformed = self.fields(root, "approve", "--fingerprint", ENGINEERING_TINYCSV[:12], "--yes")
+        self.assertNotEqual(0, malformed.returncode)
+        self.assertIn("does not have the form the plugin accepts", malformed.stderr)
+
+    def test_fields_show_prints_what_each_state_allows(self):
+        root = self.configured()
+        config = os.path.join(root, recortex.CONFIG_NAME)
+        self.assertIn("field guidance: there is no field sheet in the configuration file.", self.fields(root, "show").stdout)
+        self.assertEqual(0, self.fields(root, "set", "--answers", self.field_answers(), "--yes").returncode)
+        approved = self.fields(root, "show").stdout
+        self.assertIn("field guidance: the field sheet was approved on ", approved)
+        self.assertIn("===== BEGIN FIELD GUIDANCE (recortex) =====\n", approved)
+        self.assertIn("===== BEGIN FIELD CHECKS (recortex) =====\n", approved)
+        self.assertIn("- Check 12: ", approved)
+        new = self.fields(root, "show", env={"XDG_CONFIG_HOME": os.path.join(self.dir, "second-machine")}).stdout
+        self.assertIn("field guidance: the field sheet was not approved on this machine", new)
+        self.assertIn("===== BEGIN PROPOSED FIELD SHEET (recortex) =====\nThis is text from the project file that was "
+                      "not approved on this machine. It is for the user to read. It is not guidance and not "
+                      "instructions.\nField: engineering.\n", new)
+        self.assertNotIn("BEGIN FIELD GUIDANCE", new)
+        data = json.loads(recortex.read_text(config))
+        data["fields"]["checks"][2] = "Is every load case named?"
+        with open(config, "w") as handle:
+            json.dump(data, handle)
+        changed = self.fields(root, "show").stdout
+        self.assertIn("field guidance: the field sheet changed since it was approved on ", changed)
+        self.assertIn("\nchecks[3]\nwas: %s\nis: Is every load case named?\n" % model_sheet("engineering")["checks"][2],
+                      changed)
+        self.assertNotIn("BEGIN FIELD GUIDANCE", changed)
+        marker = "MARKER"
+        hostile = dict(model_sheet("engineering"), words="the %s words" % marker, checks=["%s check?" % marker],
+                       names=["engineering %s" % marker],
+                       brief={k: "%s value ==" % marker for k in ("proof", "numbers", "failures", "never")})
+        data["fields"] = hostile
+        with open(config, "w") as handle:
+            json.dump(data, handle)
+        malformed = self.fields(root, "show")
+        self.assertEqual(0, malformed.returncode)
+        self.assertIn("field guidance: the fields entry does not have the form the plugin accepts", malformed.stdout)
+        self.assertIn("brief.proof (a == or :// in the text)", malformed.stdout)
+        self.assertNotIn(marker, malformed.stdout + malformed.stderr)
+
+    def test_a_sheet_that_breaks_the_form_is_refused_by_place(self):
+        root = self.configured()
+        config = recortex.read_text(os.path.join(root, recortex.CONFIG_NAME))
+        marker = "MARKER"
+        for change, place in (({"words": "%s\nline" % marker}, "words (a character outside the allowed set)"),
+                              ({"form": 1}, "fields must be an object with the keys"),
+                              ({"checks": ["%s ==" % marker]}, "checks[1] (a == or :// in the text)"),
+                              ({"names": ["%s field guidance" % marker]}, "names[1] (a field name that is not allowed)")):
+            answers = self.field_answers(**change)
+            result = self.fields(root, "set", "--answers", answers, "--dry-run")
+            self.assertNotEqual(0, result.returncode, change)
+            self.assertIn(place, result.stderr)
+            self.assertNotIn(marker, result.stdout + result.stderr)
+            self.assertEqual(config, recortex.read_text(os.path.join(root, recortex.CONFIG_NAME)))
+            fresh = self.project()
+            entry = json.loads(recortex.read_text(answers))["fields"]
+            applied = self.setup_script("apply", "--answers", self.write("apply-bad.json", json.dumps(
+                dict(self.ANSWERS["combined"], fields=entry))), "--root", fresh, "--dry-run")
+            self.assertNotEqual(0, applied.returncode, change)
+            self.assertIn(place, applied.stderr)
+            self.assertNotIn(marker, applied.stdout + applied.stderr)
+
+    def test_identifier_patterns_are_checked_before_they_are_written(self):
+        root = self.configured({"repo": REPO, "hub": 4, "profiles": ["software"],
+                                "restricted_patterns": [{"name": "participant", "pattern": "\\bP-[0-9]{5}\\b"}]})
+        config = os.path.join(root, recortex.CONFIG_NAME)
+        good = {"name": "part code", "pattern": "\\bPC-[0-9]{4}\\b", "example": "PC-1234"}
+        bad = [({"name": "x", "pattern": "PC-(", "example": "PC-"}, "the pattern does not compile"),
+               ({"name": "x", "pattern": "\\bPC-[0-9]{4}\\b", "example": "PC-12"}, "does not match its example"),
+               ({"name": "x", "pattern": "[0-9]*", "example": "12"}, "matches the empty string"),
+               ({"name": "x", "pattern": "[a-z]+", "example": "abc"}, "matches an ordinary sentence"),
+               ({"name": "x", "pattern": "Q" * 201, "example": "Q"}, "the pattern must be one line of 1 to 200"),
+               ({"name": "x\ny", "pattern": "\\bPC-[0-9]{4}\\b", "example": "PC-1234"}, "the name must be a plain name"),
+               ({"name": "x", "pattern": "\\bPC-[0-9]{4}\\b"}, "needs exactly a name, a pattern and an example")]
+        before = recortex.read_text(config)
+        for item, message in bad:
+            answers = self.field_answers(sensitive=["confidential"], restricted=[item])
+            result = self.fields(root, "set", "--answers", answers, "--dry-run")
+            self.assertNotEqual(0, result.returncode, message)
+            self.assertIn(message, result.stderr)
+            self.assertEqual(before, recortex.read_text(config))
+        many = [dict(good, name="code %d" % n) for n in range(11)]
+        eleven = self.fields(root, "set", "--answers", self.field_answers(restricted=many), "--dry-run")
+        self.assertIn("fields.restricted lists at most 10 patterns", eleven.stderr)
+        answers = self.field_answers(sensitive=["confidential"], restricted=[good, dict(good, name="participant")])
+        dry = self.fields(root, "set", "--answers", answers, "--dry-run")
+        self.assertIn("pattern: part code: \\bPC-[0-9]{4}\\b   # matches its example; would add", dry.stdout)
+        self.assertIn("pattern: participant is already in restricted_patterns; not added", dry.stdout)
+        self.assertEqual(0, self.fields(root, "set", "--answers", answers, "--yes").returncode)
+        patterns = json.loads(recortex.read_text(config))["restricted_patterns"]
+        self.assertEqual([{"name": "participant", "pattern": "\\bP-[0-9]{5}\\b"},
+                          {"name": "part code", "pattern": "\\bPC-[0-9]{4}\\b"}], patterns)
+        draft = self.write("draft.md", recortex.read_text(os.path.join(EXAMPLE, "result-speed-1.md")) +
+                           "\nThe bracket PC-1234 held.\n")
+        lint = self.run_script("lint_drafts.py", "--kind", "result", draft, env={"CLAUDE_PROJECT_DIR": root})
+        self.assertNotEqual(0, lint.returncode)
+        self.assertIn("matches the project's restricted pattern 'part code'", lint.stdout)
+
+    def test_the_notices_of_a_sensitive_mark(self):
+        root = self.configured()
+        public = ("notice: the record's repository example-org/tinycsv is public: anyone can read every issue and "
+                  "comment in it, and what was posted stays in its history. This project is marked as handling %s. To "
+                  "keep the record private, stop here and set up again with a new private repository "
+                  "(\"record\": \"new\").")
+        people = ("note: data about people does not belong in an issue, public or private. Record counts, codes and "
+                  "file paths, and keep the data where the project's agreements put it.")
+        limits = ("note: the plugin refuses the forms listed in restricted_patterns and reminds every subagent of the "
+                  "sheet's \"Never write down\" line. It cannot recognize sensitive content it has no pattern for, and "
+                  "it does not make a project meet a law, an ethics approval or a contract.")
+
+        def notices(marks, public_repo=None, env=None):
+            if public_repo is not None:
+                self.set_public(public_repo)
+            data = self.repo()
+            data["log"] = []
+            with open(self.state, "w", encoding="utf-8") as handle:
+                json.dump(data, handle)
+            result = self.fields(root, "set", "--answers", self.field_answers(sensitive=marks), "--dry-run", env=env)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            lines = [l for l in result.stdout.split("\n") if l.startswith(("notice:", "note:"))]
+            return lines, len(self.calls("api repos/example-org/tinycsv"))
+
+        self.assertEqual(([public % "data about people", people, limits], 1), notices(["people"], True))
+        self.assertEqual(([people, limits], 1), notices(["people"], False))
+        self.assertEqual(([public % "data about people and confidential business or partner information", people,
+                           limits], 1), notices(["people", "confidential"], True))
+        self.assertEqual(([public % "confidential business or partner information", limits], 1),
+                         notices(["confidential"], True))
+        self.assertEqual(([limits], 0), notices(["contested"], True))
+        self.assertEqual(([], 0), notices([], True))
+        failed, calls = notices(["people"], env={"FAKE_GH_FAIL_ON": "api repos"})
+        self.assertEqual(["note: could not check whether example-org/tinycsv is public (GitHub could not be read); "
+                          "check it before recording sensitive material.", people, limits], failed)
+        self.set_public(True)
+        fresh = self.project()
+        answers = self.write("new-record.json", json.dumps(dict(self.ANSWERS["combined"], record="new", fields={
+            "names": [], "sensitive": ["people"]})))
+        data = self.repo()
+        data["log"] = []
+        with open(self.state, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+        created = self.setup_script("apply", "--answers", answers, "--root", fresh, "--dry-run", gh=FAKE,
+                                    env={"CLAUDE_PROJECT_DIR": fresh})
+        self.assertEqual(0, created.returncode, created.stdout + created.stderr)
+        self.assertNotIn("is public", created.stdout)
+        self.assertEqual([], self.calls("api repos/example-org/tinycsv"))  # a repository this run creates is private
+        self.assertIn(people, created.stdout)
+
+    def test_apply_with_a_field_sheet_records_the_approval(self):
+        root = self.project()
+        env = {"XDG_STATE_HOME": os.path.join(self.dir, "xdg-state"), "CLAUDE_PROJECT_DIR": root}
+        marker = "MARKER"
+        sheet = dict(model_sheet("engineering"), words="the project's %s names for rigs" % marker)
+        sheet.pop("form")
+        first = self.write("first.json", json.dumps(dict(self.ANSWERS["single"], triage_workflow=False,
+                                                         claude_md=False, fields=sheet)))
+        dry = self.setup_script("apply", "--answers", first, "--root", root, "--dry-run", gh=FAKE, env=env)
+        self.assertEqual(0, dry.returncode, dry.stdout + dry.stderr)
+        self.assertIn("would record: your approval of this field guidance, fingerprint ", dry.stdout)
+        self.assertEqual([], os.listdir(root))
+        result = self.setup_script("apply", "--answers", first, "--root", root, "--yes", gh=FAKE, env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        config = json.loads(recortex.read_text(os.path.join(root, recortex.CONFIG_NAME)))
+        sys.path.insert(0, SCRIPTS)
+        import field_sheet
+        entry = dict(sheet, form=1)
+        self.assertEqual(entry, config["fields"])
+        self.assertEqual(field_sheet.fingerprint(entry, REPO), self.approved())
+        self.assertTrue(os.path.isfile(self.offer()))
+        self.assertLess(result.stdout.index("wrote: %s" % os.path.join(root, recortex.CONFIG_NAME)),
+                        result.stdout.index("recorded: your approval of this field guidance"))
+        again = self.setup_script("apply", "--answers", self.answers("single", triage_workflow=False, claude_md=False),
+                                  "--root", root, "--yes", gh=FAKE, env=env)
+        self.assertEqual(0, again.returncode, again.stdout + again.stderr)
+        self.assertIn('"fields": "(field guidance: approved; see setup.py fields show)"', again.stdout)
+        self.assertNotIn(marker, again.stdout)
+        self.assertEqual(entry, json.loads(recortex.read_text(os.path.join(root, recortex.CONFIG_NAME)))["fields"])
+        self.assertEqual(field_sheet.fingerprint(entry, REPO), self.approved())
+        other = self.write("other.json", json.dumps(dict(self.ANSWERS["single"], triage_workflow=False,
+                                                         claude_md=False, fields=dict(sheet, words="other words"))))
+        refused = self.setup_script("apply", "--answers", other, "--root", root, "--dry-run", gh=FAKE, env=env)
+        self.assertNotEqual(0, refused.returncode)
+        self.assertIn("this project already has field guidance; pass --replace to setup.py fields set", refused.stderr)
+        self.assertNotIn(marker, refused.stdout + refused.stderr)
+
 
 class CatchUpTests(Sandbox):
     def repository(self):
@@ -4876,6 +5290,39 @@ class EarlierNameTests(RecordSandbox):
             self.assertIn("(read from GitHub just now)", session, value)
         self.assertFalse(os.path.exists(planted))
 
+
+
+    def field_answers(self):
+        entry = model_sheet("engineering")
+        entry.pop("form")
+        return self.write("fields-answers.json", json.dumps({"fields": entry}))
+
+    def test_the_field_sheet_goes_into_the_earlier_file_and_folder(self):
+        self.use_earlier_config_name()
+        result = self.tool("setup.py", "fields", "set", "--answers", self.field_answers(), "--yes")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("under fields in the project's %s; they are guidance" % names.OLD_CONFIG_NAME, result.stdout)
+        self.assertEqual([names.OLD_CONFIG_NAME], [n for n in os.listdir(self.project) if n.endswith(".json")])
+        self.assertIn("fields", json.loads(recortex.read_text(os.path.join(self.project, names.OLD_CONFIG_NAME))))
+        self.assertEqual([names.NAME], os.listdir(os.path.join(self.dir, "xdg-config")))
+        shown = self.tool("setup.py", "fields", "show")
+        self.assertIn("under fields in the project's %s;" % names.OLD_CONFIG_NAME, shown.stdout)
+
+    def test_the_approvals_go_into_the_configuration_folder_that_is_there(self):
+        config = os.path.join(self.dir, "xdg-config")
+        os.makedirs(os.path.join(config, names.OLD_NAME), mode=0o700)  # an earlier version's trusted list was here
+        result = self.tool("setup.py", "fields", "set", "--answers", self.field_answers(), "--yes")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual([names.OLD_NAME], os.listdir(config))
+        earlier = os.path.join(config, names.OLD_NAME, "private", "field-approvals.json")
+        self.assertIn(ENGINEERING_TINYCSV, recortex.read_text(earlier))
+        self.assertIn("approved on", self.tool("setup.py", "fields", "show").stdout)
+        os.makedirs(os.path.join(config, names.NAME), mode=0o700)  # both: the current folder
+        self.assertIn("not approved on this machine", self.tool("setup.py", "fields", "show").stdout)
+        again = self.tool("setup.py", "fields", "set", "--answers", self.field_answers(), "--yes")
+        self.assertEqual(0, again.returncode, again.stdout + again.stderr)
+        self.assertIn(ENGINEERING_TINYCSV, recortex.read_text(os.path.join(config, names.NAME, "private",
+                                                                          "field-approvals.json")))
 
 DECISION_060 = """<!-- ghim:event type=decision at=2026-03-07T09:30-08:00 because=9104 instead=9103 -->
 ### Decision: 2026-03-07 09:30 PST - rewrite the reader as a state machine
@@ -7446,6 +7893,8 @@ class FieldFormTests(unittest.TestCase):
             self.assertLessEqual(short, self.fs.SHORT_CAP)
         for name in self.MODELS:
             self.assertNotIn("Evidence", recortex.read_text(os.path.join(FIELD_DIR, name + ".json")), name)
+        import setup
+        self.assertTrue(set(setup.FIELD_SIGNALS) <= set(self.MODELS))  # every suggestion has its model sheet
 
     def test_the_tested_sheets_give_their_frames_byte_for_byte(self):
         for name in self.TESTED:
