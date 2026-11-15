@@ -30,6 +30,14 @@ class GhError(RuntimeError):
     pass
 
 
+class GhMissing(GhError):
+    """gh could not be started: not installed, or RECORTEX_GH names something that cannot be run."""
+
+
+class GhTimeout(GhError):
+    """gh did not finish within its time limit."""
+
+
 def gh_command():
     return shlex.split(names.env("GH", "gh"))
 
@@ -42,15 +50,48 @@ def gh(args, stdin=None, timeout=60):
             cmd, input=stdin, capture_output=True, text=True, timeout=timeout
         )
     except FileNotFoundError:
-        raise GhError("gh CLI not found (looked for: %s)" % cmd[0])
+        raise GhMissing("gh CLI not found (looked for: %s)" % cmd[0])
+    except OSError:
+        raise GhMissing("gh CLI cannot be run (looked for: %s)" % cmd[0])
     except subprocess.TimeoutExpired:
-        raise GhError("gh timed out after %ss: %s" % (timeout, " ".join(args[:3])))
+        raise GhTimeout("gh timed out after %ss: %s" % (timeout, " ".join(args[:3])))
     if proc.returncode != 0:
         raise GhError(
             "gh %s failed (exit %d): %s"
             % (" ".join(args[:3]), proc.returncode, proc.stderr.strip())
         )
     return proc.stdout
+
+
+# A GitHub account's login: 1 to 39 ASCII letters, digits or -, starting with a letter or digit (the form of
+# board_api.OWNER).
+LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
+GH_CHECK_SECONDS = 10
+
+
+def gh_account(timeout=GH_CHECK_SECONDS):
+    """Whether gh can be run and is signed in to github.com, for `setup.py preflight` and `hooks.py --doctor`.
+
+    Returns (state, login): "missing" (gh cannot be started), "slow" (a call took longer than `timeout` seconds),
+    "signed-out" (`gh auth status` fails for github.com), "unnamed" (signed in, but `gh api user` gave no login of
+    GitHub's form), or "ready" with the login. Nothing else that gh prints is returned: its output is untrusted, and
+    the login is returned only when it fits LOGIN.
+    """
+    try:
+        gh(["auth", "status", "--hostname", "github.com"], timeout=timeout)
+    except (GhMissing, ValueError):  # ValueError: a RECORTEX_GH that does not split into a command
+        return "missing", None
+    except GhTimeout:
+        return "slow", None
+    except GhError:
+        return "signed-out", None
+    try:
+        login = gh(["api", "user", "--jq", ".login"], timeout=timeout).strip()
+    except GhTimeout:
+        return "slow", None
+    except GhError:
+        return "unnamed", None
+    return ("ready", login) if LOGIN.fullmatch(login) else ("unnamed", None)
 
 
 def show_command(args, note=""):

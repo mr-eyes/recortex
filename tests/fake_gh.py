@@ -22,6 +22,11 @@ Fault switches:
   FAKE_GH_NODE_FAIL=1            exit 1 for a GraphQL query that reads comments by node id (the edit histories)
   FAKE_GH_NO_PARENT_FIELD=1      a query that asks for an issue's parent fails as on a GitHub without sub-issues
   FAKE_GH_PARENT_REPO=owner/name a parent is answered as an issue of that repository
+  FAKE_GH_SIGNED_OUT=1           act as a gh that is not signed in: `auth status` exits 1 and every other command 4,
+                                 with gh's own messages
+  FAKE_GH_LOGIN=name             the login that `api user` answers and `auth status` names (default octocat); a test
+                                 sets one that is not a GitHub login
+`auth status` answers as a gh signed in to github.com, and `api user` with the login.
 Projects and sub-issues (tests/fake_projects.py answers them, and lists its own fault switches): a closed issue has
 "closed_at", a merged pull request "merged_at", a sub-issue "parent" (the parent's number).
 The repository itself (`api repos/<owner>/<name>`, no further path) answers from the state's "private" key, default
@@ -179,12 +184,20 @@ def main():
     state.setdefault("log", []).append(args)
     save(state)
     words = " ".join(args[:2])
+    if os.environ.get("FAKE_GH_SIGNED_OUT"):  # what gh prints when no account is signed in
+        if words == "auth status":
+            fail("You are not logged into any GitHub hosts. To log in, run: gh auth login")
+        fail("To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN "
+             "environment variable with a GitHub API authentication token.", 4)
     fail_on = os.environ.get("FAKE_GH_FAIL_ON")
     if fail_on and words.startswith(fail_on):
         fail("gh: simulated failure (HTTP 502)")
     repo = option(args, "--repo", "octo/demo")
+    login = os.environ.get("FAKE_GH_LOGIN", ME)
 
-    if words == "label list":
+    if words == "auth status":
+        print("github.com\n  - Logged in to github.com account %s (keyring)\n  - Active account: true" % login)
+    elif words == "label list":
         print(json.dumps(state["labels"]))
     elif words == "label create":
         state["labels"].append({"name": args[2], "color": option(args, "--color", ""),
@@ -386,7 +399,7 @@ def main():
             print(json.dumps({"data": {"repository": {"issue": out}}}))
     elif args[0] == "api":
         if "user" in args[1:]:
-            print(ME if option(args, "--jq") == ".login" else json.dumps({"login": ME}))
+            print(login if option(args, "--jq") == ".login" else json.dumps({"login": login}))
             return
         path = [a for a in args[1:] if a.startswith("repos/")][0]
         jq = option(args, "--jq")

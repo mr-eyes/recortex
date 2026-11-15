@@ -11,10 +11,11 @@ A project's goal usually does not exist as files yet (a manuscript is written du
 
 ## How it runs
 
-1. `python3 scripts/setup.py detect` (read-only, local). It looks only at file and folder names at the top of the project and one level down, and prints suggestions with their evidence, for example "suggested: software (profile software), because pyproject.toml, tests/". An empty project gets no suggestion. In a large folder it stops after the first few hundred names.
-2. Ask the questions below with the session's multiple-choice question tool, a few at a time, each with an "other" answer. Pre-select what detection suggested and show its evidence next to it.
-3. Show a summary of all answers and ask for one final confirmation. Nothing is written before it. The field sheet has its own approval, in the last of the field questions below.
-4. Write the answers to a file, then run `python3 scripts/setup.py apply --answers <file> --dry-run`, show its output, and run it again with `--yes`.
+1. `python3 scripts/setup.py preflight`, before the first question. It checks that `gh` runs, is signed in to github.com and names its account, and that Python is 3.8 or newer. When a check fails it prints one line that says what the user runs (installing `gh`, or `gh auth login`) and exits nonzero: show that line and stop. Ask no question, and do not try to install anything or sign in for the user. `apply --yes` runs the same check before it writes anything.
+2. `python3 scripts/setup.py detect` (read-only, local). It looks only at file and folder names at the top of the project and one level down, and prints suggestions with their evidence, for example "suggested: software (profile software), because pyproject.toml, tests/". An empty project gets no suggestion. In a large folder it stops after the first few hundred names.
+3. Ask the questions below with the session's multiple-choice question tool, a few at a time, each with an "other" answer. Pre-select what detection suggested and show its evidence next to it.
+4. Show a summary of all answers and ask for one final confirmation. Nothing is written before it. The field sheet has its own approval, in the last of the field questions below.
+5. Write the answers to a file, then run `python3 scripts/setup.py apply --answers <file> --dry-run`, show its output, and run it again with `--yes`.
 
 ## Questions
 

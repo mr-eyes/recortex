@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Set up a project's record: suggest answers, then apply the answers the user confirmed.
 
+preflight  Runs before the first setup question: gh can be run, is signed in to
+        github.com (gh auth status) and names its account (gh api user), and
+        Python is 3.8 or newer. Prints one line: "ready: ..." with the login,
+        or a fixed line that says what to run, with a nonzero exit. Writes
+        nothing. `apply` runs the same check before it writes anything.
 detect  Read-only and local. Looks at the names of files and folders at the top
         of the project (and one level down) and suggests deliverables, each
         with the evidence for it ("pyproject.toml and tests/ exist"). It only
@@ -40,6 +45,7 @@ Kinds: paper, thesis, software, dataset, report, prototype, proposal, docs,
 other (with "name" and "sections").
 
 Examples:
+  setup.py preflight
   setup.py detect
   setup.py detect --fields --json
   setup.py apply --answers answers.json --dry-run
@@ -58,6 +64,21 @@ import stat
 import subprocess
 import sys
 import tempfile
+
+PYTHON_NEEDED = (3, 8)
+PYTHON_OLD = ("not ready: this is Python %d.%d, and setup needs Python %d.%d or newer. Install a newer Python 3, then "
+              "start setup again.")
+
+
+def python_line(version):
+    """The fixed line for a Python older than PYTHON_NEEDED, or None."""
+    found = tuple(version[:2])
+    return PYTHON_OLD % (found + PYTHON_NEEDED) if found < PYTHON_NEEDED else None
+
+
+# Checked before the plugin's modules are loaded, so that an older Python gets this line and not a traceback.
+if __name__ == "__main__" and python_line(sys.version_info):
+    sys.exit(python_line(sys.version_info))
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import recortex  # noqa: E402
@@ -95,6 +116,32 @@ SKIP = {".git", "node_modules", ".tmp", "__pycache__", ".venv", "venv", "env", "
 TOP_LIMIT, INNER_LIMIT, TOTAL_LIMIT = 300, 100, 1000
 TEXT = re.compile(r"[\w .,:;()'/+&-]{1,300}")
 NAME = re.compile(r"[\w .'-]{1,60}|@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
+
+
+# ---------------------------------------------------------------- preflight
+
+# One fixed line for each state of recortex.gh_account() but "ready": no text of gh's own output.
+NOT_READY = {
+    "missing": "not ready: the GitHub CLI gh was not found. Install it from https://cli.github.com, then run "
+               "`gh auth login` in a terminal, and start setup again.",
+    "signed-out": "not ready: gh is not signed in to github.com. Run `gh auth login` in a terminal (in Claude Code, "
+                  "type `! gh auth login`), then start setup again.",
+    "slow": "not ready: gh did not answer within %d seconds. Check the network, or run `gh auth status` in a terminal "
+            "to see why, then start setup again." % recortex.GH_CHECK_SECONDS,
+    "unnamed": "not ready: gh is signed in, but GitHub did not name the account. Run `gh auth status` in a terminal "
+               "to see why, then start setup again.",
+}
+READY = "ready: gh is signed in to github.com as %s; Python %d.%d"
+
+
+def preflight():
+    """The check before the first setup question, and before `apply` writes anything: gh can be run, is signed in to
+    github.com and names its account. (Python was checked when the script started.) Returns the line to print, which
+    holds the login only when it fits recortex.LOGIN; raises SystemExit with one line of NOT_READY otherwise."""
+    state, login = recortex.gh_account()
+    if state != "ready":
+        raise SystemExit(NOT_READY[state])
+    return READY % (login, sys.version_info[0], sys.version_info[1])
 
 
 # ---------------------------------------------------------------- detect
@@ -1129,6 +1176,8 @@ def board_step(board, root, python, dry):
 
 
 def apply(answers, root, dry, drafts):
+    if not dry:
+        print(preflight())  # before anything is written; a dry run writes nothing and makes no such check
     config_path = config_target(root)
     drafts_base = os.path.dirname(drafts) if outside(drafts, root) else root
     workflow = os.path.join(root, ".github", "workflows", names.WORKFLOW)
@@ -1295,6 +1344,7 @@ def apply(answers, root, dry, drafts):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("preflight", help="check gh and Python before the first question (writes nothing)")
     p = sub.add_parser("detect", help="suggest deliverables and fields from file and folder names (read-only, local)")
     p.add_argument("--root", help="project folder (default: the project root)")
     p.add_argument("--json", action="store_true")
@@ -1318,6 +1368,9 @@ def main(argv=None):
     a.add_argument("--fingerprint", required=True, help="the fingerprint that fields show printed (12 to 64 hex)")
     a.add_argument("--yes", action="store_true", help="the user read the sheet and approved it")
     args = parser.parse_args(argv)
+    if args.command == "preflight":
+        print(preflight())
+        return 0
     if args.command == "fields":
         return fields_command(args)
     root = os.path.abspath(args.root or recortex.project_root())

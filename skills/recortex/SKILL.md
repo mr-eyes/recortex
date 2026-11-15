@@ -58,7 +58,7 @@ Full model: [references/issue-model.md](references/issue-model.md). Label sets, 
 
 ### Set up a record (the wizard)
 
-Run `python3 ${CLAUDE_SKILL_DIR}/scripts/setup.py detect` (read-only), then ask the setup questions with the multiple-choice question tool, a few at a time, with detection's suggestions pre-selected and their evidence shown. Show a summary and get one final confirmation; nothing is written before it. Write the answers to a file and run `setup.py apply --answers <file> --dry-run`, then `--yes`: it writes the configuration, creates the labels, the hub and its first resume comment, adds the trusted entry if the user agreed, writes the optional triage workflow and CLAUDE.md snippet, and builds the local index in the foreground. The wizard also asks which field the work is in and whether it handles sensitive material, and shows the drafted field sheet for approval. Questions, answers file and later changes: [references/setup.md](references/setup.md).
+Run `python3 ${CLAUDE_SKILL_DIR}/scripts/setup.py preflight` first. When it fails, show its one line to the user and stop: ask no question, and do not try to install `gh` or sign in for the user. Then run `setup.py detect` (read-only), and ask the setup questions with the multiple-choice question tool, a few at a time, with detection's suggestions pre-selected and their evidence shown. Show a summary and get one final confirmation; nothing is written before it. Write the answers to a file and run `setup.py apply --answers <file> --dry-run`, then `--yes`: it writes the configuration, creates the labels, the hub and its first resume comment, adds the trusted entry if the user agreed, writes the optional triage workflow and CLAUDE.md snippet, and builds the local index in the foreground. The wizard also asks which field the work is in and whether it handles sensitive material, and shows the drafted field sheet for approval. Questions, answers file and later changes: [references/setup.md](references/setup.md).
 
 ### Bootstrap by hand
 
@@ -170,7 +170,7 @@ Why each rule exists, with the Mermaid and GitHub limits: [references/pitfalls.m
 | `index.py` | Local SQLite index of the record: `sync` from GitHub; `query` consistency, impact, recall (what a new memory could link to), mind, timeline, triage, brief | no (reads) |
 | `mind.py` | The mind page: one private local file that tells the project's memory in sentences | no |
 | `hooks.py`, `run_hook.sh` | The four hooks: SessionStart, SubagentStart, UserPromptSubmit, PreCompact; `hooks.py --print` shows the payloads | no |
-| `setup.py` | `detect` suggests deliverables and fields from file names (read-only); `apply` makes the setup from confirmed answers; `fields` shows, sets and approves the field sheet | `apply` only, `--dry-run` available |
+| `setup.py` | `preflight` checks that `gh` runs and is signed in, and the Python version, before the first question; `detect` suggests deliverables and fields from file names (read-only); `apply` makes the setup from confirmed answers; `fields` shows, sets and approves the field sheet | `apply` only, `--dry-run` available |
 | `catchup.py` | `inventory` and `gap` list earlier work (read-only); `event` drafts a reconstructed event comment | no |
 | `compile.py` | The deliverable by section, figure, table and source lists, the dated timeline and a manifest, from the record | no (reads) |
 | `session_start_hook.sh` | SessionStart hook; calls `run_hook.sh session-start` | no |
