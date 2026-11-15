@@ -6962,6 +6962,29 @@ class MindPageTests(MindSandbox):
         self.assertEqual([address], json.loads(recortex.read_text(record)))
         self.assertIn("open it in a browser: %s\nasked the browser to open it\n" % address, opened.stdout)
 
+    def test_the_last_lines_say_what_is_not_told_and_why(self):
+        self.add_chain()
+        self.put(9600, 5, memory_draft("idea", "2026-03-13T10:00-08:00", plain="MARK-OTHER keep it"), user="mallory")
+        self.edit_comment(9107)
+        self.ready()
+        self.sql("UPDATE meta SET value = '0' WHERE key = 'sync_complete'")
+        built = self.build()
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        self.assertIn("): 6 memories in 2 threads\n2 memories are not told; the page's last lines say why\n", built.stdout)
+        text = recortex.read_text(self.page_file())
+        words = " ".join("".join(PageReader(text).texts).split())
+        for line in ("The record was still being read when this page was built.",
+                     "1 memory by an account outside your allowed list is not told here.",
+                     "1 memory was changed on GitHub after it was posted, so it is not told here."):
+            self.assertIn(line, words)
+        self.assertIn('<a href="https://github.com/example-org/tinycsv/issues/5#issuecomment-9107" '
+                      'rel="noopener noreferrer">Open it on GitHub</a>', text)
+        self.assertNotIn("Every memory of the record by your allowed accounts is told here.", words)
+        for absent in ("MARK-OTHER", "make the lenient mode warn", "which stops at a stray quote and names"):
+            self.assertNotIn(absent, text)  # 9107's plain line and its fold, and mallory's idea
+        self.assertIn("” to mean tinycsv's rule that a quote character inside an unquoted field", words)
+        self.assertEqual([], page_problems(text))
+
     def test_the_same_index_and_day_give_the_same_bytes(self):
         mind = self.mind()
         first = self.chain_page()
