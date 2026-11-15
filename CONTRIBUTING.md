@@ -10,7 +10,9 @@ python3 -m unittest tests.test_scripts.{EditHistoryTests,MindIndexTests,MindMode
 python3 -m unittest tests.test_scripts.{GraphqlReaderTests,FakeProjectsTests,SubIssueTests,BoardRulesTests,BoardCompareTests,BoardWriteTests,BoardSyncTests,BoardTrustTests}
 ```
 
-The four commands hold every test class between them, and each takes a few minutes (keep each under five); `python3 -m unittest discover -s tests` runs the same tests in one command of about nine minutes. A new test class goes into one of the four lists. `mkdir -p .tmp` makes the folder that a test needs when its class runs first in a fresh clone.
+The four commands hold every class in `tests/test_scripts.py` between them, and each takes a few minutes (keep each under five). `python3 -m unittest discover -s tests -p test_continuity.py` also runs the continuity demonstration. `python3 -m unittest discover -s tests` runs all tests, including that demonstration, in one command. A new class in `test_scripts.py` goes into one of the four lists; discovery also includes separate `test_*.py` files. `mkdir -p .tmp` makes the folder that a test needs when its class runs first in a fresh clone.
+
+[CI](.github/workflows/tests.yml) runs complete test discovery on every pull request and push to `main`, with Python 3.8 on Ubuntu 22.04 and Python 3.14 on Ubuntu 24.04. Discovery includes new test classes and `test*.py` files automatically; the four commands above are optional local batches. The workflow has read-only repository permissions, does not retain checkout credentials, and puts a failing `gh` command ahead of the real CLI during tests so accidental live GitHub calls fail. Its actions are pinned to release commit hashes.
 
 The tests run the scripts against `tests/fake_gh.py`, a local stand-in for `gh` selected with the `RECORTEX_GH` environment variable. They work in temporary folders under `.tmp/` and remove them afterwards; set `RECORTEX_TEST_KEEP=1` to keep them for inspection. No test may contact GitHub.
 
