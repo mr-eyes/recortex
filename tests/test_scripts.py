@@ -10065,6 +10065,14 @@ class BoardWriteTests(BoardSandbox):
         self.assertEqual(0, result.returncode, result.stdout)
         self.assertNotIn("MISMATCH", result.stdout)
 
+    def test_plan_after_a_restore_shows_the_card_back(self):
+        self.make_board()
+        self.assertEqual(0, self.apply().returncode)
+        self.moved_by_hand(7, "In Progress")
+        self.ready()
+        self.assertEqual(0, self.apply("--restore", "7").returncode)
+        self.assertNotIn("moved by hand", self.tool("board.py", "plan").stdout)
+
 
 class BoardSyncTests(BoardSandbox):
     """The sync's board step, the two brief lines, --doctor and the resume reminder."""

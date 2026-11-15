@@ -582,6 +582,28 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
     return summary
 
 
+def store_board(repo, cards):
+    """Keep the cards board.py apply read back as the sync's board step keeps them, under the sync lock. False when
+    another sync holds the lock; the next sync reads the board again."""
+    if not take_lock(repo, 60):
+        return False
+    try:
+        db = connect(repo)
+        try:
+            db.execute("DELETE FROM board_cards")
+            db.executemany("INSERT INTO board_cards VALUES (?, ?, ?, ?, ?, ?)",
+                           [(n, c["kind"], c["item"], 1 if c["archived"] else 0, c["status"], c["why"])
+                            for n, c in sorted(cards.items())])
+            set_meta(db, "board_read_at", now_utc())
+            set_meta(db, "board_error", "")
+            db.commit()
+        finally:
+            db.close()
+    finally:
+        release_lock(repo)
+    return True
+
+
 def board_step(db, repo, clock, timeout):
     """The last step of a sync, only for a project whose board the user approved on this machine: the cards of the
     board go into board_cards, and board_error holds a fixed reason code (board_api.REASONS) or "". It writes

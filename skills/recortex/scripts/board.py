@@ -241,6 +241,8 @@ def apply_command(args):
                 errors += 1
             else:
                 print("written: #%d is in %s" % (number, want["status"]))
+        if not index.store_board(repo, after):
+            print("note: another sync is running; board.py plan shows the board as that sync reads it")
     if skipped:
         print("board: %d more card(s) wait; run again" % skipped)
     moved_note(found, args)
