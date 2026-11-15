@@ -289,12 +289,21 @@ def approval_tops():
 
 
 def approvals_with(repo):
-    """The approvals that hold this repository's entry, those of the chosen folder first; an empty top level when none
-    does. Raises as read_approvals does, for the first folder that cannot be read."""
-    for top in approval_tops():
-        data = read_approvals(top=top)
-        if repo.lower() in data["approvals"]:
-            return data
+    """The approvals that hold this repository's entry: those of the chosen folder first, then those of the folder of
+    the other name; an empty top level when neither does. Raises as read_approvals does when the chosen folder cannot
+    be read. The folder of the other name is no longer written: a file there that cannot be read, or an entry there
+    that does not fit, counts as no approval, so that it never blocks a new approval in the chosen folder."""
+    tops = approval_tops()
+    data = read_approvals(top=tops[0])
+    if repo.lower() in data["approvals"]:
+        return data
+    for top in tops[1:]:
+        try:
+            other = read_approvals(top=top)
+            if approval_of(repo, other) is not None:
+                return other
+        except (storage.StorageError, ValueError):
+            pass
     return {"form": FORM, "approvals": {}}
 
 

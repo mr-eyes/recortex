@@ -5395,7 +5395,7 @@ class EarlierNameTests(RecordSandbox):
         os.unlink(current)
         with open(earlier, "w") as handle:
             handle.write("{")
-        self.assertIn("approvals cannot be read", self.tool("setup.py", "fields", "show").stdout)
+        self.assertIn("not approved on this machine", self.tool("setup.py", "fields", "show").stdout)
 
 DECISION_060 = """<!-- ghim:event type=decision at=2026-03-07T09:30-08:00 because=9104 instead=9103 -->
 ### Decision: 2026-03-07 09:30 PST - rewrite the reader as a state machine
@@ -8210,6 +8210,29 @@ class FieldFormTests(unittest.TestCase):
                          sorted(data["approvals"]))
         self.assertEqual([], [name for name in os.listdir(self.private) if name.startswith(".part-")])
         self.assertEqual(0o600, os.stat(os.path.join(self.private, "field-approvals.lock")).st_mode & 0o777)
+
+    def test_an_earlier_folder_that_cannot_be_read_blocks_no_approval(self):
+        # The folder of the earlier name is read too, and no longer written. A file there that cannot be read, a symlink
+        # in its place, or an entry there that does not fit counts as no approval: the state is "new", not "unreadable",
+        # and an approval in the current folder is then shown.
+        self.fs.record_approval("example-org/first", self.entry(), "2026-11-09")  # the current folder is there
+        earlier = os.path.join(self.dir, "xdg-config", names.OLD_NAME)
+        os.makedirs(os.path.join(earlier, "private"), mode=0o700)
+        os.chmod(earlier, 0o700)
+        path = os.path.join(earlier, "private", "field-approvals.json")
+        config = {"repo": REPO, "fields": model_sheet("engineering")}
+        fingerprint = self.fs.fingerprint(self.entry(), REPO)
+        bad = {"form": 1, "approvals": {REPO: {"fingerprint": fingerprint[:63], "approved": "2026-11-09", "sensitive": []}}}
+        for text in ("{", json.dumps(bad)):
+            with open(path, "w") as handle:
+                handle.write(text)
+            os.chmod(path, 0o600)
+            self.assertEqual("new", self.fs.state(config, REPO)["state"], text)
+        os.rename(earlier, earlier + ".real")
+        os.symlink(earlier + ".real", earlier)
+        self.assertEqual("new", self.fs.state(config, REPO)["state"])
+        self.fs.record_approval(REPO, self.entry(), "2026-11-10")
+        self.assertEqual("approved", self.fs.state(config, REPO)["state"])
 
     def test_the_approvals_follow_no_symlink_and_replace_no_unreadable_file(self):
         import storage
