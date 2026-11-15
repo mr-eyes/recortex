@@ -838,7 +838,11 @@ def fields_approve(config, repo, prefix, yes):
         return 0
     if not info["fingerprint"].startswith(prefix):
         sys.exit("error: the sheet in the project file is not the one that was shown; run setup.py fields show again")
-    field_sheet.record_approval(repo, info["entry"], datetime.date.today().isoformat())
+    try:
+        field_sheet.record_approval(repo, info["entry"], datetime.date.today().isoformat())
+    except (OSError, storage.StorageError, ValueError) as error:
+        sys.exit("error: the approval was not recorded: the approvals file %s cannot be written (%s)"
+                 % (field_sheet.approvals_path(), error))
     print("recorded: your approval of this field guidance, fingerprint %s" % info["fingerprint"][:12])
     print("\n".join(sheet_lines(info["entry"], field_sheet.pointer_name(config), datetime.date.today().isoformat())))
     return 0

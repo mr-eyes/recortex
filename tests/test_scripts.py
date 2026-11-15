@@ -4498,6 +4498,19 @@ class SetupTests(Sandbox):
         again = self.fields(root, "approve", "--fingerprint", ENGINEERING_TINYCSV, "--yes")
         self.assertEqual(0, again.returncode)
         self.assertIn("approved already", again.stdout)
+        changed = dict(model_sheet("engineering"), words="other words")
+        with open(config, "w") as handle:
+            json.dump({"repo": REPO, "hub": 4, "fields": changed}, handle)
+        private = os.path.dirname(self.approvals())
+        if os.geteuid() != 0:  # a folder that cannot be written: a plain error, and the earlier approval stays
+            os.chmod(private, 0o500)
+            self.addCleanup(os.chmod, private, 0o700)
+            stuck = self.fields(root, "approve", "--fingerprint", field_sheet.fingerprint(changed, REPO)[:12], "--yes")
+            os.chmod(private, 0o700)
+            self.assertNotEqual(0, stuck.returncode)
+            self.assertIn("error: the approval was not recorded", stuck.stderr)
+            self.assertNotIn("Traceback", stuck.stderr)
+            self.assertEqual(ENGINEERING_TINYCSV, self.approved())
         with open(config, "w") as handle:
             json.dump({"repo": REPO, "hub": 4, "fields": dict(model_sheet("engineering"), form=True)}, handle)
         malformed = self.fields(root, "approve", "--fingerprint", ENGINEERING_TINYCSV[:12], "--yes")
