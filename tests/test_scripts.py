@@ -8000,6 +8000,7 @@ class FieldFormTests(unittest.TestCase):
         lines = self.fs.frame(mix, "2026-11-10").split("\n")
         self.assertEqual("Fields: engineering, bioinformatics, business. Use the checks of the field your task belongs "
                          "to, and say which you used.", lines[3])
+        self.assertTrue(lines[-3].startswith("- Never write down: "))
 
     def test_the_floor_is_in_every_frame(self):
         """A sheet that reads as field practice cannot make a subagent count or report less than its material shows."""
@@ -8011,7 +8012,6 @@ class FieldFormTests(unittest.TestCase):
                 lines = self.fs.frame(normalized, "2026-11-10", name).split("\n")
                 self.assertEqual([self.fs.FBEGIN, self.fs.FNOTE % "2026-11-10", FIELD_FLOOR], lines[:3])
                 self.assertEqual(1, lines.count(FIELD_FLOOR))
-        self.assertTrue(lines[-3].startswith("- Never write down: "))
 
     def places(self):
         """(place, entry with VALUE at that place, limit): a value of a one-field brief, a part of a mix, a check and
