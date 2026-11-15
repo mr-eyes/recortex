@@ -103,3 +103,9 @@ A memory that your allowed accounts edited, and nobody else, is told again, with
 A topic with more than 100 edits was read up to its newest 100 before. Run `python3 scripts/index.py sync --rebuild` once to read the rest: it reads every topic's history again.
 
 The index gains two tables, `comment_edit_reads` and `comment_edits`; no column, trigger or format changes. Versions 0.4.0 to 0.8.0 on the same index ignore them (0.7.0 and 0.8.0 keep leaving every edited memory out, and 0.6.0 lists it as it always did), and nothing they write makes the new version tell a memory it should not: a comment they rewrite has a new `updated_at`, which the stored history does not match.
+
+## From 1.0.1
+
+1.0.1 checks before setup asks its first question that `gh` runs, is signed in to github.com and names its account, and that Python is 3.8 or newer: `setup.py preflight`, which the session runs first, and which `setup.py apply --yes` runs again before it writes anything. When a check fails, one line says what to run (install `gh` from https://cli.github.com, or `gh auth login`) and setup stops; it installs nothing and signs in to nothing. A dry run makes no such check. On a Python older than 3.8 every `setup.py` command prints that one line and stops. The quick start in the README no longer adds the repository to the trusted list by hand, because setup asks whether to.
+
+`hooks.py --doctor` gains one line on `gh`: found or not, and signed in to github.com as which account, the login printed only when it has GitHub's form. For that it asks GitHub who is signed in (`gh auth status`, `gh api user`), each with a limit of 10 seconds; it is a note, never a problem of the brief. No hook event makes a new call, the four payloads are the same, and nothing changes in the index or in the record on GitHub.
