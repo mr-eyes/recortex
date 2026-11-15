@@ -8,6 +8,7 @@ What the plugin will and will not do, and how it treats text that came from GitH
 - Only files named on the command line or in a manifest are posted. Nothing is posted by folder or wildcard.
 - Every issue body and comment that is written is read back from the API and compared with the draft. A pin is confirmed by asking GitHub whether the issue is pinned. Section labels changed on an issue are read back; labels created by `setup_labels.py` are not, and rerunning it shows anything missing.
 - `create_issues.py` never overwrites a body that was changed on GitHub after it wrote it, and after an interrupted run it adopts what already exists instead of creating it twice.
+- `post_verified.py body` requires the body saved before drafting as `--expected-body-file`, compares it with the live body, and checks again immediately before writing. A mismatch stops the replacement. These reads and the write are separate GitHub operations, so this is not an atomic lock: coordinate one writer per issue and merge other writers' changes before retrying. A matching read-back confirms the text stored, not that no concurrent edit was overwritten.
 - The linter refuses drafts that contain common token formats or match the project's `restricted_patterns`, for example participant identifiers.
 - Decisions are quoted word for word with date, time and zone.
 - An older tracker is never edited; at most it receives short pointer comments.
