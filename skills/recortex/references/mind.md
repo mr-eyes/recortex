@@ -52,7 +52,7 @@ The page speaks as "we", so it tells only what your allowed accounts wrote: the 
 
 | Text | Told when | Otherwise |
 |---|---|---|
-| A memory, with its fields, links and folds | An allowed account wrote it and it was never edited | Not told; its links do not count and its folds explain nothing. Counted in the last lines |
+| A memory, with its fields, links and folds | An allowed account wrote it and either it was never edited, or every edit was made by an allowed account (its edit history was read) | Not told; its links do not count and its folds explain nothing. Counted in the last lines. A memory told after edits carries a quiet note when opened |
 | A word's meaning, what a thread is about | The memory that holds it is told | Not used |
 | The text of a topic (its name line, sections, tables, figures, sources) | An allowed account opened the issue, its edit history has been read, and every edit was made by an allowed account | One sentence and the thread's address; the thread is named after its `topic:` label |
 | The last pause | The resume block the sync checked (allowed author, never edited), when its comment is still one the page may tell | "No pause has been recorded yet", or one sentence that says to sync |
@@ -64,11 +64,17 @@ The last lines of the page count what is not told and why: memories by accounts 
 
 ## Edited memories
 
-A posted memory is never edited; a correction is a new memory. A memory changed on GitHub after it was posted (GitHub's `updated_at` of the comment differs from its `created_at`) is therefore not told: not on the page, not in `index.py query recall` (which says how many it left out), and the linter refuses a link to it (`link-target`). If you fix a typo in a memory on GitHub, that memory leaves the page; post a correction instead. When the repository is not in your trusted list, every account counts and so does every edit.
+A posted memory is never edited; a correction is a new memory. A memory whose comment GitHub says was changed after it was posted (its `updated_at` differs from its `created_at`) is checked: the sync reads, from GitHub, who made each edit. Only such memories are read, never all of them.
 
-An edit made in the same second as the post leaves the two times equal and is not seen. Closing that gap needs the edit history of every comment, which a later round may read.
+- Every edit was made by one of your allowed accounts: the memory is told as before, and its opened view says "Changed on GitHub after it was posted." The note also shows in `index.py query mind --json` (`changed`) and in `query recall` (a short mark after the line). Its links count, its folds explain, and the linter accepts a link to it.
+- Any edit was made by an account outside your allowed list, or by an account that no longer exists, or the edit history has not been read (yet), is not whole, or is older than the comment's last change: the memory is not told, its links do not count and its folds explain nothing. `query recall` says how many it left out, the last lines of the page count them with "Open it on GitHub", and the linter refuses a link to it (`link-target`). A history that cannot be read counts as an edit by someone outside.
+- A comment that looks changed but whose history shows no edit (a reaction, a stale answer) is not told either: nothing proves it is the text that was posted.
 
-The edit history of a topic's text is read up to its newest 100 edits. An edit by an account outside your allowed list that lies further back than that is not seen.
+The allowed list is applied when the index is read, so adding a login to your trusted list tells that login's edits at once, with no new sync. Resume comments are not memories: an edited one stays ignored, whoever edited it. When the repository is not in your trusted list, every account counts and so does every edit.
+
+An edit made in the same second as the post leaves the two times equal and is not seen: only comments whose two times differ are read, to keep the sync's cost small.
+
+Every page of an edit history is read, for memories and for the text of a topic, 100 entries at a time. A history of more than 5,000 entries is not read to its end and counts as an edit by someone unknown, so that text is not shown.
 
 ## What the session does
 
