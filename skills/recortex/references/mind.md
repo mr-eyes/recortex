@@ -44,6 +44,8 @@ The page of a private repository holds private text. Do not copy it to a shared 
 
 Any sentence opens its memory in a side panel. A project word carries a dotted underline: pointing at it shows its meaning, choosing it opens a box with the meaning, why it matters, the longer story and every memory that uses it. A cited issue shows as words, never as a number. Tables are shown in the page; code and figures are named, with a link to open them on GitHub.
 
+The page places memories before or after a pause by their clock times as written in the record, without converting time zones, since a resume block carries no offset. A memory written in another zone can therefore land on the wrong side of a pause; keep the record in its one time convention.
+
 ## Who is told
 
 The page speaks as "we", so it tells only what your allowed accounts wrote: the repository's owner and the logins listed for it in your trusted list.
