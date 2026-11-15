@@ -45,8 +45,10 @@ import json
 import os
 import re
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import names  # noqa: E402
 import recortex  # noqa: E402
 import lint_drafts  # noqa: E402
 import lookup as record_lookup  # noqa: E402
@@ -84,6 +86,14 @@ DESTINATION = re.compile(r"^## Destination topic[ \t]*\n(.*?)(?=^## |\Z)", re.M 
 TARGET = re.compile(r"NEW-([a-z0-9]+(?:-[a-z0-9]+)*)|(?<![A-Za-z0-9_/&#])#([0-9]{1,7})\b")
 
 
+def link_pause():
+    """Seconds between two links: RECORTEX_LINK_PAUSE, from 0 to 10, default 1."""
+    try:
+        return min(10.0, max(0.0, float(names.env("LINK_PAUSE", "1"))))
+    except ValueError:
+        return 1.0
+
+
 def sub_issue_links(manifest, numbers, config, repo):
     """[(child key, child number, parent number)]: each topic under the hub (the manifest's, else the project's),
     each active task under the topic its "Destination topic" section names."""
@@ -91,6 +101,7 @@ def sub_issue_links(manifest, numbers, config, repo):
     if hub is None and str(config.get("repo", "")).lower() == repo.lower() and type(config.get("hub")) is int:
         hub = config["hub"]
     links = []
+    kinds = {item["key"]: item["kind"] for item in manifest["issues"]}
     for item in manifest["issues"]:
         child = numbers.get(item["key"])
         if child is None:
@@ -101,8 +112,10 @@ def sub_issue_links(manifest, numbers, config, repo):
             section = DESTINATION.search(recortex.read_text(item["_path"]))
             found = TARGET.search(section.group(1)) if section else None
             parent = None
-            if found:
-                parent = numbers.get(found.group(1)) if found.group(1) else int(found.group(2))
+            if found and found.group(1):  # a NEW- key counts only when it is a topic of this manifest
+                parent = numbers.get(found.group(1)) if kinds.get(found.group(1)) == "final-record" else None
+            elif found:
+                parent = int(found.group(2))
             if parent and parent != child:
                 links.append((item["key"], child, parent))
     return links
@@ -292,10 +305,15 @@ def main(argv=None):
             entry["parent"] = parent
             save_state(state_path, state)
             print("sub-issue: #%d is under #%d" % (child, parent))
+            if result == "linked":
+                time.sleep(link_pause())  # GitHub asks for a second between writing requests
         elif result == "other":
             print("sub-issue: #%d already has another parent on GitHub; left alone" % child)
+        elif result == "mismatch":
+            print("MISMATCH: #%d does not read back under #%d; rerun to try again" % (child, parent))
+            failures += 1
         else:
-            print(sub_issues.REFUSED)
+            print(sub_issues.UNREAD if result == "unread" else sub_issues.REFUSED)
             break
 
     # 3. Post the comments. Each is known by its target and draft file.

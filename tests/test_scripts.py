@@ -124,6 +124,7 @@ class Sandbox(unittest.TestCase):
         full_env.update(XDG_CACHE_HOME=os.path.join(self.dir, "xdg-cache"), XDG_STATE_HOME=os.path.join(self.dir, "xdg-state"),
                         XDG_CONFIG_HOME=os.path.join(self.dir, "xdg-config"))
         full_env["RECORTEX_TRUSTED_FILE"] = os.path.join(self.dir, "no-trusted-file")
+        full_env["RECORTEX_LINK_PAUSE"] = "0"  # no wait between sub-issue links in the tests
         full_env = overlay(full_env, env)
         command = [sys.executable, os.path.join(SCRIPTS, name)] + list(args)
         return subprocess.run(command, capture_output=True, text=True, env=full_env, cwd=cwd or self.dir,
@@ -9466,6 +9467,39 @@ class SubIssueTests(RecordSandbox):
         self.assertIn("linked: #5 is under #4", result.stdout)
         self.assertIn("2 more link(s) wait", result.stdout)
         self.assertEqual({5: 4}, self.parents())
+
+    def test_the_links_of_one_run_wait_between_them(self):
+        box = Sandbox("run")
+        box.setUp()
+        box.add_labels()
+        self.addCleanup(box.doCleanups)
+        start = time.time()
+        result = box.run_script("create_issues.py", "--manifest", box.manifest, env={"RECORTEX_LINK_PAUSE": "1.5"})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertGreaterEqual(time.time() - start, 4.5)  # three links, 1.5 s after each
+
+    def test_a_task_whose_destination_is_not_a_topic_is_not_linked_under_it(self):
+        box = Sandbox("run")
+        box.setUp()
+        box.add_labels()
+        self.addCleanup(box.doCleanups)
+        path = os.path.join(box.drafts, "task-newlines.md")
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text.replace("NEW-reader: the result", "NEW-hub: the result"))
+        result = box.run_script("create_issues.py", "--manifest", box.manifest)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual({"5": 4, "6": 4}, {n: i["parent"] for n, i in box.repo()["issues"].items() if i.get("parent")})
+
+    def test_a_link_that_does_not_read_back_is_a_mismatch(self):
+        box = Sandbox("run")
+        box.setUp()
+        box.add_labels()
+        self.addCleanup(box.doCleanups)
+        result = box.run_script("create_issues.py", "--manifest", box.manifest, env={"FAKE_GH_IGNORE_SUBISSUE": "1"})
+        self.assertEqual(1, result.returncode)
+        self.assertIn("MISMATCH: #5 does not read back under #4", result.stdout)
 
 
 def utc_ago(days, hours=0):

@@ -95,20 +95,31 @@ def add_text(parent_id, child_id):
 
 
 def link(repo, parent, child, timeout=60):
-    """Make `child` a sub-issue of `parent`. "linked", "already", "other" (it has another parent, left alone) or
-    "refused". Never raises for a refusal; a failed call is "refused" too, after one fixed line."""
+    """Make `child` a sub-issue of `parent`. "linked", "already", "other" (it has another parent, left alone),
+    "refused" (the add failed and the link is not there), "mismatch" (GitHub took the add and the link does not read
+    back) or "unread" (GitHub could not be read before or after). Never raises."""
     try:
         ids, parents = read_parents(repo, [parent, child], timeout)
-        if parent not in ids or child not in ids:
-            return "refused"
-        if parents.get(child) == parent:
-            return "already"
-        if parents.get(child) is not None:
-            return "other"
-        board_api.graphql(add_text(ids[parent], ids[child]), timeout)
-        return "linked" if read_parents(repo, [child], timeout)[1].get(child) == parent else "refused"
     except board_api.BoardError:
-        return "refused"
+        return "unread"
+    if parent not in ids or child not in ids:
+        return "unread"
+    if parents.get(child) == parent:
+        return "already"
+    if parents.get(child) is not None:
+        return "other"
+    try:
+        board_api.graphql(add_text(ids[parent], ids[child]), timeout)
+        failed = False
+    except board_api.BoardError:
+        failed = True  # it may have acted before it failed: the read below says
+    try:
+        after = read_parents(repo, [child], timeout)[1].get(child)
+    except board_api.BoardError:
+        return "unread"
+    if after == parent:
+        return "linked"
+    return "refused" if failed else "mismatch"
 
 
 def difference(repo, links):
