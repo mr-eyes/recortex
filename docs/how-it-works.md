@@ -22,6 +22,8 @@ What lives in GitHub, what a session does with it, and what comes back after a c
 
 When what the deliverable says changes, the topic's body is edited in place; the dated comment that caused the change and GitHub's edit history are the trail. A result that leaves the deliverable leaves the body, and its section label comes off. Posted comments are never rewritten.
 
+Before editing a body, the session saves the current text and drafts a separate replacement. Posting compares that saved text with the live body and refuses an outdated draft. Coordinate one writer per issue: GitHub's body update is not atomic with the check, so two writers can still race. See [posting and verification](../skills/recortex/references/posting-and-verification.md#4-post).
+
 ## The daily loop
 
 1. Start. The session reads the newest resume comment on the hub, then the open `active` issues, then the newest comments of the topics in play. With the hook this begins automatically.
@@ -46,6 +48,8 @@ The rules are in [references/board.md](../skills/recortex/references/board.md).
 ## What survives compaction, and why
 
 Compaction replaces a long conversation with a summary. Summaries drop detail and sometimes get numbers and decisions wrong, so this skill never treats one as a source.
+
+Only posted work is durable in GitHub. An abrupt stop before posting can lose a result, and the PreCompact hook supplies instructions rather than independently saving pending work. The [continuity demo](../examples/continuity/README.md) tests recorded recovery with a fresh local index and provides a separate protocol for measuring Claude's behavior across sessions.
 
 | What | Where it lives | How it comes back |
 |---|---|---|
