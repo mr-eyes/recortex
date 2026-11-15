@@ -23,7 +23,7 @@ one whose context was compacted, starts from that record.
 - The mind page. One private local page that tells the memory in sentences: where things stand, how each thread got there, what went wrong, what is settled, what is open.
 - The finished work, compiled. Topic bodies hold the deliverable's current text, so the paper or the release notes are assembled from the issues.
 - Helpers that know your field. A short field sheet tells every subagent what counts as proof in your work and what must never be written down.
-- A board that keeps itself current. Sub-issues and a private GitHub Projects board follow the record; you never drag a card to keep it honest.
+- A board that keeps itself current. Sub-issues and a private GitHub Projects board follow the record; you do not drag a card to keep it honest.
 
 ## Quick start
 
@@ -95,7 +95,7 @@ Before it writes about the undated pages, it reads that thread: the failure and 
   <img src="assets/board-light.svg" alt="A board with the columns Todo, In Progress, Waiting for a yes and Done. A task's card names its thread, and the memory that put it in its column when there is one.">
 </picture>
 
-Optional, chosen at setup, and private. The record decides which column a card is in, and the board is brought up to date at each pause. If you move a card by hand, the session asks what the move means before it changes anything, then records your answer or puts the card back.
+Optional, off unless you choose it at setup, and private. The record decides which column a card is in, and the board is brought up to date at each pause. (The picture shows four of the seven columns.) If you move a card by hand, the session asks what the move means before it changes anything, then records your answer or puts the card back. Setup and the `project` scope it needs are in [How the record works](docs/how-it-works.md#sub-issues-and-the-board).
 
 ## Read more
 

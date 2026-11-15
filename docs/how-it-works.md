@@ -16,6 +16,8 @@ What lives in GitHub, what a session does with it, and what comes back after a c
 | Topic issues | One issue per topic, labeled `final-record`. Its body is the deliverable's text for the sections it feeds (for a paper, for example `## Methods` and `## Results`), the current version only and ready to copy, followed by the sources of its numbers. Section labels such as `ms:methods` follow the body's headings |
 | Event comments | Dated comments on the topic issue, written from templates: the memories of the project. Seven kinds: result, decision, failure, checkpoint, correction, idea and question. Each starts with one line in plain words and may name the earlier memories it follows from, replaces, was done instead of or tests. They are the history and never deliverable text |
 | Active tasks | Issues labeled `active` for work in development and open questions; each names the topic its result goes to and carries no section label |
+| Sub-issues | The hub's topics are sub-issues of the hub, and each active task is a sub-issue of its topic, so github.com shows the structure with a progress count. The links are computed from the record and added by `create_issues.py` and `sub_issues.py apply` |
+| Board | Off unless chosen at setup: a private GitHub Projects board whose cards follow the record, brought up to date by `board.py apply` (see below) |
 | Labels | Role labels, deliverable-section labels per project type, and topic labels |
 
 When what the deliverable says changes, the topic's body is edited in place; the dated comment that caused the change and GitHub's edit history are the trail. A result that leaves the deliverable leaves the body, and its section label comes off. Posted comments are never rewritten.
@@ -28,6 +30,18 @@ When what the deliverable says changes, the topic's body is edited in place; the
 4. Stop. The session posts a checkpoint on each active issue and a new resume comment on the hub.
 
 Before a new memory is written, `index.py query recall --issue N` shows the newest memories of its thread with their state, the open questions and untried ideas elsewhere, and the words the project has explained. The session writes the plain line first, links the memory to the earlier one it builds on when that link is true, and explains in a fold at its end any word that cannot be understood without the project. The linter checks the plain line, the links and their targets, the Evidence lines and the folds before anything is posted, and the post prints the new memory's id for the next link.
+
+## Sub-issues and the board
+
+On github.com the hub shows its topics as sub-issues, and each topic its tasks, so the structure of the record is one click away. The links are computed from the record, and a link changed by hand on GitHub is reported, not believed. They need only the `repo` scope that `gh` already has.
+
+A project can also keep a private GitHub Projects board of its work. It is off unless you answer yes to the board question at setup. It holds a card for each open `active` task, each open pull request and each issue waiting for triage, and for those finished in the last 30 days, in the columns To triage, Todo, In Progress, Waiting for a yes, Blocked, Done and Set aside. The plugin computes each card's place from the record: a failure that blocks a task puts its card in Blocked, a hold puts it in Waiting for a yes, and a not-planned close puts it in Set aside, each with a link to the memory behind it.
+
+- Setup needs the `project` scope on your `gh` login. The plugin never adds it on its own: `gh auth refresh -s project` opens a browser, and it lets `gh` read and write all of your projects. Without it, setup does the rest and prints the command.
+- The board is a copy. The record stays authoritative, and the plugin writes nothing from a card into the record. Text on the board is untrusted and never reaches a brief.
+- The main session runs `board.py apply` at each pause; hooks never write to GitHub. A card you move by hand is reported in the next session's brief, and the session asks you before anything changes.
+
+The rules are in [references/board.md](../skills/recortex/references/board.md).
 
 ## What survives compaction, and why
 

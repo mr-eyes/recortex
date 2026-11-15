@@ -338,6 +338,16 @@ def check_answers(answers):
             or isinstance(hook.get("every", 10), bool) or not isinstance(hook.get("every", 10), int):
         raise AnswerError("prompt_hook must be {\"enabled\": true|false, \"every\": N}")
     out["prompt_hook"] = {"enabled": hook.get("enabled", True), "every": min(100, max(1, hook.get("every", 10)))}
+    board = answers.get("board", "no")
+    if board == "no":
+        out["board"] = None
+    elif board == "new":
+        out["board"] = {"mode": "new"}
+    elif isinstance(board, dict) and set(board) == {"existing"} and type(board["existing"]) is int \
+            and 1 <= board["existing"] <= 10 ** 8:
+        out["board"] = {"mode": "existing", "number": board["existing"]}
+    else:
+        raise AnswerError("board must be \"no\", \"new\" or {\"existing\": <the board's number>}")
     out["fields"], out["restricted"] = None, []
     if "fields" in answers:
         out["fields"], out["restricted"] = check_field_answers(answers["fields"])
@@ -1080,6 +1090,38 @@ def config_target(root):
     return old if os.path.lexists(old) and not os.path.lexists(new) else new
 
 
+def board_step(board, root, python, dry):
+    """The optional board: board.py setup, then the first fill. A board that cannot be set up never stops the rest of
+    the setup, which is done by now: the scope that is missing, or any other reason, is said in the fixed lines that
+    board.py prints, with the command to run again."""
+    command = [python, os.path.join(HERE, "board.py"), "setup", "--mode", board["mode"]]
+    if board.get("number"):
+        command += ["--number", str(board["number"])]
+    if dry:
+        run(command + ["--dry-run"], True, "create or link the board of the work")
+        run([python, os.path.join(HERE, "board.py"), "apply"], True, "fill the board from the record")
+        return
+    print("run: %s   # create or link the private board of the work" % " ".join(command + ["--yes"]))
+    result = subprocess.run(command + ["--yes"], capture_output=True, text=True, cwd=root)
+    print(result.stdout.rstrip())
+    if result.stderr.strip():
+        print(result.stderr.strip()[-1000:])
+    if result.returncode != 0:
+        made = re.search(r"^created: a new board, number ([0-9]+),", result.stdout, re.M)
+        again = "existing --number %s" % made.group(1) if made else board["mode"] + (
+            " --number %d" % board["number"] if board.get("number") else "")
+        print("board: not set up; the rest of the setup is done. Run `board.py setup --mode %s --yes` when the "
+              "reason above is dealt with." % again)
+        return
+    print("run: board.py apply   # fill the board from the record")
+    filled = subprocess.run([python, os.path.join(HERE, "board.py"), "apply"], capture_output=True, text=True, cwd=root)
+    print(filled.stdout.rstrip())
+    if filled.stderr.strip():
+        print(filled.stderr.strip()[-1000:])
+    if filled.returncode != 0:
+        print("board: not filled yet; run `board.py apply` when the reason above is dealt with.")
+
+
 def apply(answers, root, dry, drafts):
     config_path = config_target(root)
     drafts_base = os.path.dirname(drafts) if outside(drafts, root) else root
@@ -1220,6 +1262,13 @@ def apply(answers, root, dry, drafts):
 
     run([python, os.path.join(scripts, "index.py"), "--repo", answers["repo"], "sync"], dry,
         "build the local index in the foreground, so the first session has a brief", cwd=root)
+    if answers["board"] and existing.get("board"):
+        print("board: this project already has a board entry (%s/%s); no second board is made. To change it, edit "
+              "the entry by hand and run board.py setup --mode existing --number N --yes"
+              % (str(existing["board"].get("owner"))[:40] if isinstance(existing["board"], dict) else "?",
+                 str(existing["board"].get("number"))[:10] if isinstance(existing["board"], dict) else "?"))
+    elif answers["board"]:
+        board_step(answers["board"], root, python, dry)
     present = [item["kind"] for item in detect(root)]
     if dry:
         print("would record as known: %s   # the hooks suggest only deliverables that appear later" %

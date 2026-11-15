@@ -224,6 +224,8 @@ Work in development (an investigation, a refactor, a rerun, a method not yet mer
 
 A task that ends with nothing to report still gets a result: "no change, because ...".
 
+On github.com each topic is a sub-issue of the hub and each task a sub-issue of its destination topic (`create_issues.py` links them; `sub_issues.py` fills them in for an existing record), and a private board can show where each task stands, computed from the memories on it: a failure that blocks a task names the task (`#N`) in one of its fields, and a hold in the resume block names the issue it holds, so that the board can show Blocked and Waiting for a yes. See [board.md](board.md).
+
 ## Labels
 
 | Group | Labels | Use |

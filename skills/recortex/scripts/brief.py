@@ -18,11 +18,14 @@ sheet.
 import datetime
 import json
 import re
+import sqlite3
 
 import recortex
 import index
 import names
 import field_sheet
+import board_api
+import board_rules
 
 BEGIN = "===== BEGIN PROJECT STATUS DATA (recortex) ====="
 END = "===== END PROJECT STATUS DATA ====="
@@ -68,6 +71,19 @@ class Record:
             self.labels.setdefault(row["issue"], []).append(row["label"].lower())
         # From the configuration the hook parsed once: what is checked, fingerprinted and shown is this object.
         self.field = field_sheet.state(config, repo)
+
+    def board_moved(self):
+        """The numbers of the cards someone moved by hand; [] when no board was read or the index cannot say."""
+        try:
+            return board_rules.hand_moved(self.db, self.allowed)
+        except sqlite3.Error:
+            return []
+
+    def board_note(self):
+        """The fixed line for a board the sync could not read, or "": the wording comes from board_api.REASONS."""
+        code = index.get_meta(self.db, "board_error")
+        return "recortex: board not read: %s. Run hooks.py --doctor." % board_api.REASONS[code] \
+            if code in board_api.REASONS else ""
 
     def title(self, number):
         issue = self.issues.get(number)
@@ -174,6 +190,11 @@ def session_lines(record, topic_limit, active_limit):
             len(untriaged), "" if len(untriaged) == 1 else "s", "s" if len(untriaged) == 1 else "",
             ", ".join("#%d" % n for n in untriaged[:10]), ", and %d more" % (len(untriaged) - 10)
             if len(untriaged) > 10 else ""))
+    moved = record.board_moved()  # numbers only; nothing of the board's text is ever read
+    if moved:
+        lines.append("Board: %d card%s moved by hand: %s%s. Run board.py plan." % (
+            len(moved), " was" if len(moved) == 1 else "s were", ", ".join("#%d" % n for n in moved[:10]),
+            ", and %d more" % (len(moved) - 10) if len(moved) > 10 else ""))
     return lines
 
 
@@ -181,8 +202,10 @@ def session_payload(record, fresh):
     """The SessionStart brief. Lists are shortened to fit the cap; the END and protocol lines are always there."""
     limit = CAPS["session-start"]
     field = field_sheet.session_line(record.field)  # fixed wording; FIELD_ON holds only the checked day
+    board = record.board_note()  # fixed wording, outside the data frame; empty for a project without a board
     head = ["recortex record brief for %s (%s)." % (record.repo, record.freshness(fresh)),
-            "Rules: " + RULES % record.repo, ALIAS] + ([field] if field else []) + ["", BEGIN, DATA_NOTE, ""]
+            "Rules: " + RULES % record.repo, ALIAS] + ([field] if field else []) + ([board] if board else []) + \
+        ["", BEGIN, DATA_NOTE, ""]
     resume = index.get_meta(record.db, "resume") or ""
     note = index.get_meta(record.db, "resume_note") or "not read"
     days = resume_days(record.config)

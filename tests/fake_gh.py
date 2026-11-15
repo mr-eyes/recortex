@@ -20,6 +20,9 @@ Fault switches:
   FAKE_GH_RESUME_SLEEP=8         sleep before answering the hub comments query (the GraphQL call with a number)
   FAKE_GH_RESUME_FAIL=1          exit 1 for the hub comments query
   FAKE_GH_NODE_FAIL=1            exit 1 for a GraphQL query that reads comments by node id (the edit histories)
+  FAKE_GH_NO_PARENT_FIELD=1      a query that asks for an issue's parent fails as on a GitHub without sub-issues
+Projects and sub-issues (tests/fake_projects.py answers them, and lists its own fault switches): a closed issue has
+"closed_at", a merged pull request "merged_at", a sub-issue "parent" (the parent's number).
 The repository itself (`api repos/<owner>/<name>`, no further path) answers from the state's "private" key, default
 true: `--jq .private` prints true or false, and without --jq the object {"private": ...} is printed.
 Edit histories come in pages of at most 100 entries, as GitHub's userContentEdits does: `first`, `after` and a
@@ -43,6 +46,7 @@ import time
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fake_projects  # noqa: E402
 import graphql_check  # noqa: E402
 
 ME = "octo-dev"
@@ -89,11 +93,12 @@ def api_issue(state, repo, number):
         "body": issue["body"], "labels": [{"name": n} for n in issue.get("labels", [])],
         "user": {"login": issue.get("user", "octo-dev")},
         "created_at": issue.get("created_at", "2026-01-05T17:00:00Z"),
-        "updated_at": issue.get("updated_at", "2026-01-06T18:30:00Z"),
+        "updated_at": issue.get("updated_at", "2026-01-06T18:30:00Z"), "closed_at": issue.get("closed_at"),
         "html_url": "https://github.com/%s/%s/%s" % (repo, kind, number),
     }
     if issue.get("pull_request"):
-        out["pull_request"] = {"url": "https://api.github.com/repos/%s/pulls/%s" % (repo, number)}
+        out["pull_request"] = {"url": "https://api.github.com/repos/%s/pulls/%s" % (repo, number),
+                               "merged_at": issue.get("merged_at")}
     return out
 
 
@@ -253,9 +258,24 @@ def main():
     elif args[:2] == ["api", "graphql"]:
         fields = dict(a.split("=", 1) for a in option(args, "-f", many=True) + option(args, "-F", many=True))
         problems = graphql_check.check(fields["query"])
+        if os.environ.get("FAKE_GH_NO_PARENT_FIELD") and " parent {" in fields["query"]:  # a GitHub without sub-issues
+            problems.append("Field 'parent' doesn't exist on type 'Issue'")
         if problems:  # the real API rejects the whole query
             print(json.dumps({"errors": [{"message": m} for m in problems]}))
             fail("gh: " + problems[0])
+        if fake_projects.wanted(fields["query"]):  # Projects, sub-issues, and the repository's ids
+            try:
+                response = fake_projects.handle(state, state.get("repo", fake_projects.DEFAULT_REPO), fields["query"])
+            except fake_projects.Refused as refusal:
+                print(json.dumps({"errors": [{"message": str(refusal)}]}))
+                save(state)
+                fail("gh: " + str(refusal), refusal.code)
+            print(json.dumps(response))
+            after = state.pop("_fail_after", None)
+            save(state)
+            if after:
+                fail("gh: " + after)
+            return
         top = graphql_check.parse_query(fields["query"])
         if top and top[0][1] == "node":  # comments named by node id, for their edit histories
             if os.environ.get("FAKE_GH_NODE_FAIL"):
@@ -302,8 +322,15 @@ def main():
                 edits = issue.get("edits", [])
                 out[alias] = {}
                 for a, n, arguments_of, kids in children:
-                    out[alias][a] = edit_connection(edits, arguments_of, kids) if n == "userContentEdits" \
-                        else issue.get("last_edited_at")
+                    if n == "userContentEdits":
+                        out[alias][a] = edit_connection(edits, arguments_of, kids)
+                    elif n == "parent":  # sub-issues: the parent, in the same repository
+                        top = graphql_check.parse_query(fields["query"])[0][2]
+                        where = "%s/%s" % (graphql_check.literal(top["owner"]), graphql_check.literal(top["name"]))
+                        out[alias][a] = None if issue.get("parent") is None else {
+                            "number": issue["parent"], "repository": {"nameWithOwner": where}}
+                    else:
+                        out[alias][a] = issue.get("last_edited_at")
             print(json.dumps(dict({"data": {"repository": out}}, **({"errors": errors} if errors else {}))))
             save(state)
             if errors:

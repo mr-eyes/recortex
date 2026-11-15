@@ -7,6 +7,7 @@ How to install the plugin, which repositories it may print from, how to use it a
 - Claude Code
 - The GitHub CLI `gh`, authenticated (`gh auth status`)
 - Python 3.8 or newer and bash; no other packages
+- Only for the optional board: the `project` scope on your `gh` login (`gh auth refresh -s project`), which the plugin never adds on its own. See [How the record works](how-it-works.md#sub-issues-and-the-board).
 
 ## Install
 

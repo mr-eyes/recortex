@@ -59,6 +59,8 @@ import index  # noqa: E402
 import brief  # noqa: E402
 import storage  # noqa: E402
 import field_sheet  # noqa: E402
+import board_api  # noqa: E402
+import board_rules  # noqa: E402
 
 EVENTS = ("session-start", "subagent-start", "prompt-submit", "pre-compact")
 HOOK_NAMES = {"session-start": "SessionStart", "subagent-start": "SubagentStart",
@@ -336,6 +338,8 @@ def produce(event, data, budget, config, repo, hub):
                 with alarm(share + max(1.0, budget / 4.0)):  # a safety net; the sync stops itself at `share`
                     summary = index.sync(repo, hub, timeout=share, deadline=share, timeline_cap=10, log=lambda *a: None)
                 fresh = True
+                if summary["complete"] and summary.get("board") == "budget":
+                    start_background(repo, config)  # the board did not fit in the half budget; the background reads it
                 if not summary["complete"]:
                     if summary.get("pages"):
                         fresh = "partial"  # part was read; the rest continues in the background
@@ -546,6 +550,30 @@ def field_line(config, repo):
     return "field guidance: %s%s" % (text, "; sensitive marks: %s" % marks if marks != "none" else "")
 
 
+def board_read_at(db):
+    stamp = index.get_meta(db, "board_read_at")
+    return stamp if stamp and index.ISO_UTC.fullmatch(stamp) else "at an unknown time"
+
+
+def board_lines(db, config, repo):
+    """For --doctor: what the sync stored about the board, then what GitHub says now. Fixed wording and numbers
+    only: nothing from the board is printed. Nothing at all for a project without a board."""
+    state = board_api.entry(config, repo)[0]
+    if state == "none":
+        return []
+    lines = []
+    code = index.get_meta(db, "board_error")
+    if code in board_api.REASONS:
+        lines.append("board: not read at the last sync: %s" % board_api.REASONS[code])
+    cards = db.execute("SELECT COUNT(*) AS n FROM board_cards").fetchone()["n"]
+    if cards:
+        found = board_rules.plan(db, recortex.allowed_users(repo))
+        lines.append("board cards: %d read %s; %d moved by hand, %d behind the record, %d to add, %d without an issue"
+                     % (cards, board_read_at(db), len(found["moved"]),
+                        len(found["behind"]), len(found["missing"]), len(found["gone"])))
+    return lines + board_api.doctor_lines(config, repo)
+
+
 def top_note(path):
     """For the storage line of --doctor: whether a top folder has the name from before the rename."""
     return " (the folder name from before the rename, used in place)" if os.path.basename(path) == names.OLD_NAME \
@@ -643,6 +671,8 @@ def doctor():
         print("last sync failure: %s" % (failure or "none since the last good sync"))
         print("resume block: %s" % (index.get_meta(db, "resume_note") or "not read"))
         print(field_line(config, repo))
+        for line in board_lines(db, config, repo):
+            print(line)
         if synced:
             for event, text in brief.all_payloads(db, config, repo).items():
                 print("payload %-15s %5d characters (cap %d)" % (event, len(text), brief.CAPS[event]))

@@ -23,6 +23,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import recortex  # noqa: E402
 import lint_drafts  # noqa: E402
+import board_api  # noqa: E402
 
 BLOCK_CAP = 4000   # characters of resume block shown
 TOTAL_CAP = 6000   # characters printed in all; Claude Code files hook output above 10,000
@@ -31,6 +32,10 @@ BEGIN = "===== BEGIN PROJECT STATUS DATA (recortex) ====="
 END = "===== END PROJECT STATUS DATA ====="
 PROTOCOL = ("recortex: before acting, follow the session protocol of the recortex skill "
             "(resume block, open active issues, newest comments of the topics in play).")
+
+
+BOARD_REMINDER = ("board: this project keeps a board of its work; run `board.py apply` now to bring it in step with "
+                  "the record (a task opened or closed, or a failure or hold posted since the last update).")
 
 
 def defuse(text):
@@ -159,6 +164,8 @@ def update(args, config):
         print("MISMATCH: could not find the comment id in gh output, so the comment was not read back")
         return 1
     ok = recortex.verify_body(comment, recortex.read_comment_body(repo, match.group(1)), "resume comment %s" % url)
+    if ok and board_api.entry(config, repo)[0] == "approved":
+        print(BOARD_REMINDER)
     return 0 if ok else 1
 
 

@@ -11,5 +11,5 @@
 |---|---|---|
 | {{next concrete step}} | {{owner}} | {{issue}} |
 
-**Holds:** {{what must not be done without the owner's word, or "none"}}
+**Holds:** {{what must not be done without the owner's word, naming the issue it holds as #N, or "none"}}
 <!-- ghim:resume:end -->
