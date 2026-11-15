@@ -9067,5 +9067,139 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual([], found)
 
 
+class GraphqlReaderTests(unittest.TestCase):
+    """The reader that checks a GraphQL operation against the schema excerpt (tests/graphql_check.py): queries as
+    before, and since 0.9.0 mutations, inline fragments, __typename and literal inputs."""
+
+    SET = ('mutation { updateProjectV2ItemFieldValue(input: {projectId: "p", itemId: "i", fieldId: "f", '
+           'value: {singleSelectOptionId: "o"}}) { projectV2Item { id } } }')
+
+    def test_a_mutation_with_a_nested_input_passes(self):
+        self.assertEqual([], graphql_check.check(self.SET))
+        self.assertEqual("mutation", graphql_check.operation(self.SET))
+        self.assertEqual("query", graphql_check.operation("{ viewer { login } }"))
+
+    def test_the_input_object_is_read_into_a_dict(self):
+        top = graphql_check.parse_query(self.SET)[0]
+        self.assertEqual("updateProjectV2ItemFieldValue", top[1])
+        self.assertEqual({"singleSelectOptionId": '"o"'}, top[2]["input"]["value"])
+
+    def test_an_unknown_input_field_is_a_problem(self):
+        problems = graphql_check.check(self.SET.replace("singleSelectOptionId", "optionId"))
+        self.assertEqual(["Field 'optionId' doesn't exist on input type 'ProjectV2FieldValue'"], problems)
+
+    def test_a_missing_required_input_field_is_a_problem(self):
+        problems = graphql_check.check(self.SET.replace('itemId: "i", ', ""))
+        self.assertEqual(["Argument 'itemId' on input type 'UpdateProjectV2ItemFieldValueInput' is required"], problems)
+
+    def test_a_value_that_is_not_in_the_enum_is_a_problem(self):
+        text = ('mutation { createProjectV2Field(input: {projectId: "p", dataType: %s, name: "Why"}) '
+                '{ projectV2Field { ... on ProjectV2Field { id } } } }')
+        self.assertEqual([], graphql_check.check(text % "TEXT"))
+        self.assertTrue(graphql_check.check(text % "ASSIGNEES"))  # a real field type, but not a custom one
+        self.assertTrue(graphql_check.check(text % "BOGUS"))
+
+    def test_a_list_of_inputs_is_checked_item_by_item(self):
+        text = ('mutation { updateProjectV2Field(input: {fieldId: "f", singleSelectOptions: [%s]}) '
+                '{ projectV2Field { ... on ProjectV2SingleSelectField { id } } } }')
+        good = '{id: "a", name: "Todo", color: GRAY, description: ""}, {name: "Blocked", color: RED, description: ""}'
+        self.assertEqual([], graphql_check.check(text % good))
+        self.assertTrue(graphql_check.check(text % good.replace("RED", "CRIMSON")))
+        self.assertTrue(graphql_check.check(text % '{name: "Blocked", color: RED}'))
+
+    def test_a_mutation_is_checked_against_the_mutation_type(self):
+        problems = graphql_check.check('mutation { deleteProjectV2(input: {projectId: "p"}) { clientMutationId } }')
+        self.assertEqual(["Field 'deleteProjectV2' doesn't exist on type 'Mutation'"], problems)
+
+    def test_an_inline_fragment_is_checked_against_its_union_or_interface(self):
+        card = ('query { node(id: "x") { ... on ProjectV2 { items(first: 100) { nodes { type content { %s } } } } } }')
+        self.assertEqual([], graphql_check.check(card % "... on Issue { number } ... on PullRequest { number }"))
+        self.assertTrue(graphql_check.check(card % "... on Repository { id }"))        # not in the union
+        self.assertTrue(graphql_check.check(card % "... on Issue { nonsense }"))      # a field the type lacks
+        self.assertTrue(graphql_check.check(card % "... on Nonsense { id }"))         # a type not in the excerpt
+        owner = 'query { repositoryOwner(login: "o") { login ... on User { projectV2(number: 1) { id } } } }'
+        self.assertEqual([], graphql_check.check(owner))
+        self.assertTrue(graphql_check.check(owner.replace("User", "Issue")))          # does not implement the interface
+
+    def test_typename_is_allowed_and_a_union_needs_a_selection(self):
+        self.assertEqual([], graphql_check.check('query { viewer { __typename login } }'))
+        text = 'query { node(id: "x") { ... on ProjectV2 { items(first: 1) { nodes { content } } } } }'
+        self.assertEqual(["Field 'content' of type 'ProjectV2ItemContent' must have a selection of subfields"],
+                         graphql_check.check(text))
+
+    def test_a_required_argument_that_is_missing_is_a_problem(self):
+        self.assertEqual(["Field 'repositoryOwner' argument 'login' is required"],
+                         graphql_check.check("query { repositoryOwner { login } }"))
+
+    def test_the_excerpt_holds_every_kind_of_definition(self):
+        schema = graphql_check.load_schema()
+        self.assertEqual("input", schema.kinds["CreateProjectV2Input"])
+        self.assertEqual("enum", schema.kinds["ProjectV2ItemType"])
+        self.assertEqual("union", schema.kinds["ProjectV2ItemContent"])
+        self.assertEqual({"Issue", "PullRequest", "DraftIssue"}, schema.members["ProjectV2ItemContent"])
+        self.assertIn("Node", schema.implements["ProjectV2"])
+        self.assertIn("ISSUE", schema.values["ProjectV2ItemType"])
+
+    def test_the_older_queries_are_read_as_before(self):
+        edits = ('query { repository(owner: "o", name: "r") { i7: issue(number: 7) { lastEditedAt '
+                 'userContentEdits(first: 100) { nodes { editedAt editor { login } } } } } }')
+        self.assertEqual([], graphql_check.check(edits))
+        self.assertEqual(["Field 'lastEditedBy' doesn't exist on type 'Issue'"],
+                         graphql_check.check(edits.replace("lastEditedAt", "lastEditedBy")))
+
+
+class FakeProjectsTests(Sandbox):
+    """The fake gh answers Projects and sub-issue operations the way the tests need, and refuses what GitHub would."""
+
+    def gql(self, query, env=None):
+        result = self.run_script("../tests/fake_gh.py", "api", "graphql", "-f", "query=" + query, env=env, gh="false")
+        return result
+
+    def run_script(self, name, *args, gh=FAKE, env=None, cwd=None, umask=None):
+        if name.startswith("../"):
+            full_env = environment_for(os.environ, {"FAKE_GH_STATE": self.state}, env)
+            return subprocess.run([sys.executable, os.path.join(ROOT, "tests", "fake_gh.py")] + list(args),
+                                  capture_output=True, text=True, env=full_env, cwd=self.dir)
+        return super().run_script(name, *args, gh=gh, env=env, cwd=cwd, umask=umask)
+
+    def test_a_project_is_made_filled_and_read_back(self):
+        owner = self.gql('query { repository(owner: "example-org", name: "tinycsv") { id isPrivate owner { id login } } }')
+        found = json.loads(owner.stdout)["data"]["repository"]
+        self.assertEqual("example-org", found["owner"]["login"])
+        made = self.gql('mutation { createProjectV2(input: {ownerId: "%s", title: "tinycsv record", repositoryId: "%s"}) '
+                        '{ projectV2 { id number } } }' % (found["owner"]["id"], found["id"]))
+        self.assertEqual(0, made.returncode, made.stderr)
+        project = json.loads(made.stdout)["data"]["createProjectV2"]["projectV2"]
+        read = self.gql('query { repositoryOwner(login: "example-org") { ... on Organization { projectV2(number: %d) '
+                        '{ id public fields(first: 50) { nodes { ... on ProjectV2SingleSelectField { name options { id name } } } } } } } }'
+                        % project["number"])
+        node = json.loads(read.stdout)["data"]["repositoryOwner"]["projectV2"]
+        self.assertEqual(project["id"], node["id"])
+        names = [o["name"] for f in node["fields"]["nodes"] if f for o in f.get("options", [])]
+        self.assertEqual(["Todo", "In Progress", "Done"], names)
+
+    def test_an_operation_the_schema_lacks_is_refused_as_github_refuses_it(self):
+        result = self.gql('mutation { deleteProjectV2(input: {projectId: "p"}) { clientMutationId } }')
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("doesn't exist on type 'Mutation'", result.stderr)
+
+    def test_a_missing_scope_is_answered_in_the_words_of_github(self):
+        result = self.gql('query { viewer { login projectsV2(first: 1) { totalCount } } }',
+                          env={"FAKE_GH_NO_PROJECT_SCOPE": "1"})
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("has not been granted the required scopes", result.stderr)
+        self.assertEqual(0, self.gql('query { viewer { login } }', env={"FAKE_GH_NO_PROJECT_SCOPE": "1"}).returncode)
+
+    def test_a_sub_issue_is_linked_once_and_has_one_parent(self):
+        link = 'mutation { addSubIssue(input: {issueId: "I_%d", subIssueId: "I_%d"}) { issue { id } } }'
+        self.assertEqual(0, self.gql(link % (1, 2)).returncode)
+        self.assertEqual(1, self.repo()["issues"]["2"]["parent"])
+        again = self.gql(link % (3, 2))
+        self.assertNotEqual(0, again.returncode)
+        self.assertIn("one parent", again.stderr)
+        refused = self.gql(link % (1, 3), env={"FAKE_GH_SUBISSUES": "refuse"})
+        self.assertNotEqual(0, refused.returncode)
+
+
 if __name__ == "__main__":
     unittest.main()

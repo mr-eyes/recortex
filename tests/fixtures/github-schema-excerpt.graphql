@@ -1,20 +1,491 @@
-# Excerpt of the public GitHub GraphQL schema, taken 2026-11-11 from
+# Excerpt of the public GitHub GraphQL schema, taken 2026-11-11 and 2026-11-15 from
 # https://docs.github.com/public/fpt/schema.docs.graphql
 # Only the fields the scripts query are kept. Field signatures are copied unchanged,
 # with descriptions removed. The tests check every queried field against this file.
 
-type Query {
+type Query implements Node {
+  node( id: ID! ): Node
   repository( followRenames: Boolean = true name: String! owner: String! ): Repository
+  repositoryOwner( login: String! ): RepositoryOwner
+  viewer: User!
 }
 
-type Repository {
+type Mutation {
+  addProjectV2ItemById( input: AddProjectV2ItemByIdInput! ): AddProjectV2ItemByIdPayload
+  addSubIssue( input: AddSubIssueInput! ): AddSubIssuePayload
+  createProjectV2( input: CreateProjectV2Input! ): CreateProjectV2Payload
+  createProjectV2Field( input: CreateProjectV2FieldInput! ): CreateProjectV2FieldPayload
+  createProjectV2View( input: CreateProjectV2ViewInput! ): CreateProjectV2ViewPayload
+  linkProjectV2ToRepository( input: LinkProjectV2ToRepositoryInput! ): LinkProjectV2ToRepositoryPayload
+  removeSubIssue( input: RemoveSubIssueInput! ): RemoveSubIssuePayload
+  updateProjectV2( input: UpdateProjectV2Input! ): UpdateProjectV2Payload
+  updateProjectV2Field( input: UpdateProjectV2FieldInput! ): UpdateProjectV2FieldPayload
+  updateProjectV2ItemFieldValue( input: UpdateProjectV2ItemFieldValueInput! ): UpdateProjectV2ItemFieldValuePayload
+  updateProjectV2View( input: UpdateProjectV2ViewInput! ): UpdateProjectV2ViewPayload
+}
+
+interface Node {
+  id: ID!
+}
+
+interface RepositoryOwner {
+  avatarUrl( size: Int ): URI!
+  id: ID!
+  login: String!
+  repositories( affiliations: [RepositoryAffiliation] after: String before: String first: Int hasIssuesEnabled: Boolean isArchived: Boolean isFork: Boolean isLocked: Boolean last: Int orderBy: RepositoryOrder ownerAffiliations: [RepositoryAffiliation] = [OWNER, COLLABORATOR] privacy: RepositoryPrivacy visibility: RepositoryVisibility ): RepositoryConnection!
+  repository( followRenames: Boolean = true name: String! ): Repository
+  resourcePath: URI!
+  url: URI!
+}
+
+interface ProjectV2Owner {
+  id: ID!
+  projectV2( number: Int! ): ProjectV2
+  projectsV2( after: String before: String first: Int last: Int minPermissionLevel: ProjectV2PermissionLevel = READ orderBy: ProjectV2Order = {field: NUMBER, direction: DESC} query: String ): ProjectV2Connection!
+}
+
+type User implements Actor & Node & ProjectV2Owner & RepositoryOwner {
+  id: ID!
+  login: String!
+  projectV2( number: Int! ): ProjectV2
+  projectsV2( after: String before: String first: Int last: Int minPermissionLevel: ProjectV2PermissionLevel = READ orderBy: ProjectV2Order = {field: NUMBER, direction: DESC} query: String ): ProjectV2Connection!
+}
+
+type Organization implements Actor & Node & ProjectV2Owner & RepositoryOwner {
+  id: ID!
+  login: String!
+  projectV2( number: Int! ): ProjectV2
+}
+
+type Repository implements Node {
+  id: ID!
+  isPrivate: Boolean!
   issue( number: Int! ): Issue
+  nameWithOwner: String!
+  owner: RepositoryOwner!
 }
 
-type Issue {
+type Issue implements Node & ProjectV2Owner {
   comments( after: String before: String first: Int last: Int orderBy: IssueCommentOrder ): IssueCommentConnection!
+  id: ID!
   lastEditedAt: DateTime
+  number: Int!
+  parent: Issue
+  repository: Repository!
+  state: IssueState!
+  stateReason( enableDuplicate: Boolean = false ): IssueStateReason
+  subIssues( after: String before: String first: Int last: Int ): IssueConnection!
+  subIssuesSummary: SubIssuesSummary!
   userContentEdits( after: String before: String first: Int last: Int ): UserContentEditConnection
+}
+
+type PullRequest implements Node & ProjectV2Owner {
+  id: ID!
+  number: Int!
+  repository: Repository!
+}
+
+type IssueConnection {
+  nodes: [Issue]
+  totalCount: Int!
+}
+
+type SubIssuesSummary {
+  completed: Int!
+  percentCompleted: Int!
+  total: Int!
+}
+
+type ProjectV2 implements Node {
+  closed: Boolean!
+  closedAt: DateTime
+  createdAt: DateTime!
+  creator: Actor
+  databaseId: Int
+  field( name: String! ): ProjectV2FieldConfiguration
+  fields( after: String before: String first: Int last: Int orderBy: ProjectV2FieldOrder = {field: POSITION, direction: ASC} ): ProjectV2FieldConfigurationConnection!
+  fullDatabaseId: BigInt
+  id: ID!
+  items( after: String archivedStates: [ProjectV2ItemArchivedState!] = [NOT_ARCHIVED] before: String first: Int last: Int orderBy: ProjectV2ItemOrder = {field: POSITION, direction: ASC} query: String = "" ): ProjectV2ItemConnection!
+  number: Int!
+  owner: ProjectV2Owner!
+  public: Boolean!
+  readme: String
+  repositories( after: String before: String first: Int last: Int orderBy: RepositoryOrder = {field: CREATED_AT, direction: DESC} ): RepositoryConnection!
+  resourcePath: URI!
+  shortDescription: String
+  statusUpdates( after: String before: String first: Int last: Int orderBy: ProjectV2StatusOrder = {field: CREATED_AT, direction: DESC} ): ProjectV2StatusUpdateConnection!
+  teams( after: String before: String first: Int last: Int orderBy: TeamOrder = {field: NAME, direction: ASC} ): TeamConnection!
+  template: Boolean!
+  title: String!
+  updatedAt: DateTime!
+  url: URI!
+  view( number: Int! ): ProjectV2View
+  viewerCanClose: Boolean!
+  viewerCanReopen: Boolean!
+  viewerCanUpdate: Boolean!
+  views( after: String before: String first: Int last: Int orderBy: ProjectV2ViewOrder = {field: POSITION, direction: ASC} ): ProjectV2ViewConnection!
+  workflow( number: Int! ): ProjectV2Workflow
+  workflows( after: String before: String first: Int last: Int orderBy: ProjectV2WorkflowOrder = {field: NAME, direction: ASC} ): ProjectV2WorkflowConnection!
+}
+
+type ProjectV2Connection {
+  totalCount: Int!
+}
+
+type ProjectV2ItemConnection {
+  nodes: [ProjectV2Item]
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type PageInfo {
+  endCursor: String
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+}
+
+type ProjectV2Item implements Node {
+  content: ProjectV2ItemContent
+  createdAt: DateTime!
+  creator: Actor
+  databaseId: Int
+  fieldValueByName( name: String! ): ProjectV2ItemFieldValue
+  fieldValues( after: String before: String first: Int last: Int orderBy: ProjectV2ItemFieldValueOrder = {field: POSITION, direction: ASC} ): ProjectV2ItemFieldValueConnection!
+  fullDatabaseId: BigInt
+  id: ID!
+  isArchived: Boolean!
+  project: ProjectV2!
+  type: ProjectV2ItemType!
+  updatedAt: DateTime!
+}
+
+enum ProjectV2ItemType {
+  DRAFT_ISSUE
+  ISSUE
+  PULL_REQUEST
+  REDACTED
+}
+
+union ProjectV2ItemContent = DraftIssue | Issue | PullRequest
+
+type DraftIssue implements Node {
+  title: String!
+}
+
+union ProjectV2ItemFieldValue = ProjectV2ItemFieldDateValue | ProjectV2ItemFieldIterationValue | ProjectV2ItemFieldLabelValue | ProjectV2ItemFieldMilestoneValue | ProjectV2ItemFieldMultiSelectValue | ProjectV2ItemFieldNumberValue | ProjectV2ItemFieldPullRequestValue | ProjectV2ItemFieldRepositoryValue | ProjectV2ItemFieldReviewerValue | ProjectV2ItemFieldSingleSelectValue | ProjectV2ItemFieldTextValue | ProjectV2ItemFieldUserValue | ProjectV2ItemIssueFieldValue
+
+type ProjectV2ItemFieldSingleSelectValue implements Node {
+  name: String
+  optionId: String
+}
+
+type ProjectV2ItemFieldTextValue implements Node {
+  text: String
+}
+
+union ProjectV2FieldConfiguration = ProjectV2Field | ProjectV2IterationField | ProjectV2MultiSelectField | ProjectV2SingleSelectField
+
+type ProjectV2FieldConfigurationConnection {
+  nodes: [ProjectV2FieldConfiguration]
+}
+
+type ProjectV2Field implements Node {
+  createdAt: DateTime!
+  dataType: ProjectV2FieldType!
+  databaseId: Int
+  id: ID!
+  isIssueField: Boolean!
+  issueField: IssueFields
+  name: String!
+  project: ProjectV2!
+  updatedAt: DateTime!
+}
+
+type ProjectV2SingleSelectField implements Node {
+  createdAt: DateTime!
+  dataType: ProjectV2FieldType!
+  databaseId: Int
+  id: ID!
+  isIssueField: Boolean!
+  issueField: IssueFields
+  name: String!
+  options( names: [String!] ): [ProjectV2SingleSelectFieldOption!]!
+  project: ProjectV2!
+  updatedAt: DateTime!
+}
+
+type ProjectV2SingleSelectFieldOption {
+  color: ProjectV2SingleSelectFieldOptionColor!
+  description: String!
+  id: String!
+  name: String!
+}
+
+enum ProjectV2FieldType {
+  ASSIGNEES
+  CLOSED
+  CREATED
+  DATE
+  ISSUE_TYPE
+  ITERATION
+  LABELS
+  LINKED_PULL_REQUESTS
+  MILESTONE
+  MULTI_SELECT
+  NUMBER
+  PARENT_ISSUE
+  REPOSITORY
+  REVIEWERS
+  SINGLE_SELECT
+  SUB_ISSUES_PROGRESS
+  TEXT
+  TITLE
+  TRACKED_BY
+  TRACKS
+  UPDATED
+}
+
+type ProjectV2IterationField implements Node {
+  id: ID!
+  name: String!
+}
+
+type ProjectV2MultiSelectField implements Node {
+  id: ID!
+  name: String!
+}
+
+type ProjectV2Workflow implements Node {
+  enabled: Boolean!
+  id: ID!
+  name: String!
+  number: Int!
+}
+
+type ProjectV2WorkflowConnection {
+  nodes: [ProjectV2Workflow]
+}
+
+type ProjectV2View implements Node {
+  filter: String
+  id: ID!
+  layout: ProjectV2ViewLayout!
+  name: String!
+  number: Int!
+}
+
+type ProjectV2ViewConnection {
+  nodes: [ProjectV2View]
+}
+
+enum ProjectV2ViewLayout {
+  BOARD_LAYOUT
+  ROADMAP_LAYOUT
+  TABLE_LAYOUT
+}
+
+input CreateProjectV2Input {
+  clientMutationId: String
+  ownerId: ID!
+  repositoryId: ID
+  teamId: ID
+  title: String!
+}
+
+type CreateProjectV2Payload {
+  clientMutationId: String
+  projectV2: ProjectV2
+}
+
+input UpdateProjectV2Input {
+  clientMutationId: String
+  closed: Boolean
+  projectId: ID!
+  public: Boolean
+  readme: String
+  shortDescription: String
+  title: String
+}
+
+type UpdateProjectV2Payload {
+  clientMutationId: String
+  projectV2: ProjectV2
+}
+
+input CreateProjectV2FieldInput {
+  clientMutationId: String
+  dataType: ProjectV2CustomFieldType!
+  iterationConfiguration: ProjectV2IterationFieldConfigurationInput
+  multiSelectOptions: [ProjectV2MultiSelectFieldOptionInput!]
+  name: String!
+  projectId: ID!
+  singleSelectOptions: [ProjectV2SingleSelectFieldOptionInput!]
+}
+
+type CreateProjectV2FieldPayload {
+  clientMutationId: String
+  projectV2Field: ProjectV2FieldConfiguration
+}
+
+input UpdateProjectV2FieldInput {
+  clientMutationId: String
+  fieldId: ID!
+  iterationConfiguration: ProjectV2IterationFieldConfigurationInput
+  multiSelectOptions: [ProjectV2MultiSelectFieldOptionInput!]
+  name: String
+  singleSelectOptions: [ProjectV2SingleSelectFieldOptionInput!]
+}
+
+type UpdateProjectV2FieldPayload {
+  clientMutationId: String
+  projectV2Field: ProjectV2FieldConfiguration
+}
+
+input LinkProjectV2ToRepositoryInput {
+  clientMutationId: String
+  projectId: ID!
+  repositoryId: ID!
+}
+
+type LinkProjectV2ToRepositoryPayload {
+  clientMutationId: String
+  repository: Repository
+}
+
+input CreateProjectV2ViewInput {
+  clientMutationId: String
+  configuration: ProjectV2ViewConfigurationInput
+  layout: ProjectV2ViewLayout!
+  name: String!
+  projectId: ID!
+}
+
+type CreateProjectV2ViewPayload {
+  clientMutationId: String
+  projectV2View: ProjectV2View
+}
+
+input UpdateProjectV2ViewInput {
+  clientMutationId: String
+  configuration: ProjectV2ViewConfigurationInput
+  filter: String
+  layout: ProjectV2ViewLayout
+  name: String
+  viewId: ID!
+}
+
+type UpdateProjectV2ViewPayload {
+  clientMutationId: String
+  projectV2View: ProjectV2View
+}
+
+input ProjectV2ViewConfigurationInput {
+  visibleFieldIds: [ID!]
+}
+
+input AddProjectV2ItemByIdInput {
+  clientMutationId: String
+  contentId: ID!
+  projectId: ID!
+}
+
+type AddProjectV2ItemByIdPayload {
+  clientMutationId: String
+  item: ProjectV2Item
+}
+
+input UpdateProjectV2ItemFieldValueInput {
+  clientMutationId: String
+  fieldId: ID!
+  itemId: ID!
+  projectId: ID!
+  value: ProjectV2FieldValue!
+}
+
+type UpdateProjectV2ItemFieldValuePayload {
+  clientMutationId: String
+  projectV2Item: ProjectV2Item
+}
+
+input ProjectV2FieldValue {
+  date: Date
+  iterationId: String
+  multiSelectOptionIds: [String!]
+  number: Float
+  singleSelectOptionId: String
+  text: String
+}
+
+input AddSubIssueInput {
+  clientMutationId: String
+  issueId: ID!
+  replaceParent: Boolean
+  subIssueId: ID
+  subIssueUrl: String
+}
+
+type AddSubIssuePayload {
+  clientMutationId: String
+  issue: Issue
+  subIssue: Issue
+}
+
+input RemoveSubIssueInput {
+  clientMutationId: String
+  issueId: ID!
+  subIssueId: ID!
+}
+
+type RemoveSubIssuePayload {
+  clientMutationId: String
+  issue: Issue
+  subIssue: Issue
+}
+
+enum ProjectV2CustomFieldType {
+  DATE
+  ITERATION
+  MULTI_SELECT
+  NUMBER
+  SINGLE_SELECT
+  TEXT
+}
+
+enum ProjectV2SingleSelectFieldOptionColor {
+  BLUE
+  GRAY
+  GREEN
+  ORANGE
+  PINK
+  PURPLE
+  RED
+  YELLOW
+}
+
+input ProjectV2SingleSelectFieldOptionInput {
+  color: ProjectV2SingleSelectFieldOptionColor!
+  description: String!
+  id: String
+  name: String!
+}
+
+enum ProjectV2ItemArchivedState {
+  ARCHIVED
+  NOT_ARCHIVED
+}
+
+enum IssueState {
+  CLOSED
+  OPEN
+}
+
+enum IssueStateReason {
+  COMPLETED
+  DUPLICATE
+  NOT_PLANNED
+  REOPENED
 }
 
 type IssueCommentConnection {
@@ -46,3 +517,4 @@ type UserContentEdit {
 interface Actor {
   login: String!
 }
+
