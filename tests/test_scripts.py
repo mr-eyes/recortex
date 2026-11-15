@@ -6512,6 +6512,21 @@ class MindModelTests(MindSandbox):
         self.assertIn("mind of example-org/tinycsv: 2000 memories told in 2 threads, 1 word, 0 open thoughts; not "
                       "told: 0 by other accounts, 0 edited, 100 older", self.tool("index.py", "query", "mind").stdout)
 
+    def test_a_long_field_is_cut_at_a_line_break_and_its_table_loses_whole_rows(self):
+        rows = "\n".join("| run number %d of the benchmark | 1.84 s | 5 runs |" % n for n in range(60))
+        self.put(9120, 5, memory_draft("result", "2026-03-20T10:00-08:00", rest="**What ran:** The runs.\n\n"
+                                       "**Numbers:**\n\n| Run | Time | Of |\n|---|---|---|\n%s\n\n"
+                                       "**Not established:** Windows." % rows))
+        self.ready()
+        numbers = [f for f in self.told(self.model())[9120]["fields"] if f["label"] == "Numbers"][0]
+        self.assertTrue(numbers["doc"]["cut"])
+        blocks = numbers["doc"]["blocks"]
+        self.assertEqual(["table"], [list(block)[0] for block in blocks])  # no half row left over as a line of text
+        table = blocks[0]["table"]
+        self.assertGreater(len(table["rows"]), 20)
+        self.assertEqual([["1.84 s"]] * len(table["rows"]), [[row[1][0]["t"]] for row in table["rows"]])
+        self.assertEqual({3}, {len(row) for row in table["rows"]})
+
     def test_the_model_is_the_same_after_sync_rebuild_and_step_by_step(self):
         def settled(model):
             return json.dumps(dict(model, built=None), sort_keys=True)

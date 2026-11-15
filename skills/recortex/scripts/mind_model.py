@@ -513,10 +513,13 @@ class Build:
     def doc(self, text, seen, cap=CAP_FIELD):
         """Record text as blocks: paragraphs at blank lines, a list for lines that start with "- ", a quotation for
         lines that start with ">", a table for a Markdown table; a line that is only an image is left out. Cut at
-        `cap` characters, and then "cut" is true."""
+        its last line break before `cap` characters, else at `cap`, so that a table loses whole rows; then "cut" is
+        true."""
         text = clean(text).strip("\n")
         cut = len(text) > cap
-        text = text[:cap]
+        if cut:
+            text = text[:cap]
+            text = text[:text.rindex("\n")] if "\n" in text else text
         lines, blocks, paragraph, i = text.split("\n"), [], [], 0
         inline = self.runs
 
