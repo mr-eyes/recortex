@@ -93,7 +93,7 @@ Every event comment starts with a machine-readable marker line, then its heading
 
 The heading keeps the comment list of an issue readable as a timeline; the marker gives the type and the time with its offset, so the index and `compile.py` can order every event of the project exactly. Both carry the same local date and time, and the linter checks that they agree. The comment that keeps a former body during a conversion carries `type=record`. Resume comments keep their own heading first and have no marker, because the trust check reads that heading. A merged change is recorded as a result comment whose "What ran" names the pull request and commit.
 
-Comments are append-only. They are the history: results, decisions with the decider's exact words, failures, corrections. The decision record lives only in decision comments. Nobody rewrites them, and none of them is deliverable text.
+Comments are append-only. They are the history: results, decisions with the decider's exact words, failures, corrections. The decision record lives only in decision comments. Nobody rewrites them, and none of them is deliverable text. A memory edited on GitHub after it was posted is no longer told (in `query recall` and on the mind page) and no new memory may link to it; post a correction instead ([mind.md](mind.md), "Edited memories").
 
 A memory is written in a fixed order: marker, heading, the plain line, the kind's fields, `**Evidence:**` when there is something to show, then the folds, then nothing. A memory recorded before 0.6.0 has no plain line and no links; it stays as it is.
 

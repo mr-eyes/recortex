@@ -71,3 +71,9 @@ From 0.6.0 a memory starts with a line in plain words, may link to earlier memor
 | Hook payloads | The same: no payload reads the text of a comment other than the hub's checked resume block |
 
 What an older version cannot do: write an idea or a question, have links, Evidence or folds checked, or run `index.py query recall`. A memory written by an older version has no plain line, and `query recall` shows its title in its place. When an older version synced last, `query recall` of 0.6.0 says "the index was last written by an older version of the plugin, or never by this one; run index.py sync", and one `index.py sync` of 0.6.0 brings it back.
+
+## From 0.7.0
+
+0.7.0 adds the mind page: `mind.py` builds one private local file that tells the project's memory in sentences, beside the index ([mind.md](mind.md)). Nothing in the index changes: no table, column, trigger or meta key is added, and 0.4.x, 0.5.0 and 0.6.0 sync, rebuild and print their briefs on the same index as before and ignore the page. The hook payloads are the same.
+
+What changes for a memory edited on GitHub after it was posted (GitHub's `updated_at` differs from its `created_at`): when the repository is in your trusted list, `index.py query recall` of 0.7.0 no longer lists it, its links no longer count, its folds no longer explain a word or a thread, and the linter refuses a new link to it. `recall` closes with one line that says how many memories it left out for that reason. 0.6.0 on the same index keeps listing it.

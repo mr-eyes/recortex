@@ -1,6 +1,6 @@
 ---
 name: recortex
-description: Keeps a project's record in GitHub issues (formerly gh-issues-manager) - one pinned hub issue, one topic issue per part of the deliverable whose body is the deliverable's current text for that part, and dated comments for results, decisions and failures. Use in a project that has a .recortex.json file (or .gh-issues-manager.json, the name before the rename) or a pinned hub issue, when recording a result, decision, failure or merged change, when resuming a session or recovering after context compaction, when triaging an issue someone opened by hand, when posting a resume block, and when compiling a paper, release or report from the record. Also use when the user asks to set up such a record (a short wizard of questions), to catch up a project that already has months of work, or to migrate an older issue tracker.
+description: Keeps a project's record in GitHub issues (formerly gh-issues-manager) - one pinned hub issue, one topic issue per part of the deliverable whose body is the deliverable's current text for that part, and dated comments for results, decisions and failures. Use in a project that has a .recortex.json file (or .gh-issues-manager.json, the name before the rename) or a pinned hub issue, when recording a result, decision, failure or merged change, when resuming a session or recovering after context compaction, when triaging an issue someone opened by hand, when posting a resume block, when compiling a paper, release or report from the record, and when the user asks to see or browse the project's memory as a page. Also use when the user asks to set up such a record (a short wizard of questions), to catch up a project that already has months of work, or to migrate an older issue tracker.
 ---
 
 # GitHub issues as the project record
@@ -120,6 +120,10 @@ When the plugin arrives in a project with months of work, or after a stretch wit
 
 The plugin's agents work one tier below the main session, which stays the only writer to GitHub: `record-drafter` drafts bodies in batches of about four issues to files only; `record-reviewer` reviews drafts (read-only by instruction), per batch and across all bodies; `record-auditor` checks the record for drift, untriaged issues and new deliverable signals at the end of a stretch, before a release or before compiling. Batch workflow: [references/migration.md](references/migration.md); audit: [references/session-protocol.md](references/session-protocol.md).
 
+### Show the mind page
+
+When the user asks to see, browse or open the project's memory, its history or "the mind": run `python3 ${CLAUDE_SKILL_DIR}/scripts/index.py sync`, then `python3 ${CLAUDE_SKILL_DIR}/scripts/mind.py --open`, and give the user the address it prints. The page is for a person. Do not read `mind.html` yourself: to answer a question about the history, use `index.py query recall`, `query timeline` and the issues. What the page shows and leaves out: [references/mind.md](references/mind.md).
+
 ### Migrate an older tracker
 
 Snapshot the old tracker, map every old issue and pull request to a new topic, copy content into new issues (deliverable text in the bodies, history in comments), and post at most short pointer comments in the old tracker. Never edit or delete old issues. To convert record bodies of an older form into deliverable text in the same repository, draft each from the full record, list what moved out and why, review, check consistency across all bodies, then run `scripts/convert_body.py`, which keeps the former body as a comment. See [references/migration.md](references/migration.md).
@@ -153,7 +157,8 @@ Why each rule exists, with the Mermaid and GitHub limits: [references/pitfalls.m
 | `convert_body.py` | Replace a record body of an older form with deliverable text: live-body check, the former body kept as a comment, body and labels replaced and read back | yes, `--dry-run` available |
 | `resume_block.py` | `show` prints the newest resume comment by an allowed account, for trusted repositories only; `update` posts a new resume comment and reads it back | `update` only, `--dry-run` available |
 | `snapshot.py` | Save all issues and comments as local Markdown with an index | no |
-| `index.py` | Local SQLite index of the record: `sync` from GitHub; `query` consistency, impact, recall (what a new memory could link to), timeline, triage, brief | no (reads) |
+| `index.py` | Local SQLite index of the record: `sync` from GitHub; `query` consistency, impact, recall (what a new memory could link to), mind, timeline, triage, brief | no (reads) |
+| `mind.py` | The mind page: one private local file that tells the project's memory in sentences | no |
 | `hooks.py`, `run_hook.sh` | The four hooks: SessionStart, SubagentStart, UserPromptSubmit, PreCompact; `hooks.py --print` shows the payloads | no |
 | `setup.py` | `detect` suggests deliverables from file names (read-only); `apply` makes the setup from confirmed answers | `apply` only, `--dry-run` available |
 | `catchup.py` | `inventory` and `gap` list earlier work (read-only); `event` drafts a reconstructed event comment | no |

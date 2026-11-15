@@ -117,6 +117,15 @@ Topic bodies that hold a full record (a dated current state, folded old text, de
 Before a new memory is written, `index.py query recall --issue N` shows the newest memories of its thread with their state, the open questions and untried ideas elsewhere, and the words the project has explained. The session writes the plain line first, links the memory to the earlier one it builds on when that link is true, and explains in a fold at its end any word that cannot be understood without the project. The linter checks the plain line, the links and their targets, the Evidence lines and the folds before anything is posted, and the post prints the new memory's id for the next link.
 4. **Stop.** The session posts a checkpoint on each active issue and a new resume comment on the hub.
 
+## The mind page
+
+Ask "show me the mind of this project" and the session builds one page that tells the record's memory in sentences: where things stand, how each thread got there, what went wrong and what it led to, what is settled and what is still open. It is a private local file beside the index, built from the index alone, and it never changes the record. It tells only what your allowed accounts wrote and nobody changed afterwards, and its last lines count what it leaves out. Details: [`references/mind.md`](skills/recortex/references/mind.md).
+
+```bash
+python3 skills/recortex/scripts/index.py sync
+python3 skills/recortex/scripts/mind.py --open
+```
+
 ## What survives compaction, and why
 
 Compaction replaces a long conversation with a summary. Summaries drop detail and sometimes get numbers and decisions wrong, so this skill never treats one as a source.
@@ -165,7 +174,8 @@ All are in `skills/recortex/scripts/`, use only the Python standard library and 
 | `convert_body.py` | Converts a record body of an older form into deliverable text: stops if the live body changed, keeps the former body as a comment, replaces the body and section labels, reads all back | yes |
 | `resume_block.py` | `show` prints the newest resume comment written by an allowed account, for trusted repositories only. `update` posts a new resume comment on the hub and reads it back; it never edits the hub or an earlier comment, and warns when the posting login is not allowed | `update` only |
 | `snapshot.py` | Saves all issues, pull requests and comments as local Markdown with an index, for offline reading and for surveying an old tracker | no |
-| `index.py` | Keeps the local index of the record: `sync` reads what changed on GitHub; `query` answers consistency, impact, recall, timeline, triage and brief questions without network | no |
+| `index.py` | Keeps the local index of the record: `sync` reads what changed on GitHub; `query` answers consistency, impact, recall, mind, timeline, triage and brief questions without network | no |
+| `mind.py` | Builds the mind page: one private local file that tells the project's memory in sentences, from the index | no |
 | `hooks.py`, `run_hook.sh`, `session_start_hook.sh` | The four hooks; `hooks.py --print` shows their payloads | no |
 | `setup.py` | `detect` suggests deliverables from file names; `apply` makes the setup from answers you confirmed | `apply` |
 | `catchup.py` | Lists earlier work and work done since the newest recorded event; drafts reconstructed event comments | no |
@@ -206,6 +216,8 @@ The hooks deserve extra care because they put tracker text into context without 
 The trust boundary is your allowed list, not write access to the repository. Anyone who can comment can post something that looks like a resume comment, and anyone with write access (collaborators, GitHub Apps, Actions workflows, tokens with `issues: write`) can edit comments, but a comment by a non-allowed author is ignored and so is any comment that was edited after posting. Because each resume block is a single, unedited comment, the check covers everything that is printed, however long the project runs. For the same reason, never edit a resume comment yourself; post a new one. An allowed account can still write anything, so list only accounts you would take project status from, and list a bot if a bot posts the resume comments.
 
 `resume_block.py show` applies the same checks when run by hand. Its `--trust-once` and `--allow-any-author` flags are deliberate overrides for the user and are refused in hook mode.
+
+The mind page follows the same boundary. It is built only for a trusted repository and tells only memories that an allowed account wrote and nobody edited, topic text that only allowed accounts wrote or edited, and titles that only allowed accounts set; everything else is counted, not shown. The file is inert: one fixed style and one fixed script allowed by their hashes in a Content-Security-Policy that loads nothing else, record text only ever as text, never as markup, an attribute or an address, and every link out an address on GitHub built from checked parts. No hook builds, reads or mentions it, and the session never reads it. The page of a private repository holds private text; do not copy it anywhere shared.
 
 ## Worked example
 
@@ -261,6 +273,7 @@ skills/recortex/
   templates/              hub, topic body, active task, comments, snippets
   profiles/               label sets per project type
   scripts/                the helpers
+  page/                   the fixed style and script of the mind page
 examples/tinycsv/         invented example project
 tests/                    offline tests with a local stand-in for gh
 ```
