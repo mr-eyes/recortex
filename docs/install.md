@@ -1,0 +1,63 @@
+# Install and upgrade
+
+How to install the plugin, which repositories it may print from, how to use it as a plain skill and how to move from the plugin's earlier name.
+
+## Requirements
+
+- Claude Code
+- The GitHub CLI `gh`, authenticated (`gh auth status`)
+- Python 3.8 or newer and bash; no other packages
+
+## Install
+
+### As a plugin (includes the session hook)
+
+```bash
+claude plugin marketplace add mr-eyes/recortex
+claude plugin install recortex@mr-eyes-skills
+```
+
+The skill is then available as `/recortex:recortex`, and Claude loads it on its own when a task matches. The plugin's hooks are registered for every project but print nothing until you trust a repository (next section). The same trust list governs `resume_block.py show`.
+
+### Trust the repositories whose record the hooks may print
+
+The hook puts text from a GitHub issue into every session, so it is off until you opt in, per repository, in a file that belongs to you and not to any project:
+
+```bash
+mkdir -p ~/.config/recortex
+echo "your-name/your-project" >> ~/.config/recortex/trusted-repos
+```
+
+Each line is `owner/name`, optionally followed by GitHub logins whose resume comments you accept besides the repository owner's:
+
+```text
+# owner/name   extra allowed logins
+your-name/your-project
+your-lab/shared-project   your-name   a-colleague
+```
+
+A name is read only in GitHub's form, in ASCII: an owner of 1 to 39 letters, digits, `-` or `_` that starts with a letter or digit, and a name of 1 to 100 letters, digits, `.`, `-` or `_` other than `.` and `..`; a line in another form is ignored.
+
+For a repository owned by an organization, list the people who post the resume comments, because the owner is then not a person. `RECORTEX_TRUSTED_REPOS` (comma-separated `owner/name`) does the same for one shell. See [Safety and security](security.md) for what this protects against.
+
+### As a plain skill
+
+```bash
+git clone https://github.com/mr-eyes/recortex
+cp -r recortex/skills/recortex ~/.claude/skills/
+```
+
+Use `<project>/.claude/skills/` in place of `~/.claude/skills/` to install it for one project only. The skill is then available as `/recortex`. The hook is optional in this mode; to add it, see [the hooks](reference.md#the-hooks-and-the-claudemd-snippet).
+
+## Upgrading from gh-issues-manager
+
+The plugin was named gh-issues-manager before version 0.5.0. To move an installed copy to the new name, run both commands, one after the other; between them the plugin is not loaded:
+
+```bash
+claude plugin marketplace update mr-eyes-skills
+claude plugin install recortex@mr-eyes-skills
+```
+
+Then start a new session. If the brief and the skill stopped appearing without your doing anything, the marketplace was updated for you. `claude plugin list` may still show gh-issues-manager as enabled, but `claude plugin update gh-issues-manager@mr-eyes-skills` fails with "not found"; the second command brings it back. Add `--scope project` or `--scope local` if that is how you installed it. Disable or remove any other copy of the plugin (a folder install, for example), or every session gets two briefs.
+
+Nothing else is needed. The configuration file `.gh-issues-manager.json`, the folders `~/.cache/gh-issues-manager` and `~/.local/state/gh-issues-manager`, the trusted list `~/.config/gh-issues-manager/trusted-repos`, the `GHIM_*` variables, an installed `ghim-triage.yml` workflow and everything on GitHub keep working as they are. Edit by hand what names the plugin's parts: the agent prefix (`recortex:record-auditor`) and the skill name in permission rules, your own agents and a project's CLAUDE.md snippet, and the folder and hook paths of a folder install. Rename the configuration file to `.recortex.json` only once everyone on the project has 0.5.0 or later. Optionally, with no session running and no copy of 0.4.x left on the machine, delete `~/.cache/gh-issues-manager` and move `~/.local/state/gh-issues-manager` to `~/.local/state/recortex`. The earlier names are read for at least twelve months, and `hooks.py --doctor` lists the ones in use. Details: [references/upgrading.md](../skills/recortex/references/upgrading.md).

@@ -1,0 +1,48 @@
+# How the record works
+
+What lives in GitHub, what a session does with it, and what comes back after a compaction.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/how-it-works-dark.svg">
+  <img src="../assets/how-it-works-light.svg" alt="A session writes memories to GitHub issues. The record gives back a brief at every session start, the mind page, the finished text and a board.">
+</picture>
+
+## What it sets up
+
+| Piece | What it is |
+|---|---|
+| Hub issue | One pinned issue that is the entry point. It states the deliverable-text rule and holds the project statement, a Mermaid map, the issues of each deliverable section in order, the active issues, the pull requests, the labels and the recording rules. It repeats no numbers from the bodies |
+| Resume comments | The short "Resume block" (current focus, active issues, last decisions, next actions, holds) is posted as a new comment on the hub at the end of every working stretch. The newest one is what a fresh session reads first; older ones stay as history |
+| Topic issues | One issue per topic, labeled `final-record`. Its body is the deliverable's text for the sections it feeds (for a paper, for example `## Methods` and `## Results`), the current version only and ready to copy, followed by the sources of its numbers. Section labels such as `ms:methods` follow the body's headings |
+| Event comments | Dated comments on the topic issue, written from templates: the memories of the project. Seven kinds: result, decision, failure, checkpoint, correction, idea and question. Each starts with one line in plain words and may name the earlier memories it follows from, replaces, was done instead of or tests. They are the history and never deliverable text |
+| Active tasks | Issues labeled `active` for work in development and open questions; each names the topic its result goes to and carries no section label |
+| Labels | Role labels, deliverable-section labels per project type, and topic labels |
+
+When what the deliverable says changes, the topic's body is edited in place; the dated comment that caused the change and GitHub's edit history are the trail. A result that leaves the deliverable leaves the body, and its section label comes off. Posted comments are never rewritten.
+
+
+
+## The daily loop
+
+1. **Start.** The session reads the newest resume comment on the hub, then the open `active` issues, then the newest comments of the topics in play. With the hook this begins automatically.
+2. **Work.** When an experiment finishes, a decision is made, something fails or a change is merged, the session drafts a comment from the matching template, checks every number against its source file, lints the draft and posts it. The script reads the comment back from GitHub and compares it with the draft.
+3. **The deliverable text changes.** The topic's body is edited in place and its section labels follow its headings; the comment that caused the change is the record of why.
+4. **Stop.** The session posts a checkpoint on each active issue and a new resume comment on the hub.
+
+Before a new memory is written, `index.py query recall --issue N` shows the newest memories of its thread with their state, the open questions and untried ideas elsewhere, and the words the project has explained. The session writes the plain line first, links the memory to the earlier one it builds on when that link is true, and explains in a fold at its end any word that cannot be understood without the project. The linter checks the plain line, the links and their targets, the Evidence lines and the folds before anything is posted, and the post prints the new memory's id for the next link.
+
+## What survives compaction, and why
+
+Compaction replaces a long conversation with a summary. Summaries drop detail and sometimes get numbers and decisions wrong, so this skill never treats one as a source.
+
+| What | Where it lives | How it comes back |
+|---|---|---|
+| Current focus, active issues, last decisions, next actions, holds | The newest resume comment on the hub by an allowed account | Printed into context in the record brief after every compaction, or read with `resume_block.py show` |
+| Where the record is, the topics by section, active issues, issues that need triage | The hub and the issue labels, copied into a local index | The record brief at session start; a short brief in every subagent; a one-line reminder on prompts when it changed |
+| Results, decisions and failures not yet posted | The conversation | The PreCompact hook tells the compaction summary to keep them, with enough detail to post them |
+| Work in flight | Checkpoint comments on `active` issues | Read in step 2 of the session protocol |
+| Results, decisions, failures | Dated comments on topic issues | Read on demand; nothing depends on remembering them |
+| What the deliverable says now, with its numbers | The bodies of the topic issues, each number with its source | Read before acting or writing |
+| The rules themselves | The skill, and optionally the project's CLAUDE.md | Loaded by Claude Code |
+
+The resume block is small on purpose (under 4,000 characters) and a new one is posted at the end of every working stretch, so the first thing a blank session reads is short, current and written for exactly that reader. Posting it as a comment, never as an edit, also keeps a history of where the project stood at each stop.

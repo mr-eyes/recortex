@@ -9069,6 +9069,111 @@ class DocsRecordTests(Sandbox):
         self.assertNotIn("tinycsv", text.lower())
 
 
+def github_slug(heading):
+    """The anchor GitHub gives a heading: lower case, punctuation dropped, spaces to hyphens."""
+    return re.sub(r"[^a-z0-9 _-]", "", heading.strip().lower()).replace(" ", "-")
+
+
+class DocsTests(unittest.TestCase):
+    """The README and the five pages in docs/: size, links, pictures, names and the files they bring."""
+
+    PAGES = ("how-it-works.md", "install.md", "existing-work.md", "security.md", "reference.md")
+
+    def files(self):
+        return ["README.md"] + [os.path.join("docs", name) for name in self.PAGES]
+
+    def text(self, path):
+        return recortex.read_text(os.path.join(ROOT, path))
+
+    def test_the_docs_are_the_five_pages_and_the_pictures_folder(self):
+        self.assertEqual(sorted(self.PAGES + ("pictures",)), sorted(os.listdir(os.path.join(ROOT, "docs"))))
+        for name in self.PAGES:
+            first = [line for line in self.text(os.path.join("docs", name)).split("\n")[1:] if line.strip()][0]
+            self.assertFalse(first.startswith(("#", "|", "-", "`")), name)  # opens with one sentence on its purpose
+
+    def test_the_readme_is_short(self):
+        text = self.text("README.md")
+        self.assertLess(len(text.split()), 1000)
+        self.assertIn("Project memory that survives every session.", text)
+        self.assertNotIn("**", text)  # no bold in the README
+
+    def test_every_relative_link_and_picture_resolves(self):
+        found = 0
+        for path in self.files():
+            text = self.text(path)
+            folder = os.path.dirname(os.path.join(ROOT, path))
+            targets = re.findall(r"\]\(([^)\s]+)\)", text) + re.findall(r'(?:src|srcset|href)="([^"]+)"', text)
+            for target in targets:
+                if re.match(r"[a-z][a-z0-9+.-]*:", target):
+                    continue
+                name, _, anchor = target.partition("#")
+                full = os.path.normpath(os.path.join(folder, name)) if name else os.path.join(ROOT, path)
+                self.assertTrue(os.path.exists(full), "%s links to %s" % (path, target))
+                self.assertTrue(full.startswith(ROOT), "%s leaves the repository: %s" % (path, target))
+                found += 1
+                if anchor and full.endswith(".md"):
+                    slugs = {github_slug(line.lstrip("#")) for line in recortex.read_text(full).split("\n")
+                             if line.startswith("#")}
+                    self.assertIn(anchor, slugs, "%s links to %s" % (path, target))
+        self.assertGreater(found, 25)
+
+    def test_every_picture_has_a_light_and_a_dark_file_and_a_description(self):
+        for path in self.files():
+            text = self.text(path)
+            for block in re.findall(r"<picture>(.*?)</picture>", text, re.S):
+                dark = re.search(r'<source media="\(prefers-color-scheme: dark\)" srcset="([^"]+)"', block).group(1)
+                light = re.search(r'<img src="([^"]+)" alt="([^"]+)"', block)
+                self.assertTrue(light.group(2).strip(), path)
+                self.assertNotEqual(dark, light.group(1))
+                self.assertEqual(os.path.basename(light.group(1)).replace("light", "dark").replace(
+                    "recortex-lockup.svg", "recortex-lockup-reversed.svg"), os.path.basename(dark), path)
+            self.assertNotIn("![", text, path)  # a picture is a <picture>, so that dark mode has its own file
+
+    def test_the_assets_folder_is_small_and_every_file_is_used(self):
+        assets = os.path.join(ROOT, "assets")
+        used = set()
+        for path in self.files():
+            used.update(os.path.basename(t) for t in re.findall(r'(?:src|srcset)="[^"]*assets/([^"]+)"', self.text(path)))
+        self.assertEqual(sorted(used), sorted(os.listdir(assets)))
+        sizes = {name: os.path.getsize(os.path.join(assets, name)) for name in os.listdir(assets)}
+        self.assertLess(sum(sizes.values()), 600 * 1024, sizes)
+        for name, size in sizes.items():
+            self.assertLess(size, 300 * 1024 if name.endswith(".png") else 40 * 1024, name)
+
+    def test_the_docs_name_no_example_and_no_earlier_name_outside_the_install_page(self):
+        earlier = re.compile(r"gh[-_ ]?issues[-_ ]?manager|ghim|tinycsv", re.I)
+        for folder, dirs, files in os.walk(ROOT):
+            dirs[:] = [d for d in dirs if d not in (".git", ".tmp", "__pycache__")]
+            relative = os.path.relpath(folder, ROOT).replace(os.sep, "/")
+            if relative.split("/")[0] not in ("docs", "assets") and relative != ".":
+                continue
+            for name in files:
+                path = ("" if relative == "." else relative + "/") + name
+                if relative == "." and name != "README.md":
+                    continue
+                if path == "docs/install.md" or name.endswith(".png"):
+                    continue  # the upgrade section keeps the earlier names; the stray-name test limits it to that section
+                text = self.text(path)
+                if path.startswith("docs/pictures/record/"):
+                    text = re.sub(r"ghim:(?:event|resume:start|resume:end)", "", text)  # the record format
+                self.assertIsNone(earlier.search(text), path)
+
+    def test_the_docs_point_at_this_repository_and_the_invented_one_only(self):
+        found = set()
+        for path in self.files() + ["docs/pictures/record/chain/3-decision.md", "docs/pictures/record/manifest.json"]:
+            found.update(re.findall(r"github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", self.text(path)))
+        self.assertEqual({"mr-eyes/recortex", "octo-org/sample-project"}, found)
+        for path in self.files():
+            self.assertNotIn("example-org", self.text(path), path)
+
+    def test_the_story_in_the_readme_is_the_story_the_record_tells(self):
+        text = self.text("README.md")
+        quoted = " ".join(line[2:].strip() for line in text.split("\n") if line.startswith("> "))
+        for sentence in STORY:
+            self.assertIn(sentence, quoted)
+        self.assertIn("Still open.", quoted)
+
+
 class PackagingTests(unittest.TestCase):
     def read_json(self, *parts):
         return json.loads(recortex.read_text(os.path.join(ROOT, *parts)))
@@ -9132,7 +9237,7 @@ class PackagingTests(unittest.TestCase):
             "skills/recortex/scripts/run_hook.sh": where(lambda line: "GHIM_HOOK_TIMEOUT" in line),
             ".claude-plugin/marketplace.json": where(lambda line: line.strip() == '"gh-issues-manager": "recortex"'),
             "skills/recortex/SKILL.md": where(lambda line: line.startswith("description: ")),
-            "README.md": upgrade_section,
+            "docs/install.md": upgrade_section,
             "CONTRIBUTING.md": where(lambda line: "names.py" in line),
             "skills/recortex/references/templates.md": where(lambda line: "The marker prefix `ghim:` predates" in line),
         }
@@ -9142,6 +9247,8 @@ class PackagingTests(unittest.TestCase):
             for name in files:
                 path = os.path.relpath(os.path.join(folder, name), ROOT).replace(os.sep, "/")
                 self.assertIsNone(earlier.search(path), path)  # no path keeps an earlier name
+                if name.endswith(".png"):
+                    continue  # a picture holds no words; the docs test looks at what is drawn in the pictures' SVG files
                 lines = recortex.read_text(os.path.join(ROOT, path)).split("\n")
                 keep = allowed[path](lines) if path in allowed else set()
                 for number, line in enumerate(lines):
@@ -9206,7 +9313,7 @@ class PackagingTests(unittest.TestCase):
         self.assertTrue(os.access(script, os.X_OK))
         snippet = json.loads(recortex.read_text(os.path.join(TEMPLATES, "settings-hook-snippet.json")))
         self.assertEqual("startup|resume|clear|compact|fork", snippet["hooks"]["SessionStart"][0]["matcher"])
-        for name in ("README.md", os.path.join(SKILL, "references", "session-protocol.md")):
+        for name in (os.path.join("docs", "reference.md"), os.path.join(SKILL, "references", "session-protocol.md")):
             self.assertNotIn("`startup`, `resume` and `compact`", recortex.read_text(os.path.join(ROOT, name)))
 
     def test_skill_file(self):
@@ -9232,6 +9339,8 @@ class PackagingTests(unittest.TestCase):
             dirs[:] = [d for d in dirs if d not in (".git", ".tmp", "__pycache__")]
             for name in files:
                 path = os.path.join(folder, name)
+                if name.endswith(".png"):
+                    continue  # a picture holds no words
                 text = recortex.read_text(path)
                 if os.path.abspath(path) != os.path.abspath(__file__):
                     self.assertIsNone(banned.search(text), path)

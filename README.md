@@ -1,303 +1,112 @@
-# recortex
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/recortex-lockup-reversed.svg">
+    <img src="assets/recortex-lockup.svg" alt="recortex" width="420">
+  </picture>
+</p>
 
-A Claude Code skill that keeps a project's whole record in GitHub issues: what was done, why, what was found, what was decided, what failed and where the files are. The issues are organized so that a new Claude session, or one whose context has been compacted many times, can rebuild the state of the project from GitHub alone, and so that the final paper, release notes or report is assembled from issue bodies that already hold its text.
+<p align="center">Project memory that survives every session.</p>
 
-It works for software development, research and development, scientific prototyping and manuscript preparation, alone or mixed.
+recortex is a Claude Code plugin. It keeps what a project knows in GitHub issues, not in a chat: what was found,
+what was decided and why, what failed, and the current text of the paper, release notes or report. A new session, or
+one whose context was compacted, starts from that record.
 
-## What it does for you
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works-dark.svg">
+  <img src="assets/how-it-works-light.svg" alt="A session writes memories to GitHub issues. The record gives back a brief at every session start, the mind page, the finished text and a board.">
+</picture>
 
-- **The record lifts the context limit.** The project's memory is its GitHub issues, not a conversation. Every session, every resumed or compacted session and every subagent starts with a short brief of where the record is and what is in play, printed by the plugin's hooks from a local index of the issues, and the rules for writing to it. Nothing important lives only in a chat.
-- **The finished work compiles from the issues.** Topic bodies hold the deliverable's current text, section by section; comments hold the dated, typed history. `compile.py` writes the deliverable in the hub's order, the figure, table and source lists, and a complete dated timeline of everything that happened, tagged by the issues' labels.
+## What you get
 
-Setup is a short set of questions; issues people open by hand are flagged for triage; a project that installs the plugin after months of work can catch up.
+- A session that starts where the last one stopped. A short brief of the record opens every session and every subagent.
+- A record you can read on GitHub. One pinned hub, one issue per topic, and a dated memory for each result, decision, failure, idea and question.
+- The mind page. One private local page that tells the memory in sentences: where things stand, how each thread got there, what went wrong, what is settled, what is open.
+- The finished work, compiled. Topic bodies hold the deliverable's current text, so the paper or the release notes are assembled from the issues.
+- Helpers that know your field. A short field sheet tells every subagent what counts as proof in your work and what must never be written down.
+- A board that keeps itself current. Sub-issues and a private GitHub Projects board follow the record; you never drag a card to keep it honest.
 
-## What it sets up
+## Quick start
 
-| Piece | What it is |
+You need Claude Code, the GitHub CLI `gh` (signed in) and Python 3.8 or newer.
+
+1. Install the plugin.
+
+   ```bash
+   claude plugin marketplace add mr-eyes/recortex
+   claude plugin install recortex@mr-eyes-skills
+   ```
+
+2. Trust your repository. The plugin shows a session nothing from GitHub until you do.
+
+   ```bash
+   mkdir -p ~/.config/recortex
+   echo "your-name/your-project" >> ~/.config/recortex/trusted-repos
+   ```
+
+3. Open Claude Code in your project and say: "Set up the record for this project." You answer a few multiple-choice questions and confirm a summary. Nothing is written before that.
+
+4. Work. Memories are posted as things happen. Say "pause here" when you stop, and "show me the mind of this project" when you want to read it back.
+
+Already months into a project? Say "catch up the record". Coming from another tracker? Say "migrate the issues of owner/old-tracker". Both are in [Starting from existing work](docs/existing-work.md).
+
+## A short story
+
+An invented project sorts a box of scanned letters by the date written on each page. This is one of its threads, the way the mind page tells it.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/mind-story-dark.png">
+  <img src="assets/mind-story-light.png" alt="The mind page showing one thread: a decision, an idea that was tried, a failure, the decision it led to, and an open question.">
+</picture>
+
+> On March 4 we decided to put every page with no readable date in an undated pile, and never give it a guessed date.
+>
+> *then*
+>
+> On March 5 we had the idea to give an undated page the date of the pages scanned just before and after it.
+>
+> *we tried it*
+>
+> On March 6, borrowing the date from the pages around it put 4 of 6 test pages in the wrong year.
+>
+> *so*
+>
+> On March 7 we decided to show each undated page to the person and ask for its date, and stop borrowing dates from other pages.
+>
+> *so*
+>
+> On March 10 we asked whether asking still works when a box has a hundred undated pages and not twelve. Still open.
+
+Each sentence is one comment on a GitHub issue. The words between them are links the session recorded: this failure tested that idea, this decision came from that failure. Three weeks later a new session opens, and its first lines are, abridged:
+
+```text
+recortex record brief for your-name/your-project (from the local index, 2 minutes old).
+Open active issues: 1
+- #7 Task: pages that carry two dates
+Current focus: Release 0.3.0. The tool reads handwritten dates; pages that carry two dates are the last open item.
+Holds: Do not tag 0.3.0 until the project owner says so.
+```
+
+Before it writes about the undated pages, it reads that thread: the failure and the decision it caused. It does not try the borrowed dates again. The failure is in the record.
+
+## The board
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/board-dark.svg">
+  <img src="assets/board-light.svg" alt="A board with the columns Todo, In Progress, Waiting for a yes and Done. Each card names its thread and the memory that put it there.">
+</picture>
+
+Optional, chosen at setup, and private. The record decides which column a card is in, and the board is brought up to date at each pause. If you move a card by hand, the session asks you before it changes anything, then records your answer.
+
+## Read more
+
+| If you want to | Read |
 |---|---|
-| Hub issue | One pinned issue that is the entry point. It states the deliverable-text rule and holds the project statement, a Mermaid map, the issues of each deliverable section in order, the active issues, the pull requests, the labels and the recording rules. It repeats no numbers from the bodies |
-| Resume comments | The short "Resume block" (current focus, active issues, last decisions, next actions, holds) is posted as a new comment on the hub at the end of every working stretch. The newest one is what a fresh session reads first; older ones stay as history |
-| Topic issues | One issue per topic, labeled `final-record`. Its body is the deliverable's text for the sections it feeds (for a paper, for example `## Methods` and `## Results`), the current version only and ready to copy, followed by the sources of its numbers. Section labels such as `ms:methods` follow the body's headings |
-| Event comments | Dated comments on the topic issue, written from templates: the memories of the project. Seven kinds: result, decision, failure, checkpoint, correction, idea and question. Each starts with one line in plain words and may name the earlier memories it follows from, replaces, was done instead of or tests. They are the history and never deliverable text |
-| Active tasks | Issues labeled `active` for work in development and open questions; each names the topic its result goes to and carries no section label |
-| Labels | Role labels, deliverable-section labels per project type, and topic labels |
-
-When what the deliverable says changes, the topic's body is edited in place; the dated comment that caused the change and GitHub's edit history are the trail. A result that leaves the deliverable leaves the body, and its section label comes off. Posted comments are never rewritten.
-
-## Who it is for
-
-Anyone who works on a project with Claude Code over weeks or months and does not want the project's memory to live in chat transcripts. It was designed for a researcher who also writes software, and the templates lean toward that: numbers carry denominators and sources, decisions are quoted word for word in comments, and limitations stay in the text.
-
-## Requirements
-
-- Claude Code
-- The GitHub CLI `gh`, authenticated (`gh auth status`)
-- Python 3.8 or newer and bash; no other packages
-
-## Install
-
-### As a plugin (includes the session hook)
-
-```bash
-claude plugin marketplace add mr-eyes/recortex
-claude plugin install recortex@mr-eyes-skills
-```
-
-The skill is then available as `/recortex:recortex`, and Claude loads it on its own when a task matches. The plugin's hooks are registered for every project but print nothing until you trust a repository (next section). The same trust list governs `resume_block.py show`.
-
-### Trust the repositories whose record the hooks may print
-
-The hook puts text from a GitHub issue into every session, so it is off until you opt in, per repository, in a file that belongs to you and not to any project:
-
-```bash
-mkdir -p ~/.config/recortex
-echo "your-name/your-project" >> ~/.config/recortex/trusted-repos
-```
-
-Each line is `owner/name`, optionally followed by GitHub logins whose resume comments you accept besides the repository owner's:
-
-```text
-# owner/name   extra allowed logins
-your-name/your-project
-your-lab/shared-project   your-name   a-colleague
-```
-
-A name is read only in GitHub's form, in ASCII: an owner of 1 to 39 letters, digits, `-` or `_` that starts with a letter or digit, and a name of 1 to 100 letters, digits, `.`, `-` or `_` other than `.` and `..`; a line in another form is ignored.
-
-For a repository owned by an organization, list the people who post the resume comments, because the owner is then not a person. `RECORTEX_TRUSTED_REPOS` (comma-separated `owner/name`) does the same for one shell. See "Security model" below for what this protects against.
-
-### As a plain skill
-
-```bash
-git clone https://github.com/mr-eyes/recortex
-cp -r recortex/skills/recortex ~/.claude/skills/
-```
-
-Use `<project>/.claude/skills/` in place of `~/.claude/skills/` to install it for one project only. The skill is then available as `/recortex`. The hook is optional in this mode; see below.
-
-## Upgrading from gh-issues-manager
-
-The plugin was named gh-issues-manager before version 0.5.0. To move an installed copy to the new name, run both commands, one after the other; between them the plugin is not loaded:
-
-```bash
-claude plugin marketplace update mr-eyes-skills
-claude plugin install recortex@mr-eyes-skills
-```
-
-Then start a new session. If the brief and the skill stopped appearing without your doing anything, the marketplace was updated for you. `claude plugin list` may still show gh-issues-manager as enabled, but `claude plugin update gh-issues-manager@mr-eyes-skills` fails with "not found"; the second command brings it back. Add `--scope project` or `--scope local` if that is how you installed it. Disable or remove any other copy of the plugin (a folder install, for example), or every session gets two briefs.
-
-Nothing else is needed. The configuration file `.gh-issues-manager.json`, the folders `~/.cache/gh-issues-manager` and `~/.local/state/gh-issues-manager`, the trusted list `~/.config/gh-issues-manager/trusted-repos`, the `GHIM_*` variables, an installed `ghim-triage.yml` workflow and everything on GitHub keep working as they are. Edit by hand what names the plugin's parts: the agent prefix (`recortex:record-auditor`) and the skill name in permission rules, your own agents and a project's CLAUDE.md snippet, and the folder and hook paths of a folder install. Rename the configuration file to `.recortex.json` only once everyone on the project has 0.5.0 or later. Optionally, with no session running and no copy of 0.4.x left on the machine, delete `~/.cache/gh-issues-manager` and move `~/.local/state/gh-issues-manager` to `~/.local/state/recortex`. The earlier names are read for at least twelve months, and `hooks.py --doctor` lists the ones in use. Details: [references/upgrading.md](skills/recortex/references/upgrading.md).
-
-## First use
-
-### A new project
-
-In a project without a record, the first session prints one line saying the plugin is installed and the project has no record yet. Say something like "set up the record for this project". Claude will:
-
-1. Look at the project's file names (`setup.py detect`) only to pre-select answers, then ask a few questions with multiple-choice answers: what the project will produce (paper, thesis, software, dataset, report, prototype, proposal, documentation, other), the sections of each, where the record lives, who decides, the time zone, whether there is earlier work to catch up on, and the optional parts.
-2. Show a summary for your confirmation; nothing is written before it.
-3. Apply it (`setup.py apply`, dry run first): the configuration, the labels, the hub with its first resume comment, your trusted-list entry if you agree, the optional triage workflow and CLAUDE.md snippet, and the first sync of the local index.
-
-### A project with months of work behind it
-
-Say "catch up the record". Claude takes a read-only inventory of what exists (`catchup.py inventory`: history, issues, pull requests, documents, result folders, and, only if you agree, this project's local Claude Code transcripts), proposes a topic map for your approval, drafts the bodies with the plugin's agents, and posts past events as reconstructed comments with their original dates and sources.
-
-### A project with an older tracker
-
-Say "migrate the issues of owner/old-tracker into the new structure". Claude snapshots the old tracker to local Markdown, maps every old issue and pull request to a topic, shows you the map, copies the content into new issues (deliverable text in the bodies, history in comments), and, if you want, leaves one short pointer comment on each old item. Nothing in the old tracker is edited or deleted.
-
-Topic bodies that hold a full record (a dated current state, folded old text, decisions, open work) are converted in place with `convert_body.py`: it checks that the live body is the one the new text was drafted from, keeps the former body as a comment, replaces the body, sets the section labels from the new headings and reads everything back.
-
-## The daily loop
-
-1. **Start.** The session reads the newest resume comment on the hub, then the open `active` issues, then the newest comments of the topics in play. With the hook this begins automatically.
-2. **Work.** When an experiment finishes, a decision is made, something fails or a change is merged, the session drafts a comment from the matching template, checks every number against its source file, lints the draft and posts it. The script reads the comment back from GitHub and compares it with the draft.
-3. **The deliverable text changes.** The topic's body is edited in place and its section labels follow its headings; the comment that caused the change is the record of why.
-
-Before a new memory is written, `index.py query recall --issue N` shows the newest memories of its thread with their state, the open questions and untried ideas elsewhere, and the words the project has explained. The session writes the plain line first, links the memory to the earlier one it builds on when that link is true, and explains in a fold at its end any word that cannot be understood without the project. The linter checks the plain line, the links and their targets, the Evidence lines and the folds before anything is posted, and the post prints the new memory's id for the next link.
-4. **Stop.** The session posts a checkpoint on each active issue and a new resume comment on the hub.
-
-## The mind page
-
-Ask "show me the mind of this project" and the session builds one page that tells the record's memory in sentences: where things stand, how each thread got there, what went wrong and what it led to, what is settled and what is still open. It is a private local file beside the index, built from the index alone, and it never changes the record. It tells only what your allowed accounts wrote and nobody changed afterwards, and its last lines count what it leaves out. Details: [`references/mind.md`](skills/recortex/references/mind.md).
-
-```bash
-python3 skills/recortex/scripts/index.py sync
-python3 skills/recortex/scripts/mind.py --open
-```
-
-## The field of work
-
-The setup wizard asks which field the work is in, in your own words, and whether it handles data about people, confidential information or a contested public topic. Claude drafts a short field sheet from six fixed questions: what counts as proof, how numbers are written, which failures must be reported, what must never be written down, the checks a reviewer asks, and which kinds of names the project makes up. You read the whole sheet and approve it, and from then on every subagent gets its short part in its start brief, on each machine where you approved that exact text. A sheet that changed since you approved it (after a pull, for example) is not shown until you approve it again, and the session tells you so. Five model sheets ship with the plugin (bioinformatics, engineering, business, policy and a mix), and the sheet is written by `setup.py`, never by hand, so `templates/recortex.example.json` has no `fields` key. Details: [`references/fields.md`](skills/recortex/references/fields.md).
-
-```bash
-python3 skills/recortex/scripts/setup.py fields show
-python3 skills/recortex/scripts/setup.py fields set --answers answers.json --dry-run
-python3 skills/recortex/scripts/setup.py fields approve --fingerprint <the fingerprint in the line fields show printed> --yes
-```
-
-## What survives compaction, and why
-
-Compaction replaces a long conversation with a summary. Summaries drop detail and sometimes get numbers and decisions wrong, so this skill never treats one as a source.
-
-| What | Where it lives | How it comes back |
-|---|---|---|
-| Current focus, active issues, last decisions, next actions, holds | The newest resume comment on the hub by an allowed account | Printed into context in the record brief after every compaction, or read with `resume_block.py show` |
-| Where the record is, the topics by section, active issues, issues that need triage | The hub and the issue labels, copied into a local index | The record brief at session start; a short brief in every subagent; a one-line reminder on prompts when it changed |
-| Results, decisions and failures not yet posted | The conversation | The PreCompact hook tells the compaction summary to keep them, with enough detail to post them |
-| Work in flight | Checkpoint comments on `active` issues | Read in step 2 of the session protocol |
-| Results, decisions, failures | Dated comments on topic issues | Read on demand; nothing depends on remembering them |
-| What the deliverable says now, with its numbers | The bodies of the topic issues, each number with its source | Read before acting or writing |
-| The rules themselves | The skill, and optionally the project's CLAUDE.md | Loaded by Claude Code |
-
-The resume block is small on purpose (under 4,000 characters) and a new one is posted at the end of every working stretch, so the first thing a blank session reads is short, current and written for exactly that reader. Posting it as a comment, never as an edit, also keeps a history of where the project stood at each stop.
-
-## The agents
-
-The plugin adds three agents for bulk and audit work, one tier below the main session, which stays the only writer to GitHub: `record-drafter` drafts topic bodies in batches to files only; `record-reviewer` reviews drafts, per batch and across all bodies; `record-auditor` checks the record for drift, untriaged issues and new deliverable signals. The drafter has no shell and no GitHub access. The reviewer and the auditor are read-only by instruction: they need Bash for read commands such as `gh issue view` and `git log`, so their tool list does not enforce it, and the main session checks what they did. Each preloads the skill and uses your default model; to choose another, copy its file into the project's `.claude/agents/` and set `model:`.
-
-## The hooks and the CLAUDE.md snippet
-
-**Hooks.** Four hooks keep every session and subagent aware of the record, built from a local index of the issues (`scripts/index.py`, a SQLite file under `~/.cache/recortex` that can be rebuilt from GitHub at any time; hooks and terminal scripts use the same file):
-
-| Hook | Prints |
-|---|---|
-| SessionStart (startup, resume, clear, compact, fork) | The record brief: the rules for writing to the record, the hub, the deliverable topics by section, the open active issues, the issues that need triage, and the newest allowed resume block. It syncs the index first; if GitHub does not answer in time it prints the brief from the index and says how old it is |
-| SubagentStart | A short brief for the subagent: where the record is, the issues in play, and that it reads the record for facts and posts only when its task says so; with a field sheet you approved, its short part in its own frame |
-| UserPromptSubmit | One line with the hub and the active issues, only when it changed or every tenth prompt (`"prompt_hook": {"enabled": false}` in `.recortex.json` turns it off) |
-| PreCompact | Instructions for the compaction summary: keep the issue numbers in play and every result, decision or failure that is not yet posted |
-
-They print nothing when the project has no configuration file or the repository is not in your trusted list, and never write to GitHub. Set-up builds the index once (`index.py sync`); otherwise the first session builds it in the background and the brief arrives with its next prompt. In a project that is set up and trusted, a brief that cannot be produced is replaced by one line naming the reason. `python3 scripts/hooks.py --print` shows each payload and its size; `python3 scripts/hooks.py --doctor` shows why a brief is or is not shown: configuration, trust, storage folders with owner and mode, the index and the last sync failure. The plugin installs them. For a plain skill install, merge [`templates/settings-hook-snippet.json`](skills/recortex/templates/settings-hook-snippet.json) into `.claude/settings.json` or `~/.claude/settings.json` and adjust the paths.
-
-**CLAUDE.md snippet.** [`templates/claude-md-snippet.md`](skills/recortex/templates/claude-md-snippet.md) is a few lines for the project's CLAUDE.md that give every session the hub's location and the recording rules.
-
-## Scripts
-
-All are in `skills/recortex/scripts/`, use only the Python standard library and `gh`, and accept `--help`.
-
-| Script | What it does | Writes to GitHub |
-|---|---|---|
-| `setup_labels.py` | Creates the labels of the chosen profiles. Existing labels are left alone unless `--update` | yes |
-| `lint_drafts.py` | Checks drafts: required sections, leftover placeholders, bare `#N`, body length, Mermaid rules, secrets, project-defined restricted patterns; history in a topic body; section headings against labels; a memory's plain line, links, Evidence and folds, against the record with `--index` or `--online` | no |
-| `create_issues.py` | Creates interlinked issues and comments from a manifest, replaces `NEW-<key>` placeholders with real numbers, reads every body and comment back, and can be rerun after a failure without duplicates or overwriting changed bodies | yes |
-| `post_verified.py` | Posts one comment or replaces one issue body, with lint, a backup of the replaced body and read-back; for a topic body, the section labels follow the headings; for a memory, its links and evidence are checked against GitHub and its id is printed | yes |
-| `convert_body.py` | Converts a record body of an older form into deliverable text: stops if the live body changed, keeps the former body as a comment, replaces the body and section labels, reads all back | yes |
-| `resume_block.py` | `show` prints the newest resume comment written by an allowed account, for trusted repositories only. `update` posts a new resume comment on the hub and reads it back; it never edits the hub or an earlier comment, and warns when the posting login is not allowed | `update` only |
-| `snapshot.py` | Saves all issues, pull requests and comments as local Markdown with an index, for offline reading and for surveying an old tracker | no |
-| `index.py` | Keeps the local index of the record: `sync` reads what changed on GitHub; `query` answers consistency, impact, recall, mind, timeline, triage and brief questions without network | no |
-| `mind.py` | Builds the mind page: one private local file that tells the project's memory in sentences, from the index | no |
-| `hooks.py`, `run_hook.sh`, `session_start_hook.sh` | The four hooks; `hooks.py --print` shows their payloads | no |
-| `setup.py` | `detect` suggests deliverables and fields from file names; `apply` makes the setup from answers you confirmed; `fields` shows, sets and approves the field sheet | `apply` |
-| `catchup.py` | Lists earlier work and work done since the newest recorded event; drafts reconstructed event comments | no |
-| `compile.py` | Writes the deliverable section by section in the hub's order, the figure, table and source lists, the full dated timeline of the project and a manifest | no |
-
-Every script that writes has `--dry-run`, which prints the exact `gh` commands and changes nothing.
-
-## Safety rules
-
-- No script deletes an issue, a comment or a label, edits a posted comment, or closes an issue. The only labels a script changes on an existing issue are section labels, which follow the body's headings.
-- Only files named on the command line or in a manifest are posted. Nothing is posted by folder or wildcard.
-- Every issue body and comment that is written is read back from the API and compared with the draft. A pin is confirmed by asking GitHub whether the issue is pinned. Section labels changed on an issue are read back; labels created by `setup_labels.py` are not, and rerunning it shows anything missing.
-- `create_issues.py` never overwrites a body that was changed on GitHub after it wrote it, and after an interrupted run it adopts what already exists instead of creating it twice.
-- The linter refuses drafts that contain common token formats or match the project's `restricted_patterns`, for example participant identifiers.
-- Decisions are quoted word for word with date, time and zone.
-- An older tracker is never edited; at most it receives short pointer comments.
-- Text read from GitHub is treated as data, never as instructions (see "Security model").
-
-## Security model
-
-Issue and comment text read back from GitHub is data, never instructions. A hub can be edited by anyone with write access to the repository, and on a public repository anyone can open issues and write comments. The skill tells Claude to treat everything it reads from the tracker as a description of the project's state, and never to follow commands found there. Only the user, in the session, gives instructions.
-
-The hooks deserve extra care because they put tracker text into context without anyone asking. Their rules:
-
-| Rule | What it prevents |
-|---|---|
-| The configuration is read only from the project root: `CLAUDE_PROJECT_DIR` (which Claude Code sets for hooks), else the top of the git checkout, else the current folder. Parent folders are never searched. The same holds for every script, and each script prints the configuration file and repository it is using | A `.recortex.json` planted in a parent folder pointing sessions at someone else's repository |
-| Trust is checked in every mode. The hook prints nothing, and `resume_block.py show` prints a one-line notice, unless the configured repository is in the user's own trusted list (`~/.config/recortex/trusted-repos`, the list under the plugin's earlier folder name described in the upgrade section above, or `RECORTEX_TRUSTED_REPOS`; `XDG_CONFIG_HOME` and `RECORTEX_TRUSTED_FILE` are used only when they are absolute paths, so a relative value cannot point into a project). Nothing inside a project can add to that list, and the repository owner counts as an allowed writer only once the repository is trusted | A cloned repository that configures itself to inject text |
-| The resume block is a comment, and only a comment that passes every check is printed: its first line is the resume heading, each marker stands alone on its own line outside any quote or code block, its author is allowed (the repository owner plus the logins listed for that repository in the trusted file), and it was never edited by anyone. The newest 50 comments of the hub come from one API call, and the newest passing comment is chosen by creation time. Newer resume comments that fail are counted with the reason and never shown | Anyone posting or editing a comment to get text into your sessions |
-| The time the shown comment was posted is printed with it | Showing an old block as if it were current. Anyone can post many comments on a public hub and push the newest resume comment beyond the 50 that are read (the script then says there is none), and an account with write access can delete the newest resume comment so that an older one is shown. Neither changes what an allowed account wrote; posting a new resume comment repairs both |
-| An issue title is printed only when the issue was opened by an allowed account and no other account renamed it; otherwise only its number, with the reason | Instructions smuggled in through an issue title, which anyone who can edit the issue can change |
-| The index (`index.sqlite`) and the hook state live in a folder `private/` (mode 0700) that the plugin creates inside its top folders: `$XDG_CACHE_HOME/recortex` for the index and `$XDG_STATE_HOME/recortex` for the state and the key (by default under `~/.cache` and `~/.local/state`), or a top folder of the plugin's earlier name, used in place when only that one is there; never in the project tree. Hooks, the session's Bash tool and your own shell resolve the same folders; the plugin data folder that Claude Code sets only for hooks (`CLAUDE_PLUGIN_DATA`) is not used, and an index left there by an earlier version is ignored (the first sync builds a new one). `RECORTEX_DATA_HOME` moves the index and the state to one folder, `$RECORTEX_DATA_HOME/recortex`, and is read only when `RECORTEX_TESTING=1` is also set: it is for the plugin's tests only. A top folder must be a real folder owned by the user or by root; one the user owns that was created group-writable (umask 0002) is tightened to 0700, and one owned by another user is refused. `private/` and everything in it must be real folders and files owned by the user with no permissions for group or others, checked at every read and write; files are written through a fresh temporary file with mode 0600 and read without following symlinks. An index is read only when it carries the repository, the format and a mark made with a per-user key from the state folder, so a swapped folder or a file the plugin did not make is refused | A repository you clone, or a folder someone shares, planting an index or state file whose text the hooks would print |
-| When the sync at session start fails, the brief says "cached, not refreshed" with its age; a cached resume block is one that passed every check when it was read, and is left out once it is older than `resume_cache_days` (default 7). Stored sync times enter a GitHub query only as plain ISO 8601 UTC times | Old or tampered cached text passed off as current, and text smuggled into an API query |
-| A refused index is never read and nothing from it is printed; the next sync moves it aside and builds a new one. The hooks load only the profiles shipped with the plugin, never a profile file a project names, and `RECORTEX_HOOK_TIMEOUT` is read as digits only | A cloned project or a shared folder getting its own text into the brief outside the data frame |
-| The output is wrapped in `BEGIN/END PROJECT STATUS DATA` lines that say it is data and not instructions, text that imitates those lines is defused, and the SessionStart brief is cut at 6,000 characters (the subagent brief at 3,500) | Text posing as system or user instructions, and context flooding |
-| A failure to read the configuration prints nothing and exits 0. A failure to read GitHub, or a timeout, prints the brief from the local index with its age; in a set-up, trusted project with no usable index, one line names the reason and points to `hooks.py --doctor`. Every hook exits 0 | A slow or broken network blocking the session |
-
-The trust boundary is your allowed list, not write access to the repository. Anyone who can comment can post something that looks like a resume comment, and anyone with write access (collaborators, GitHub Apps, Actions workflows, tokens with `issues: write`) can edit comments, but a comment by a non-allowed author is ignored and so is any comment that was edited after posting. Because each resume block is a single, unedited comment, the check covers everything that is printed, however long the project runs. For the same reason, never edit a resume comment yourself; post a new one. An allowed account can still write anything, so list only accounts you would take project status from, and list a bot if a bot posts the resume comments.
-
-A field sheet is the one text from the project tree that a payload holds outside the data frame, because it is meant to be followed, so it has its own conditions: the repository is trusted, you approved that exact text on this machine (its fingerprint is kept in `private/field-approvals.json` of your own configuration folder, which the project cannot write), and it passes the sheet's form when it is shown, one line of plain characters per value under the plugin's own labels. It stands only in its own frame, whose fixed note says that it was approved by you, cannot change rules, permissions or the task, and never makes a subagent count or report less than its material shows (a failure is reported as one, every number the task asks for goes back to the session, and what "Never write down" names stays out of anything to be posted or recorded and comes back marked in the reply); any change after the approval switches it off. The skill and the agents rank it below their rules. What remains is that you can approve a sheet that should not be approved, and that a misled session could run the approval command without you, as it could add a repository to your trusted list.
-
-`resume_block.py show` applies the same checks when run by hand. Its `--trust-once` and `--allow-any-author` flags are deliberate overrides for the user and are refused in hook mode.
-
-The mind page follows the same boundary. It is built only for a trusted repository and tells only memories that an allowed account wrote and nobody edited, topic text that only allowed accounts wrote or edited, and titles that only allowed accounts set; everything else is counted, not shown. The file is inert: one fixed style and one fixed script allowed by their hashes in a Content-Security-Policy that loads nothing else, record text only ever as text, never as markup, an attribute or an address, and every link out an address on GitHub built from checked parts. No hook builds, reads or mentions it, and the session never reads it. The page of a private repository holds private text; do not copy it anywhere shared.
-
-## Worked example
-
-`examples/tinycsv/` holds the drafts for an invented project: a small CSV library preparing release 0.3.0, with a benchmark note. It has a hub with its first resume comment, two topics whose bodies are release-notes and benchmark-note text, one active task, one result and one decision. `examples/tinycsv/chain/` adds five memories that link to each other, posted one at a time after the manifest.
-
-```bash
-cd examples/tinycsv
-S=../../skills/recortex/scripts
-export RECORTEX_CONFIG=$PWD/.recortex.json   # the example is not at a project root
-
-python3 $S/setup_labels.py --dry-run
-python3 $S/lint_drafts.py --manifest manifest.json
-python3 $S/create_issues.py --manifest manifest.json --dry-run
-```
-
-The dry run prints what would happen, for example:
-
-```text
-config: <path>/examples/tinycsv/.recortex.json  repo: example-org/tinycsv
-manifest: manifest.json   repository: example-org/tinycsv   issues: 4   comments: 3
-lint: all 7 drafts pass
-dry run: no network access, nothing written
-note: commands are listed issue by issue. The real run creates all issues first, then writes the bodies, then posts the comments.
-would run: gh issue create --repo example-org/tinycsv --title 'tinycsv project hub' --body-file - --label hub   # body: a one-line stub, replaced in the next step
-would run: gh issue edit '<number of NEW-hub>' --repo example-org/tinycsv --body-file -   # hub.md, 5033 characters, with NEW-reader, NEW-speed, NEW-task-newlines replaced by real numbers
-would read back: gh api repos/example-org/tinycsv/issues/<number of NEW-hub> and compare with hub.md
-would run: gh issue pin '<number of NEW-hub>' --repo example-org/tinycsv
-...
-```
-
-In the drafts, issues refer to each other as `NEW-reader`, `NEW-speed` and so on. After a real run in an empty repository those become `#2`, `#3` and so on (`Issue 2` inside the Mermaid map), and the first resume comment on the hub reads:
-
-```text
-**Last updated:** 2026-03-04 16:40 PST by the maintainer's Claude session
-**Current focus:** Release 0.3.0. The reader handles quoted fields; newlines inside quoted fields are the last open item.
-**Active issues:** #4 (newlines inside quoted fields).
-**Last decisions:** 2026-03-04 15:55 PST, strict quoting is the default, see #2.
-```
-
-The dry run lists the commands issue by issue; the real run creates all issues first, then writes the bodies, then posts the comments.
-
-To try a real run, change `repo` in `manifest.json` and `.recortex.json` to a scratch repository of your own, run `setup_labels.py` and `create_issues.py` without `--dry-run`, and then set `hub` in `.recortex.json` to the number the run printed for `NEW-hub`. The run leaves `manifest.json.state.json` beside the manifest; it is what makes a rerun safe, and this repository's `.gitignore` excludes it.
-
-## Repository layout
-
-```text
-.claude-plugin/           plugin.json and marketplace.json
-hooks/hooks.json          hook registration for the plugin (four events)
-agents/                   record-drafter, record-reviewer, record-auditor
-skills/recortex/
-  SKILL.md                the skill
-  references/             detail loaded on demand
-  templates/              hub, topic body, active task, comments, snippets
-  profiles/               label sets per project type
-  fields/                 the five model field sheets
-  scripts/                the helpers
-  page/                   the fixed style and script of the mind page
-examples/tinycsv/         invented example project
-tests/                    offline tests with a local stand-in for gh
-```
-
-## Tests
-
-```bash
-python3 -m unittest discover -s tests
-```
-
-The tests never contact GitHub.
+| See how the issues are laid out | [How the record works](docs/how-it-works.md) |
+| Install as a plain skill, trust a shared repository, upgrade from before 0.5.0 | [Install and upgrade](docs/install.md) |
+| Start from months of work or an older tracker | [Starting from existing work](docs/existing-work.md) |
+| Know what the plugin will and will not do with untrusted text | [Safety and security](docs/security.md) |
+| Look up a script, a hook or an agent | [Reference](docs/reference.md) |
+| Change the plugin | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## License
 
