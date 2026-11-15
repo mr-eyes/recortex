@@ -60,7 +60,7 @@ The linter does not judge content. It cannot know whether a number is right.
 |---|---|
 | Several new issues and comments | `create_issues.py --manifest <file>` |
 | One comment | `post_verified.py comment --issue N --kind <kind> --body-file <draft>` |
-| Replace an issue body | `post_verified.py body --issue N --kind <kind> --body-file <draft> --backup <file>`; for a final record it also moves the section labels to follow the headings, and removes one only with `--allow-label-removal` |
+| Replace an issue body | `post_verified.py body --issue N --kind <kind> --body-file <draft> --expected-body-file <base> --backup <file>`; for a final record it also moves the section labels to follow the headings, and removes one only with `--allow-label-removal` |
 | Convert a record body of an older form, keeping it as a comment | `convert_body.py --issue N --body-file <draft> --expected <saved live body> --note "<when and why>"` |
 | A new resume comment on the hub | `resume_block.py update --file <draft>` |
 | The hub's topics and the tasks as sub-issues, for a record that exists | `sub_issues.py plan`, then `sub_issues.py apply` (`--dry-run` first); a new topic or task is linked by `create_issues.py` |
@@ -68,7 +68,21 @@ The linter does not judge content. It cannot know whether a number is right.
 
 `post_verified.py comment` lints a memory against GitHub, so a dangling link, a missing cited comment or a wrong evidence line stops the post; a failure of GitHub other than "Not Found" stops it too. With `--dry-run --offline` it checks against the local index instead and reads no network; without a usable index it says so in one line and gives the single `not-checked` warning. A memory of a kind that may link but carries no link gets one note before it is posted: "note: this memory links to no earlier one; ...". It is a note, not an error: add the link first if it follows from, replaces or tests an earlier memory. After a verified post of a memory it prints `memory id: <id>`, the id to link to it. `create_issues.py` lints offline first and checks each comment against GitHub just before posting it; a comment of a manifest cannot link to another comment of the same manifest, so post such a memory afterwards with `post_verified.py`.
 
-Run each with `--dry-run` first; it prints the exact `gh` commands. `post_verified.py body` prints a diff against the body now on GitHub and saves that body to the backup file before editing. To edit a body, start from the current one: `gh issue view N --json body --jq .body > draft.md`, or `gh api repos/owner/name/issues/N --jq .body`.
+Run each with `--dry-run` first; it prints the exact `gh` commands. Before drafting a body replacement, save the live body unchanged and edit a separate copy:
+
+```bash
+gh issue view N --repo owner/name --json body --jq .body > topic.base.md
+cp topic.base.md topic.draft.md
+# Edit topic.draft.md, leaving topic.base.md unchanged.
+python3 scripts/post_verified.py body --repo owner/name --issue N --kind final-record \
+  --body-file topic.draft.md --expected-body-file topic.base.md --backup topic.before.md --dry-run
+```
+
+Run the same command without `--dry-run` after checking the diff. A real replacement requires `--expected-body-file`; its text must match the live body, ignoring the same line-ending and trailing-whitespace differences as read-back. The script checks again before saving the backup and writing. If either check fails, read the latest body, merge your changes into it, and prepare a new base and draft. Never just replace the base to force an older draft through.
+
+A dry run without a base can still preview the diff, but says that a real replacement needs one. An offline dry run checks no live body. A completed retry whose draft already matches the live body is a no-op; if section labels remain to be updated after a partial failure, it checks the body again before changing them.
+
+These checks do not make GitHub issue updates atomic. Coordinate one writer per issue; another writer can still edit between the final read and write. The backup helps recovery, and read-back proves that the draft was stored, not that nobody else's simultaneous change was lost.
 
 ## 5. Read back and compare
 
