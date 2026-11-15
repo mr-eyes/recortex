@@ -84,6 +84,13 @@ FIELD_MALFORMED = ("%s: this project's field guidance does not have the form the
                    "Ask to review the field guidance, or run hooks.py --doctor." % names.NAME)
 FIELD_UNREADABLE = ("%s: the record of the field guidance you approved cannot be read, so this project's field "
                     "guidance is not shown. Run hooks.py --doctor." % names.NAME)
+# The marks in their fixed wording, and the sentence the main session's line gains when a project carries any: a
+# mark's name reaches a payload only through this mapping.
+MARK_WORDS = {"people": "data about people", "confidential": "confidential business or partner information",
+              "contested": "a contested public topic"}
+FIELD_MARKS = ("This project is marked as handling %s, so before anything that will be cited is posted, the independent "
+               "reviewer of step 7 of \"Record an event\" must also answer the confidentiality question, and the user is "
+               "told what it found.")
 LINES = {"changed": FIELD_CHANGED, "new": FIELD_NEW, "malformed": FIELD_MALFORMED, "unreadable": FIELD_UNREADABLE}
 OFFER = ("%s can fit its subagent briefs to this project's field of work. Ask to set the field (three short "
          "questions). This line is shown once per project." % names.NAME)
@@ -463,6 +470,14 @@ def off():
 
 
 def state(config, repo, honor_off=True):
+    """What the hooks show (see _state), with "marks": the sensitive marks of the project (sensitive_marks) in every
+    state but none and off, for the main session's line. Never raises."""
+    out = _state(config, repo, honor_off)
+    out["marks"] = sensitive_marks(config, repo) if out["state"] not in ("none", "off") else []
+    return out
+
+
+def _state(config, repo, honor_off=True):
     """What the hooks show, from the configuration they already parsed (no project file is read here):
     {"state", "entry", "approved", "fingerprint", "approved_fingerprint", "problems", "reason"}, by the table of states
     (none, off, malformed, mark, unreadable, new, changed, approved). Never raises. honor_off=False is for setup.py
@@ -503,11 +518,25 @@ def state(config, repo, honor_off=True):
         return dict(out, state="unreadable", entry=None, reason="an unexpected %s" % type(error).__name__)
 
 
+def mark_words(marks):
+    """The marks in their fixed wording, joined ("a, b and c"); marks other than the three are left out."""
+    words = [MARK_WORDS[mark] for mark in SENSITIVE if mark in marks]
+    if not words:
+        return ""
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
 def session_line(info):
-    """The main session's line for a state, or "" (none, off, mark)."""
+    """The main session's line for a state, or "" (none, off, and mark without marks). With sensitive marks, the line
+    ends with FIELD_MARKS, and a project with marks but no field names gets that sentence alone."""
     if info["state"] == "approved":
-        return FIELD_ON % info["approved"] if real_day(info["approved"]) else ""
-    return LINES.get(info["state"], "")
+        line = FIELD_ON % info["approved"] if real_day(info["approved"]) else ""
+    else:
+        line = LINES.get(info["state"], "")
+    words = mark_words(info.get("marks") or [])
+    if words and (line or info["state"] == "mark"):
+        line = (line + " " if line else "") + FIELD_MARKS % words
+    return line
 
 
 def sensitive_marks(config, repo):

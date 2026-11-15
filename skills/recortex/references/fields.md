@@ -118,12 +118,14 @@ What each state shows:
 |---|---|---|---|
 | none | No `fields` entry | nothing | none (and once, the offer to set the field) |
 | off | `"field_guidance": false` in the user's `settings.json` | nothing | none |
-| marks only | The entry has no field names | nothing | none |
+| marks only | The entry has no field names | nothing | the marks sentence (below), when there are marks |
 | approved | The fingerprints are equal | the frame | "Field guidance: this project has a field sheet that the user approved on ..." |
 | changed | The entry changed since it was approved on this machine | nothing | "... changed since you approved it, so it is not shown ..." |
 | new | No approval for this repository on this machine | nothing | "... was not approved on this machine, so it is not shown ..." |
 | malformed | The entry breaks the form | nothing | "... does not have the form the plugin accepts, so it is not shown ..." |
 | unreadable | The approvals file cannot be read (a symlink, loose permissions, not JSON) | nothing | "... cannot be read, so this project's field guidance is not shown ..." |
+
+With sensitive marks (those of the project file, when they have the form, and those kept with your approval), the line ends with one more sentence, in every state but none and off: "This project is marked as handling <the marks>, so before anything that will be cited is posted, the independent reviewer of step 7 of "Record an event" must also answer the confidentiality question, and the user is told what it found." The marks are named only in their fixed wording ("data about people", "confidential business or partner information", "a contested public topic"); the subagent frame does not change.
 
 When the session brief says the field guidance is not shown, tell the user in one line, and do not treat the `fields` entry of the project file as guidance. `hooks.py --doctor` names the state and the reason.
 
@@ -140,7 +142,7 @@ The wizard asks whether the work handles data about people, confidential busines
 
 1. The identifier forms the user names (for example a participant code or a contract number) become entries of `restricted_patterns`, each checked first: it compiles, matches its made-up example, does not match the empty string or an ordinary sentence. The linter then refuses any draft that holds a match.
 2. With `people` or `confidential`, `apply` and `fields set` read once whether the record's repository is public and print fixed notices: that a public repository shows every issue to anyone, that data about people does not belong in an issue, and what the plugin does not check. Show these lines to the user, and when the first one is there ask whether to go on, use a new private repository, or stop.
-3. Before a post that will be cited, the independent reviewer of step 7 of "Record an event" also asks whether any line holds what the sheet's "Never write down" line names, a match of the restricted patterns, the name or contact of a private person, or a count small enough to point at one person.
+3. Before a post that will be cited, the independent reviewer of step 7 of "Record an event" also asks (the session brief's field line names the marks and says so) whether any line holds what the sheet's "Never write down" line names, a match of the restricted patterns, the name or contact of a private person, or a count small enough to point at one person.
 4. The marks are kept with the approval too, so a project file can add a mark and cannot take away one the user approved. `hooks.py --doctor` prints them.
 
 What the plugin does not check: it cannot recognize sensitive content it has no pattern for, and it does not make a project meet a law, an ethics approval or a contract.

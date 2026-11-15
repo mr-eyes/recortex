@@ -478,8 +478,7 @@ ORDINARY = ("The run finished on 2026-03-04 with 42 of 48 samples.",
             "See the reader in src and the notes of the last meeting.")
 CONTROL = re.compile("[\x00-\x1f\x7f-\x9f]")
 REPLACE = "this project already has field guidance; pass --replace to setup.py fields set"
-MARK_WORDS = {"people": "data about people", "confidential": "confidential business or partner information",
-              "contested": "a contested public topic"}
+MARK_WORDS = field_sheet.MARK_WORDS
 PUBLIC = ("notice: the record's repository %s is public: anyone can read every issue and comment in it, and what was "
           "posted stays in its history. This project is marked as handling %s. To keep the record private, stop here "
           "and set up again with a new private repository (\"record\": \"new\").")
@@ -652,8 +651,7 @@ def approvals_readable():
 
 
 def mark_words(marks):
-    words = [MARK_WORDS[m] for m in marks]
-    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+    return field_sheet.mark_words(marks)
 
 
 def notices(repo, marks, created=False):

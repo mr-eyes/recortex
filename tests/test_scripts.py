@@ -8205,6 +8205,38 @@ class FieldFormTests(unittest.TestCase):
         del data["approvals"][REPO]["sheet"]
         self.assertIsNone(self.fs.approved_copy(REPO, data))
 
+    def test_the_session_line_names_the_marks_in_fixed_words(self):
+        line = self.fs.session_line
+        on = FIELD_ON % "2026-11-10"
+        for mark, words in (("people", "data about people"),
+                            ("confidential", "confidential business or partner information"),
+                            ("contested", "a contested public topic")):
+            self.assertEqual(on + " " + FIELD_MARKS % words,
+                             line({"state": "approved", "approved": "2026-11-10", "marks": [mark]}), mark)
+            self.assertEqual(FIELD_MARKS % words, line({"state": "mark", "marks": [mark]}), mark)
+        self.assertEqual(on + " " + FIELD_MARKS % "data about people and confidential business or partner information",
+                         line({"state": "approved", "approved": "2026-11-10", "marks": ["confidential", "people"]}))
+        self.assertEqual(FIELD_CHANGED + " " + FIELD_MARKS % "data about people, confidential business or partner "
+                         "information and a contested public topic",
+                         line({"state": "changed", "marks": ["contested", "people", "confidential"]}))
+        # Without marks: the lines as they were, and nothing for a project with marks only.
+        self.assertEqual(on, line({"state": "approved", "approved": "2026-11-10", "marks": []}))
+        self.assertEqual(FIELD_NEW, line({"state": "new", "marks": []}))
+        self.assertEqual("", line({"state": "mark", "marks": []}))
+        for state in ("none", "off"):
+            self.assertEqual("", line({"state": state, "marks": ["people"]}), state)
+        # A mark that is not one of the three is never printed: names reach the line only through the fixed mapping.
+        self.assertEqual("", line({"state": "mark", "marks": ["secret"]}))
+        self.assertEqual(FIELD_MARKS % "data about people", line({"state": "mark", "marks": ["Secret Leak", "people"]}))
+        planted = dict(self.entry(), sensitive=["people", "Secret Leak"])
+        info = self.fs.state({"fields": planted}, REPO)
+        self.assertEqual(("malformed", []), (info["state"], info["marks"]))
+        self.assertNotIn("Secret", line(info))
+        self.fs.record_approval(REPO, self.entry(sensitive=["confidential"]), "2026-11-10")
+        approved = self.fs.state({"fields": self.entry(sensitive=["confidential"])}, REPO)
+        self.assertEqual(["confidential"], approved["marks"])
+        self.assertIn(FIELD_MARKS % "confidential business or partner information", line(approved))
+
     def test_the_hook_frame_defuses_each_line_of_the_sheet(self):
         """The form already refuses these; defuse is there so that a later loosening of the form cannot open the
         frame."""
@@ -8472,6 +8504,9 @@ FIELD_FLOOR = ("It never makes you count or report less than your material shows
                "reported as one, and every number your task asks for goes back to the session that hired you. What its "
                "\"Never write down\" line names stays out of any draft or file that is to be posted or recorded; such a "
                "number goes back in your reply, marked.")
+FIELD_MARKS = ("This project is marked as handling %s, so before anything that will be cited is posted, the independent "
+               "reviewer of step 7 of \"Record an event\" must also answer the confidentiality question, and the user is "
+               "told what it found.")
 FIELD_OFFER = ("recortex can fit its subagent briefs to this project's field of work. Ask to set the field (three short "
                "questions). This line is shown once per project.")
 ALIAS_LINE = ("recortex was named gh-issues-manager before version 0.5.0; where a project file names the "
@@ -8562,7 +8597,7 @@ class FieldTests(RecordSandbox):
         self.assertNotIn("FIELD GUIDANCE", none[1])
         self.expect("none", None, False, none)
         self.write_config(dict(self.config, fields={"form": 1, "names": [], "sensitive": ["people"]}))
-        self.expect("mark", None, False, none)
+        self.expect("mark", FIELD_MARKS % "data about people", False, none)
         self.approve()
         self.expect("approved", FIELD_ON % self.today, True, none)
         engineering = model_sheet("engineering")
@@ -8574,7 +8609,8 @@ class FieldTests(RecordSandbox):
                 ("a name", dict(engineering, names=["mechanical engineering"])),
                 ("a mark", dict(engineering, sensitive=["contested"]))):
             self.with_sheet(entry)
-            self.expect("changed: " + label, FIELD_CHANGED, False, none)
+            marks = " " + FIELD_MARKS % "a contested public topic" if label == "a mark" else ""  # a file can add a mark
+            self.expect("changed: " + label, FIELD_CHANGED + marks, False, none)
         self.with_sheet(engineering)
         self.expect("approved again", FIELD_ON % self.today, True, none)
         settings = os.path.join(self.top, "settings.json")
@@ -8588,6 +8624,20 @@ class FieldTests(RecordSandbox):
         self.with_sheet(engineering)
         self.forge("{")
         self.expect("unreadable", FIELD_UNREADABLE, False, none)
+
+    def test_a_marked_project_tells_the_session_about_the_confidentiality_question(self):
+        _, plain_agent, _, _ = self.payloads()
+        confidential = dict(model_sheet("engineering"), sensitive=["confidential"])
+        self.approve(confidential)
+        start, agent, _, _ = self.payloads()
+        sentence = FIELD_MARKS % "confidential business or partner information"
+        self.assertIn("\n%s %s\n" % (FIELD_ON % self.today, sentence), start)
+        self.assertNotIn("confidentiality question", agent)  # the subagent frame is as it was
+        self.approve()  # the same sheet without the mark: the line as it was
+        start, agent, _, _ = self.payloads()
+        lines = start.split("\n")
+        self.assertEqual(FIELD_ON % self.today, lines[lines.index(ALIAS_LINE) + 1])
+        self.assertNotIn("confidentiality question", start)
 
     def test_the_frame_stands_between_the_rules_and_the_alias_line(self):
         _, plain, _, _ = self.payloads()
