@@ -124,7 +124,7 @@ LINK_ORDER = ("because", "instead", "replaces", "checks")
 MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
           "November", "December")
 
-BAD = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f‎‏‪-‮⁦-⁩﻿]")
+BAD = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?")
 WALL = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})(?:T([0-9]{2}):([0-9]{2}))?")
 CODE = re.compile(r"`([^`\n]+)`")
@@ -139,7 +139,7 @@ def clean(value):
     """A string from the record as the model keeps it: CR LF and lone CR become LF, the line and paragraph
     separators become LF, and control characters and characters that reorder or hide text become U+FFFD."""
     text = "" if value is None else str(value)
-    text = text.replace("\r\n", "\n").replace("\r", "\n").replace(" ", "\n").replace(" ", "\n")
+    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\u2028", "\n").replace("\u2029", "\n")
     return BAD.sub("�", text)
 
 

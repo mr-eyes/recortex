@@ -6631,7 +6631,7 @@ PAGE_ADDRESS = re.compile(
     r"https://github\.com/[A-Za-z0-9][A-Za-z0-9_-]{0,38}/[A-Za-z0-9._-]{1,100}/(?:issues/[1-9][0-9]{0,9}"
     r"(?:#issuecomment-[1-9][0-9]{0,18})?|pull/[1-9][0-9]{0,9}|blob/[0-9A-Za-z][0-9A-Za-z._-]{0,99}/"
     r"[A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)*(?:#L[1-9][0-9]{0,6}(?:-L[1-9][0-9]{0,6})?)?)")
-PAGE_HIDDEN = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f‎‏‪-‮⁦-⁩﻿]")
+PAGE_HIDDEN = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 SCRIPT_BANNED = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "Function(", "import(",
                  "fetch(", "XMLHttpRequest", "WebSocket", "EventSource", "sendBeacon", "window.open", "srcdoc",
                  "DOMParser", "createContextualFragment", "localStorage", "sessionStorage", "indexedDB",
@@ -6889,7 +6889,7 @@ class MindPageTests(MindSandbox):
             mind.E("a", {"href": "#now"})  # a plain string is no address
         with self.assertRaises(ValueError):
             mind.E("a", {"href": "https://github.com/example-org/tinycsv/issues/1"})
-        for value in ('a"b', "a<b", "a>b", "a&b", "a\nb", "a‮b", "a`b"):
+        for value in ('a"b', "a<b", "a>b", "a&b", "a\nb", "a\u202eb", "a`b"):
             with self.assertRaises(ValueError, msg=value):
                 mind.E("div", {"class": value})
         for name in ("aria-label", "placeholder", "content"):
@@ -7331,6 +7331,21 @@ class PackagingTests(unittest.TestCase):
                     if folder.endswith("scripts"):
                         self.assertIsNone(deleting.search(text), path)
                 self.assertIsNone(emoji.search(text), path)
+
+    def test_no_file_holds_a_hidden_or_reordering_character(self):
+        """Such a character is written as an escape, never as itself."""
+        import re
+        hidden = re.compile("[\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2069\ufeff]")
+        found = []
+        for folder, folders, names in os.walk(ROOT):
+            folders[:] = [name for name in folders if name not in (".git", ".tmp", "__pycache__")]
+            for name in names:
+                if name.endswith((".py", ".md", ".json", ".js", ".css", ".sh", ".graphql", ".yml", ".txt")):
+                    path = os.path.join(folder, name)
+                    for number, line in enumerate(recortex.read_text(path).split("\n"), 1):
+                        if hidden.search(line):
+                            found.append("%s:%d" % (os.path.relpath(path, ROOT), number))
+        self.assertEqual([], found)
 
 
 if __name__ == "__main__":
