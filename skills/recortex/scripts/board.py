@@ -196,11 +196,9 @@ def apply_command(args):
                 item = "<item of #%d>" % number
                 print("would run: " + recortex.show_command(["api", "graphql", "-f", "query=" + add_text(
                     project["id"], contents.get(number, "<node of #%d>" % number))]))
-            if not want.get("why_only"):
-                print("would run: " + recortex.show_command(["api", "graphql", "-f", "query=" + value_text(
-                    project["id"], item, status_field, ("option", status_ids[want["status"]]))]))
-            print("would run: " + recortex.show_command(["api", "graphql", "-f", "query=" + value_text(
-                project["id"], item, why_field, ("text", want["mark"]))]))
+            values = [] if want.get("why_only") else [(status_field, ("option", status_ids[want["status"]]))]
+            print("would run: " + recortex.show_command(["api", "graphql", "-f", "query=" + board_api.values_text(
+                project["id"], item, values + [(why_field, ("text", want["mark"]))], check=False)]))
         if skipped:
             print("would leave %d card(s) for the next run (at most %d are written at a time)" % (skipped, args.limit))
         print("dry run: nothing was written")
@@ -220,10 +218,8 @@ def apply_command(args):
                     continue
                 item = board_api.add_item(project["id"], contents[number])
                 pause(args)
-            if not want.get("why_only"):
-                board_api.set_value(project["id"], item, status_field, ("option", status_ids[want["status"]]))
-                pause(args)
-            board_api.set_value(project["id"], item, why_field, ("text", want["mark"]))
+            values = [] if want.get("why_only") else [(status_field, ("option", status_ids[want["status"]]))]
+            board_api.set_values(project["id"], item, values + [(why_field, ("text", want["mark"]))])
             pause(args)
         except board_api.BoardError as error:
             print("board: #%d was not finished: %s; run again to go on" % (number, board_api.REASONS[error.code]))
@@ -264,15 +260,6 @@ def pause(args):
 def add_text(project_id, content_id):
     return "mutation { addProjectV2ItemById(input: {projectId: %s, contentId: %s}) { item { id } } }" % (
         board_api.quote(project_id), board_api.quote(content_id))
-
-
-def value_text(project_id, item_id, field_id, value):
-    kind, content = value
-    literal = "singleSelectOptionId: %s" % board_api.quote(content) if kind == "option" else \
-        "text: %s" % board_api.quote(content)
-    return ("mutation { updateProjectV2ItemFieldValue(input: {projectId: %s, itemId: %s, fieldId: %s, value: {%s}}) "
-            "{ projectV2Item { id } } }" % (board_api.quote(project_id), board_api.quote(item_id),
-                                            board_api.quote(field_id), literal))
 
 
 # ---------------------------------------------------------------- setup

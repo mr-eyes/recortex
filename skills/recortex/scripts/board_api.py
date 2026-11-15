@@ -334,13 +334,23 @@ def add_item(project_id, content_id, timeout=60):
     return ident(((data.get("addProjectV2ItemById") or {}).get("item") or {}).get("id"))
 
 
-def set_value(project_id, item_id, field_id, value, timeout=60):
-    """`value` is ("option", id) or ("text", text)."""
-    kind, content = value
-    literal = "singleSelectOptionId: %s" % quote(ident(content)) if kind == "option" else "text: %s" % quote(content)
-    mutation("updateProjectV2ItemFieldValue", "projectId: %s, itemId: %s, fieldId: %s, value: {%s}"
-             % (quote(ident(project_id)), quote(ident(item_id)), quote(ident(field_id)), literal),
-             "projectV2Item { id }", timeout)
+def values_text(project_id, item_id, values, check=True):
+    """One mutation that writes fields of one card: [(field id, ("option", option id) or ("text", text))]. `check`
+    False is for a dry run, whose item can be a placeholder."""
+    same = ident if check else str
+    parts = []
+    for position, (field_id, (kind, content)) in enumerate(values):
+        literal = "singleSelectOptionId: %s" % quote(same(content)) if kind == "option" else "text: %s" % quote(content)
+        parts.append("f%d: updateProjectV2ItemFieldValue(input: {projectId: %s, itemId: %s, fieldId: %s, value: {%s}}) "
+                     "{ projectV2Item { id } }" % (position, quote(same(project_id)), quote(same(item_id)),
+                                                  quote(same(field_id)), literal))
+    return "mutation { %s }" % " ".join(parts)
+
+
+def set_values(project_id, item_id, values, timeout=60):
+    """Status and Why of one card in one request. GitHub refuses a request whole (a rate limit) or runs all of it, so
+    a stopped run does not leave a new Status under an old Why, which board_rules.compare would read as a hand move."""
+    graphql(values_text(project_id, item_id, values), timeout)
 
 
 def lines_for(project):

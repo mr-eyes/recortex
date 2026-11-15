@@ -12,6 +12,7 @@ Fault switches (environment):
   FAKE_GH_FAIL_AFTER_MUTATION=name  the mutation acts, then fails (a timeout after GitHub acted)
   FAKE_GH_NO_WRITE_SCOPE=1       reads of projects work, every project mutation fails as a missing scope (read:project only)
   FAKE_GH_IGNORE_FIELD_WRITE=1   updateProjectV2ItemFieldValue answers as if it worked and changes nothing
+  FAKE_GH_FAIL_TEXT_WRITE=1      a request that writes a text value is refused whole before it acts (a rate limit)
   FAKE_GH_SUBISSUES=refuse       addSubIssue is refused (an older GitHub Enterprise Server)
   FAKE_GH_IGNORE_SUBISSUE=1      addSubIssue answers as if it worked and changes nothing
   FAKE_GH_BOARD_PAGE_FAIL=2      exit 1 when page 2 of the items is read
@@ -390,6 +391,8 @@ def handle(state, repo, query):
         raise Refused(scope_problem(), 1)
     if os.environ.get("FAKE_GH_NO_WRITE_SCOPE") and kind == "mutation" and "SubIssue" not in query:
         raise Refused(scope_problem(), 1)
+    if os.environ.get("FAKE_GH_FAIL_TEXT_WRITE") and kind == "mutation" and "text:" in query:
+        raise Refused("You have exceeded a secondary rate limit (HTTP 403)", 1)
     if kind == "query":
         return {"data": run_query(state, repo, {}, selection)}
     data = {}

@@ -10767,7 +10767,7 @@ class BoardWriteTests(BoardSandbox):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn("would run: gh api graphql -f 'query=mutation { addProjectV2ItemById(input: {projectId: ",
                       result.stdout)
-        self.assertIn("would run: gh api graphql -f 'query=mutation { updateProjectV2ItemFieldValue(input: ",
+        self.assertIn("would run: gh api graphql -f 'query=mutation { f0: updateProjectV2ItemFieldValue(input: ",
                       result.stdout)
         self.assertIn("dry run: nothing was written", result.stdout)
         self.assertEqual({}, self.cards())
@@ -10790,6 +10790,17 @@ class BoardWriteTests(BoardSandbox):
         data["owners"] = {}
         self.save(data)
         self.make_board()
+    def test_a_refused_card_write_leaves_no_new_status_under_an_old_why(self):
+        self.make_board()
+        self.assertEqual(0, self.apply().returncode)
+        self.memory(9300, 7, "checkpoint")  # the record wants #7 In Progress
+        self.ready()
+        self.assertEqual(1, self.apply(env={"FAKE_GH_FAIL_TEXT_WRITE": "1"}).returncode)
+        self.assertEqual(("Todo", "Todo"), self.cards()[7])  # neither field was written
+        self.memory(9301, 7, "failure", at="2026-04-10T11:00:00-08:00")  # the record moves on; nobody moved the card
+        self.ready()
+        self.assertNotIn("moved by hand", self.tool("board.py", "plan").stdout)
+
         self.assertEqual(0, self.apply().returncode)
         self.assertEqual(self.cards(), resumed)
 

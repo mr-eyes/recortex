@@ -23,7 +23,7 @@ import record_format  # noqa: E402
 
 STATUSES = ("To triage", "Todo", "In Progress", "Waiting for a yes", "Blocked", "Done", "Set aside")
 WINDOW_DAYS = 30
-WRITE_CAP = 20          # cards one `board.py apply` writes (about 60 requests, a minute or two); the rest waits
+WRITE_CAP = 20          # cards one `board.py apply` writes (about 40 requests, a minute or two); the rest waits
 MARK_CAP = 300
 ADDRESS = re.compile(r"https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/issues/[0-9]+#issuecomment-[0-9]+",
                      re.ASCII)
