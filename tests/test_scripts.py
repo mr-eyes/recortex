@@ -9861,7 +9861,7 @@ class BoardWriteTests(BoardSandbox):
         self.make_board()
         stopped = self.apply(env={"FAKE_GH_FAIL_MUTATION": "updateProjectV2ItemFieldValue"})
         self.assertEqual(1, stopped.returncode)
-        self.assertIn("was not written: GitHub could not be read; run again to go on", stopped.stdout)
+        self.assertIn("was not finished: GitHub could not be read; run again to go on", stopped.stdout)
         self.assertNotEqual(set(), set(self.cards()))  # the item was added before the field write failed
         self.assertEqual(0, self.apply().returncode)
         resumed = self.cards()
@@ -10021,6 +10021,12 @@ class BoardWriteTests(BoardSandbox):
         result = self.apply()
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn("written: #20 is in In Progress", result.stdout)
+
+    def test_a_card_added_before_a_failed_write_is_read_back(self):
+        self.make_board()
+        result = self.apply(env={"FAKE_GH_FAIL_MUTATION": "updateProjectV2ItemFieldValue"})
+        self.assertEqual(1, result.returncode)
+        self.assertIn("MISMATCH: #3 does not read back as Todo", result.stdout)
 
 
 class BoardSyncTests(BoardSandbox):

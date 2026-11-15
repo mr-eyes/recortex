@@ -208,6 +208,8 @@ def apply_command(args):
     for position, want in enumerate(work):
         number = want["number"]
         try:
+            if number in cards or number in contents:
+                wrote[number] = want  # read back even when a write below fails: GitHub may have acted first
             if number in cards:
                 item = cards[number]["item"]
             else:
@@ -222,9 +224,8 @@ def apply_command(args):
                 pause(args)
             board_api.set_value(project["id"], item, why_field, ("text", want["mark"]))
             pause(args)
-            wrote[number] = want
         except board_api.BoardError as error:
-            print("board: #%d was not written: %s; run again to go on" % (number, board_api.REASONS[error.code]))
+            print("board: #%d was not finished: %s; run again to go on" % (number, board_api.REASONS[error.code]))
             errors += 1
             break
     if wrote:
