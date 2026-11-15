@@ -9747,6 +9747,19 @@ class BoardRulesTests(BoardSandbox):
             db.close()
         self.assertLess(took, 2.0)
 
+    def test_a_merge_an_older_version_stored_is_read_again(self):
+        self.pull(40)
+        self.ready()
+        data = self.repo()
+        stamp = utc_ago(0, 0)
+        data["issues"]["40"].update(state="closed", closed_at=stamp, merged_at=stamp, updated_at=stamp)
+        self.save(data)
+        # what a sync of 0.8.0 leaves on a shared index: the row and the listing stamp move on, the merge state does not
+        self.sql("UPDATE issues SET state = 'closed', closed_at = '%s', updated_at = '%s' WHERE number = 40" % (stamp, stamp),
+                 "INSERT OR REPLACE INTO meta(key, value) VALUES ('issues_newest', '%s')" % stamp)
+        self.ready()
+        self.assertEqual("Done", self.want()[40][0])
+
 
 class BoardCompareTests(unittest.TestCase):
     """Behind, moved by hand and gone, as board_rules.compare tells them apart."""

@@ -141,7 +141,9 @@ def desired(db, allowed, now=None):
     facts = Facts(db, allowed)
     held, where = holds(db)
     triage = {row["issue"] for row in index.triage(db, allowed)}
-    merged = {row["number"] for row in db.execute("SELECT number FROM pull_merge WHERE merged = 1")}
+    known = {row["number"]: row["merged"] for row in db.execute(
+        "SELECT p.number, p.merged FROM pull_merge p JOIN issues i ON i.number = p.number AND i.updated_at = p.updated_at")}
+    merged = {number for number, value in known.items() if value}
     labels = {}
     for row in db.execute("SELECT issue, label FROM labels"):
         labels.setdefault(row["issue"], set()).add(row["label"].lower())
@@ -152,7 +154,7 @@ def desired(db, allowed, now=None):
             kind = "pull"
             if issue["state"] == "open":
                 status = "In Progress"
-            elif closed_within(issue["closed_at"], now):
+            elif closed_within(issue["closed_at"], now) and number in known:  # else unknown until the next sync
                 status = "Done" if number in merged else "Set aside"
         elif number in triage:
             status = "To triage"

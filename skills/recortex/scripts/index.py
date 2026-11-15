@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS evidence(comment INTEGER, ordinal INTEGER, kind TEXT,
 CREATE TABLE IF NOT EXISTS explanations(comment INTEGER, ordinal INTEGER, kind TEXT, word TEXT, revised INTEGER,
   meaning TEXT, why TEXT, also TEXT, story TEXT);
 CREATE TABLE IF NOT EXISTS parents(issue INTEGER PRIMARY KEY, parent INTEGER);
-CREATE TABLE IF NOT EXISTS pull_merge(number INTEGER PRIMARY KEY, merged INTEGER);
+CREATE TABLE IF NOT EXISTS pull_merge(number INTEGER PRIMARY KEY, merged INTEGER, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS board_cards(number INTEGER PRIMARY KEY, kind TEXT, item TEXT, archived INTEGER, status TEXT,
   why TEXT);
 """
@@ -292,10 +292,9 @@ def store_issue_page(db, rows, changed):
         number = int(row["number"])
         old = db.execute("SELECT updated_at FROM issues WHERE number = ?", (number,)).fetchone()
         if old and old["updated_at"] == row.get("updated_at"):
-            if row.get("pull_request") and not db.execute("SELECT 1 FROM pull_merge WHERE number = ?",
-                                                          (number,)).fetchone():
-                db.execute("INSERT OR REPLACE INTO pull_merge VALUES (?, ?)",
-                           (number, 1 if (row.get("pull_request") or {}).get("merged_at") else 0))
+            if row.get("pull_request"):  # also fills the merge state of a row an older version stored
+                db.execute("INSERT OR REPLACE INTO pull_merge VALUES (?, ?, ?)", (number, 1 if (
+                    row.get("pull_request") or {}).get("merged_at") else 0, row.get("updated_at")))
             continue  # read again because of the overlap; nothing changed
         db.execute("""INSERT OR REPLACE INTO issues(number, title, state, is_pr, author, labels, body, created_at,
                       updated_at, closed_at, url, last_edited_at, timeline_read, edits_read)
@@ -308,7 +307,8 @@ def store_issue_page(db, rows, changed):
         changed.add(number)
         if row.get("pull_request"):
             merged = (row.get("pull_request") or {}).get("merged_at")
-            db.execute("INSERT OR REPLACE INTO pull_merge VALUES (?, ?)", (number, 1 if merged else 0))
+            db.execute("INSERT OR REPLACE INTO pull_merge VALUES (?, ?, ?)", (number, 1 if merged else 0,
+                                                                              row.get("updated_at")))
 
 
 def store_comment_page(db, rows, changed):
@@ -412,6 +412,12 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
         set_meta(db, "issues_newest", "")
         db.execute("UPDATE issues SET edits_read = 0 WHERE is_pr = 0")
     set_meta(db, "links_ready", "1")
+    # A pull request whose merge state is older than its row was stored by an older version on a shared index: the
+    # issues are listed again from that row's stamp, which fills the merge state in (store_issue_page).
+    stale = db.execute("SELECT MIN(i.updated_at) AS at FROM issues i LEFT JOIN pull_merge p ON p.number = i.number "
+                       "WHERE i.is_pr = 1 AND (p.updated_at IS NULL OR p.updated_at != i.updated_at)").fetchone()["at"]
+    if stale and (get_meta(db, "issues_newest") or "") > stale:
+        set_meta(db, "issues_newest", stale)
     # Anything but "1" means that an older version wrote comments or events since this version's last derive, or
     # that this version never derived this index: the tables of MIND are behind, so everything is derived again.
     full = rebuild or not get_meta(db, "synced_at") or get_meta(db, "derive_pending") == "1" or not mind_ready(db)
