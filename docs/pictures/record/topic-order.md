@@ -14,7 +14,7 @@ The tool put 184 of the 200 pages of the large box in the same place as the pers
 
 Median share of pages, over 5 runs per box, that the tool puts in the same place as a person, for boxes of 20, 60 and 200 pages.
 
-![Share of pages the tool puts in the same place as a person, by size of box](https://github.com/octo-org/sample-project/blob/4f2a9c1/check/out/run-0304/same-place.png?raw=true)
+![Share of pages the tool puts in the same place as a person, by size of box](https://github.com/octo-org/sample-project/blob/7b3d0e2/check/out/run-0304/same-place.png?raw=true)
 
 ## Limitations
 
@@ -24,7 +24,7 @@ The comparison comes from one person and one set of boxes. How long the sort tak
 
 | Statement or number | Source |
 |---|---|
-| 184 of 200 pages in the same place, median of 5 runs; first and last page right on 3 of 3 boxes | `check/out/run-0304/summary.tsv`, commit 4f2a9c1 |
+| 184 of 200 pages in the same place, median of 5 runs; first and last page right on 3 of 3 boxes | `check/out/run-0304/summary.tsv`, commit 7b3d0e2 |
 | Boxes | practice set v1 under `pages/boxes/` |
-| Comparison method | `check/run.py`, commit 4f2a9c1 |
-| Figure same-place | data `check/out/run-0304/summary.tsv`; command `python check/plot.py check/out/run-0304/summary.tsv`; commit 4f2a9c1 |
+| Comparison method | `check/run.py`, commit 7b3d0e2 |
+| Figure same-place | data `check/out/run-0304/summary.tsv`; command `python check/plot.py check/out/run-0304/summary.tsv`; commit 7b3d0e2 |

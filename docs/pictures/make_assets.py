@@ -3,7 +3,7 @@
 import html, os
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "assets")
 PAL = {
-    "light": dict(bg="#FCF8F1", sheet="#FFFFFF", ink="#302927", quiet="#6E625D", rule="#E7DDCE", brand="#D76744", deep="#B04A2A", wash="#F8E4D9"),
+    "light": dict(bg="#FCF8F1", sheet="#FFFFFF", ink="#302927", quiet="#6E625D", rule="#E7DDCE", brand="#D76744", deep="#B04A2A", wash="#FAEAE1"),
     "dark": dict(bg="#231D1B", sheet="#302927", ink="#F6EFE3", quiet="#B9ABA1", rule="#4B403B", brand="#D76744", deep="#F0997A", wash="#4D2F24"),
 }
 FONT = 'font-family="system-ui,-apple-system,Segoe UI,Roboto,Noto Sans,Liberation Sans,sans-serif"'
@@ -29,7 +29,7 @@ def how(p):
     b = []
     # column 1: the session
     b += [T(40, 44, "YOUR SESSION", 12, "quiet", 600, p=p), box(40, 60, 230, 208, p)]
-    for i, (mark, line) in enumerate((("found", "finds a result"), ("decided", "takes a decision"), ("wrong", "hits a failure"), ("idea", "has an idea"))):
+    for i, (mark, line) in enumerate((("found", "finds a result"), ("decided", "makes a decision"), ("wrong", "hits a failure"), ("idea", "has an idea"))):
         y = 100 + i * 42
         b += ['<circle cx="68" cy="%d" r="6" fill="%s"/>' % (y - 5, p["brand"]), T(86, y, line, 16, serif=True, p=p)]
     # arrow 1
@@ -59,10 +59,10 @@ def board(p):
     b = [T(32, 42, "sample-project record", 17, weight=600, p=p), T(928, 42, "Private", 12, "quiet", anchor="end", p=p),
          T(32, 66, "Board", 13, "deep", 600, p=p), T(86, 66, "Waiting on you", 13, "quiet", p=p), T(196, 66, "By thread", 13, "quiet", p=p),
          '<line x1="32" y1="72" x2="68" y2="72" stroke="%s" stroke-width="2.5"/>' % p["brand"]]
-    cols = (("Todo", [("Task: three trial boxes for asking", "Dates", None)]),
-            ("In Progress", [("Task: pages that carry two dates", "Dates", "a decision, March 7")]),
-            ("Waiting for a yes", [("Tag release 0.3.0", "hub", "the last pause")]),
-            ("Done", [("Add the question step", "Dates", "merged"), ("Task: ask the person, never guess", "Dates", None)]))
+    cols = (("Todo", [("Task: three trial boxes", "Thread: Dates", None)]),
+            ("In Progress", [("Task: pages with two dates", "Thread: Dates", "a checkpoint, March 11")]),
+            ("Waiting for a yes", [("Task: tag release 1.4.0", "Thread: Dates", "the last pause")]),
+            ("Done", [("Add the question step", "Pull request, merged", None), ("Task: ask, never guess", "Thread: Dates", "a result, March 9")]))
     for i, (name, cards) in enumerate(cols):
         x = 32 + i * 226
         b += [box(x, 88, 216, 186, p, fill="sheet", r=12, sw=1), T(x + 14, 114, name, 13.5, weight=600, p=p), T(x + 202, 114, str(len(cards)), 12, "quiet", anchor="end", p=p)]
@@ -70,11 +70,11 @@ def board(p):
         for title, thread, why in cards:
             h = 74 if why else 56
             b += [box(x + 10, y, 196, h, p, fill="bg", r=8, sw=1), T(x + 22, y + 22, title if len(title) < 27 else title[:25] + "…", 12.5, weight=600, p=p),
-                  T(x + 22, y + 41, "Thread: " + thread, 11.5, "quiet", p=p)]
+                  T(x + 22, y + 41, thread, 11.5, "quiet", p=p)]
             if why:
                 b += [T(x + 22, y + 59, "Why: " + why, 11.5, "deep", p=p)]
             y += h + 8
-    b += [T(32, 302, "Every card and every move comes from a memory in the record. The record stays the authority.", 13, "quiet", p=p)]
+    b += [T(32, 302, "Each card's column follows from the record, and the record stays the authority.", 13, "quiet", p=p)]
     return frame(960, 324, p, b, "A private GitHub Projects board whose cards and columns follow the record")
 
 os.makedirs(OUT, exist_ok=True)

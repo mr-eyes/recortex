@@ -1,11 +1,11 @@
-<!-- ghim:event type=decision at=2026-03-07T09:30-08:00 because=9104 instead=9103 -->
-### Decision: 2026-03-07 09:30 PST - ask the person, never guess
+<!-- ghim:event type=decision at=2026-03-07T13:45-08:00 because=9104 instead=9103 -->
+### Decision: 2026-03-07 13:45 PST - ask the person, never guess
 
 **In plain words, we decided to:** show each undated page to the person and ask for its date, and stop borrowing dates from other pages
 
 **Decision:** The tool asks the person for the date of each page in the undated pile; the borrowing pass is removed.
 
-**Decided by:** the project owner, 2026-03-07 09:30 PST
+**Decided by:** the project owner, 2026-03-07 13:45 PST
 
 **Exact words:**
 
@@ -19,7 +19,7 @@
 
 **Evidence:**
 - table practice
-- code sorter/dates.py#L41-L59 at 9c3e1ab
+- code sorter/dates.py#L41-L59 at 2e8f6a4
 - pull 2
 
 <details>

@@ -7794,6 +7794,8 @@ class MindPageTests(MindSandbox):
             for name in ("ink", "quiet", "thread", "found", "decided", "wrong", "idea", "asked", "fixed", "paused"):
                 for ground in ("fog", "sheet"):
                     self.assertGreaterEqual(contrast(tokens[name], tokens[ground]), 4.5, (name, ground, tokens[name]))
+            for name in ("ink", "quiet", "thread"):  # chips, the active way in and the reminder fold sit on --wash
+                self.assertGreaterEqual(contrast(tokens[name], tokens["wash"]), 4.5, (name, "wash", tokens[name]))
         # the contrast function itself: black on white is 21 to 1, and a mid gray fails
         self.assertAlmostEqual(21.0, contrast("#000000", "#FFFFFF"), places=3)
         self.assertLess(contrast("#D76744", "#FCF8F1"), 4.5)  # why the brand color is never used for text
@@ -9007,6 +9009,7 @@ class DocsRecordTests(Sandbox):
             json.dump({"repo": self.repo_name, "hub": 4, "profiles": ["software", "research"]}, handle)
         trusted = self.write("trusted-repos", "%s octo-dev\n" % self.repo_name)
         self.env = {"CLAUDE_PROJECT_DIR": self.project, "RECORTEX_TRUSTED_FILE": trusted}
+        shutil.copy(os.path.join(ROOT, "docs", "pictures", "state.json"), self.state)  # the record's own fake GitHub
 
     def write(self, name, text):
         path = os.path.join(self.dir, name)
@@ -9067,6 +9070,21 @@ class DocsRecordTests(Sandbox):
             self.assertIn(sentence, words)
         self.assertIn("Still open" + STORY[-1], words)  # the chip before the last sentence
         self.assertNotIn("tinycsv", text.lower())
+        fixture = json.loads(recortex.read_text(os.path.join(FIXTURES, "repo-state.json")))
+        for issue in fixture["issues"].values():  # nothing of the tests' fake repository reaches the docs
+            self.assertNotIn(issue["title"], text)
+        self.assertNotIn("tests/fixtures", recortex.read_text(os.path.join(ROOT, "docs", "pictures", "make.sh")))
+
+    def test_the_brief_in_the_readme_is_what_the_record_prints(self):
+        self.build()
+        printed = self.script("hooks.py", "--print")
+        self.assertEqual(0, printed.returncode, printed.stdout + printed.stderr)
+        readme = recortex.read_text(os.path.join(ROOT, "README.md"))
+        sample = readme.split("```text\n", 1)[1].split("```", 1)[0].strip().split("\n")
+        clock = lambda line: re.sub(r"synced \S+ \(UTC\), \d+ minutes? old", "synced (UTC), old", line)
+        lines = [clock(line) for line in printed.stdout.split("\n")]
+        for line in sample:
+            self.assertIn(clock(line), lines, line)
 
 
 def github_slug(heading):
@@ -9095,7 +9113,10 @@ class DocsTests(unittest.TestCase):
         text = self.text("README.md")
         self.assertLess(len(text.split()), 1000)
         self.assertIn("Project memory that survives every session.", text)
-        self.assertNotIn("**", text)  # no bold in the README
+        self.assertNotIn("**", re.sub(r"```.*?```", "", text, flags=re.S))  # no bold in the README's prose
+        for name in ("how-it-works.md", "reference.md"):
+            self.assertNotIn("**", self.text(os.path.join("docs", name)), name)  # no bold list openers in the pages
+            self.assertNotIn("\n\n\n", self.text(os.path.join("docs", name)), name)
 
     def test_every_relative_link_and_picture_resolves(self):
         found = 0
@@ -9165,6 +9186,30 @@ class DocsTests(unittest.TestCase):
         self.assertEqual({"mr-eyes/recortex", "octo-org/sample-project"}, found)
         for path in self.files():
             self.assertNotIn("example-org", self.text(path), path)
+
+    def test_the_board_drawing_promises_no_more_than_the_design(self):
+        for path in self.files():
+            self.assertNotIn("the memory that put it there", self.text(path), path)
+        for mode in ("light", "dark"):
+            texts = re.findall(r">([^<>]+)</text>", self.text(os.path.join("assets", "board-%s.svg" % mode)))
+            self.assertFalse([t for t in texts if t.startswith("Every card")], mode)  # no card or move without a memory
+            self.assertNotIn("Thread: hub", texts)  # a task's thread is a topic; the hub is the top, not a thread
+            self.assertNotIn("Why: merged", texts)  # a pull request's card has no Why
+            self.assertFalse([t for t in texts if t.startswith("Why: a decision")], mode)  # In Progress: a checkpoint
+            self.assertFalse([t for t in texts if t.endswith("\u2026")], mode)  # every title fits its card
+
+    def test_the_docs_write_american_english(self):
+        for path in self.files() + [os.path.join("assets", name) for name in os.listdir(os.path.join(ROOT, "assets"))
+                                    if name.endswith(".svg")]:
+            self.assertNotIn("takes a decision", self.text(path), path)
+
+    def test_the_record_shares_no_time_commit_or_version_with_the_built_in_example(self):
+        def read(folder):
+            return "\n".join(recortex.read_text(os.path.join(top, name)) for top, _, names in os.walk(folder)
+                             for name in names)
+        docs, example = read(DOCS_RECORD) + self.text("README.md"), read(EXAMPLE)
+        for pattern in (r"\b20\d\d-\d\d-\d\d[ T]\d\d:\d\d", r"\b[0-9a-f]{7}\b", r"\b\d+\.\d+\.\d+\b"):
+            self.assertEqual(set(), set(re.findall(pattern, docs)) & set(re.findall(pattern, example)), pattern)
 
     def test_the_story_in_the_readme_is_the_story_the_record_tells(self):
         text = self.text("README.md")
@@ -9246,6 +9291,8 @@ class PackagingTests(unittest.TestCase):
             dirs[:] = [d for d in dirs if d not in (".git", ".tmp", "__pycache__")]
             for name in files:
                 path = os.path.relpath(os.path.join(folder, name), ROOT).replace(os.sep, "/")
+                if path == ".git":
+                    continue  # in a worktree this is a file that points at the main checkout's folder
                 self.assertIsNone(earlier.search(path), path)  # no path keeps an earlier name
                 if name.endswith(".png"):
                     continue  # a picture holds no words; the docs test looks at what is drawn in the pictures' SVG files

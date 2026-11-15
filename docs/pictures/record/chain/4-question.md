@@ -1,5 +1,5 @@
-<!-- ghim:event type=question at=2026-03-10T09:15-08:00 because=9105 -->
-### Question: 2026-03-10 09:15 PST - asking about a hundred pages
+<!-- ghim:event type=question at=2026-03-10T17:10-08:00 because=9105 -->
+### Question: 2026-03-10 17:10 PST - asking about a hundred pages
 
 **In plain words, we asked:** whether asking still works when a box has a hundred undated pages and not twelve
 

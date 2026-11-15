@@ -8,7 +8,7 @@ NEW-dates: the result of this task is posted there as a dated comment when the t
 
 ## Done when
 
-All 12 two-date pages in practice set v2 are read correctly, and no page that is read correctly at commit 4f2a9c1 fails.
+All 12 two-date pages in practice set v2 are read correctly, and no page that is read correctly at commit 7b3d0e2 fails.
 
 ## Plan
 
@@ -19,4 +19,4 @@ All 12 two-date pages in practice set v2 are read correctly, and no page that is
 
 ## Result
 
-Not finished. Opened 2026-03-04 16:35 PST.
+Not finished. Opened 2026-03-04 11:50 PST.

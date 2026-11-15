@@ -1,9 +1,9 @@
-<!-- ghim:event type=result at=2026-03-04T14:10-08:00 -->
-### Result: 2026-03-04 14:10 PST - first comparison with a hand-sorted box
+<!-- ghim:event type=result at=2026-03-04T08:40-08:00 -->
+### Result: 2026-03-04 08:40 PST - first comparison with a hand-sorted box
 
 **In plain words, we found that:** the tool put 184 of the 200 pages of the large box in the same place as a person did
 
-**What ran:** `python check/run.py --repeat 5` at commit 4f2a9c1, output in `check/out/run-0304/`.
+**What ran:** `python check/run.py --repeat 5` at commit 7b3d0e2, output in `check/out/run-0304/`.
 
 **Configuration:** practice set v1 (boxes of 20, 60 and 200 pages), one laptop, one person's hand-sorted order.
 
@@ -17,7 +17,7 @@
 
 **Exclusions and failures:** None. All 15 runs finished.
 
-**Cost:** About 4 minutes of laptop time.
+**Cost:** One run of the sorter over the box, under a minute.
 
 **Not established:** How long a sort takes. Whether a second person would sort the boxes the same way.
 

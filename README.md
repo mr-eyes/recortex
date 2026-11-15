@@ -79,11 +79,11 @@ An invented project sorts a box of scanned letters by the date written on each p
 Each sentence is one comment on a GitHub issue. The words between them are links the session recorded: this failure tested that idea, this decision came from that failure. Three weeks later a new session opens, and its first lines are, abridged:
 
 ```text
-recortex record brief for your-name/your-project (from the local index, 2 minutes old).
+recortex record brief for octo-org/sample-project (from the local index synced 2026-03-31T16:02:11Z (UTC), 2 minutes old).
 Open active issues: 1
 - #7 Task: pages that carry two dates
-Current focus: Release 0.3.0. The tool reads handwritten dates; pages that carry two dates are the last open item.
-Holds: Do not tag 0.3.0 until the project owner says so.
+**Current focus:** Release 1.4.0, which reads dates written by hand. Pages that carry two dates are what is left.
+**Holds:** The project owner says when 1.4.0 is tagged; until then, no tag.
 ```
 
 Before it writes about the undated pages, it reads that thread: the failure and the decision it caused. It does not try the borrowed dates again. The failure is in the record.
@@ -92,10 +92,10 @@ Before it writes about the undated pages, it reads that thread: the failure and 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/board-dark.svg">
-  <img src="assets/board-light.svg" alt="A board with the columns Todo, In Progress, Waiting for a yes and Done. Each card names its thread and the memory that put it there.">
+  <img src="assets/board-light.svg" alt="A board with the columns Todo, In Progress, Waiting for a yes and Done. A task's card names its thread, and the memory that put it in its column when there is one.">
 </picture>
 
-Optional, chosen at setup, and private. The record decides which column a card is in, and the board is brought up to date at each pause. If you move a card by hand, the session asks you before it changes anything, then records your answer.
+Optional, chosen at setup, and private. The record decides which column a card is in, and the board is brought up to date at each pause. If you move a card by hand, the session asks what the move means before it changes anything, then records your answer or puts the card back.
 
 ## Read more
 

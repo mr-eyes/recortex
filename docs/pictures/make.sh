@@ -7,9 +7,7 @@ set -e
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); R=$(cd "$HERE/../.." && pwd); S=$R/skills/recortex/scripts
 REPO=${PICTURE_REPO:-octo-org/sample-project}   # the invented record's repository name; the drafts hold the same text
 mkdir -p "$R/.tmp"; D=$(mktemp -d "${1:-$R/.tmp}/pictures-XXXX")
-mkdir "$D/project" "$D/home"; cp "$R/tests/fixtures/repo-state.json" "$D/state.json"; cp -r "$HERE/record" "$D/drafts"
-# the fake's other issues get invented titles that name nothing real
-sed -i 's/Add tolerance option/Add the question step/; s/Old question about tolerance/Old question about paper sizes/; s/Benchmark the reader/Compare with a hand-sorted box/; s/Adds `--tol`\./Adds the question step./' "$D/state.json"
+mkdir "$D/project" "$D/home"; cp "$HERE/state.json" "$D/state.json"; cp -r "$HERE/record" "$D/drafts"
 printf '%s octo-dev\n' "$REPO" > "$D/trusted"
 printf '{"repo": "%s", "hub": 4, "profiles": ["software", "research"]}\n' "$REPO" > "$D/project/.recortex.json"
 # every command runs in a clean environment: no variable of the plugin or of the real account reaches it
@@ -28,8 +26,8 @@ done
 run python3 "$S/index.py" sync && run python3 "$S/mind.py"
 PAGE="$D/cache/recortex/private/$(echo "$REPO" | sed 's#/#__#')/mind.html"
 cp "$PAGE" "$D/mind.html"
-# the story pictures: the page at 1240 wide, one thread, light and dark
-run node "$HERE/shots.mjs" "$D/mind.html" "$D/shots" mind-story 1240 thread-5 1180 1
+# the story pictures: the page at 1240 wide, the thread from its title down to the failure and the decision it caused, light and dark
+run node "$HERE/shots.mjs" "$D/mind.html" "$D/shots" mind-story 1240 thread-5 910 1 225
 cp "$D/shots/mind-story-light-thread-5.png" "$R/assets/mind-story-light.png"
 cp "$D/shots/mind-story-dark-thread-5.png" "$R/assets/mind-story-dark.png"
 # the two drawings

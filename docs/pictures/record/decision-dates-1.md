@@ -1,11 +1,11 @@
-<!-- ghim:event type=decision at=2026-03-04T15:55-08:00 -->
-### Decision: 2026-03-04 15:55 PST - undated pages get their own pile
+<!-- ghim:event type=decision at=2026-03-04T11:25-08:00 -->
+### Decision: 2026-03-04 11:25 PST - undated pages get their own pile
 
 **In plain words, we decided to:** put every page with no readable date in an undated pile, and never give it a guessed date
 
 **Decision:** A page with no readable date goes to the undated pile.
 
-**Decided by:** the project owner, 2026-03-04 15:55 PST
+**Decided by:** the project owner, 2026-03-04 11:25 PST
 
 **Exact words:**
 

@@ -8,7 +8,7 @@ The plugin adds three agents for bulk and audit work, one tier below the main se
 
 ## The hooks and the CLAUDE.md snippet
 
-**Hooks.** Four hooks keep every session and subagent aware of the record, built from a local index of the issues (`scripts/index.py`, a SQLite file under `~/.cache/recortex` that can be rebuilt from GitHub at any time; hooks and terminal scripts use the same file):
+Hooks: Four hooks keep every session and subagent aware of the record, built from a local index of the issues (`scripts/index.py`, a SQLite file under `~/.cache/recortex` that can be rebuilt from GitHub at any time; hooks and terminal scripts use the same file):
 
 | Hook | Prints |
 |---|---|
@@ -19,7 +19,7 @@ The plugin adds three agents for bulk and audit work, one tier below the main se
 
 They print nothing when the project has no configuration file or the repository is not in your trusted list, and never write to GitHub. Set-up builds the index once (`index.py sync`); otherwise the first session builds it in the background and the brief arrives with its next prompt. In a project that is set up and trusted, a brief that cannot be produced is replaced by one line naming the reason. `python3 scripts/hooks.py --print` shows each payload and its size; `python3 scripts/hooks.py --doctor` shows why a brief is or is not shown: configuration, trust, storage folders with owner and mode, the index and the last sync failure. The plugin installs them. For a plain skill install, merge [`templates/settings-hook-snippet.json`](../skills/recortex/templates/settings-hook-snippet.json) into `.claude/settings.json` or `~/.claude/settings.json` and adjust the paths.
 
-**CLAUDE.md snippet.** [`templates/claude-md-snippet.md`](../skills/recortex/templates/claude-md-snippet.md) is a few lines for the project's CLAUDE.md that give every session the hub's location and the recording rules.
+The CLAUDE.md snippet: [`templates/claude-md-snippet.md`](../skills/recortex/templates/claude-md-snippet.md) is a few lines for the project's CLAUDE.md that give every session the hub's location and the recording rules.
 
 ## Scripts
 

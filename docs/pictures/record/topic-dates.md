@@ -31,7 +31,7 @@ Practice pages for which the tool reads the same date as a person, by what the p
 
 | Statement or number | Source |
 |---|---|
-| 41 of 53 pages read correctly; 12 fail, each with two dates | `pages/practice/report-4f2a9c1.txt`, practice set v2, commit 4f2a9c1 |
-| 6 of 6 pages with a date written as words read correctly | `pages/practice/report-4f2a9c1.txt`, commit 4f2a9c1 |
-| Undated pages get their own pile | `sorter/dates.py`, commit 4f2a9c1 |
-| Table practice | data `pages/practice/report-4f2a9c1.txt`; command `python pages/practice/run.py --summary`; commit 4f2a9c1 |
+| 41 of 53 pages read correctly; 12 fail, each with two dates | `pages/practice/report-7b3d0e2.txt`, practice set v2, commit 7b3d0e2 |
+| 6 of 6 pages with a date written as words read correctly | `pages/practice/report-7b3d0e2.txt`, commit 7b3d0e2 |
+| Undated pages get their own pile | `sorter/dates.py`, commit 7b3d0e2 |
+| Table practice | data `pages/practice/report-7b3d0e2.txt`; command `python pages/practice/run.py --summary`; commit 7b3d0e2 |

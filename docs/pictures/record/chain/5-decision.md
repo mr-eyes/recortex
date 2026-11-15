@@ -1,11 +1,11 @@
-<!-- ghim:event type=decision at=2026-03-12T10:10-08:00 replaces=9102 -->
-### Decision: 2026-03-12 10:10 PST - the undated pile stays, and says why
+<!-- ghim:event type=decision at=2026-03-12T14:50-08:00 replaces=9102 -->
+### Decision: 2026-03-12 14:50 PST - the undated pile stays, and says why
 
 **In plain words, we decided to:** keep the undated pile and make the report say, for each page in it, why the date could not be read
 
 **Decision:** The undated pile stays. The report now gives one reason per page: no date found, two dates found, or a date that cannot be a real day.
 
-**Decided by:** the project owner, 2026-03-12 10:10 PST
+**Decided by:** the project owner, 2026-03-12 14:50 PST
 
 **Exact words:**
 

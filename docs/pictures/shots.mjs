@@ -1,10 +1,10 @@
-// Headless Chrome screenshots. usage: node shots.mjs <file.html> <shots dir> <prefix> <width> <hash,hash,...|-> [maxheight] [scale]
+// Headless Chrome screenshots. usage: node shots.mjs <file.html> <shots dir> <prefix> <width> <hash,hash,...|-> [maxheight] [scale] [top]
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 const file = resolve(process.argv[2]), shots = resolve(process.argv[3]), prefix = process.argv[4], width = +process.argv[5];
-const hashes = process.argv[6] === '-' ? [''] : process.argv[6].split(','), maxh = +(process.argv[7] || 2600), scale = +(process.argv[8] || 2);
+const hashes = process.argv[6] === '-' ? [''] : process.argv[6].split(','), maxh = +(process.argv[7] || 2600), scale = +(process.argv[8] || 2), top = +(process.argv[9] || 0);
 mkdirSync(shots, { recursive: true }); const profile = mkdtempSync(join(tmpdir(), 'recortex-chrome-'));
 const chrome = spawn('google-chrome', ['--headless=new', '--remote-debugging-port=0', '--user-data-dir=' + profile, '--no-first-run', '--window-size=1400,1000', 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -26,7 +26,7 @@ for (const d of ['Runtime', 'Log', 'Network', 'Page']) await send(d + '.enable')
 await send('Emulation.setDeviceMetricsOverride', { width, height: Math.min(maxh, 1200), deviceScaleFactor: scale, mobile: false });
 const shot = async (name) => { await ev('scrollTo(0,0)'); await sleep(400);
   const m = await send('Page.getLayoutMetrics'); const h = await ev('Math.max(document.body.scrollHeight, document.querySelector("main") ? document.querySelector("main").scrollHeight : 0)');
-  const clip = { x: 0, y: 0, width: m.cssContentSize.width, height: Math.min(Math.max(h, 600), maxh), scale: 1 };
+  const clip = { x: 0, y: top, width: m.cssContentSize.width, height: Math.min(Math.max(h - top, 600), maxh), scale: 1 };
   const r = await send('Page.captureScreenshot', { format: 'png', clip, captureBeyondViewport: true }); writeFileSync(join(shots, name + '.png'), Buffer.from(r.data, 'base64')); };
 for (const mode of ['light', 'dark']) {
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: mode }] });

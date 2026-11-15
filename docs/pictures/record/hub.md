@@ -8,15 +8,15 @@ The current resume block is the newest comment on this issue that carries the re
 
 ## Project
 
-The sample project is a small tool that puts a box of scanned letters in order by the date written on each page. The goal of the current cycle is release 0.3.0, which reads handwritten dates, plus a short accuracy note that compares the sorted box with one sorted by hand. The project owner makes release decisions. Code lives in `octo-org/sample-project`; the practice pages live under `pages/practice/` in the same repository.
+The sample project is a small tool that puts a box of scanned letters in order by the date written on each page. The goal of the current cycle is release 1.4.0, which reads handwritten dates, plus a short accuracy note that compares the sorted box with one sorted by hand. The project owner makes release decisions. Code lives in `octo-org/sample-project`; the practice pages live under `pages/practice/` in the same repository.
 
-Times in this tracker are US Pacific time, written as 2026-03-04 14:10 PST. Times copied from GitHub or other tools in UTC are converted before they are written here.
+Times in this tracker are US Pacific time, written as 2026-03-04 08:40 PST. Times copied from GitHub or other tools in UTC are converted before they are written here.
 
 ## Map
 
 ```mermaid
 flowchart LR
-  REL["Release notes 0.3.0"] --> DATES["NEW-dates Dates"]
+  REL["Release notes 1.4.0"] --> DATES["NEW-dates Dates"]
   NOTE["Accuracy note"] --> ORDER["NEW-order Order"]
   DATES --> TASK["NEW-task-two-dates Two dates"]
   DATES --> ORDER
@@ -26,7 +26,7 @@ flowchart LR
 
 The issues whose bodies make up each section, sections in the order of each deliverable. A topic appears once for each section its body has. Numbers are not repeated here; they live in the bodies, each with its source.
 
-### Release notes 0.3.0
+### Release notes 1.4.0
 
 | Section | Issue | What its body covers |
 |---|---|---|

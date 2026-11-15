@@ -1,5 +1,5 @@
-<!-- ghim:event type=idea at=2026-03-05T10:00-08:00 -->
-### Idea: 2026-03-05 10:00 PST - borrow the date from the pages around it
+<!-- ghim:event type=idea at=2026-03-05T16:20-08:00 -->
+### Idea: 2026-03-05 16:20 PST - borrow the date from the pages around it
 
 **In plain words, we had the idea to:** give an undated page the date of the pages scanned just before and after it
 

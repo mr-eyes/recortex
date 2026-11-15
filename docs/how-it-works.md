@@ -20,14 +20,12 @@ What lives in GitHub, what a session does with it, and what comes back after a c
 
 When what the deliverable says changes, the topic's body is edited in place; the dated comment that caused the change and GitHub's edit history are the trail. A result that leaves the deliverable leaves the body, and its section label comes off. Posted comments are never rewritten.
 
-
-
 ## The daily loop
 
-1. **Start.** The session reads the newest resume comment on the hub, then the open `active` issues, then the newest comments of the topics in play. With the hook this begins automatically.
-2. **Work.** When an experiment finishes, a decision is made, something fails or a change is merged, the session drafts a comment from the matching template, checks every number against its source file, lints the draft and posts it. The script reads the comment back from GitHub and compares it with the draft.
-3. **The deliverable text changes.** The topic's body is edited in place and its section labels follow its headings; the comment that caused the change is the record of why.
-4. **Stop.** The session posts a checkpoint on each active issue and a new resume comment on the hub.
+1. Start. The session reads the newest resume comment on the hub, then the open `active` issues, then the newest comments of the topics in play. With the hook this begins automatically.
+2. Work. When an experiment finishes, a decision is made, something fails or a change is merged, the session drafts a comment from the matching template, checks every number against its source file, lints the draft and posts it. The script reads the comment back from GitHub and compares it with the draft.
+3. The deliverable text changes. The topic's body is edited in place and its section labels follow its headings; the comment that caused the change is the record of why.
+4. Stop. The session posts a checkpoint on each active issue and a new resume comment on the hub.
 
 Before a new memory is written, `index.py query recall --issue N` shows the newest memories of its thread with their state, the open questions and untried ideas elsewhere, and the words the project has explained. The session writes the plain line first, links the memory to the earlier one it builds on when that link is true, and explains in a fold at its end any word that cannot be understood without the project. The linter checks the plain line, the links and their targets, the Evidence lines and the folds before anything is posted, and the post prints the new memory's id for the next link.
 
