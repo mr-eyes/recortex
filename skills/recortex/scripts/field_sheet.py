@@ -41,7 +41,9 @@ NAME = re.compile(r"[A-Za-z][A-Za-z0-9 '&-]{1,39}")
 EXTRA = "\u00b1\u00b0\u00b5\u00d7\u2264\u2265"
 TEXT = re.compile("[A-Za-z0-9 ,.;:()'\"/%+&?=" + EXTRA + "-]+")
 # A dot inside a word (a file name or an address), or a dot that starts a word (a hidden file such as a settings file).
-DOTTED = re.compile(r"[A-Za-z0-9]\.[A-Za-z]{2}|(?:^|[^A-Za-z0-9.])\.[A-Za-z]")
+DOTTED = re.compile(r"[A-Za-z0-9]\.[A-Za-z]{2}|(?:^|[^A-Za-z0-9.])\.[A-Za-z]|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+")
+# A path that starts with a slash (/srv/keys), also after one or two dots (../keys); "and/or" and "mg/kg" pass.
+PATH = re.compile(r"(?:^|[ (\"'])\.{0,2}/[A-Za-z0-9]")
 RUNS = ("==", "://")
 PHRASES = ("field guidance", "project status data", names.NAME, names.OLD_NAME)
 RESERVED = ("what counts as proof", "numbers", "failures", "never write down", "across fields", "field", "fields")
@@ -92,6 +94,7 @@ PROBLEMS = {
     "spaces": "a space at either end, or two spaces in a row",
     "run": "a == or :// in the text",
     "dotted": "a dot inside or at the start of a word, as in a file name or an address",
+    "path": "a path that starts with a slash",
     "phrase": "a phrase the plugin keeps for its own wording",
     "total": "the short part is longer than %d characters" % SHORT_CAP,
     "frame": "the frame would be longer than %d characters" % FRAME_CAP,
@@ -104,7 +107,8 @@ TOO_LARGE = "the file is larger than the plugin writes"
 # ---------------------------------------------------------------- the form
 
 def text_problem(value, limit):
-    """None, or the code of the first rule a text breaks: type, empty, long, characters, spaces, run, dotted, phrase."""
+    """None, or the code of the first rule a text breaks: type, empty, long, characters, spaces, run, dotted, path,
+    phrase."""
     if not isinstance(value, str):
         return "type"
     if not value:
@@ -119,6 +123,8 @@ def text_problem(value, limit):
         return "run"
     if DOTTED.search(value):
         return "dotted"
+    if PATH.search(value):
+        return "path"
     low = value.lower()
     if any(phrase in low for phrase in PHRASES):
         return "phrase"
