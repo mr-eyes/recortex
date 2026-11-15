@@ -1078,7 +1078,9 @@ def main(argv=None):
     repo = recortex.resolve_repo(args.repo, config)
     print(recortex.describe(config, repo))
     if args.sync:
-        hub = config.get("hub") if config.get("repo", "").lower() == repo.lower() else None
+        hub = None  # a project file with no hub syncs without the resume block, as index.py sync does
+        if config.get("repo", "").lower() == repo.lower() and "hub" in config:
+            hub = recortex.resolve_hub(None, config)  # a hub that is no issue number stops with its fixed line
         index.sync(repo, hub)
     allowed = recortex.allowed_users(repo)
     if not allowed:

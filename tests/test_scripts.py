@@ -7189,6 +7189,19 @@ class MindPageTests(MindSandbox):
         calls = [" ".join(call) for call in self.repo()["log"][before:]]
         self.assertTrue(any("repos/example-org/tinycsv/issues?" in call for call in calls), calls)
 
+    def test_a_hub_that_is_no_number_stops_a_sync_with_its_fixed_line(self):
+        self.add_chain()
+        self.ready()
+        before = len(self.repo()["log"])
+        for hub in ("four", 0, "4"):
+            self.write_config(dict(self.config, hub=hub))
+            refused = self.build("--sync", gh=FAKE)
+            self.assertEqual((1, "error: no hub issue number. Pass --hub N or set \"hub\" in .recortex.json\n"),
+                             (refused.returncode, refused.stderr), hub)
+        self.assertEqual(before, len(self.repo()["log"]))  # nothing was read
+        self.write_config({key: value for key, value in self.config.items() if key != "hub"})
+        self.assertEqual(0, self.build("--sync", gh=FAKE).returncode)  # no hub at all: a sync without the resume
+
     def test_open_hands_the_file_address_to_the_browser(self):
         self.add_chain()
         self.ready()
