@@ -6207,6 +6207,23 @@ class MindIndexTests(MindSandbox):
         edited = text.replace(" source=pr:12 -->", " source=pr:12 because=9104 -->", 1)
         self.assertIn("link-kind", codes(lint_drafts.lint_text(edited, kind="decision")))
 
+    def test_a_memory_with_a_missing_time_counts_as_edited(self):
+        """The other half of edited_comments."""
+        self.add_chain()
+        self.ready()
+        self.sql("UPDATE comments SET updated_at = NULL WHERE id = 9105", "UPDATE comments SET created_at = NULL WHERE "
+                 "id = 9106", "UPDATE meta SET value = '1' WHERE key = 'mind_derived'")
+        found = self.memories()
+        self.assertFalse({9105, 9106} & set(found))
+        self.assertIn("2 memories were edited after they were posted and are not listed.", self.recall().stdout)
+        self.in_process()
+        import lookup
+        record = lookup.local(REPO, 5)  # the answers of the index, as lint_drafts.py --index reads them
+        try:
+            self.assertEqual([True, True, False], [record.memory(cid)["edited"] for cid in (9105, 9106, 9107)])
+        finally:
+            record.close()
+
 
 def without_plain(text, kind):
     """A memory as an older version wrote it: the same comment without its plain line."""
@@ -6628,6 +6645,93 @@ class MindModelTests(MindSandbox):
         self.assertTrue(set(range(100, 400)) <= set(cited))
         self.assertEqual({"cite": "issue", "n": 400, "text": "Step 400"} if 400 in cited else
                          {"cite": "none", "n": 0, "text": "an issue on GitHub"}, cited[399]["first"]["blocks"][0]["p"][1])
+
+    def test_a_title_a_login_and_a_label_are_told_only_under_their_rules(self):
+        """An outside author's title, a title whose history is unread, a login that is no login, a label that is no
+        label name."""
+        self.add_chain()
+        data = self.repo()
+        data["issues"]["8"] = {"title": "MARK-TITLE stray", "body": "Body.", "labels": [], "state": "open",
+                               "user": 'mallory"><b>MARK-LOGIN', "created_at": "2026-04-05T10:00:00Z",
+                               "updated_at": "2026-04-05T10:00:00Z"}
+        data["issues"]["9"] = {"title": "Unlabeled", "body": "Body.", "labels": ["topic:MARK-LABEL <b>"],
+                               "state": "open", "created_at": "2026-04-05T10:00:00Z",
+                               "updated_at": "2026-04-05T10:00:00Z"}
+        data["next_issue"] = 10
+        self.save(data)
+        self.put(9600, 9, memory_draft("idea", "2026-03-13T10:00-08:00", rest="**Why it might help:** See #8 and "
+                                          "#7.\n\n**What it would take:** Time.\n\n**Next step:** None, owner Claude "
+                                          "session"))
+        self.ready()
+        self.sql("UPDATE issues SET timeline_read = 0 WHERE number = 7")  # its history is not read yet
+        model = self.model()
+        for mark in ("MARK-LOGIN", "MARK-TITLE", "MARK-LABEL <b>"):
+            self.assertNotIn(mark, json.dumps({key: value for key, value in model.items() if key != "threads"}))
+        cited = {c["n"]: c for c in model["cited"]}
+        self.assertEqual(("an issue someone else opened", None), (cited[8]["title"], cited[8]["author"]))
+        self.assertEqual("an issue someone else opened", cited[7]["title"])
+        thread = [t for t in model["threads"] if 9600 in t["memories"]][0]
+        self.assertEqual(("a thread", "fixed"), (thread["name"], thread["name_from"]))
+        text = self.page()
+        self.assertIn("Opened by <span class=\"people\">an account</span> on April 5, 2026; still open.", text)
+        for mark in ("MARK-LOGIN", "MARK-TITLE", "MARK-LABEL"):
+            self.assertNotIn(mark, text)
+
+    def test_a_large_table_many_words_and_many_threads_are_cut_at_their_caps(self):
+        """The three caps that no test holds."""
+        self.add_chain()
+        wide = "| " + " | ".join("c%d" % c for c in range(15)) + " |\n|" + "---|" * 15 + "\n| " + " | ".join(
+            "v%d" % c for c in range(15)) + " |"
+        tall = "\n".join(["| n |", "|---|"] + ["| %d |" % r for r in range(50)])
+        self.put(9600, 5, memory_draft("result", "2026-03-13T10:00-08:00", rest="**What ran:** The tests.\n\n"
+                                          "**Configuration:**\n\n%s\n\n**Numbers:**\n\n%s\n\n**Not established:** "
+                                          "Windows." % (wide, tall)))
+        data = self.repo()
+        for n in range(30):
+            data["issues"][str(100 + n)] = {"title": "Thread %d" % n, "body": "Body.", "labels": ["topic:t%02d" % n],
+                                            "state": "open", "created_at": "2026-04-05T10:00:00Z",
+                                            "updated_at": "2026-04-05T10:00:00Z"}
+        data["next_issue"] = 131
+        self.save(data)
+        for n in range(30):
+            self.put(9700 + n, 100 + n, memory_draft("idea", "2026-03-%02dT10:00-08:00" % (1 + n % 28)))
+        self.ready()
+        for n in range(401):  # 401 more words, written straight into the index
+            self.sql("INSERT INTO explanations VALUES (9105, %d, 'word', 'word%03d', 0, 'the meaning of a word that is "
+                     "made up for this test', 'Why.', '[]', '')" % (10 + n, n))
+        model = self.model()
+        tables = {f["label"]: f["doc"]["blocks"][0]["table"] for f in self.told(model)[9600]["fields"]
+                  if f["label"] in ("Configuration", "Numbers")}
+        self.assertEqual((12, 12, True), (len(tables["Configuration"]["head"]), len(tables["Configuration"]["rows"][0]),
+                                          tables["Configuration"]["cut"]))
+        self.assertEqual((40, True), (len(tables["Numbers"]["rows"]), tables["Numbers"]["cut"]))
+        self.assertEqual((400, 3), (len(model["words"]), model["not_told"]["words"]))
+        self.assertEqual((24, 9, 9), (len(model["map"]["rows"]), model["map"]["folded"], model["map"]["rows"][-1]["folded"]))
+        text = self.page()
+        for said in ("Only the first 40 rows and 12 columns are shown here.", "9 other threads",
+                     "3 more words are explained in the record than this page shows."):
+            self.assertIn(said, text)
+
+    def test_a_failure_nothing_followed_a_word_used_twice_and_a_set_aside_thread(self):
+        """Three rules of the model that no test holds."""
+        self.add_chain()
+        self.put(9600, 5, memory_draft("failure", "2026-03-13T10:00-08:00",
+                                          plain="the line splitter hangs on a pipe, and the line splitter hangs on a socket"))
+        data = self.repo()
+        data["issues"]["8"] = {"title": "Old thread", "body": "Body.", "labels": ["topic:old"], "state": "closed",
+                               "created_at": "2026-04-05T10:00:00Z", "updated_at": "2026-04-05T10:00:00Z"}
+        data["next_issue"] = 9
+        self.save(data)
+        self.put(9601, 8, memory_draft("result", "2026-03-14T10:00-08:00"))
+        self.ready()
+        model = self.model()
+        told = self.told(model)
+        self.assertEqual(("open", "Nothing followed yet", "open"), (told[9600]["css"], told[9600]["chip"], told[9600]["group"]))
+        self.assertEqual([9600], [entry["id"] for entry in model["open"]["failures"]])
+        self.assertEqual(1, len(told[9600]["sentence"]["marks"]))  # the first appearance of a word, once
+        thread = [t for t in model["threads"] if 9601 in t["memories"]][0]
+        self.assertEqual((True, "Set aside", []), (thread["set_aside"], thread["status"], thread["rests"]))
+        self.assertEqual([9101], [entry["id"] for entry in model["open"]["unknown"]])  # not what a set-aside thread lacks
 
 
 def index_not_ready():
@@ -7100,6 +7204,31 @@ class MindPageTests(MindSandbox):
         self.assertEqual(first, recortex.read_text(self.page_file()))
         model = self.model()
         self.assertEqual(mind.render(model), mind.render(json.loads(json.dumps(model))))
+
+    def test_what_names_nothing_told_gets_words_and_no_anchor(self):
+        """The page's own second check of every reference."""
+        self.add_chain()
+        self.put(9600, 5, memory_draft("decision", "2026-03-13T10:00-08:00", "replaces=9107", plain="MARK-GONE drop it"))
+        self.edit_comment(9600)
+        self.put(9601, 5, memory_draft("decision", "2026-03-14T10:00-08:00", "replaces=9600"))
+        self.ready()
+        built = self.build()
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        text = recortex.read_text(self.page_file())
+        self.assertEqual([], page_problems(text))
+        words = " ".join("".join(PageReader(text).texts).split())
+        self.assertIn("later that changedan earlier memory that is not told here", words)
+        self.assertNotIn("MARK-GONE", text)
+        self.assertNotIn('"#m-9600"', text)
+        mind, model = self.mind(), self.model()
+        told = {m["id"]: m for m in model["memories"]}
+        told[9105]["sentence"]["marks"] = [[0, 7, 99]]  # a word that has no entry
+        told[9105]["fields"][0]["type"] = "text"
+        told[9105]["fields"][0]["doc"] = {"cut": False, "blocks": [{"p": [
+            {"cite": "memory", "n": 424242, "text": "a memory"}, {"cite": "issue", "n": 424242, "text": "an issue"},
+            {"cite": "thread", "n": 424242, "text": "a thread"}, {"w": "a word", "n": 98}]}]}
+        told[9105]["out"].append({"kind": "because", "id": 424242, "told": False, "phrase": "so"})
+        self.assertEqual([], page_problems(mind.render(model)))
 
 
 COMPAT = os.path.join(FIXTURES, "compat-0.5.0")
