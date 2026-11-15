@@ -787,6 +787,10 @@ def check_record(text, kind, lookup, add):
                 add("error", "link-target", 1, "%s=%d: memory %d was written by %s, an account outside your allowed list, "
                     "so the link would lead nowhere; if that account belongs to the project, add its login to the line "
                     "of %s in your trusted list" % (key, target, target, shown_login(found["author"]), repo))
+            elif lookup.trusted and found.get("edited"):
+                add("error", "link-target", 1, "%s=%d: memory %d was edited after it was posted, so it is not told and "
+                    "the link would lead nowhere; link to the memory that corrects it, or leave the link out"
+                    % (key, target, target))
     for item in record_format.citations(text, repo):
         if item["kind"] != "memory":
             continue

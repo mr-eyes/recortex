@@ -5646,6 +5646,71 @@ class MindIndexTests(RecordSandbox):
         recalled = json.loads(self.tool("index.py", "query", "recall", "--issue", "6", "--json").stdout)
         self.assertEqual("tried", {m["id"]: m["state"] for m in recalled["memories"]}[9109])
 
+    # ------------------------------------------------------------ edited memories
+
+    def edit_comment(self, cid, when="2026-04-20T10:00:00Z"):
+        """Mark comment `cid` as changed on GitHub after it was posted: its updated_at moves past its created_at."""
+        data = self.repo()
+        data["comments"][str(cid)]["updated_at"] = when
+        self.save(data)
+
+    def test_an_edited_memory_is_not_told_and_its_links_and_folds_do_not_count(self):
+        self.add_chain()
+        self.ready()
+        self.assertEqual("replaced", self.memories()[9102]["state"])
+        self.edit_comment(9107)  # replaces=9102, and "We now use" strict quoting in a fold
+        self.ready()
+        found = self.memories()
+        self.assertNotIn(9107, found)
+        self.assertEqual("stands", found[9102]["state"])  # its replaces= no longer counts
+        recalled = json.loads(self.tool("index.py", "query", "recall", "--issue", "5", "--json").stdout)
+        self.assertEqual((1, 0), (recalled["edited"], recalled["hidden"]))
+        words = {w["key"]: w for w in recalled["words"]}
+        self.assertEqual(9102, words["strict quoting"]["comment"])  # the older meaning stands again
+        out = self.recall().stdout
+        self.assertIn("1 memory was edited after it was posted and is not listed.\n", out)
+        self.assertNotIn("keep strict quoting as the default", out)
+        self.assertNotIn("the reader's default mode, which stops at a stray quote", out)
+        self.assertIn("strict quoting: tinycsv's rule that a quote character inside an unquoted field stops", out)
+        self.edit_comment(9105, "2026-04-21T10:00:00Z")  # a checkpoint and a second memory count too
+        self.put(9108, 7, CHECKPOINT_060)
+        self.edit_comment(9108, "2026-04-21T11:00:00Z")
+        self.ready()
+        out = self.recall().stdout
+        self.assertIn("3 memories were edited after they were posted and are not listed.\n", out)
+        self.assertNotIn("line splitter", out)  # the fold of 9105 explains nothing now
+        # with the repository untrusted every account counts, and so does every edit
+        untrusted = {"RECORTEX_TRUSTED_FILE": os.path.join(self.dir, "absent")}
+        listed = json.loads(self.tool("index.py", "query", "recall", "--issue", "5", "--json", env=untrusted).stdout)
+        self.assertEqual("replaced", {m["id"]: m for m in listed["memories"]}[9102]["state"])
+        self.assertIn(9107, [m["id"] for m in listed["memories"]])
+        self.assertEqual(0, listed["edited"])
+        self.assertNotIn("edited after", self.recall(env=untrusted).stdout)
+
+    def test_a_link_to_an_edited_memory_is_refused(self):
+        self.add_chain(3)
+        self.edit_comment(9105)
+        self.ready()
+        question = chain_text("4-question.md")  # because=9105
+        refused = self.lint(question, "question")[0]
+        self.assertEqual(["link-target"], codes(refused))
+        self.assertIn("because=9105: memory 9105 was edited after it was posted, so it is not told and the link would "
+                      "lead nowhere; link to the memory that corrects it, or leave the link out", refused[0].message)
+        self.assertEqual([], codes(self.lint(question.replace("because=9105", "because=9104"), "question")[0]))
+        draft = self.write("question.md", question)
+        offline = self.tool("lint_drafts.py", "--kind", "question", "--index", "--issue", "5", draft, gh="false")
+        self.assertEqual(1, offline.returncode)
+        self.assertIn("memory 9105 was edited after it was posted", offline.stdout)
+        online = self.tool("lint_drafts.py", "--kind", "question", "--online", "--issue", "5", draft)
+        self.assertEqual(1, online.returncode)
+        self.assertIn("memory 9105 was edited after it was posted", online.stdout)
+        unedited = self.write("unedited.md", question.replace("because=9105", "because=9104"))
+        passed = self.tool("lint_drafts.py", "--kind", "question", "--index", "--issue", "5", unedited, gh="false")
+        self.assertEqual(0, passed.returncode, passed.stdout + passed.stderr)
+        untrusted = self.tool("lint_drafts.py", "--kind", "question", "--online", "--issue", "5", draft,
+                              env={"RECORTEX_TRUSTED_FILE": os.path.join(self.dir, "absent")})
+        self.assertNotIn("was edited after it was posted", untrusted.stdout)
+
     # ------------------------------------------------------------ staleness
 
     def assertBehind(self):

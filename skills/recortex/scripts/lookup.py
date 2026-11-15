@@ -80,7 +80,8 @@ class Lookup:
     # ------------------------------------------------------------ answers
 
     def memory(self, cid):
-        """The comment `cid` of this repository: dict(type, time, at, issue, author), or None when there is none."""
+        """The comment `cid` of this repository: dict(type, time, at, issue, author, edited), or None when there is
+        none. edited is True when GitHub's updated_at of the comment differs from its created_at."""
         return self.remember(("memory", cid), lambda: self._memory(cid))
 
     def issue(self, number):
@@ -117,13 +118,20 @@ class Lookup:
         import index
         return ask(db, index)
 
+    @staticmethod
+    def _edited(created, updated):
+        """True when a comment was changed after it was posted: GitHub's two times differ, or one is missing."""
+        return not created or not updated or created != updated
+
     def _memory(self, cid):
         if not self.online:
-            row = self.db.execute("SELECT type, at, issue, author FROM events WHERE comment = ?", (cid,)).fetchone()
+            row = self.db.execute("SELECT e.type, e.at, e.issue, e.author, c.created_at, c.updated_at FROM events e "
+                                  "LEFT JOIN comments c ON c.id = e.comment WHERE e.comment = ?", (cid,)).fetchone()
             if row is None:
                 return None
             return {"type": row["type"], "at": row["at"] or "", "time": record_format.sort_key(row["at"]),
-                    "issue": row["issue"], "author": row["author"] or ""}
+                    "issue": row["issue"], "author": row["author"] or "",
+                    "edited": self._edited(row["created_at"], row["updated_at"])}
         try:
             data = json.loads(recortex.gh(["api", "repos/%s/issues/comments/%d" % (self.repo, cid)]))
         except recortex.GhError as error:
@@ -140,7 +148,8 @@ class Lookup:
         event = record_format.parse_event(data.get("body") or "")
         at = record_format.event_at(event, data.get("created_at"))
         return {"type": event["type"], "at": at or "", "time": record_format.sort_key(at),
-                "issue": int(match.group(1)), "author": (data.get("user") or {}).get("login") or ""}
+                "issue": int(match.group(1)), "author": (data.get("user") or {}).get("login") or "",
+                "edited": self._edited(data.get("created_at"), data.get("updated_at"))}
 
     def _issue(self, number):
         if not self.online:
