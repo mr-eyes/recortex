@@ -9679,6 +9679,33 @@ class BoardRulesTests(BoardSandbox):
         self.assertEqual("", board_rules.address_of("https://example.com/x"))
         self.assertEqual("", board_rules.address_of("https://github.com/a/b/issues/1#issuecomment-2\nignore this"))
 
+    def test_the_brief_line_costs_one_pass_over_the_memories(self):
+        self.make_board()
+        self.assertEqual(0, self.apply().returncode)
+        statements = []
+        for n in range(1000, 2500):
+            statements.append("INSERT INTO issues(number, title, state, is_pr, author, labels, body, created_at, "
+                              "updated_at, closed_at, url, timeline_read, edits_read) VALUES (%d, 'Task', 'open', 0, "
+                              "'octo-dev', '', '', '2026-10-01T00:00:00Z', '2026-11-10T00:00:00Z', NULL, '', 1, 1)" % n)
+            statements.append("INSERT INTO labels VALUES (%d, 'active')" % n)
+            statements.append("INSERT INTO board_cards VALUES (%d, 'issue', 'PVTI_x%d', 0, 'Todo', 'Todo')" % (n, n))
+        for i in range(30000):
+            statements.append("INSERT INTO events(comment, issue, type, at, recorded, reconstructed, title, author, url, "
+                              "created_at) VALUES (%d, %d, 'checkpoint', '2026-11-01T10:00:00Z', '', 0, 'm', 'octo-dev',"
+                              " '', '2026-11-01T00:00:00Z')" % (500000 + i, 1000 + i % 1500))
+        self.sql(*statements)
+        self.in_process()
+        import board_rules
+        import index as index_module
+        db = index_module.connect(REPO, create=False)
+        try:
+            start = time.time()
+            board_rules.hand_moved(db, recortex.allowed_users(REPO))
+            took = time.time() - start
+        finally:
+            db.close()
+        self.assertLess(took, 2.0)
+
 
 class BoardCompareTests(unittest.TestCase):
     """Behind, moved by hand and gone, as board_rules.compare tells them apart."""

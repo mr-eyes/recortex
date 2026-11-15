@@ -84,15 +84,21 @@ class Facts:
             texts.setdefault(row["comment"], []).append(row["text"])
         self.cites = {cid: cited(texts.get(cid, [])) for cid in self.items}
         self.pointed = {target for item in self.items.values() for _, target in item["links"]}
+        # Each memory is filed once under its issue and once under each number it names, so that a question about one
+        # card reads only that card's memories: the brief asks it for every card, inside a hook's time.
+        self.on_issue, self.naming = {}, {}
+        for cid, memory in self.items.items():
+            self.on_issue.setdefault(memory["issue"], []).append(memory)
+            for number in self.cites[cid]:
+                self.naming.setdefault(number, []).append(memory)
 
     def about(self, number, kinds):
         """The memories of `kinds` on issue `number` or naming it in a field, newest first."""
-        rows = [m for cid, m in self.items.items() if m["kind"] in kinds and (m["issue"] == number
-                                                                                or number in self.cites[cid])]
-        return sorted(rows, key=lambda m: (m["time"], m["id"]), reverse=True)
+        rows = {m["id"]: m for m in self.on_issue.get(number, []) + self.naming.get(number, []) if m["kind"] in kinds}
+        return sorted(rows.values(), key=lambda m: (m["time"], m["id"]), reverse=True)
 
     def on(self, number, kinds=None):
-        rows = [m for m in self.items.values() if m["issue"] == number and (kinds is None or m["kind"] in kinds)]
+        rows = [m for m in self.on_issue.get(number, []) if kinds is None or m["kind"] in kinds]
         return sorted(rows, key=lambda m: (m["time"], m["id"]), reverse=True)
 
     def address(self, memory):
