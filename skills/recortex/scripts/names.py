@@ -22,7 +22,9 @@ ENV_PREFIX = "RECORTEX_"
 OLD_ENV_PREFIX = "GHIM_"
 WORKFLOW = "recortex-triage.yml"
 OLD_WORKFLOW = "ghim-triage.yml"
-# The plugin's environment variables, without the prefix. The three before the last are read only by the tests. LINK_PAUSE is the seconds create_issues.py waits after each sub-issue link it writes (default 1, at most 10); the tests set it to 0.
+# The plugin's environment variables, without the prefix. The three before the last are read only by the tests.
+# LINK_PAUSE is the seconds create_issues.py waits after each sub-issue link it writes (default 1, at most 10);
+# the tests set it to 0.
 VARIABLES = ("GH", "CONFIG", "TRUSTED_FILE", "TRUSTED_REPOS", "HOOK_TIMEOUT", "DISCOVERY", "SYNC_PAGE",
              "DATA_HOME", "TESTING", "TEST_KEEP", "LINK_PAUSE")
 

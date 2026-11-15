@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKILL = os.path.join(ROOT, "skills", "recortex")
@@ -10286,6 +10287,13 @@ class SubIssueTests(RecordSandbox):
     def test_a_link_that_does_not_read_back_is_a_mismatch(self):
         box = Sandbox("run")
         box.setUp()
+    def test_the_pause_between_links_is_clamped_and_a_value_that_is_not_a_number_gives_the_default(self):
+        import create_issues
+        for value, expected in (("0", 0.0), ("1.5", 1.5), ("99", 10.0), ("nan", 1.0), ("inf", 1.0), ("-3", 1.0),
+                                ("1e400", 1.0), ("abc", 1.0), ("", 1.0)):
+            with mock.patch.dict(os.environ, {"RECORTEX_LINK_PAUSE": value}):
+                self.assertEqual(expected, create_issues.link_pause(), value)
+
         box.add_labels()
         self.addCleanup(box.doCleanups)
         result = box.run_script("create_issues.py", "--manifest", box.manifest, env={"FAKE_GH_IGNORE_SUBISSUE": "1"})

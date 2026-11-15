@@ -87,11 +87,9 @@ TARGET = re.compile(r"NEW-([a-z0-9]+(?:-[a-z0-9]+)*)|(?<![A-Za-z0-9_/&#])#([0-9]
 
 
 def link_pause():
-    """Seconds between two links: RECORTEX_LINK_PAUSE, from 0 to 10, default 1."""
-    try:
-        return min(10.0, max(0.0, float(names.env("LINK_PAUSE", "1"))))
-    except ValueError:
-        return 1.0
+    """Seconds between two links: RECORTEX_LINK_PAUSE, digits with an optional fraction, at most 10, default 1."""
+    value = names.env("LINK_PAUSE", "1")
+    return min(10.0, float(value)) if re.fullmatch(r"[0-9]{1,2}(\.[0-9]{1,2})?", value) else 1.0
 
 
 def sub_issue_links(manifest, numbers, config, repo):
