@@ -21,6 +21,7 @@ Fault switches:
   FAKE_GH_RESUME_FAIL=1          exit 1 for the hub comments query
   FAKE_GH_NODE_FAIL=1            exit 1 for a GraphQL query that reads comments by node id (the edit histories)
   FAKE_GH_NO_PARENT_FIELD=1      a query that asks for an issue's parent fails as on a GitHub without sub-issues
+  FAKE_GH_PARENT_REPO=owner/name a parent is answered as an issue of that repository
 Projects and sub-issues (tests/fake_projects.py answers them, and lists its own fault switches): a closed issue has
 "closed_at", a merged pull request "merged_at", a sub-issue "parent" (the parent's number).
 The repository itself (`api repos/<owner>/<name>`, no further path) answers from the state's "private" key, default
@@ -326,7 +327,8 @@ def main():
                         out[alias][a] = edit_connection(edits, arguments_of, kids)
                     elif n == "parent":  # sub-issues: the parent, in the same repository
                         top = graphql_check.parse_query(fields["query"])[0][2]
-                        where = "%s/%s" % (graphql_check.literal(top["owner"]), graphql_check.literal(top["name"]))
+                        where = os.environ.get("FAKE_GH_PARENT_REPO") or "%s/%s" % (graphql_check.literal(top["owner"]),
+                                                                               graphql_check.literal(top["name"]))
                         out[alias][a] = None if issue.get("parent") is None else {
                             "number": issue["parent"], "repository": {"nameWithOwner": where}}
                     else:

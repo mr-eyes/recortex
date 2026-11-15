@@ -10317,6 +10317,14 @@ class SubIssueTests(RecordSandbox):
         self.assertEqual(1, result.returncode)
         self.assertIn("MISMATCH: #5 does not read back under #4", result.stdout)
 
+    def test_a_parent_in_another_repository_is_not_stored(self):
+        data = self.repo()
+        data["issues"]["7"]["parent"] = 5
+        self.save(data)
+        result = self.tool("index.py", "sync", "--rebuild", env={"FAKE_GH_PARENT_REPO": "octo-org/other"})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual([], self.sql_rows("SELECT * FROM parents WHERE issue = 7"))
+
     def test_link_leaves_a_task_with_another_parent_alone(self):
         data = self.repo()
         data["issues"]["7"]["parent"] = 6
@@ -10578,6 +10586,20 @@ class BoardRulesTests(BoardSandbox):
         self.ready()
         self.assertEqual(("Set aside", ""), self.want()[41])
         self.sql("DELETE FROM pull_merge WHERE number = 41")
+        self.in_process()
+        import board_rules
+        import index as index_module
+        db = index_module.connect(REPO, create=False)
+        try:
+            self.assertNotIn(41, {c["number"] for c in board_rules.desired(db, recortex.allowed_users(REPO))})
+        finally:
+            db.close()
+
+    def test_a_merge_state_older_than_its_row_is_not_used(self):
+        self.pull(41, state="closed", closed_days=2)
+        self.ready()
+        # what a sync of an older version leaves on a shared index: the row moves on, the merge state does not
+        self.sql("UPDATE issues SET updated_at = '%s' WHERE number = 41" % utc_ago(0, 0))
         self.in_process()
         import board_rules
         import index as index_module
@@ -10999,6 +11021,18 @@ class BoardWriteTests(BoardSandbox):
             self.hook(event)
         self.assertEqual([], [a for a in self.repo()["log"][before:] if "mutation" in " ".join(a)])
 
+    def test_a_failed_lookup_of_the_cards_to_add_is_one_fixed_line(self):
+        self.make_board()
+        result = self.apply(env={"FAKE_GH_FAIL_QUERY": "issueOrPullRequest"})
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn("board: not done: GitHub could not be read. Run hooks.py --doctor.", result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_setup_reads_back_the_link_to_the_repository(self):
+        result = self.tool("board.py", "setup", "--mode", "new", "--yes", env={"FAKE_GH_NO_PROJECT_LINK": "1"})
+        self.assertEqual(1, result.returncode, result.stdout)
+        self.assertIn("the board does not read back as it was set up", result.stdout)
+
     def test_a_pull_request_gets_its_card(self):
         self.make_board()
         self.pull(20)
@@ -11051,6 +11085,16 @@ class BoardWriteTests(BoardSandbox):
                            env={"FAKE_GH_IGNORE_MUTATION": "updateProjectV2View"})
         self.assertEqual(1, result.returncode, result.stdout)
         self.assertIn("the board does not read back as it was set up", result.stdout)
+
+    def test_plan_takes_done_on_a_closed_item_for_the_workflow(self):
+        self.make_board()
+        self.assertEqual(0, self.apply().returncode)
+        self.close(7, reason="not_planned")
+        self.moved_by_hand(7, "Done")  # GitHub's "Item closed" workflow
+        self.ready()
+        plan = self.tool("board.py", "plan").stdout
+        self.assertNotIn("moved by hand", plan)
+        self.assertIn("#7: the record says Set aside", plan)
 
     def test_a_hand_move_is_reported_after_the_record_moves_on(self):
         self.make_board()
@@ -11237,6 +11281,14 @@ class BoardSyncTests(BoardSandbox):
         self.assertEqual(0, kept.returncode, kept.stdout + kept.stderr)
         self.assertIn("run `board.py apply` now to bring it in step with the record", kept.stdout)
 
+    def test_the_resume_reminder_is_left_out_for_a_board_not_approved_here(self):
+        self.make_board()
+        os.unlink(os.path.join(self.dir, "xdg-config", "recortex", "private", "board-approvals.json"))
+        draft = self.write("resume.md", RESUME_WITH_HOLD)
+        result = self.tool("resume_block.py", "update", "--file", draft)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("board.py apply", result.stdout)
+
     def test_a_board_that_does_not_fit_is_read_in_the_background(self):
         self.make_board()
         self.assertEqual(0, self.apply().returncode)
@@ -11245,6 +11297,21 @@ class BoardSyncTests(BoardSandbox):
         self.hook("session-start", env={"RECORTEX_HOOK_TIMEOUT": "10", "FAKE_GH_SLEEP": "0.7"})
         self.wait_background(120)
         self.assertEqual("", self.meta("board_error"))
+        self.assertEqual(2, self.sql("SELECT COUNT(*) FROM board_cards")[0][0])
+
+    def test_the_cards_of_the_last_read_stay_when_the_budget_runs_out(self):
+        self.make_board()
+        self.assertEqual(0, self.apply().returncode)
+        self.ready()
+        self.assertEqual(2, self.sql("SELECT COUNT(*) FROM board_cards")[0][0])
+        self.in_process({"CLAUDE_PROJECT_DIR": self.project})
+        import index as index_module
+        db = index_module.connect(REPO, create=False)
+        try:
+            self.assertEqual("budget", index_module.board_step(db, REPO, index_module.Deadline(-1), 10))
+        finally:
+            db.close()
+        self.assertEqual("budget", self.meta("board_error"))
         self.assertEqual(2, self.sql("SELECT COUNT(*) FROM board_cards")[0][0])
 
     def test_an_unexpected_error_in_the_board_step_leaves_the_record_sync_done(self):
@@ -11388,6 +11455,37 @@ class BoardTrustTests(BoardSandbox):
         config = json.loads(open(os.path.join(self.project, recortex.CONFIG_NAME)).read())
         self.assertEqual("unapproved", board_api.entry(config, REPO)[0])
         self.assertEqual('{"form": 2, "approvals": {}}', open(approvals).read())
+
+    def test_an_approvals_file_whose_approvals_are_not_a_mapping_is_refused(self):
+        self.make_board()
+        approvals = os.path.join(self.dir, "xdg-config", "recortex", "private", "board-approvals.json")
+        with open(approvals, "w") as handle:
+            handle.write('{"form": 1, "approvals": ["octo-org/octo-repo"]}')
+        self.in_process()
+        import board_api
+        with open(os.path.join(self.project, recortex.CONFIG_NAME)) as handle:
+            config = json.load(handle)
+        self.assertEqual("unapproved", board_api.entry(config, REPO)[0])
+
+    def test_a_record_whose_visibility_is_not_said_is_taken_as_private(self):
+        self.in_process()
+        import board_api
+        original = board_api.graphql
+        board_api.graphql = lambda query, timeout=60: {"repository": {"id": "R_1", "owner": {"id": "O_1",
+                                                                                              "login": "octo-org"}}}
+        self.addCleanup(setattr, board_api, "graphql", original)
+        self.assertTrue(board_api.repo_ids(REPO, [])[0]["private"])
+
+    def test_a_project_answer_of_another_owner_is_not_the_board(self):
+        self.in_process()
+        import board_api
+        answer = {"repositoryOwner": {"id": "O_2", "login": "dependabot", "projectV2": {"id": "PVT_9", "number": 1}}}
+        original = board_api.graphql
+        board_api.graphql = lambda query, timeout=60: answer
+        self.addCleanup(setattr, board_api, "graphql", original)
+        with self.assertRaises(board_api.BoardError) as caught:
+            board_api.read_project("octo-org", 1)
+        self.assertEqual("notfound", caught.exception.code)
 
     def test_a_held_approvals_lock_is_waited_for_then_refused(self):
         import fcntl
