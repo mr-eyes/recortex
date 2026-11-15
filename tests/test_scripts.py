@@ -8024,11 +8024,13 @@ class FieldFormTests(unittest.TestCase):
         entry = {"form": 1, "names": long_names, "sensitive": [],
                  "brief": {"parts": ["p" * 200] * 4, "across": "a" * 150, "never": "n" * 150},
                  "checks": ["Is it so?"], "words": "the project's own names"}
-        size = len(self.fs.frame(entry, "2026-01-01"))
+        # The cap is held with the longest of the three names the pointer line can carry.
+        longest = max((names.CONFIG_NAME, names.OLD_CONFIG_NAME, self.fs.OTHER_FILE), key=len)
+        size = len(self.fs.frame(entry, "2026-01-01", longest))
         self.assertGreater(size, 1901)
         for target, accepted in ((1901, False), (1900, True)):
             trimmed = dict(entry, brief=dict(entry["brief"], across="a" * (150 - (size - target))))
-            self.assertEqual(target, len(self.fs.frame(trimmed, "2026-01-01")))
+            self.assertEqual(target, len(self.fs.frame(trimmed, "2026-01-01", longest)))
             normalized, problems = self.fs.check_entry(trimmed)
             self.assertEqual(accepted, not problems, target)
             if not accepted:
@@ -8372,9 +8374,9 @@ class FieldTests(RecordSandbox):
         names_ = ["A" + "b" * 39, "C" + "d" * 39, "E" + "f" * 39, "G" + "h" * 39]
         entry = {"form": 1, "names": names_, "sensitive": [], "checks": ["Is it so?"], "words": "the project's names",
                  "brief": {"parts": ["p" * 200] * 4, "across": "a" * 150, "never": "n" * 150}}
-        size = len(self.fs.frame(entry, self.today))
+        size = len(self.fs.frame(entry, self.today, self.fs.OTHER_FILE))  # the cap is held with the longest pointer
         entry["brief"]["across"] = "a" * (150 - (size - self.fs.FRAME_CAP))
-        self.assertEqual(self.fs.FRAME_CAP, len(self.fs.frame(entry, self.today)))
+        self.assertEqual(self.fs.FRAME_CAP, len(self.fs.frame(entry, self.today, self.fs.OTHER_FILE)))
         self.approve(entry)
         _, agent, _, _ = self.payloads()
         self.assertLessEqual(len(agent), 3200)

@@ -208,7 +208,7 @@ def check_entry(entry):
     if code:
         bad.append(("words", code))
     out["words"] = entry.get("words")
-    if not bad and len(frame(out, "2026-01-01")) > FRAME_CAP:
+    if not bad and len(frame(out, "2026-01-01", OTHER_FILE)) > FRAME_CAP:  # the longest of the three pointer names
         bad.append(("brief", "frame"))
     return (None, bad) if bad else (out, [])
 
