@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import time
 
 import names
 import recortex
@@ -53,6 +54,7 @@ DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 APPROVALS = "field-approvals.json"
 APPROVALS_LOCK = "field-approvals.lock"
+LOCK_WAIT = 10  # seconds a writer waits for another one to finish with the approvals, then refuses
 OFFER_FILE = "field-offer.json"
 APPROVALS_CAP = 2 * 1024 * 1024  # far above what the plugin writes; a larger file is not read
 
@@ -380,7 +382,19 @@ def approvals_lock(top=None):
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
         if fcntl:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            # A holder keeps the lock for one read and one write. One that stopped (a debugger, a stopped process) is
+            # waited for about LOCK_WAIT seconds, then the write is refused in one line instead of waiting for good.
+            deadline = time.monotonic() + LOCK_WAIT
+            while True:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise storage.StorageError("another process holds the lock %s on the approvals and did not "
+                                                   "release it within %d seconds; run again once it has finished"
+                                                   % (path, LOCK_WAIT), "lock")
+                    time.sleep(0.1)
         yield
     finally:
         os.close(descriptor)

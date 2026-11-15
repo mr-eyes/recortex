@@ -8273,6 +8273,40 @@ class FieldFormTests(unittest.TestCase):
         self.assertFalse(os.path.lexists(self.private))  # nothing made in the current folder
         self.assertFalse(self.fs.forget_approval(REPO))
 
+    def test_a_held_lock_is_waited_for_then_refused(self):
+        # A holder that never finishes (a stopped process) is waited for LOCK_WAIT seconds, then the write is refused.
+        # The writer runs in a child with a short wait, so that a writer that waits for good fails the test instead of
+        # holding up the suite.
+        import fcntl
+        self.assertEqual(10, self.fs.LOCK_WAIT)
+        self.fs.record_approval("example-org/first", self.entry(), "2026-11-09")
+        before = recortex.read_text(self.approvals)
+        held = os.open(os.path.join(self.private, "field-approvals.lock"), os.O_RDWR)
+        self.addCleanup(os.close, held)
+        fcntl.flock(held, fcntl.LOCK_EX)
+        code = ("import json, sys\n"
+                "sys.path.insert(0, sys.argv[1])\n"
+                "import field_sheet, storage\n"
+                "field_sheet.LOCK_WAIT = 0.5\n"
+                "entry = field_sheet.check_entry(json.load(open(sys.argv[2], encoding='utf-8')))[0]\n"
+                "try:\n"
+                "    field_sheet.record_approval('example-org/tinycsv', entry, '2026-11-10')\n"
+                "except storage.StorageError as error:\n"
+                "    print(error)\n"
+                "    sys.exit(3)\n")
+        child = subprocess.Popen([sys.executable, "-c", code, SCRIPTS, os.path.join(FIELD_DIR, "engineering.json")],
+                                 env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"), stdout=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: child.poll() is None and child.kill())
+        start = time.time()
+        out, _ = child.communicate(timeout=30)
+        self.assertEqual(3, child.returncode)
+        self.assertGreaterEqual(time.time() - start, 0.4)
+        self.assertIn("another process holds the lock %s" % os.path.join(self.private, "field-approvals.lock"), out)
+        self.assertEqual(before, recortex.read_text(self.approvals))
+        fcntl.flock(held, fcntl.LOCK_UN)
+        self.fs.record_approval(REPO, self.entry(), "2026-11-10")  # released: the next write goes through
+        self.assertIsNotNone(self.fs.approval_of(REPO))
+
     def test_a_removal_at_the_same_moment_as_an_approval_keeps_both(self):
         # forget_approval reads, changes and writes under the same lock as record_approval; without it, one of the two
         # writes is lost.
