@@ -8234,6 +8234,21 @@ class FieldFormTests(unittest.TestCase):
         self.fs.record_approval(REPO, self.entry(), "2026-11-10")
         self.assertEqual("approved", self.fs.state(config, REPO)["state"])
 
+    def test_a_removal_forgets_the_approval_in_both_configuration_folders(self):
+        # An approval made while only the folder of the earlier name was there is still read once the current folder
+        # appears; removing the sheet forgets it there too, so its marks and its sheet do not come back.
+        earlier = os.path.join(self.dir, "xdg-config", names.OLD_NAME)
+        os.makedirs(earlier, mode=0o700)
+        self.fs.record_approval(REPO, self.entry(sensitive=["people"]), "2026-11-09")  # the only folder there
+        self.assertTrue(os.path.isfile(os.path.join(earlier, "private", "field-approvals.json")))
+        os.makedirs(self.top, mode=0o700)  # the current folder appears (a settings.json, say)
+        self.assertEqual(["people"], self.fs.approval_of(REPO)["sensitive"])  # still read from the earlier folder
+        self.assertTrue(self.fs.forget_approval(REPO))
+        self.assertIsNone(self.fs.approval_of(REPO))
+        self.assertEqual([], self.fs.sensitive_marks({"repo": REPO}, REPO))
+        self.assertFalse(os.path.lexists(self.private))  # nothing made in the current folder
+        self.assertFalse(self.fs.forget_approval(REPO))
+
     def test_the_approvals_follow_no_symlink_and_replace_no_unreadable_file(self):
         import storage
         victim = os.path.join(self.dir, "victim.json")

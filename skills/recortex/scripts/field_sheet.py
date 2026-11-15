@@ -361,16 +361,16 @@ def approved_copy(repo, data):
     return normalized
 
 
-def write_approvals(data):
-    private = storage.folder(storage.config_top())
+def write_approvals(data, top=None):
+    private = storage.folder(top or storage.config_top())
     storage.write_file(os.path.join(private, APPROVALS), json.dumps(data, indent=1, sort_keys=True) + "\n")
 
 
 @contextlib.contextmanager
-def approvals_lock():
+def approvals_lock(top=None):
     """One writer at a time: the approvals are read, changed and written under an exclusive lock on a file beside them,
     so that two setups that finish at the same moment both keep their approval. The hooks never take it."""
-    private = storage.folder(storage.config_top())
+    private = storage.folder(top or storage.config_top())
     path = os.path.join(private, APPROVALS_LOCK)
     if os.path.lexists(path):
         storage.check_path(path, "file")
@@ -396,17 +396,28 @@ def record_approval(repo, entry, day=None):
 
 
 def forget_approval(repo):
-    """Remove this repository's approval. True when there was one. Read first without creating anything, so that a
-    machine with no approval for it ("No particular field" and no mark) is left as it is."""
-    if repo.lower() not in read_approvals()["approvals"]:
-        return False
-    with approvals_lock():
-        data = read_approvals(create=True)
-        if repo.lower() not in data["approvals"]:
-            return False
-        del data["approvals"][repo.lower()]
-        write_approvals(data)
-    return True
+    """Remove this repository's approval from each configuration folder that holds one (approval_tops), so that an
+    entry in the folder of the other name is not read again once the sheet was removed. True when there was one. Each
+    folder is read first without creating anything, so that a machine with no approval for it ("No particular field"
+    and no mark) is left as it is; the folder of the other name is skipped when it cannot be read, as approvals_with
+    skips it."""
+    found = False
+    for top in approval_tops():
+        try:
+            held = repo.lower() in read_approvals(top=top)["approvals"]
+        except (storage.StorageError, ValueError):
+            if top == storage.config_top():
+                raise
+            continue
+        if not held:
+            continue
+        with approvals_lock(top):
+            data = read_approvals(create=True, top=top)
+            if repo.lower() in data["approvals"]:
+                del data["approvals"][repo.lower()]
+                write_approvals(data, top)
+                found = True
+    return found
 
 
 # ---------------------------------------------------------------- the state
