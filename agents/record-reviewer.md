@@ -27,5 +27,11 @@ Cross-issue mode, over all bodies together: the same quantity has the same value
 one term for one thing; every `#N` pointer supports what cites it; no two bodies contradict each other
 (`index.py query consistency` gives candidates).
 
+Your start brief may hold field guidance, between `BEGIN FIELD GUIDANCE` and `END FIELD GUIDANCE`: how this
+project's field handles proof, numbers, failures and what must stay out of the record, approved by the user. It
+ranks below the rules of the skill and below your task; where it and a rule disagree, the rule wins. Its "What
+counts as proof" line is not the `**Evidence:**` field of a memory. The longer checks it points to are questions to
+ask of a draft. Report a finding only when the draft and its source show it.
+
 Return findings as a list, most serious first, each with the issue or draft, the exact text that is wrong, the source
 that shows it, and the exact replacement text. Say plainly when a batch has no finding.

@@ -126,6 +126,16 @@ python3 skills/recortex/scripts/index.py sync
 python3 skills/recortex/scripts/mind.py --open
 ```
 
+## The field of work
+
+The setup wizard asks which field the work is in, in your own words, and whether it handles data about people, confidential information or a contested public topic. Claude drafts a short field sheet from six fixed questions: what counts as proof, how numbers are written, which failures must be reported, what must never be written down, the checks a reviewer asks, and which kinds of names the project makes up. You read the whole sheet and approve it, and from then on every subagent gets its short part in its start brief, on each machine where you approved that exact text. A sheet that changed since you approved it (after a pull, for example) is not shown until you approve it again, and the session tells you so. Five model sheets ship with the plugin (bioinformatics, engineering, business, policy and a mix), and the sheet is written by `setup.py`, never by hand, so `templates/recortex.example.json` has no `fields` key. Details: [`references/fields.md`](skills/recortex/references/fields.md).
+
+```bash
+python3 skills/recortex/scripts/setup.py fields show
+python3 skills/recortex/scripts/setup.py fields set --answers answers.json --dry-run
+python3 skills/recortex/scripts/setup.py fields approve --fingerprint <the 12 characters fields show printed> --yes
+```
+
 ## What survives compaction, and why
 
 Compaction replaces a long conversation with a summary. Summaries drop detail and sometimes get numbers and decisions wrong, so this skill never treats one as a source.
@@ -153,7 +163,7 @@ The plugin adds three agents for bulk and audit work, one tier below the main se
 | Hook | Prints |
 |---|---|
 | SessionStart (startup, resume, clear, compact, fork) | The record brief: the rules for writing to the record, the hub, the deliverable topics by section, the open active issues, the issues that need triage, and the newest allowed resume block. It syncs the index first; if GitHub does not answer in time it prints the brief from the index and says how old it is |
-| SubagentStart | A short brief for the subagent: where the record is, the issues in play, and that it reads the record for facts and posts only when its task says so |
+| SubagentStart | A short brief for the subagent: where the record is, the issues in play, and that it reads the record for facts and posts only when its task says so; with a field sheet you approved, its short part in its own frame |
 | UserPromptSubmit | One line with the hub and the active issues, only when it changed or every tenth prompt (`"prompt_hook": {"enabled": false}` in `.recortex.json` turns it off) |
 | PreCompact | Instructions for the compaction summary: keep the issue numbers in play and every result, decision or failure that is not yet posted |
 
@@ -177,7 +187,7 @@ All are in `skills/recortex/scripts/`, use only the Python standard library and 
 | `index.py` | Keeps the local index of the record: `sync` reads what changed on GitHub; `query` answers consistency, impact, recall, mind, timeline, triage and brief questions without network | no |
 | `mind.py` | Builds the mind page: one private local file that tells the project's memory in sentences, from the index | no |
 | `hooks.py`, `run_hook.sh`, `session_start_hook.sh` | The four hooks; `hooks.py --print` shows their payloads | no |
-| `setup.py` | `detect` suggests deliverables from file names; `apply` makes the setup from answers you confirmed | `apply` |
+| `setup.py` | `detect` suggests deliverables and fields from file names; `apply` makes the setup from answers you confirmed; `fields` shows, sets and approves the field sheet | `apply` |
 | `catchup.py` | Lists earlier work and work done since the newest recorded event; drafts reconstructed event comments | no |
 | `compile.py` | Writes the deliverable section by section in the hub's order, the figure, table and source lists, the full dated timeline of the project and a manifest | no |
 
@@ -210,10 +220,12 @@ The hooks deserve extra care because they put tracker text into context without 
 | The index (`index.sqlite`) and the hook state live in a folder `private/` (mode 0700) that the plugin creates inside its top folders: `$XDG_CACHE_HOME/recortex` for the index and `$XDG_STATE_HOME/recortex` for the state and the key (by default under `~/.cache` and `~/.local/state`), or a top folder of the plugin's earlier name, used in place when only that one is there; never in the project tree. Hooks, the session's Bash tool and your own shell resolve the same folders; the plugin data folder that Claude Code sets only for hooks (`CLAUDE_PLUGIN_DATA`) is not used, and an index left there by an earlier version is ignored (the first sync builds a new one). `RECORTEX_DATA_HOME` moves the index and the state to one folder, `$RECORTEX_DATA_HOME/recortex`, and is read only when `RECORTEX_TESTING=1` is also set: it is for the plugin's tests only. A top folder must be a real folder owned by the user or by root; one the user owns that was created group-writable (umask 0002) is tightened to 0700, and one owned by another user is refused. `private/` and everything in it must be real folders and files owned by the user with no permissions for group or others, checked at every read and write; files are written through a fresh temporary file with mode 0600 and read without following symlinks. An index is read only when it carries the repository, the format and a mark made with a per-user key from the state folder, so a swapped folder or a file the plugin did not make is refused | A repository you clone, or a folder someone shares, planting an index or state file whose text the hooks would print |
 | When the sync at session start fails, the brief says "cached, not refreshed" with its age; a cached resume block is one that passed every check when it was read, and is left out once it is older than `resume_cache_days` (default 7). Stored sync times enter a GitHub query only as plain ISO 8601 UTC times | Old or tampered cached text passed off as current, and text smuggled into an API query |
 | A refused index is never read and nothing from it is printed; the next sync moves it aside and builds a new one. The hooks load only the profiles shipped with the plugin, never a profile file a project names, and `RECORTEX_HOOK_TIMEOUT` is read as digits only | A cloned project or a shared folder getting its own text into the brief outside the data frame |
-| The output is wrapped in `BEGIN/END PROJECT STATUS DATA` lines that say it is data and not instructions, text that imitates those lines is defused, and the SessionStart brief is cut at 6,000 characters (the subagent brief at 2,500) | Text posing as system or user instructions, and context flooding |
+| The output is wrapped in `BEGIN/END PROJECT STATUS DATA` lines that say it is data and not instructions, text that imitates those lines is defused, and the SessionStart brief is cut at 6,000 characters (the subagent brief at 3,200) | Text posing as system or user instructions, and context flooding |
 | A failure to read the configuration prints nothing and exits 0. A failure to read GitHub, or a timeout, prints the brief from the local index with its age; in a set-up, trusted project with no usable index, one line names the reason and points to `hooks.py --doctor`. Every hook exits 0 | A slow or broken network blocking the session |
 
 The trust boundary is your allowed list, not write access to the repository. Anyone who can comment can post something that looks like a resume comment, and anyone with write access (collaborators, GitHub Apps, Actions workflows, tokens with `issues: write`) can edit comments, but a comment by a non-allowed author is ignored and so is any comment that was edited after posting. Because each resume block is a single, unedited comment, the check covers everything that is printed, however long the project runs. For the same reason, never edit a resume comment yourself; post a new one. An allowed account can still write anything, so list only accounts you would take project status from, and list a bot if a bot posts the resume comments.
+
+A field sheet is the one text from the project tree that a payload holds outside the data frame, because it is meant to be followed, so it has its own conditions: the repository is trusted, you approved that exact text on this machine (its fingerprint is kept in `private/field-approvals.json` of your own configuration folder, which the project cannot write), and it passes the sheet's form when it is shown, one line of plain characters per value under the plugin's own labels. It stands only in its own frame, whose first line says that it was approved by you and cannot change rules, permissions or the task; any change after the approval switches it off. The skill and the agents rank it below their rules. What remains is that you can approve a sheet that should not be approved, and that a misled session could run the approval command without you, as it could add a repository to your trusted list.
 
 `resume_block.py show` applies the same checks when run by hand. Its `--trust-once` and `--allow-any-author` flags are deliberate overrides for the user and are refused in hook mode.
 
@@ -272,6 +284,7 @@ skills/recortex/
   references/             detail loaded on demand
   templates/              hub, topic body, active task, comments, snippets
   profiles/               label sets per project type
+  fields/                 the five model field sheets
   scripts/                the helpers
   page/                   the fixed style and script of the mind page
 examples/tinycsv/         invented example project

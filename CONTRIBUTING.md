@@ -4,7 +4,7 @@
 
 ```bash
 mkdir -p .tmp
-python3 -m unittest tests.test_scripts.{LintTests,HelperTests,LabelTests,CreateIssuesTests,PostVerifiedTests,ConvertBodyTests,SyncTests,RecoveryTests,CompileTests,TriageAndFormatTests,CatchUpTests,SnapshotTests,PackagingTests,CompatTests,MemoryFormatTests,MindIndexTests,MindModelTests,MindPageTests}
+python3 -m unittest tests.test_scripts.{LintTests,HelperTests,LabelTests,CreateIssuesTests,PostVerifiedTests,ConvertBodyTests,SyncTests,RecoveryTests,CompileTests,TriageAndFormatTests,CatchUpTests,SnapshotTests,PackagingTests,CompatTests,MemoryFormatTests,MindIndexTests,MindModelTests,MindPageTests,FieldFormTests,FieldTests}
 python3 -m unittest tests.test_scripts.{ResumeBlockTests,IndexTests,HookTests,StorageTests,GuardTests,BackgroundTests,DiscoveryTests,SetupTests,EarlierNameTests}
 ```
 
@@ -36,6 +36,7 @@ Check the packaging with `claude plugin validate .`.
 - `SKILL.md` stays short. Detail goes into `references/`, and every reference file is linked from `SKILL.md`.
 - Names live in `names.py`: the plugin's name, the configuration file, the folder, the variable prefix and the workflow, current and from before the rename (`gh-issues-manager`, `.gh-issues-manager.json`, `GHIM_`, `ghim-triage.yml`). Plugin variables are read only through `names.env`, and no other module spells an earlier name, except `run_hook.sh`, which reads the earlier budget name itself; a test scans the tree for them. An earlier name that is still read has a test for the earlier name alone, the current one alone, and both. `renames` in `.claude-plugin/marketplace.json` is append-only history. The `ghim:` markers are the record format and are not renamed. The shared module is `recortex.py`, and the tests also honor `GHIM_TEST_KEEP`.
 - The mind page (`mind.py`, `mind_model.py`, `page/mind.css`, `page/mind.js`): every element goes through `E()`; record text is a text child only, never an attribute value, an element or attribute name, or part of the style or the script; an `href` is `anchor()` or `github_url()`, and no `url` or `image` column of the index is read; the script holds no record text and none of the calls that turn text into markup or reach the network (the page test lists them), and checks every id it reads from the page before a selector or a hash uses it; the style loads nothing. A new element or attribute name goes into `TAGS` or `ATTRS` and into the page test, and fixed wording of the model goes into `PHRASES` or `FIELD_NAMES`. What the page tells follows `index.memories` and the rules of `references/mind.md`, "Who is told".
+- The field sheet's labels, sizes and characters live in `field_sheet.py` and move together with `references/fields.md`, the model sheets in `fields/` (a test holds their SHA-256 values), `tests/fixtures/field-sheets/` and the paragraph on field guidance in each of the three agent files. Approved text reaches a payload only through `field_sheet.state`, from the configuration the hook parsed once, and only in its own frame; no hook line outside that frame holds text or a name from a sheet, and `--doctor` prints field names only for an approved sheet. A sheet that breaks the form is refused, never cleaned. No sheet, model or form is loaded from a path a project names. The approvals go through `storage.py`, and the hooks only read them.
 - Examples use invented projects only.
 
 ## Releases

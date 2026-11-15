@@ -16,7 +16,7 @@ Ask once, together, and record the answers (they become the first decision comme
 | What is the deliverable, and what are its sections? | The profiles and the hub's deliverable tables |
 | What are the first topics? | `topics`, one final record each |
 | Which time zone do we write times in? | `timezone` and the hub's convention line |
-| Is any data restricted (identifiers, unpublished names, credentials)? | `restricted_patterns` and recording rule 9 |
+| Is any data restricted (identifiers, unpublished names, credentials)? The wizard asks this as "which forms of identifier must never be posted", with a made-up example of each ([setup.md](setup.md)) | `restricted_patterns` and recording rule 9 |
 | Who decides what? | The "Decided by" values to expect |
 
 Check that `gh auth status` works and that the account may create issues and labels in the repository.

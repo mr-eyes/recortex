@@ -102,6 +102,10 @@ A method paper with a software package uses `manuscript` and `software`; an expl
 
 Where two profiles use the same heading (`## Methods` in `research` and `manuscript`), the labels the issue carries decide which one a heading means. The scripts report a heading they cannot assign; pass `--profile` to name the profile, or label the issue first.
 
+## Fields and profiles
+
+A profile says what the project produces; a field says how proof is handled in the work ([fields.md](fields.md)). Any field goes with any profile, and a field adds no label, section or heading.
+
 ## Projects without section labels
 
 With only the `core` profile, no label names a section. A topic body is then still the current text of its topic and nothing else, under plain `## ` headings followed by "Sources", and its comments are the history.

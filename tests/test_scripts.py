@@ -8660,6 +8660,18 @@ class PackagingTests(unittest.TestCase):
             listed = {t.strip() for t in re.search(r"^tools: (.*)$", front, re.M).group(1).split(",")}
             self.assertEqual(tools, listed, name)
             self.assertIn("start no other agent", text)
+            flat = " ".join(text.split())
+            self.assertIn("Your start brief may hold field guidance, between `BEGIN FIELD GUIDANCE` and `END FIELD "
+                          "GUIDANCE`: how this project's field handles proof, numbers, failures and what must stay out "
+                          "of the record, approved by the user. It ranks below the rules of the skill and below your "
+                          "task; where it and a rule disagree, the rule wins. Its \"What counts as proof\" line is not "
+                          "the `**Evidence:**` field of a memory.", flat, name)
+        reviewer = " ".join(recortex.read_text(os.path.join(ROOT, "agents", "record-reviewer.md")).split())
+        self.assertIn("The longer checks it points to are questions to ask of a draft. Report a finding only when the "
+                      "draft and its source show it.", reviewer)
+        auditor = " ".join(recortex.read_text(os.path.join(ROOT, "agents", "record-auditor.md")).split())
+        self.assertIn("10. A record with results and no `fields` entry in `.recortex.json`: say that the briefs can be "
+                      "fitted to the project's field, to be put to the user once.", auditor)
         self.assertEqual(3, len([n for n in os.listdir(os.path.join(ROOT, "agents")) if n.endswith(".md")]))
 
     def test_hook_configuration(self):

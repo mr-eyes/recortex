@@ -79,3 +79,9 @@ What an older version cannot do: write an idea or a question, have links, Eviden
 What changes for a memory edited on GitHub after it was posted (GitHub's `updated_at` differs from its `created_at`): when the repository is in your trusted list, `index.py query recall` of 0.7.0 no longer lists it, its links no longer count, its folds no longer explain a word or a thread, and the linter refuses a new link to it. `recall` closes with one line that says how many memories it left out for that reason. 0.6.0 on the same index keeps listing it.
 
 Run `python3 scripts/index.py sync --rebuild` once after the update: it reads the edit history of every topic again, and an edit that another account made in the minute an issue was opened is now seen.
+
+## From 0.8.0
+
+0.8.0 adds field guidance: a project's `.recortex.json` can carry a `fields` entry, the field sheet the user approved, and every subagent gets its short part in its start brief on a machine where the user approved that exact text ([fields.md](fields.md)). Nothing changes in the index or in the record on GitHub. A project without a sheet gets the payloads of 0.7.0, and once the line that offers to set the field.
+
+Older versions ignore the entry: their hooks, sync, linter and `--doctor` do not read it, and their `setup.py apply` keeps it as it is. Their `apply --dry-run` prints the whole configuration, the sheet included; 0.8.0 prints a sheet it does not write as one line. The identifier patterns the wizard adds go into `restricted_patterns` in the form every version reads. The approvals are kept per machine, in `private/field-approvals.json` of the plugin's folder in your configuration folder, which no older version reads: each machine, and each collaborator, approves a sheet once with `setup.py fields show` and `setup.py fields approve`.
