@@ -74,7 +74,7 @@ Do this when an experiment finishes, a decision is made, something fails or a ch
 
 1. Pick the topic issue. If none fits, create a final record for the new topic first and add it to the hub.
 2. Run `python3 ${CLAUDE_SKILL_DIR}/scripts/index.py sync`, then `python3 ${CLAUDE_SKILL_DIR}/scripts/index.py query recall --issue N`: the thread's newest memories with their state, open questions and untried ideas elsewhere, and the words explained so far.
-3. Copy the matching comment template to a draft file and fill every field, the plain line first. "None" with a reason is a valid entry; an empty field is not. Its first line is the event marker, `<!-- ghim:event type=<type> at=<ISO time with offset> -->`, at the same local time as the heading.
+3. Copy the matching comment template to a draft file and fill every field, the plain line first. "None" with a reason is a valid entry; an empty field is not. Evidence is the exception: delete the `**Evidence:**` field when there is nothing to show (step 5). Its first line is the event marker, `<!-- ghim:event type=<type> at=<ISO time with offset> -->`, at the same local time as the heading.
 4. Link it to what it builds on (below).
 5. Explain the project's own words (below) and, when recall says the thread has no opening yet, what the thread is about, in folds at the end. Add Evidence when there is a table, figure, code or pull request to show.
 6. Check every number against the file it comes from. Never from memory.

@@ -421,6 +421,20 @@ class LintTests(unittest.TestCase):
         for name, text in bad.items():
             self.assertIsNone(recortex.extract_resume_block(text), name)
 
+    def test_none_under_evidence_says_to_delete_the_field(self):
+        for line in ("- None", "None", "- None, nothing to show.", "- N/A", "- nothing"):
+            text = memory_draft("failure", "2026-03-13T10:00-08:00") + "\n**Evidence:**\n%s\n" % line
+            found = [f.message for f in lint_drafts.lint_text(text, kind="failure") if f.code == "evidence"]
+            self.assertEqual(1, len(found), (line, found))
+            self.assertIn("delete the **Evidence:** field when there is nothing", found[0], line)
+        text = memory_draft("failure", "2026-03-13T10:00-08:00") + "\n**Evidence:**\n- table nonesuch\n- sketch 4\n"
+        found = [f.message for f in lint_drafts.lint_text(text, kind="failure") if f.code == "evidence"]
+        self.assertEqual(1, len(found), found)
+        self.assertIn("not one of the four forms", found[0])
+        for path in ("references/templates.md", "SKILL.md"):  # the rule and its exception stand side by side
+            words = recortex.read_text(os.path.join(SKILL, path))
+            self.assertIn("Evidence", words.split('"None"')[1][:200], path)  # not the "Add Evidence" of step 5
+
 
 class HelperTests(unittest.TestCase):
     def test_normalize_ignores_only_trailing_whitespace(self):

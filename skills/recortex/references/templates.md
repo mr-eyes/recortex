@@ -1,6 +1,6 @@
 # Templates and how to fill them
 
-All templates are in `templates/`. Fields to fill are written `{{like this}}`; the linter rejects a draft that still contains one. Where a field does not apply, write "None" and the reason. An empty section is an error, because a reader cannot tell "nothing to report" from "forgotten". The one exception is the body of a final record: a deliverable section the topic does not feed is left out, with its label.
+All templates are in `templates/`. Fields to fill are written `{{like this}}`; the linter rejects a draft that still contains one. Where a field does not apply, write "None" and the reason. The optional parts are the exception: the link keys of the marker, the `**Evidence:**` field and the folds are left out when there is nothing to put in them, and "None" under Evidence is an error. An empty section is an error, because a reader cannot tell "nothing to report" from "forgotten". The one exception is the body of a final record: a deliverable section the topic does not feed is left out, with its label.
 
 | Template | Kind for the linter | Use |
 |---|---|---|

@@ -640,6 +640,9 @@ def check_quoted_fields(text, add):
                 "GitHub shows it inside the quote; leave a blank line before it" % match.group(1))
 
 
+NOTHING_TO_SHOW = re.compile(r"(?:- )?(?:none|n/a|nothing)\b.*", re.I)
+
+
 def check_evidence(text, kind, template, add):
     """The optional Evidence field: last, at most six lines, each one of the four forms."""
     scanned = record_format.scan_fields(text)
@@ -666,7 +669,10 @@ def check_evidence(text, kind, template, add):
             continue
         count += 1
         row, why = record_format.evidence_line(part)
-        if row is None:
+        if row is None and NOTHING_TO_SHOW.fullmatch(part.strip()):
+            add("error", "evidence", index + 1, "Evidence lists what there is to show; delete the **Evidence:** field "
+                "when there is nothing (\"None\" belongs to the other fields)")
+        elif row is None:
             add("error", "evidence", index + 1, "an Evidence line is %s" % why if why.startswith("not ") else why)
     if not count:
         add("error", "evidence", number, "Evidence is empty; delete the field when there is nothing to show")
