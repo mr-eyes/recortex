@@ -9,7 +9,7 @@
 
 **Cause:** {{the cause if shown, and how it was shown; otherwise "Not established" and the leading guess, marked as a guess}}
 
-**Impact:** {{what is lost or unusable: outputs, numbers, time; counts with denominators}}
+**Impact:** {{what is lost or unusable: outputs, numbers, time; counts with denominators; when it blocks a task, name the task as #N}}
 
 **Not established:** {{what is still unknown about the failure}}
 

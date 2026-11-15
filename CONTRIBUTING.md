@@ -4,11 +4,12 @@
 
 ```bash
 mkdir -p .tmp
-python3 -m unittest tests.test_scripts.{LintTests,HelperTests,LabelTests,CreateIssuesTests,PostVerifiedTests,ConvertBodyTests,SyncTests,RecoveryTests,CompileTests,TriageAndFormatTests,CatchUpTests,SnapshotTests,PackagingTests,CompatTests,MemoryFormatTests,MindIndexTests,MindModelTests,MindPageTests,FieldFormTests,FieldTests,GraphqlReaderTests,FakeProjectsTests,SubIssueTests,BoardRulesTests,BoardCompareTests,BoardWriteTests,BoardSyncTests,BoardTrustTests}
+python3 -m unittest tests.test_scripts.{LintTests,HelperTests,LabelTests,CreateIssuesTests,PostVerifiedTests,ConvertBodyTests,SyncTests,RecoveryTests,CompileTests,TriageAndFormatTests,CatchUpTests,SnapshotTests,PackagingTests,CompatTests,MemoryFormatTests,MindIndexTests,MindModelTests,MindPageTests,FieldFormTests,FieldTests}
 python3 -m unittest tests.test_scripts.{ResumeBlockTests,IndexTests,HookTests,StorageTests,GuardTests,BackgroundTests,DiscoveryTests,SetupTests,EarlierNameTests}
+python3 -m unittest tests.test_scripts.{GraphqlReaderTests,FakeProjectsTests,SubIssueTests,BoardRulesTests,BoardCompareTests,BoardWriteTests,BoardSyncTests,BoardTrustTests}
 ```
 
-The two commands hold every test class between them, and each takes a few minutes; `python3 -m unittest discover -s tests` runs the same tests in one command of about five minutes. A new test class goes into one of the two lists. `mkdir -p .tmp` makes the folder that a test needs when its class runs first in a fresh clone.
+The three commands hold every test class between them, and each takes a few minutes (keep each under five); `python3 -m unittest discover -s tests` runs the same tests in one command of about nine minutes. A new test class goes into one of the three lists. `mkdir -p .tmp` makes the folder that a test needs when its class runs first in a fresh clone.
 
 The tests run the scripts against `tests/fake_gh.py`, a local stand-in for `gh` selected with the `RECORTEX_GH` environment variable. They work in temporary folders under `.tmp/` and remove them afterwards; set `RECORTEX_TEST_KEEP=1` to keep them for inspection. No test may contact GitHub.
 

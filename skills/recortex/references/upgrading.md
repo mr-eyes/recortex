@@ -80,6 +80,12 @@ What changes for a memory edited on GitHub after it was posted (GitHub's `update
 
 Run `python3 scripts/index.py sync --rebuild` once after the update: it reads the edit history of every topic again, and an edit that another account made in the minute an issue was opened is now seen.
 
+## From 0.9.0
+
+0.9.0 adds two views of the record on github.com ([board.md](board.md)): each topic becomes a sub-issue of the hub and each `active` task a sub-issue of its destination topic, and a project can opt into a private GitHub Projects board of its work. Nothing in the record changes. `create_issues.py` links what it creates; for an existing record run `sub_issues.py plan` and then `sub_issues.py apply`. A project that does not answer yes to the board question never makes a board call, never sees a board line and never needs the `project` scope.
+
+The index gains three tables (`parents`, `pull_merge`, `board_cards`) and three meta keys, as `CREATE TABLE IF NOT EXISTS` and plain rows. Versions 0.4.0 to 0.8.0 on the same index ignore them, and ignore the `board` entry of `.recortex.json`. The first sync of 0.9.0 on an older index lists the issues and reads their body edits again once.
+
 ## From 0.8.0
 
 0.8.0 adds field guidance: a project's `.recortex.json` can carry a `fields` entry, the field sheet the user approved, and every subagent gets its short part in its start brief on a machine where the user approved that exact text ([fields.md](fields.md)). Nothing changes in the index or in the record on GitHub. A project without a sheet gets the payloads of 0.7.0, and once the line that offers to set the field.

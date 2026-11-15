@@ -4744,6 +4744,73 @@ class SetupTests(Sandbox):
         self.assertNotIn(marker, refused.stdout + refused.stderr)
 
 
+    def apply_with_board(self, board, *extra, env=None, gh=FAKE):
+        root = self.project()
+        environment = {"XDG_STATE_HOME": os.path.join(self.dir, "xdg-state"), "CLAUDE_PROJECT_DIR": root}
+        environment.update(env or {})
+        result = self.setup_script("apply", "--answers", self.answers("single", board=board), "--root", root,
+                                   *(extra or ("--yes",)), gh=gh, env=environment)
+        return root, result
+
+    def test_a_board_answer_makes_the_board_and_fills_it(self):
+        root, result = self.apply_with_board("new")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("board: example-org/1", result.stdout)
+        self.assertIn("run: board.py apply   # fill the board from the record", result.stdout)
+        self.assertIn("setup applied", result.stdout)
+        config = json.loads(recortex.read_text(os.path.join(root, recortex.CONFIG_NAME)))
+        self.assertEqual({"owner": "example-org", "number": 1}, config["board"])
+        self.assertFalse(self.repo()["projects"]["example-org/1"]["public"])
+        self.assertTrue(os.path.isfile(os.path.join(self.dir, "xdg-config", "recortex", "private",
+                                                    "board-approvals.json")))
+
+    def test_an_existing_board_answer_names_its_number(self):
+        root, result = self.apply_with_board({"existing": 4})
+        self.assertIn("board.py setup --mode existing --number 4 --yes", result.stdout)
+        self.assertIn("setup applied", result.stdout)  # board 4 does not exist: the rest of the setup is done
+        self.assertIn("board: not done: the project was not found", result.stdout)
+        self.assertNotIn("board", json.loads(recortex.read_text(os.path.join(root, recortex.CONFIG_NAME))))
+
+    def test_without_the_project_scope_the_rest_of_the_setup_is_done_and_one_fixed_line_says_what_to_run(self):
+        root, result = self.apply_with_board("new", env={"FAKE_GH_NO_PROJECT_SCOPE": "1"})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("the gh login lacks the project scope; run `gh auth refresh -s project` in your terminal, then "
+                      "run setup again.", result.stdout)
+        self.assertIn("The scope lets gh read and write all of your GitHub projects", result.stdout)
+        self.assertIn("board: not set up; the rest of the setup is done. Run `board.py setup --mode new --yes`",
+                      result.stdout)
+        self.assertNotIn("run: board.py apply", result.stdout)  # a board that is not set up is not filled
+        self.assertIn("setup applied", result.stdout)
+        config = json.loads(recortex.read_text(os.path.join(root, recortex.CONFIG_NAME)))
+        self.assertNotIn("board", config)
+        self.assertIn("hub", config)
+
+    def test_the_dry_run_names_the_board_steps_and_makes_no_call(self):
+        root, result = self.apply_with_board("new", "--dry-run")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("board.py setup --mode new --dry-run", result.stdout)
+        self.assertIn("would run:", result.stdout)
+        self.assertNotIn("projects", self.repo())
+
+    def test_no_board_answer_means_no_board_line_and_no_board_call(self):
+        root = self.project()
+        env = {"XDG_STATE_HOME": os.path.join(self.dir, "xdg-state"), "CLAUDE_PROJECT_DIR": root}
+        result = self.setup_script("apply", "--answers", self.answers("single"), "--root", root, "--yes", gh=FAKE,
+                                   env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("board.py", result.stdout)
+        self.assertNotIn("board:", result.stdout)
+        calls = " ".join(" ".join(a) for a in self.repo()["log"])
+        self.assertNotIn("rojectV2", calls)
+        self.assertNotIn("board", json.loads(recortex.read_text(os.path.join(root, recortex.CONFIG_NAME))))
+
+    def test_a_board_answer_that_does_not_fit_is_refused(self):
+        for board in ("yes", 3, {"existing": 0}, {"existing": "3"}, {"existing": 3, "extra": 1}, {"existing": True}):
+            with self.subTest(board=board):
+                root, result = self.apply_with_board(board)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("board must be", result.stderr)
+
 class CatchUpTests(Sandbox):
     def repository(self):
         root = os.path.join(self.dir, "work")
@@ -9330,12 +9397,13 @@ class SubIssueTests(RecordSandbox):
 
     def test_the_payloads_are_the_same_with_and_without_sub_issues(self):
         self.ready()
-        with_links = self.tool("index.py", "query", "brief").stdout
+        times = lambda text: re.sub(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", "<time>", text)
+        with_links = times(self.tool("index.py", "query", "brief").stdout)
         self.clear_parents()
         again = self.tool("index.py", "sync", "--rebuild")
         self.assertEqual(0, again.returncode, again.stdout + again.stderr)
         self.assertEqual([], self.sql_rows("SELECT * FROM parents"))
-        self.assertEqual(with_links, self.tool("index.py", "query", "brief").stdout)
+        self.assertEqual(with_links, times(self.tool("index.py", "query", "brief").stdout))
 
     def test_an_index_from_before_0_9_0_is_read_again_once_for_parents_and_merges(self):
         self.ready()

@@ -117,6 +117,10 @@ Topic bodies that hold a full record (a dated current state, folded old text, de
 Before a new memory is written, `index.py query recall --issue N` shows the newest memories of its thread with their state, the open questions and untried ideas elsewhere, and the words the project has explained. The session writes the plain line first, links the memory to the earlier one it builds on when that link is true, and explains in a fold at its end any word that cannot be understood without the project. The linter checks the plain line, the links and their targets, the Evidence lines and the folds before anything is posted, and the post prints the new memory's id for the next link.
 4. **Stop.** The session posts a checkpoint on each active issue and a new resume comment on the hub.
 
+## The board and the sub-issues
+
+On github.com the hub shows its topics as sub-issues and each topic its tasks, so the structure of the record is one click away. A project can also keep a private GitHub Projects board of its work: a card for each open `active` task, each open pull request and each issue waiting for triage, and for those finished in the last 30 days, in the columns To triage, Todo, In Progress, Waiting for a yes, Blocked, Done and Set aside. The plugin computes each card's place from the record, so a failure that blocks a task puts its card in Blocked, a hold puts it in Waiting for a yes, and a not-planned close puts it in Set aside, each with a link to the memory behind it. The board is opt-in at setup, needs the `project` scope that you add yourself (`gh auth refresh -s project`), is private, and is a copy: the record stays authoritative, and a card you move by hand is reported to the next session, which asks you before anything changes. See [references/board.md](skills/recortex/references/board.md).
+
 ## The mind page
 
 Ask "show me the mind of this project" and the session builds one page that tells the record's memory in sentences: where things stand, how each thread got there, what went wrong and what it led to, what is settled and what is still open. It is a private local file beside the index, built from the index alone, and it never changes the record. It tells only what your allowed accounts wrote and nobody changed afterwards, and its last lines count what it leaves out. Details: [`references/mind.md`](skills/recortex/references/mind.md).
@@ -185,6 +189,8 @@ All are in `skills/recortex/scripts/`, use only the Python standard library and 
 | `resume_block.py` | `show` prints the newest resume comment written by an allowed account, for trusted repositories only. `update` posts a new resume comment on the hub and reads it back; it never edits the hub or an earlier comment, and warns when the posting login is not allowed | `update` only |
 | `snapshot.py` | Saves all issues, pull requests and comments as local Markdown with an index, for offline reading and for surveying an old tracker | no |
 | `index.py` | Keeps the local index of the record: `sync` reads what changed on GitHub; `query` answers consistency, impact, recall, mind, timeline, triage and brief questions without network | no |
+| `sub_issues.py` | Links the hub's topics and each task as sub-issues, from the record; `plan` shows the difference | `apply` |
+| `board.py` | The private board of the work: `setup`, `plan`, `apply` (and `--restore N` for a card moved by hand) | `setup`, `apply` |
 | `mind.py` | Builds the mind page: one private local file that tells the project's memory in sentences, from the index | no |
 | `hooks.py`, `run_hook.sh`, `session_start_hook.sh` | The four hooks; `hooks.py --print` shows their payloads | no |
 | `setup.py` | `detect` suggests deliverables and fields from file names; `apply` makes the setup from answers you confirmed; `fields` shows, sets and approves the field sheet | `apply` |
