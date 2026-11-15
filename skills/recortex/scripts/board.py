@@ -325,6 +325,8 @@ def set_up(args):
         else:
             number = args.number
         project = board_api.read_project(owner, number)
+        if project["closed"]:
+            raise board_api.BoardError("notfound")
         texts = ", shortDescription: %s, readme: %s" % (board_api.quote(board_api.DESCRIPTION),
                                                         board_api.quote(board_api.README)) if args.mode == "new" else ""
         board_api.graphql("mutation { updateProjectV2(input: {projectId: %s, public: false%s}) { projectV2 { id } } }"
@@ -337,7 +339,8 @@ def set_up(args):
         missing = [n for n in STATUS_NAMES if n not in project["status"]["ids"]]
         if missing:
             options = ", ".join("{id: %s, name: %s, color: %s, description: %s}" % (
-                board_api.quote(ident), board_api.quote(label or ""), color or "GRAY", board_api.quote(desc or ""))
+                board_api.quote(ident), board_api.quote(label or "", False), color or "GRAY",
+                board_api.quote(desc or "", False))
                 for ident, label, color, desc in project["status"]["full"])
             options += (", " if options else "") + ", ".join("{name: %s, color: %s, description: \"\"}" % (
                 board_api.quote(n), board_api.COLORS[n]) for n in missing)
@@ -373,7 +376,10 @@ def set_up(args):
                 or (args.mode == "new" and (not project["texts"] or repo.lower() not in project["repos"])):
             raise board_api.BoardError("setup")
     except board_api.BoardError as error:
-        print(failure(error.code))
+        if error.code == "scope":  # a login that reads projects but cannot write them fails at the first write
+            print(board_api.SCOPE_LINE)
+        else:
+            print(failure(error.code))
         if args.mode == "new" and type(made_number) is int:
             print("board: the new board is number %d; run `board.py setup --mode existing --number %d --yes` to "
                   "finish it" % (made_number, made_number))

@@ -186,7 +186,7 @@ def main(argv=None):
         return 0
     todo = [(p, c) for p, c, state in rows if state == "missing"]
     if args.dry_run:
-        for parent, child in todo:
+        for parent, child in todo[:args.limit]:
             print("would run: " + recortex.show_command(["api", "graphql", "-f", "query=" + add_text(ids[parent],
                                                                                                       ids[child])]))
         print("dry run: nothing was written")

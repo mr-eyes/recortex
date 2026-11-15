@@ -8,8 +8,8 @@ Two views of the record on github.com, both kept in step from the record and bot
 
 Each topic issue (label `final-record`) is a sub-issue of the hub, and each `active` task is a sub-issue of its destination topic. The hub then shows its topics with a progress count on github.com, and a topic shows its tasks. The links are computed from the record (the hub's tables, the task's "Destination topic" section), and a link changed by hand on GitHub is reported, not believed.
 
-- `create_issues.py` adds the link when it creates a topic or a task, and prints `sub-issue: #7 is under #5`.
-- `sub_issues.py plan` says which links the record wants that GitHub lacks or shows differently; `sub_issues.py apply` (`--dry-run` first) adds the missing ones and reads each back through `Issue.parent`. A task that already has another parent is reported and left alone. Nothing is removed.
+- `create_issues.py` adds the link when it creates a topic or a task, waits a second after each (`RECORTEX_LINK_PAUSE`), and prints `sub-issue: #7 is under #5`. A task whose "Destination topic" names no topic number is not linked by it; `sub_issues.py apply` links it under the only topic that shares its `topic:` label.
+- `sub_issues.py plan` says which links the record wants that GitHub lacks or shows differently; `sub_issues.py apply` (`--dry-run` first; at most 60 links a run, `--limit`) adds the missing ones and reads each back through `Issue.parent`, also after a failure, since GitHub may have acted before it failed. A task that already has another parent is reported and left alone. Nothing is removed.
 - When GitHub refuses a link (an older GitHub Enterprise Server, or more than 100 sub-issues under one parent) the script says so in one fixed line, and the hub's tables stay the structure.
 - The sync stores each issue's parent (`parents`), and `index.py query consistency` reports a link the record wants that GitHub does not show, for a record that uses sub-issues at all.
 - The links need the `repo` scope `gh` already has. Topic issues stay open for the life of the project, so the hub's own count reads "0 of N" for as long.
@@ -52,7 +52,7 @@ Optional, in the browser, none required: keep GitHub's two default workflows (a 
 ### Commands
 
 - `board.py plan`: offline, from the index. Lists cards moved by hand, cards behind the record, cards not on the board yet and cards with no issue in the record.
-- `board.py apply --dry-run`, then `board.py apply`: syncs the index, reads the board, adds the missing cards, writes Status and Why for cards that are behind, leaves hand-moved cards alone, then reads every changed card back and says `MISMATCH` for any that did not take. At most 60 cards are written per run (`--limit`); run again for the rest. A run that stops is run again; adding a card is idempotent on GitHub's side.
+- `board.py apply --dry-run`, then `board.py apply`: syncs the index, reads the board, adds the missing cards, writes Status and Why for cards that are behind, leaves hand-moved cards alone, then reads every changed card back and says `MISMATCH` for any that did not take. At most 20 cards are written per run (`--limit`, about 60 requests a minute or two apart); run it with a timeout of five minutes, and run it again until it says nothing waits. The cards it read back are kept in the index, so `board.py plan` and the brief are right at once. A run that stops is run again; adding a card is idempotent on GitHub's side.
 - `board.py apply --restore N`: puts one hand-moved card back, after the user's answer.
 
 Only the main session runs `apply`; hooks never write to GitHub, and the auditor runs only `plan`. A board failure never fails a record post, because no posting script calls `board.py`. A failure of `board.py` is one fixed line: `board: not done: <reason>. Run hooks.py --doctor.`

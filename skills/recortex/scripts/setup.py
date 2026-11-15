@@ -1262,7 +1262,12 @@ def apply(answers, root, dry, drafts):
 
     run([python, os.path.join(scripts, "index.py"), "--repo", answers["repo"], "sync"], dry,
         "build the local index in the foreground, so the first session has a brief", cwd=root)
-    if answers["board"]:
+    if answers["board"] and existing.get("board"):
+        print("board: this project already has a board entry (%s/%s); no second board is made. To change it, edit "
+              "the entry by hand and run board.py setup --mode existing --number N --yes"
+              % (str(existing["board"].get("owner"))[:40] if isinstance(existing["board"], dict) else "?",
+                 str(existing["board"].get("number"))[:10] if isinstance(existing["board"], dict) else "?"))
+    elif answers["board"]:
         board_step(answers["board"], root, python, dry)
     present = [item["kind"] for item in detect(root)]
     if dry:

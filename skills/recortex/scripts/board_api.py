@@ -46,6 +46,7 @@ GH_ID = re.compile(r"[A-Za-z0-9_=-]{1,100}")
 OWNER = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
 PAGE = 100
 WHY_CAP = 300
+CURSOR = re.compile(r"[A-Za-z0-9+/=_-]{1,400}")  # a page cursor from GitHub, checked before it goes into a query
 MAX_PAGES = 500          # pages of cards read at most (50,000 cards, the most a board holds)
 DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
@@ -169,8 +170,10 @@ def classify(text):
     return "github"
 
 
-def quote(value):
-    return json.dumps(value)
+def quote(value, ascii_only=True):
+    """A string literal. JSON escapes are GraphQL's; ascii_only=False keeps an emoji of the user's own option names
+    as itself rather than as a surrogate pair."""
+    return json.dumps(value, ensure_ascii=ascii_only)
 
 
 def ident(value):
@@ -188,7 +191,7 @@ def scope_probe(timeout=60):
 
 PROJECT_FIELDS = ("id number closed public title readme shortDescription "
                   "repositories(first: 20) { nodes { nameWithOwner } } "
-                  "fields(first: 50) { nodes { ... on ProjectV2Field { id name } ... on ProjectV2SingleSelectField "
+                  "fields(first: 50) { nodes { ... on ProjectV2Field { id name dataType } ... on ProjectV2SingleSelectField "
                   "{ id name options { id name color description } } } } "
                   "workflows(first: 20) { nodes { name enabled } } "
                   "views(first: 20) { nodes { id name filter } }")
@@ -239,7 +242,7 @@ def read_project(owner, number, timeout=60):
                     full.append((option["id"], option.get("name") if isinstance(option.get("name"), str) else "",
                                  color, description[:100]))
             out["status"] = {"id": ident(node.get("id")), "options": names, "ids": ids, "full": full}
-        elif node.get("name") == WHY and "options" not in node:
+        elif node.get("name") == WHY and "options" not in node and node.get("dataType") == "TEXT":
             out["why"] = ident(node.get("id"))
     for node in (found.get("workflows") or {}).get("nodes") or []:
         if isinstance(node, dict) and isinstance(node.get("name"), str):
@@ -253,6 +256,8 @@ def read_project(owner, number, timeout=60):
 
 
 def cards_query(project_id, after):
+    if after is not None and not CURSOR.fullmatch(after):
+        raise BoardError("github")
     paging = "first: %d, archivedStates: [ARCHIVED, NOT_ARCHIVED]%s" % (PAGE, ", after: %s" % quote(after) if after
                                                                      else "")
     content = "number repository { nameWithOwner }"
@@ -361,7 +366,8 @@ def doctor_lines(config, repo, timeout=30):
     if state == "none":
         return ["board: none configured"]
     words = {"entry": "the entry does not fit", "owner": "its owner is not the record's owner",
-             "unapproved": "not approved on this machine (run board.py setup)", "approved": "approved here"}
+             "unapproved": "not approved on this machine (run board.py setup --mode existing --number %s --yes)"
+             % (number if type(number) is int else "N"), "approved": "approved here"}
     lines = ["board: %s%s" % (words[state], "; %s/%d" % (owner, number) if owner else "")]
     if state != "approved":
         return lines

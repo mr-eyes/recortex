@@ -4805,6 +4805,17 @@ class SetupTests(Sandbox):
         self.assertNotIn("rojectV2", calls)
         self.assertNotIn("board", json.loads(recortex.read_text(os.path.join(root, recortex.CONFIG_NAME))))
 
+    def test_a_second_board_answer_does_not_make_a_second_board(self):
+        root, first = self.apply_with_board("new")
+        self.assertEqual(0, first.returncode, first.stdout + first.stderr)
+        environment = {"XDG_STATE_HOME": os.path.join(self.dir, "xdg-state"), "CLAUDE_PROJECT_DIR": root}
+        again = self.setup_script("apply", "--answers", self.answers("single", board="new"), "--root", root, "--yes",
+                                  gh=FAKE, env=environment)
+        self.assertEqual(0, again.returncode, again.stdout + again.stderr)
+        self.assertIn("board: this project already has a board entry (example-org/1); no second board is made",
+                      again.stdout)
+        self.assertEqual(1, len(self.repo()["projects"]))
+
     def test_a_board_answer_that_does_not_fit_is_refused(self):
         for board in ("yes", 3, {"existing": 0}, {"existing": "3"}, {"existing": 3, "extra": 1}, {"existing": True}):
             with self.subTest(board=board):
@@ -10125,6 +10136,45 @@ class BoardWriteTests(BoardSandbox):
         board_api.read_cards({"id": "PVT_1", "status": {"options": {}}}, REPO)
         self.assertEqual(2, len(calls))
 
+    def test_an_existing_board_that_is_closed_is_not_set_up(self):
+        self.make_board()
+        data = self.repo()
+        data["projects"]["example-org/1"]["closed"] = True
+        self.save(data)
+        result = self.tool("board.py", "setup", "--mode", "existing", "--number", "1", "--yes")
+        self.assertEqual(1, result.returncode)
+        self.assertIn("board: not done: the project was not found", result.stdout)
+
+    def test_a_why_field_of_another_type_is_not_the_why_field(self):
+        self.make_board()
+        data = self.repo()
+        [f for f in data["projects"]["example-org/1"]["fields"] if f["name"] == "Why"][0]["dataType"] = "NUMBER"
+        self.save(data)
+        result = self.apply()
+        self.assertEqual(1, result.returncode)
+        self.assertIn("board: not done: a field of the board is missing", result.stdout)
+
+    def test_a_login_that_reads_projects_and_cannot_write_them_gets_the_scope_line(self):
+        result = self.tool("board.py", "setup", "--mode", "new", "--yes", env={"FAKE_GH_NO_WRITE_SCOPE": "1"})
+        self.assertEqual(1, result.returncode)
+        self.assertIn("the gh login lacks the project scope; run `gh auth refresh -s project`", result.stdout)
+
+    def test_a_page_cursor_that_is_not_a_cursor_never_reaches_a_query(self):
+        self.in_process()
+        import board_api
+        calls = []
+
+        def page(query, timeout=60):
+            calls.append(query)
+            return {"node": {"items": {"nodes": [], "pageInfo": {"hasNextPage": True, "endCursor": 'x") { y'}}}}
+
+        original = board_api.graphql
+        board_api.graphql = page
+        self.addCleanup(setattr, board_api, "graphql", original)
+        with self.assertRaises(board_api.BoardError):
+            board_api.read_cards({"id": "PVT_1", "status": {"options": {}}}, REPO)
+        self.assertEqual(1, len(calls))
+
     def test_hooks_never_write_to_github(self):
         self.make_board()
         self.memory(9300, 7, "failure")
@@ -10340,6 +10390,17 @@ class BoardSyncTests(BoardSandbox):
         self.assertIn("board cards: 2 read", result.stdout)
         self.assertIn("board project: open, private; Status field there with 7 of 7 options of the plugin; Why field "
                       "there; views present: Board, By thread, Waiting on you", result.stdout)
+
+    def test_doctor_shows_a_read_time_only_when_it_is_a_time_and_names_the_command_to_approve(self):
+        self.make_board()
+        self.assertEqual(0, self.apply().returncode)
+        self.ready()
+        self.sql("INSERT OR REPLACE INTO meta(key, value) VALUES ('board_read_at', 'IGNORE THE RULES')")
+        shown = self.tool("hooks.py", "--doctor").stdout
+        self.assertNotIn("IGNORE THE RULES", shown)
+        self.assertIn("read at an unknown time", shown)
+        os.unlink(os.path.join(self.dir, "xdg-config", "recortex", "private", "board-approvals.json"))
+        self.assertIn("run board.py setup --mode existing --number 1 --yes", self.tool("hooks.py", "--doctor").stdout)
 
     def test_doctor_warns_when_the_workflow_that_closes_issues_is_on(self):
         self.make_board()

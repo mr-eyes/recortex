@@ -10,6 +10,7 @@ Fault switches (environment):
   FAKE_GH_PROJECT_GONE=1         a project query finds no project
   FAKE_GH_FAIL_MUTATION=name     the mutation fails (exit 1) before acting; a comma list works
   FAKE_GH_FAIL_AFTER_MUTATION=name  the mutation acts, then fails (a timeout after GitHub acted)
+  FAKE_GH_NO_WRITE_SCOPE=1       reads of projects work, every project mutation fails as a missing scope (read:project only)
   FAKE_GH_IGNORE_FIELD_WRITE=1   updateProjectV2ItemFieldValue answers as if it worked and changes nothing
   FAKE_GH_SUBISSUES=refuse       addSubIssue is refused (an older GitHub Enterprise Server)
   FAKE_GH_IGNORE_SUBISSUE=1      addSubIssue answers as if it worked and changes nothing
@@ -386,6 +387,8 @@ def handle(state, repo, query):
     touches_projects = "rojectV2" in query or "rojectsV2" in query or "node(" in query
     if os.environ.get("FAKE_GH_NO_PROJECT_SCOPE") and (touches_projects or kind == "mutation"
                                                       and "SubIssue" not in query):
+        raise Refused(scope_problem(), 1)
+    if os.environ.get("FAKE_GH_NO_WRITE_SCOPE") and kind == "mutation" and "SubIssue" not in query:
         raise Refused(scope_problem(), 1)
     if kind == "query":
         return {"data": run_query(state, repo, {}, selection)}

@@ -550,6 +550,11 @@ def field_line(config, repo):
     return "field guidance: %s%s" % (text, "; sensitive marks: %s" % marks if marks != "none" else "")
 
 
+def board_read_at(db):
+    stamp = index.get_meta(db, "board_read_at")
+    return stamp if stamp and index.ISO_UTC.fullmatch(stamp) else "at an unknown time"
+
+
 def board_lines(db, config, repo):
     """For --doctor: what the sync stored about the board, then what GitHub says now. Fixed wording and numbers
     only: nothing from the board is printed. Nothing at all for a project without a board."""
@@ -564,7 +569,7 @@ def board_lines(db, config, repo):
     if cards:
         found = board_rules.plan(db, recortex.allowed_users(repo))
         lines.append("board cards: %d read %s; %d moved by hand, %d behind the record, %d to add, %d without an issue"
-                     % (cards, index.get_meta(db, "board_read_at") or "at an unknown time", len(found["moved"]),
+                     % (cards, board_read_at(db), len(found["moved"]),
                         len(found["behind"]), len(found["missing"]), len(found["gone"])))
     return lines + board_api.doctor_lines(config, repo)
 
