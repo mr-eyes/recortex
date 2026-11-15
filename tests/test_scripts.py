@@ -6967,7 +6967,7 @@ class MindPageTests(MindSandbox):
                      "Task: support newlines inside quoted fields", "the memory of March 6",
                      "We use “line splitter” to mean", "Where it came up (2), oldest first",
                      "later that changed, going back to March 4", "Every memory of the record by your allowed "
-                     "accounts is told here."):
+                     "accounts is told here.", "No thread has been set aside."):
             self.assertIn(said, words)
         for number in ("#5", "#6", "#7", "issuecomment"):
             self.assertNotIn(number, words)  # content, not containers: no issue number in the reading text
@@ -7032,6 +7032,19 @@ class MindPageTests(MindSandbox):
             mind.anchor("not a name")
         self.assertEqual('<a class="said" href="#m-5" data-m="5">&lt;b&gt; &amp; �</a>',
                          mind.E("a", {"class": "said", "href": mind.anchor("m-5"), "data-m": 5}, "<b> & \x1b"))
+
+    def test_a_link_that_leaves_the_page_always_carries_rel(self):
+        mind = self.mind()
+        address = mind.github_url("issue", REPO, 7)
+        self.assertEqual('<a href="https://github.com/example-org/tinycsv/issues/7" rel="noopener noreferrer">x</a>',
+                         mind.E("a", {"href": address}, "x"))
+        self.assertEqual('<a href="https://github.com/example-org/tinycsv/issues/7" rel="noopener noreferrer">x</a>',
+                         mind.E("a", {"href": address, "rel": "opener"}, "x"))  # whatever the caller says
+        self.assertEqual('<a href="#now">x</a>', mind.E("a", {"href": mind.anchor("now")}, "x"))
+        text = self.chain_page()
+        links = [dict(attrs) for tag, attrs in PageReader(text).elements if dict(attrs).get("href", "#")[:1] != "#"]
+        self.assertGreater(len(links), 10)
+        self.assertEqual({"noopener noreferrer"}, {link.get("rel") for link in links})
 
     def test_addresses_are_built_from_checked_parts_only(self):
         mind = self.mind()

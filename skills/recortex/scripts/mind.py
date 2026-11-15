@@ -47,6 +47,7 @@ POLICY = ("default-src 'none'; style-src %s; script-src %s; img-src 'none'; conn
           "base-uri 'none'; form-action 'none'")
 POLICY_FORM = re.compile(re.escape(POLICY).replace("%s", "'sha256-[A-Za-z0-9+/]{43}='"))
 VIEWPORT = "width=device-width, initial-scale=1"
+SCHEME = "https://"  # the one scheme of an address that leaves the page; E() gives such a link its rel
 
 UNTRUSTED = ("mind: this repository is not in your trusted list, so no page is built. The page tells only the memories "
              "of accounts you allow.")
@@ -101,11 +102,14 @@ def J(*parts):
 
 def E(tag, attrs=None, *children):
     """One element. Raises for a name off the lists, a plain string as href, or an attribute value that is not a
-    fixed word or number."""
+    fixed word or number. A link that leaves the page gets rel="noopener noreferrer" here, not from its caller."""
     if tag not in TAGS:
         raise ValueError("element <%s> is not on the list" % tag)
+    attrs = dict(attrs or {})
+    if isinstance(attrs.get("href"), Href) and attrs["href"].startswith(SCHEME):
+        attrs["rel"] = "noopener noreferrer"  # every link that leaves the page, whatever the call site says
     written = []
-    for name, value in (attrs or {}).items():
+    for name, value in attrs.items():
         if value is None or value is False:
             continue
         if name not in ATTRS:
@@ -170,7 +174,7 @@ def github_url(kind, repo, *parts):
     path)."""
     if not recortex.valid_repo(repo):
         return None
-    base = "https://github.com/" + repo
+    base = SCHEME + "github.com/" + repo
     if kind in ("issue", "pull"):
         n = number(parts[0], ISSUE_NUMBER)
         return Href("%s/%s/%d" % (base, "issues" if kind == "issue" else "pull", n)) if n else None
@@ -412,7 +416,7 @@ class Page:
                          E("p", {"class": "quiet"}, "The picture is ", E("code", None, text_of(block.get("path"))),
                            " at ", text_of(block.get("ref")), ".") if text_of(block.get("path")) else "",
                          self.made_from(block),
-                         E("a", {"href": address, "rel": "noopener noreferrer"}, "Open the picture on GitHub")
+                         E("a", {"href": address}, "Open the picture on GitHub")
                          if address else E("p", {"class": "nothing"}, "This memory names a figure that this page cannot "
                                                                        "link to."))
 
@@ -422,14 +426,14 @@ class Page:
         span = "line %d" % first if first == last else "lines %d to %d" % (first, last)
         return self.show("Show the code", E("p", {"class": "evtitle"}, E("code", None, text_of(item.get("path"))),
                                             ", %s, as they were at the change " % span, text_of(item.get("ref"))[:12]),
-                         E("a", {"href": address, "rel": "noopener noreferrer"}, "Open these lines on GitHub")
+                         E("a", {"href": address}, "Open these lines on GitHub")
                          if address else E("p", {"class": "nothing"}, "This memory names code that this page cannot "
                                                                        "link to."))
 
     def pull_ref(self, item):
         address = github_url("pull", text_of(item.get("repo")), item.get("number"))
         return self.show("Show the change that was merged", E("p", {"class": "evtitle"}, text_of(item.get("title"))),
-                         E("a", {"href": address, "rel": "noopener noreferrer"}, "Open the pull request on GitHub")
+                         E("a", {"href": address}, "Open the pull request on GitHub")
                          if address else E("p", {"class": "nothing"}, "This memory names a change that this page "
                                                                        "cannot link to."))
 
@@ -524,7 +528,7 @@ class Page:
                    *[self.field(entry) for entry in memory.get("where", [])],
                    E("p", None, "Written by ", E("span", {"class": "people"}, who), " at %s, as a comment in the "
                                                                                     "project's record on GitHub." % when),
-                   E("a", {"href": address, "rel": "noopener noreferrer"}, "Open the original comment on GitHub")
+                   E("a", {"href": address}, "Open the original comment on GitHub")
                    if address else ""))
 
     # ------------------------------------------------------------ the views
@@ -609,7 +613,7 @@ class Page:
             return E("p", None, "This thread is not part of what we deliver. The story below says why.")
         if thread.get("shown") is not True:
             address = github_url("issue", self.repo, thread.get("topic"))
-            return J(E("p", None, NOT_SHOWN), E("a", {"href": address, "rel": "noopener noreferrer"},
+            return J(E("p", None, NOT_SHOWN), E("a", {"href": address},
                                                 "Open the thread on GitHub") if address else "")
         sections = thread.get("sections", [])
         if not sections:
@@ -728,7 +732,7 @@ class Page:
         address = github_url("issue", self.repo, task.get("issue"))
         return E("div", {"class": "onote task k-checkpoint"},
                  E("p", {"class": "said"}, words),
-                 E("a", {"class": "quiet", "href": address, "rel": "noopener noreferrer"}, "Open the task on GitHub")
+                 E("a", {"class": "quiet", "href": address}, "Open the task on GitHub")
                  if address else "")
 
     def open_view(self):
@@ -923,7 +927,7 @@ class Page:
                              E("p", {"class": "quiet"}, "Opened by ", E("span", {"class": "people"}, who),
                                " on %s; %s." % (text_of(issue.get("opened")), state)),
                              E("div", {"class": "why"}, self.blocks(issue.get("first"))) if issue.get("first") else "",
-                             E("p", None, E("a", {"href": address, "rel": "noopener noreferrer"},
+                             E("p", None, E("a", {"href": address},
                                             "Open the whole issue on GitHub")) if address else ""))
         return E("div", {"id": "issues", "hidden": "hidden"}, *entries)
 
@@ -992,8 +996,7 @@ class Page:
                                                      "told here.",
                                              "%d memories were changed on GitHub after they were posted, so they are "
                                              "not told here.")))
-            lines.append(E("ul", {"class": "plainlist"}, *[E("li", None, E("a", {"href": address, "rel":
-                                                                                  "noopener noreferrer"},
+            lines.append(E("ul", {"class": "plainlist"}, *[E("li", None, E("a", {"href": address},
                                                                          "Open it on GitHub"))
                                                             for address in links if address]))
         older = integer(missing.get("older"))
@@ -1011,7 +1014,7 @@ class Page:
             lines.append(E("p", None, "The text of the thread ", self.thread_link(body.get("thread")),
                            " is not shown: someone outside your allowed accounts wrote or changed it, or its history "
                            "has not been read yet. ",
-                           E("a", {"href": address, "rel": "noopener noreferrer"}, "Open it on GitHub") if address
+                           E("a", {"href": address}, "Open it on GitHub") if address
                            else ""))
         if not lines:
             lines.append(E("p", None, "Every memory of the record by your allowed accounts is told here."))
