@@ -710,7 +710,7 @@ class Page:
                          "memories it rests on. Anything replaced is folded under what replaced it.", *blocks,
                          E("h3", None, "Left out on purpose"),
                          E("ul", {"class": "leftout"}, *left) if left else
-                         E("p", {"class": "quiet"}, "Nothing has been set aside."))
+                         E("p", {"class": "quiet"}, "No thread has been set aside."))
 
     @staticmethod
     def age(days):
