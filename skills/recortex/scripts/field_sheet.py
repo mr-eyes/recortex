@@ -371,15 +371,29 @@ def write_approvals(data, top=None):
     storage.write_file(os.path.join(private, APPROVALS), json.dumps(data, indent=1, sort_keys=True) + "\n")
 
 
+class LockError(storage.StorageError):
+    """The lock file of the approvals is the problem: it is refused, cannot be opened, or is held too long. `path`
+    names it, so that a command's one line names the file to look at."""
+
+    def __init__(self, message, kind, path):
+        super().__init__(message, kind)
+        self.path = path
+
+
 @contextlib.contextmanager
 def approvals_lock(top=None):
     """One writer at a time: the approvals are read, changed and written under an exclusive lock on a file beside them,
     so that two setups that finish at the same moment both keep their approval. The hooks never take it."""
     private = storage.folder(top or storage.config_top())
     path = os.path.join(private, APPROVALS_LOCK)
-    if os.path.lexists(path):
-        storage.check_path(path, "file")
-    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        if os.path.lexists(path):
+            storage.check_path(path, "file")
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except storage.StorageError as error:
+        raise LockError(str(error), error.kind, path)
+    except OSError as error:
+        raise LockError("%s cannot be opened (%s)" % (path, error.strerror or error), "lock", path)
     try:
         if fcntl:
             # A holder keeps the lock for one read and one write. One that stopped (a debugger, a stopped process) is
@@ -391,9 +405,9 @@ def approvals_lock(top=None):
                     break
                 except BlockingIOError:
                     if time.monotonic() >= deadline:
-                        raise storage.StorageError("another process holds the lock %s on the approvals and did not "
-                                                   "release it within %d seconds; run again once it has finished"
-                                                   % (path, LOCK_WAIT), "lock")
+                        raise LockError("another process holds the lock %s on the approvals and did not release it "
+                                        "within %d seconds; run again once it has finished" % (path, LOCK_WAIT),
+                                        "lock", path)
                     time.sleep(0.1)
         yield
     finally:

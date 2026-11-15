@@ -612,6 +612,13 @@ def print_patterns(existing, restricted, dry):
                                                                   "would add" if dry else "added"))
 
 
+def not_recorded(error):
+    """The file a failed approval names: the lock file when the lock is the problem, else the approvals file."""
+    if isinstance(error, field_sheet.LockError):
+        return "the lock file %s cannot be used (%s)" % (error.path, error)
+    return "the approvals file %s cannot be written (%s)" % (field_sheet.approvals_path(), error)
+
+
 def record_fields(repo, entry, dry):
     """After the configuration file is written: the user's approval of the sheet (none for "No particular field"),
     and that the field question was asked, so the session start does not offer it again."""
@@ -628,9 +635,10 @@ def record_fields(repo, entry, dry):
             field_sheet.record_approval(repo, entry, datetime.date.today().isoformat())
             print("recorded: your approval of this field guidance, fingerprint %s" % value[:12])
     except (OSError, storage.StorageError, ValueError) as error:
-        raise SystemExit("error: the approval was not recorded: the approvals file %s cannot be written (%s). The "
-                         "configuration is written; move the file aside by hand and run again to record it"
-                         % (field_sheet.approvals_path(), error))
+        raise SystemExit("error: the approval was not recorded: %s. The configuration is written; %s"
+                         % (not_recorded(error), "run again to record it once the lock file is fixed or free"
+                            if isinstance(error, field_sheet.LockError) else
+                            "move the file aside by hand and run again to record it"))
     record_offer(repo)
 
 
@@ -841,8 +849,7 @@ def fields_approve(config, repo, prefix, yes):
     try:
         field_sheet.record_approval(repo, info["entry"], datetime.date.today().isoformat())
     except (OSError, storage.StorageError, ValueError) as error:
-        sys.exit("error: the approval was not recorded: the approvals file %s cannot be written (%s)"
-                 % (field_sheet.approvals_path(), error))
+        sys.exit("error: the approval was not recorded: %s" % not_recorded(error))
     print("recorded: your approval of this field guidance, fingerprint %s" % info["fingerprint"][:12])
     print("\n".join(sheet_lines(info["entry"], field_sheet.pointer_name(config), datetime.date.today().isoformat())))
     return 0

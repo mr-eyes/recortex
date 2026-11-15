@@ -4533,6 +4533,26 @@ class SetupTests(Sandbox):
         self.assertNotEqual(0, malformed.returncode)
         self.assertIn("does not have the form the plugin accepts", malformed.stderr)
 
+    def test_a_lock_file_that_is_the_problem_is_named(self):
+        private = os.path.dirname(self.approvals())
+        os.makedirs(private, mode=0o700)
+        os.chmod(os.path.dirname(private), 0o700)
+        lock = os.path.join(private, "field-approvals.lock")
+        with open(lock, "w"):
+            pass
+        os.chmod(lock, 0o644)  # refused: the lock file, not the approvals, is what the user has to fix
+        root = self.configured({"repo": REPO, "hub": 4, "fields": model_sheet("engineering")})
+        approve = self.fields(root, "approve", "--fingerprint", ENGINEERING_TINYCSV[:12], "--yes")
+        fresh = self.configured()
+        set_ = self.fields(fresh, "set", "--answers", self.field_answers(), "--yes")
+        for result in (approve, set_):
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("error: the approval was not recorded: the lock file %s cannot be used (" % lock, result.stderr)
+            self.assertNotIn("the approvals file", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+        self.assertIn("run again to record it once the lock file is fixed or free", set_.stderr)
+        self.assertFalse(os.path.lexists(self.approvals()))
+
     def test_fields_show_prints_what_each_state_allows(self):
         root = self.configured()
         config = os.path.join(root, recortex.CONFIG_NAME)
