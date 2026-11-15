@@ -1,0 +1,25 @@
+{
+ "about": "Twenty payloads for the hostile mind page test (MindPageTests): markup, event handlers, attribute breakouts, javascript: links, closing tags of the page's own elements, meta refresh, base, a form, control characters and characters that reorder text.",
+ "payloads": [
+  "<script>window.__pwned=1</script>",
+  "<img src=x onerror=\"window.__pwned=2\">",
+  "\"><svg onload=window.__pwned=3>",
+  "' onmouseover='window.__pwned=4",
+  "</style><script>window.__pwned=5</script>",
+  "javascript:window.__pwned=6",
+  "[x](javascript:window.__pwned=7)",
+  "<a href=\"https://evil.example/\">x</a>",
+  "&lt;b&gt; &amp;#x3c;script&#62;",
+  "</details></dialog></article><iframe srcdoc=\"<script>parent.__pwned=8</script>\">",
+  "\u202egnp.exe\u202c",
+  "\u001b[31mred\u0000",
+  "<meta http-equiv=\"refresh\" content=\"0;url=https://evil.example/\">",
+  "<base href=\"https://evil.example/\">",
+  "<link rel=stylesheet href=https://evil.example/x.css>",
+  "{{constructor.constructor(\"window.__pwned=9\")()}}",
+  "<!-- --><script>window.__pwned=10</script>",
+  "</title><script>window.__pwned=11</script>",
+  "<form action=https://evil.example><input name=q>",
+  "\" data-m=\"1\" id=\"now"
+ ]
+}

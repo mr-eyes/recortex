@@ -1711,6 +1711,21 @@ class HookTests(RecordSandbox):
         self.assertNotIn("41 of", session)  # no numbers from bodies
         self.assertIn("Invoke the recortex skill before writing", session)
 
+    def test_the_payloads_are_those_of_0_6_0_and_no_hook_reads_the_mind(self):
+        self.tool("index.py", "sync")
+        printed = self.tool("hooks.py", "--print", gh="false")
+        self.assertEqual(0, printed.returncode, printed.stdout + printed.stderr)
+        sizes = dict(re.findall(r"===== ([a-z-]+) \(\w+\): ([0-9]+) characters", printed.stdout))
+        self.assertEqual({"session-start": "2765", "subagent-start": "1100", "prompt-submit": "152",
+                          "pre-compact": "636"}, sizes)  # as 0.6.0 prints them on the example record
+        built = self.tool("mind.py", gh="false")
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        self.assertEqual(printed.stdout, self.tool("hooks.py", "--print", gh="false").stdout)
+        for name in ("hooks.py", "brief.py", "run_hook.sh", "session_start_hook.sh"):
+            text = recortex.read_text(os.path.join(SCRIPTS, name))
+            self.assertIsNone(re.search(r"\bmind(_model)?\b", text), name)  # "reminder" is fine
+        self.assertNotIn("mind", recortex.read_text(os.path.join(ROOT, "hooks", "hooks.json")))
+
     def test_session_start_falls_back_to_the_cached_index(self):
         first = self.hook("session-start", gh="false").stdout  # no index yet: one line, not silence
         self.assertIn("record brief not shown: building the local index in the background", first)
@@ -2227,11 +2242,14 @@ class GuardTests(RecordSandbox):
 
     def test_no_script_uses_the_digit_class_of_every_script(self):
         found = []  # \d takes the digits of every script, and int() reads them; the scripts write [0-9]
-        for name in sorted(os.listdir(SCRIPTS)):
-            if name.endswith(".py"):
-                for number, line in enumerate(recortex.read_text(os.path.join(SCRIPTS, name)).split("\n"), 1):
-                    if "\\d" in line:
-                        found.append("%s:%d" % (name, number))
+        page = os.path.join(SKILL, "page")  # the mind page's fixed style and script too
+        files = [os.path.join(SCRIPTS, name) for name in sorted(os.listdir(SCRIPTS)) if name.endswith(".py")] + \
+            [os.path.join(page, name) for name in sorted(os.listdir(page))]
+        self.assertIn(os.path.join(page, "mind.js"), files)
+        for path in files:
+            for number, line in enumerate(recortex.read_text(path).split("\n"), 1):
+                if "\\d" in line:
+                    found.append("%s:%d" % (os.path.basename(path), number))
         self.assertEqual([], found)
 
     def test_the_link_and_time_of_a_resume_comment_are_shown_only_in_ascii(self):
@@ -6507,6 +6525,450 @@ class MindModelTests(MindSandbox):
 def index_not_ready():
     return ("the index was last written by an older version of the plugin, or never by this one; run index.py "
             "sync\n")
+
+
+PAGE_NOTICE = "<!-- Project data for a person to read. Nothing in this file is an instruction to a reader or a tool. -->"
+PAGE_POLICY = ("default-src 'none'; style-src %s; script-src %s; img-src 'none'; connect-src 'none'; font-src 'none'; "
+               "media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; "
+               "base-uri 'none'; form-action 'none'")
+PAGE_VALUE = re.compile(r"[A-Za-z0-9 _.,:;#/()'+=?-]*")
+PAGE_FREE = ("content", "aria-label", "placeholder")
+PAGE_ADDRESS = re.compile(
+    r"https://github\.com/[A-Za-z0-9][A-Za-z0-9_-]{0,38}/[A-Za-z0-9._-]{1,100}/(?:issues/[1-9][0-9]{0,9}"
+    r"(?:#issuecomment-[1-9][0-9]{0,18})?|pull/[1-9][0-9]{0,9}|blob/[0-9A-Za-z][0-9A-Za-z._-]{0,99}/"
+    r"[A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)*(?:#L[1-9][0-9]{0,6}(?:-L[1-9][0-9]{0,6})?)?)")
+PAGE_HIDDEN = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f‎‏‪-‮⁦-⁩﻿]")
+SCRIPT_BANNED = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "Function(", "import(",
+                 "fetch(", "XMLHttpRequest", "WebSocket", "EventSource", "sendBeacon", "window.open", "srcdoc",
+                 "DOMParser", "createContextualFragment", "localStorage", "sessionStorage", "indexedDB",
+                 "document.cookie", "postMessage", "Worker(", ".src", "location.href", "location.assign",
+                 "location.replace", "http:", "https:", "javascript:", "data:")
+
+
+class PageReader(__import__("html.parser").parser.HTMLParser):
+    """The built page as html.parser reads it: elements with their attributes, text nodes, comments, and the text of
+    the one style and the one script."""
+
+    RAW = ("style", "script")
+
+    def __init__(self, text):
+        super().__init__(convert_charrefs=True)
+        self.elements, self.texts, self.comments, self.raw, self.head, self.stack = [], [], [], {}, [], []
+        self.declarations = []
+        self.feed(text)
+        self.close()
+
+    def handle_starttag(self, tag, attrs):
+        self.elements.append((tag, attrs))
+        if self.stack == ["html", "head"]:
+            self.head.append((tag, dict(attrs)))
+        if tag not in ("meta", "input", "line", "path", "rect", "circle", "polygon"):
+            self.stack.append(tag)
+        if tag in self.RAW:
+            self.raw.setdefault(tag, []).append("")
+
+    def handle_startendtag(self, tag, attrs):
+        self.elements.append((tag, attrs))
+
+    def handle_endtag(self, tag):
+        if tag in self.stack:
+            while self.stack.pop() != tag:
+                pass
+
+    def handle_data(self, data):
+        if self.stack and self.stack[-1] in self.RAW:
+            self.raw[self.stack[-1]][-1] += data
+        else:
+            self.texts.append(data)
+
+    def handle_comment(self, data):
+        self.comments.append(data)
+
+    def handle_decl(self, decl):
+        self.declarations.append(decl)
+
+    def unknown_decl(self, data):
+        self.declarations.append(data)
+
+    def handle_pi(self, data):
+        self.declarations.append(data)
+
+
+def page_problems(text, marker=None):
+    """Every rule of the page's contract (spec 0.7.0, "The page's contract") that the built page breaks, in words."""
+    import base64
+    import hashlib
+    sys.path.insert(0, SCRIPTS)
+    import mind
+    page, bad = PageReader(text), []
+    if not text.startswith("<!doctype html>\n%s\n<html lang=\"en\">" % PAGE_NOTICE):
+        bad.append("the first lines")
+    if len(page.comments) != 1 or page.declarations != ["doctype html"]:
+        bad.append("a comment or declaration besides the notice and the doctype")
+    ids, wanted = {}, []
+    for tag, attrs in page.elements:
+        if tag not in mind.TAGS | {"style", "script"}:  # those two only from the shell, counted below
+            bad.append("element %s" % tag)
+        names = [name for name, _ in attrs]
+        if len(set(names)) != len(names):
+            bad.append("an attribute twice on %s" % tag)
+        if tag in PageReader.RAW and attrs:
+            bad.append("%s with an attribute" % tag)
+        values = dict(attrs)
+        for name, value in attrs:
+            value = value or ""
+            if name not in {a.lower() for a in mind.ATTRS} or name.startswith("on"):
+                bad.append("attribute %s on %s" % (name, tag))
+            if PAGE_HIDDEN.search(value):
+                bad.append("a hidden character in attribute %s" % name)
+            if marker and marker in value:
+                bad.append("the marker in attribute %s of %s" % (name, tag))
+            if name == "href":
+                if value.startswith("#"):
+                    wanted.append(value[1:])
+                elif not PAGE_ADDRESS.fullmatch(value) or values.get("rel") != "noopener noreferrer" or \
+                        any(part in (".", "..") for part in value.split("/")[3:]):
+                    bad.append("href %r" % value[:80])
+            elif name not in PAGE_FREE and not PAGE_VALUE.fullmatch(value):
+                bad.append("value %r of %s" % (value[:60], name))
+            if name == "id":
+                if value in ids:
+                    bad.append("id %s twice" % value)
+                ids[value] = tag
+            if name in ("data-m", "data-a", "data-b"):
+                wanted.append("m-" + value)
+            if name in ("data-term", "data-issue"):
+                wanted.append(value)
+            if name == "data-go":
+                wanted.append(value[1:])
+    bad += ["a reference to %s, which is no id of the page" % name for name in wanted if name not in ids]
+    if [len(page.raw.get(name, [])) for name in PageReader.RAW] != [1, 1]:
+        bad.append("not exactly one style and one script")
+    else:
+        style, script = page.raw["style"][0], page.raw["script"][0]
+        digest = lambda part: "'sha256-%s'" % base64.b64encode(hashlib.sha256(part.encode("utf-8")).digest()).decode()
+        head = [(tag, attrs) for tag, attrs in page.head]
+        expected = [("meta", {"charset": "utf-8"}),
+                    ("meta", {"http-equiv": "Content-Security-Policy", "content": PAGE_POLICY % (digest(style),
+                                                                                                 digest(script))}),
+                    ("meta", {"name": "referrer", "content": "no-referrer"}),
+                    ("meta", {"name": "viewport", "content": "width=device-width, initial-scale=1"}),
+                    ("title", {}), ("style", {})]
+        if head != expected:
+            bad.append("the head is not the charset, the policy, the referrer, the viewport, the title and the style")
+        for word in SCRIPT_BANNED:
+            if word in script:
+                bad.append("the script holds %s" % word)
+        for name, part in (("style", style), ("script", script)):
+            if marker and marker in part:
+                bad.append("the marker in the %s" % name)
+            if "</" in part or "<!--" in part:
+                bad.append("the %s can end its element" % name)
+        if re.search(r"url\(|@import|expression\(", style):
+            bad.append("the style loads something")
+    if sum(1 for tag, attrs in page.elements if tag == "meta" and dict(attrs).get("http-equiv")) != 1:
+        bad.append("more than one http-equiv")
+    for data in page.texts:
+        if PAGE_HIDDEN.search(data):
+            bad.append("a hidden character in the text")
+    return bad
+
+
+def hostile_model(model, payloads, everything=False):
+    """`model` with every string from the record (with `everything`, every string of the model) replaced by
+    HOSTILE-<n>, one of `payloads`, and the string. The repository at the top stays, so that addresses are built."""
+    structure = {"kind", "css", "group", "state", "type", "status_css", "name_from", "cite"}
+    count = [0]
+
+    def walk(value, key=None, top=False):
+        if isinstance(value, dict):
+            return {k: (v if top and k == "repo" else walk(v, k)) for k, v in value.items()}
+        if isinstance(value, list):
+            return [walk(v, key) for v in value]
+        if isinstance(value, str) and (everything or key not in structure):
+            count[0] += 1
+            return "HOSTILE-%d %s %s" % (count[0], payloads[count[0] % len(payloads)], value)
+        return value
+
+    return walk(model, top=True), count[0]
+
+
+class MindPageTests(MindSandbox):
+    """The mind page (mind.py): its contract, hostile text, addresses, storage, gates and the command."""
+
+    def page_file(self):
+        return os.path.join(self.data, "private", "example-org__tinycsv", "mind.html")
+
+    def build(self, *args, env=None, gh="false"):
+        return self.tool("mind.py", *args, env=env, gh=gh)
+
+    def model(self):
+        result = self.tool("index.py", "query", "mind", "--json", gh="false")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        return json.loads(result.stdout)
+
+    @staticmethod
+    def mind():
+        sys.path.insert(0, SCRIPTS)
+        import mind
+        return mind
+
+    def chain_page(self):
+        self.add_chain()
+        self.ready()
+        built = self.build()
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        return recortex.read_text(self.page_file())
+
+    # ------------------------------------------------------------ the contract
+
+    def test_the_chain_page_keeps_the_contract(self):
+        text = self.chain_page()
+        self.assertEqual([], page_problems(text))
+        page = PageReader(text)
+        tags = {tag for tag, _ in page.elements}
+        self.assertTrue({"svg", "dialog", "details", "table", "blockquote", "input"} <= tags, tags)
+        hrefs = [dict(attrs)["href"] for tag, attrs in page.elements if dict(attrs).get("href", "#").startswith("http")]
+        self.assertIn("https://github.com/example-org/tinycsv/issues/5#issuecomment-9105", hrefs)
+        self.assertIn("https://github.com/example-org/tinycsv/blob/9c3e1ab/tinycsv/reader.py#L41-L59", hrefs)
+        self.assertIn("https://github.com/example-org/tinycsv/pull/2", hrefs)
+        self.assertIn("https://github.com/example-org/tinycsv/blob/4f2a9c1/bench/out/run-0304/read-time.png", hrefs)
+        words = " ".join("".join(page.texts).split())
+        for said in ("On March 6, remembering an open quote from one line to the next broke files with mixed line "
+                     "endings: 4 of 6 failed, so on March 7 we decided to rewrite the reader",
+                     "We last paused on March 4.", "Do not tag 0.3.0 until Sam Rivera says so.",
+                     "Task: support newlines inside quoted fields", "the memory of March 6",
+                     "We use “line splitter” to mean", "Where it came up (2), oldest first",
+                     "later that changed, going back to March 4", "Every memory of the record by your allowed "
+                     "accounts is told here."):
+            self.assertIn(said, words)
+        for number in ("#5", "#6", "#7", "issuecomment"):
+            self.assertNotIn(number, words)  # content, not containers: no issue number in the reading text
+        self.assertIn('<span class="term" data-term="w1">line splitter</span>', text)
+        self.assertIn('<a class="cite" href="#issue-7" data-issue="issue-7">', text)
+
+    def test_hostile_text_reaches_the_page_as_text_only(self):
+        mind = self.mind()
+        payloads = json.loads(recortex.read_text(os.path.join(FIXTURES, "hostile-mind.json")))["payloads"]
+        self.assertEqual(20, len(payloads))
+        clean_page = self.chain_page()
+        clean_tags = {tag for tag, _ in PageReader(clean_page).elements}
+        model = self.model()
+        for everything in (False, True):
+            hostile, count = hostile_model(model, payloads, everything)
+            self.assertGreater(count, 300)
+            text = mind.render(hostile)
+            self.assertEqual([], page_problems(text, marker="HOSTILE-"), everything)
+            page = PageReader(text)
+            self.assertLessEqual({tag for tag, _ in page.elements}, clean_tags)
+            found = {int(n) for n in re.findall(r"HOSTILE-([0-9]+) ", " ".join(page.texts))}
+            self.assertGreater(len(found), count // 2, everything)  # most strings are on the page, as text
+            self.assertNotIn("window.__pwned", "".join(page.raw["script"]))
+            if not everything:
+                self.assertIn("HOSTILE-", text.split("<title>")[1].split("</title>")[0])  # the name in the title
+
+    def test_a_missing_escape_breaks_the_contract(self):
+        mind = self.mind()
+        self.chain_page()
+        payloads = json.loads(recortex.read_text(os.path.join(FIXTURES, "hostile-mind.json")))["payloads"]
+        hostile, _ = hostile_model(self.model(), payloads)
+        real = mind.esc
+        mind.esc = lambda value: value if isinstance(value, mind.Safe) else mind.Safe(str(value))
+        try:
+            text = mind.render(hostile)
+        finally:
+            mind.esc = real
+        problems = page_problems(text, marker="HOSTILE-")
+        self.assertTrue([p for p in problems if p.startswith(("element ", "attribute on", "not exactly one"))],
+                        problems[:5])
+
+    def test_the_element_builder_refuses_what_the_contract_forbids(self):
+        mind = self.mind()
+        for tag in ("script", "style", "img", "iframe", "form", "object", "base", "link", "template", "foreignObject"):
+            with self.assertRaises(ValueError, msg=tag):
+                mind.E(tag)
+        for name in ("onclick", "style", "src", "srcdoc", "action", "formaction", "target", "download", "ping",
+                     "xlink:href", "alt", "title"):
+            with self.assertRaises(ValueError, msg=name):
+                mind.E("div", {name: "x"})
+        with self.assertRaises(ValueError):
+            mind.E("a", {"href": "#now"})  # a plain string is no address
+        with self.assertRaises(ValueError):
+            mind.E("a", {"href": "https://github.com/example-org/tinycsv/issues/1"})
+        for value in ('a"b', "a<b", "a>b", "a&b", "a\nb", "a‮b", "a`b"):
+            with self.assertRaises(ValueError, msg=value):
+                mind.E("div", {"class": value})
+        for name in ("aria-label", "placeholder", "content"):
+            with self.assertRaises(ValueError, msg=name):
+                mind.E("div", {name: "any words"})
+        with self.assertRaises(ValueError):
+            mind.anchor("not a name")
+        self.assertEqual('<a class="said" href="#m-5" data-m="5">&lt;b&gt; &amp; �</a>',
+                         mind.E("a", {"class": "said", "href": mind.anchor("m-5"), "data-m": 5}, "<b> & \x1b"))
+
+    def test_addresses_are_built_from_checked_parts_only(self):
+        mind = self.mind()
+        url = mind.github_url
+        self.assertEqual("https://github.com/example-org/tinycsv/issues/7", url("issue", REPO, 7))
+        self.assertEqual("https://github.com/example-org/tinycsv/issues/5#issuecomment-9105",
+                         url("memory", REPO, 5, 9105))
+        self.assertEqual("https://github.com/example-org/tinycsv/pull/2", url("pull", REPO, "2"))
+        self.assertEqual("https://github.com/example-org/tinycsv/blob/9c3e1ab/tinycsv/reader.py#L41-L59",
+                         url("lines", REPO, "9c3e1ab", "tinycsv/reader.py", 41, 59))
+        self.assertEqual("https://github.com/o/r/blob/9c3e1ab/a.py#L3", url("lines", "o/r", "9c3e1ab", "a.py", 3, 3))
+        self.assertEqual("https://github.com/example-org/tinycsv/blob/v0.3.0/plots/a.png",
+                         url("picture", REPO, "v0.3.0", "plots/a.png"))
+        self.assertIsInstance(url("issue", REPO, 7), mind.Href)
+        failing = [("issue", "example org/tinycsv", 7), ("issue", REPO, 0), ("issue", REPO, "1" * 20),
+                   ("issue", REPO, True), ("issue", REPO, "7 "), ("issue", "javascript:x/y", 7),
+                   ("memory", REPO, 5, "1" * 20), ("memory", REPO, 5, -1), ("pull", REPO, "2#x"),
+                   ("lines", REPO, "9c3e1ag", "a.py", 1, 2), ("lines", REPO, "9c3e1ab", "../a.py", 1, 2),
+                   ("lines", REPO, "9c3e1ab", "a/./b.py", 1, 2), ("lines", REPO, "9c3e1ab", "a.py?x=1", 1, 2),
+                   ("lines", REPO, "9c3e1ab", "a\".py", 1, 2), ("lines", REPO, "9c3e1ab", "/etc/passwd", 1, 2),
+                   ("lines", REPO, "9c3e1ab", "a.py", 5, 4), ("lines", REPO, "9c3e1ab", "a.py", 1, "12345678"),
+                   ("lines", REPO, "9c3e1ab", "a" * 201, 1, 2), ("picture", REPO, "..", "a.png"),
+                   ("picture", REPO, "v1", "a b.png"), ("picture", REPO, "-x", "a.png")]
+        for parts in failing:
+            self.assertIsNone(url(*parts), parts)
+        page = mind.Page({"repo": REPO})
+        code = page.code_ref({"kind": "code", "repo": REPO, "ref": "9c3e1ag", "path": "a.py", "from": 1, "to": 2})
+        self.assertIn("This memory names code that this page cannot link to.", code)
+        self.assertNotIn("href", code)
+        figure = page.figure_ref({"kind": "figure", "repo": REPO, "ref": "..", "path": "a.png", "title": "t"})
+        self.assertIn("This memory names a figure that this page cannot link to.", figure)
+        pull = page.pull_ref({"kind": "pull", "repo": "a b/c", "number": 2, "title": "t"})
+        self.assertIn("This memory names a change that this page cannot link to.", pull)
+
+    def test_no_address_comes_from_the_index(self):
+        before = self.chain_page()
+        self.sql("UPDATE issues SET url = 'javascript:MARK-URL'", "UPDATE comments SET url = 'javascript:MARK-URL'",
+                 "UPDATE events SET url = 'javascript:MARK-URL'", "UPDATE blocks SET image = 'javascript:MARK-URL'",
+                 "UPDATE meta SET value = '1' WHERE key = 'mind_derived'")
+        built = self.build()
+        self.assertEqual(0, built.returncode, built.stdout)
+        self.assertEqual(before, recortex.read_text(self.page_file()))
+
+    def test_the_fixed_files_hold_no_record_text_and_no_banned_call(self):
+        page = os.path.join(SKILL, "page")
+        script = recortex.read_text(os.path.join(page, "mind.js"))
+        style = recortex.read_text(os.path.join(page, "mind.css"))
+        for word in SCRIPT_BANNED:
+            self.assertNotIn(word, script)
+        for word in ("url(", "@import", "expression("):
+            self.assertNotIn(word, style)
+        for text in (script, style):
+            self.assertNotIn("</", text)
+            self.assertNotIn("<!--", text)
+            self.assertNotIn("\\d", text)
+        self.assertIn("overflow-wrap:anywhere", style)
+        for check in ("MEMORY = /^[0-9]+$/", "WORD = /^w[0-9]+$/", "ISSUE = /^issue-[0-9]+$/",
+                      "THREAD = /^thread-[0-9]+$/"):  # an id read from the page is checked before a selector uses it
+            self.assertIn(check, script)
+        mind = self.mind()
+        real = mind.PAGE
+        for name, bad in (("mind.js", script + "\n// </script>"), ("mind.css", style + "\n/* <!-- */")):
+            folder = os.path.join(self.dir, "page-" + name)
+            os.makedirs(folder)
+            for other, text in (("mind.js", script), ("mind.css", style)):
+                with open(os.path.join(folder, other), "w") as handle:
+                    handle.write(bad if other == name else text)
+            mind.PAGE = folder
+            try:
+                with self.assertRaises(ValueError, msg=name):
+                    mind.render({"repo": REPO})
+            finally:
+                mind.PAGE = real
+        self.assertEqual(1, recortex.read_text(os.path.join(SCRIPTS, "mind.py")).count("https://"))
+        model = recortex.read_text(os.path.join(SCRIPTS, "mind_model.py"))
+        selects = re.findall(r"SELECT (.*?)\bFROM\b", model, re.S)
+        self.assertGreater(len(selects), 5)
+        for columns in selects:
+            self.assertNotIn("*", columns)
+            self.assertIsNone(re.search(r"\b(url|image)\b", columns), columns)
+
+    # ------------------------------------------------------------ the command
+
+    def test_the_page_is_private_and_replaced_whole(self):
+        self.chain_page()
+        path = self.page_file()
+        self.assertEqual((0o600, 0o700), (os.stat(path).st_mode & 0o777, os.stat(os.path.dirname(path)).st_mode & 0o777))
+        self.assertEqual([], [n for n in os.listdir(os.path.dirname(path)) if n.startswith(".part-")])
+        first = recortex.read_text(path)
+        self.put(9120, 5, memory_draft("idea", "2026-03-13T10:00-08:00", plain="keep one more idea"))
+        self.ready()
+        again = self.build()
+        self.assertEqual(0, again.returncode)
+        self.assertIn("keep one more idea", recortex.read_text(path))
+        self.assertNotEqual(first, recortex.read_text(path))
+        self.assertIn("wrote %s (" % path, again.stdout)
+        self.assertIn("): 8 memories in 2 threads\nopen it in a browser: file://", again.stdout)
+        os.unlink(path)
+        outside = self.write("outside.html", "outside")
+        os.symlink(outside, path)
+        refused = self.build()
+        self.assertEqual((1, "mind: the page cannot be written beside the index (symlink); nothing was written"),
+                         (refused.returncode, refused.stdout.split("\n")[1]))
+        self.assertEqual("outside", recortex.read_text(outside))
+        self.assertTrue(os.path.islink(path))
+
+    def test_each_gate_writes_nothing_and_keeps_the_earlier_page(self):
+        earlier = self.chain_page()
+        absent = {"RECORTEX_TRUSTED_FILE": os.path.join(self.dir, "absent")}
+        cases = [
+            (absent, None, "mind: this repository is not in your trusted list, so no page is built. The page tells only "
+                           "the memories of accounts you allow."),
+            ({"RECORTEX_DATA_HOME": os.path.join(self.dir, "empty")}, None,
+             "mind: there is no local index of this repository; run index.py sync"),
+            (None, "chmod", "mind: the local index cannot be read; run hooks.py --doctor"),
+            (None, "behind", index_not_ready().strip()),
+        ]
+        for env, change, line in cases:
+            if change == "chmod":
+                os.chmod(self.index_file(), 0o644)
+            if change == "behind":
+                self.sql("UPDATE meta SET value = '0' WHERE key = 'mind_derived'")
+            refused = self.build(env=env)
+            if change == "chmod":
+                os.chmod(self.index_file(), 0o600)
+            self.assertEqual((1, line), (refused.returncode, refused.stdout.split("\n")[1]), line)
+            self.assertEqual(earlier, recortex.read_text(self.page_file()))
+            self.assertEqual(["index.sqlite", "mind.html"], sorted(os.listdir(os.path.dirname(self.page_file()))))
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "empty", "recortex", "private", "example-org__tinycsv",
+                                                     "mind.html")))
+
+    def test_a_build_reads_only_the_index_unless_asked_to_sync(self):
+        self.add_chain()
+        self.ready()
+        before = len(self.repo()["log"])
+        built = self.build(gh=FAKE)
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        self.assertEqual(before, len(self.repo()["log"]))
+        self.assertEqual(0, self.build(gh="false").returncode)
+        synced = self.build("--sync", gh=FAKE)
+        self.assertEqual(0, synced.returncode, synced.stdout + synced.stderr)
+        calls = [" ".join(call) for call in self.repo()["log"][before:]]
+        self.assertTrue(any("repos/example-org/tinycsv/issues?" in call for call in calls), calls)
+
+    def test_open_hands_the_file_address_to_the_browser(self):
+        self.add_chain()
+        self.ready()
+        record = os.path.join(self.dir, "browser-args.json")
+        browser = self.write("browser.py", "#!%s\nimport json, sys\njson.dump(sys.argv[1:], open(%r, 'w'))\n"
+                             % (sys.executable, record))
+        os.chmod(browser, 0o755)
+        opened = self.build("--open", env={"BROWSER": browser, "DISPLAY": None, "WAYLAND_DISPLAY": None})
+        self.assertEqual(0, opened.returncode, opened.stdout + opened.stderr)
+        address = "file://" + self.page_file()
+        self.assertEqual([address], json.loads(recortex.read_text(record)))
+        self.assertIn("open it in a browser: %s\nasked the browser to open it\n" % address, opened.stdout)
+
+    def test_the_same_index_and_day_give_the_same_bytes(self):
+        mind = self.mind()
+        first = self.chain_page()
+        self.assertEqual(0, self.build().returncode)
+        self.assertEqual(first, recortex.read_text(self.page_file()))
+        model = self.model()
+        self.assertEqual(mind.render(model), mind.render(json.loads(json.dumps(model))))
 
 
 COMPAT = os.path.join(FIXTURES, "compat-0.5.0")
