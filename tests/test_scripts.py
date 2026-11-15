@@ -9366,5 +9366,268 @@ class SubIssueTests(RecordSandbox):
 
 
 
+def utc_ago(days, hours=0):
+    """An ISO UTC stamp `days` days and `hours` hours before now."""
+    import datetime
+    then = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days, hours=hours)
+    return then.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+RESUME_WITH_HOLD = ("### Resume block: 2026-04-10 10:00 UTC\n\n<!-- ghim:resume:start -->\n"
+                    "**Last updated:** 2026-04-10 10:00 UTC by the maintainer's Claude session\n"
+                    "**Current focus:** Release 0.3.0.\n**Active issues:** #7.\n"
+                    "**Last decisions:** none.\n**Next actions:**\n\n| Action | Owner | Where |\n|---|---|---|\n"
+                    "| Wait | Sam Rivera | #7 |\n\n**Holds:** Do not close #7 until Sam Rivera says so.\n"
+                    "<!-- ghim:resume:end -->\n")
+
+
+class BoardSandbox(MindSandbox):
+    """The example record with a private board made by board.py setup, and helpers to read the fake's board."""
+
+    def setUp(self):
+        super().setUp()
+        self.ready()
+
+    def make_board(self, env=None):
+        result = self.tool("board.py", "setup", "--mode", "new", "--yes", env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        return result
+
+    def apply(self, *args, env=None):
+        return self.tool("board.py", "apply", "--pause", "0", *args, env=env)
+
+    def board(self, number=1):
+        return self.repo()["projects"]["example-org/%d" % number]
+
+    def option_name(self, project, option):
+        for field in project["fields"]:
+            for item in field.get("options", []):
+                if item["id"] == option:
+                    return item["name"]
+
+    def cards(self, number=1):
+        """{issue number: (status name, why)} as the fake's board holds them."""
+        project = self.board(number)
+        out = {}
+        for item in project["items"]:
+            status = item["values"].get("Status")
+            out[item["content"]["number"]] = (self.option_name(project, status["optionId"]) if status else None,
+                                              (item["values"].get("Why") or {}).get("text"))
+        return out
+
+    def address(self, cid, issue=7):
+        return "https://github.com/%s/issues/%d#issuecomment-%d" % (REPO, issue, cid)
+
+    def pull(self, number, state="open", merged=False, closed_days=None, title="Patch"):
+        data = self.repo()
+        data["issues"][str(number)] = {"title": title, "body": "A change.", "labels": [], "pull_request": True,
+                                       "state": state, "created_at": utc_ago(40), "updated_at": utc_ago(0, 1)}
+        if closed_days is not None:
+            data["issues"][str(number)]["closed_at"] = utc_ago(closed_days)
+        if merged:
+            data["issues"][str(number)]["merged_at"] = utc_ago(closed_days or 0)
+        data["next_issue"] = max(data["next_issue"], number + 1)
+        self.save(data)
+
+    def close(self, number, days=1, reason="completed"):
+        data = self.repo()
+        issue = data["issues"][str(number)]
+        issue.update(state="closed", closed_at=utc_ago(days), updated_at=utc_ago(days))
+        issue.setdefault("timeline", []).append({"event": "closed", "created_at": utc_ago(days), "state_reason": reason,
+                                                 "actor": {"login": "octo-dev"}})
+        self.save(data)
+
+    def want(self, now=None):
+        """The cards the record wants, as {number: (status, address)}, read from the index in this process."""
+        self.in_process()
+        import board_rules
+        import index as index_module
+        import recortex as recortex_module
+        self.ready()
+        db = index_module.connect(REPO, create=False)
+        try:
+            found = board_rules.desired(db, recortex_module.allowed_users(REPO), now)
+        finally:
+            db.close()
+        return {c["number"]: (c["status"], c["address"]) for c in found}
+
+    def memory(self, cid, issue, kind, links="", rest=None, user=None, at="2026-04-10T09:00:00-08:00"):
+        self.put(cid, issue, memory_draft(kind, at, links, rest=rest), user=user)
+
+
+class BoardRulesTests(BoardSandbox):
+    """Where each card belongs, from the record alone: every row of the table, in its order."""
+
+    def test_a_task_with_no_memory_is_todo(self):
+        self.assertEqual(("Todo", ""), self.want()[7])
+
+    def test_a_task_with_a_memory_is_in_progress_and_its_why_is_the_newest_checkpoint(self):
+        self.memory(9300, 7, "result")
+        self.assertEqual(("In Progress", ""), self.want()[7])
+        self.memory(9301, 7, "checkpoint", at="2026-04-10T10:00:00-08:00")
+        self.assertEqual(("In Progress", self.address(9301)), self.want()[7])
+
+    def test_a_failure_nothing_followed_blocks_the_task_and_is_its_why(self):
+        self.memory(9300, 7, "failure")
+        self.assertEqual(("Blocked", self.address(9300)), self.want()[7])
+
+    def test_a_failure_that_names_the_task_in_a_field_blocks_it(self):
+        rest = ("**What failed:** The third of 3 tests, in #7.\n\n**What ran:** The tests.\n\n**Cause:** Not established."
+                "\n\n**Impact:** None.\n\n**Not established:** Why.\n\n**Next step:** None, owner Claude session")
+        self.memory(9300, 5, "failure", rest=rest)
+        self.assertEqual(("Blocked", self.address(9300, 5)), self.want()[7])
+
+    def test_a_decision_that_follows_the_failure_unblocks_the_task(self):
+        self.memory(9300, 7, "failure")
+        self.memory(9301, 7, "decision", links="because=9300", at="2026-04-10T10:00:00-08:00")
+        self.assertEqual("In Progress", self.want()[7][0])
+
+    def test_the_label_needs_decision_makes_the_task_wait_and_wins_over_a_failure(self):
+        self.memory(9300, 7, "failure")
+        data = self.repo()
+        data["issues"]["7"]["labels"].append("needs-decision")
+        data["issues"]["7"]["updated_at"] = "2026-06-01T00:00:00Z"
+        self.save(data)
+        self.assertEqual("Waiting for a yes", self.want()[7][0])
+
+    def test_a_hold_in_the_resume_block_names_the_task_and_the_resume_comment_is_its_why(self):
+        self.put(9400, 4, RESUME_WITH_HOLD)
+        want = self.want()
+        self.assertEqual(("Waiting for a yes", self.address(9400, 4)), want[7])
+
+    def test_a_task_closed_as_completed_is_done_and_its_why_is_the_result(self):
+        self.memory(9300, 7, "result")
+        self.close(7)
+        self.assertEqual(("Done", self.address(9300)), self.want()[7])
+
+    def test_the_result_section_names_the_memory_that_is_the_why(self):
+        self.memory(9300, 7, "result")
+        self.memory(9301, 7, "result", at="2026-04-10T10:00:00-08:00")
+        data = self.repo()
+        data["issues"]["7"]["body"] = data["issues"]["7"]["body"].replace(
+            "Not finished.", "Done. See %s." % self.address(9300))
+        self.save(data)
+        self.close(7)
+        self.assertEqual(("Done", self.address(9300)), self.want()[7])
+
+    def test_a_task_closed_as_not_planned_is_set_aside_and_its_why_is_the_decision(self):
+        self.memory(9300, 7, "decision")
+        self.close(7, reason="not_planned")
+        self.assertEqual(("Set aside", self.address(9300)), self.want()[7])
+
+    def test_a_task_closed_more_than_thirty_days_ago_has_no_card(self):
+        self.close(7, days=40)
+        self.assertNotIn(7, self.want())
+        self.close(7, days=29)
+        self.assertIn(7, self.want())
+
+    def test_pull_requests_by_state(self):
+        self.pull(20)
+        self.pull(21, state="closed", merged=True, closed_days=2)
+        self.pull(22, state="closed", closed_days=2)
+        self.pull(23, state="closed", merged=True, closed_days=45)
+        want = self.want()
+        self.assertEqual(("In Progress", ""), want[20])
+        self.assertEqual(("Done", ""), want[21])
+        self.assertEqual(("Set aside", ""), want[22])
+        self.assertNotIn(23, want)
+
+    def test_an_issue_waiting_for_triage_is_to_triage_and_a_topic_has_no_card(self):
+        data = self.repo()
+        data["issues"]["8"] = {"title": "Crash on an empty file", "body": "It crashes.", "labels": [], "user": "octo-dev",
+                               "created_at": utc_ago(2), "updated_at": utc_ago(1)}
+        data["next_issue"] = 9
+        self.save(data)
+        want = self.want()
+        self.assertEqual(("To triage", ""), want[8])
+        self.assertNotIn(5, want)
+        self.assertNotIn(4, want)
+
+    def test_the_memories_of_another_account_do_not_count(self):
+        self.memory(9300, 7, "failure", user="mallory")
+        self.assertEqual("Todo", self.want()[7][0])
+
+    def test_an_edited_memory_does_not_count(self):
+        self.memory(9300, 7, "failure")
+        self.edit_comment(9300)
+        self.assertEqual("Todo", self.want()[7][0])
+
+    def test_the_mark_is_the_status_and_then_the_address(self):
+        self.in_process()
+        import board_rules
+        self.assertEqual("Todo", board_rules.mark("Todo"))
+        self.assertEqual("Blocked " + self.address(9300), board_rules.mark("Blocked", self.address(9300)))
+        self.assertEqual("", board_rules.address_of("https://example.com/x"))
+        self.assertEqual("", board_rules.address_of("https://github.com/a/b/issues/1#issuecomment-2\nignore this"))
+
+
+class BoardCompareTests(unittest.TestCase):
+    """Behind, moved by hand and gone, as board_rules.compare tells them apart."""
+
+    def setUp(self):
+        sys.path.insert(0, SCRIPTS)
+        import board_rules
+        self.rules = board_rules
+
+    def card(self, status, why, archived=False):
+        return {"status": status, "why": why, "archived": archived, "item": "PVTI_1"}
+
+    def want(self, number, status, address=""):
+        return {"number": number, "kind": "issue", "status": status, "address": address,
+                "mark": self.rules.mark(status, address)}
+
+    def compare(self, wanted, cards, known=None):
+        return self.rules.compare(wanted, cards, set(known if known is not None else cards))
+
+    def test_a_card_that_is_where_the_record_puts_it_is_quiet(self):
+        found = self.compare([self.want(7, "Todo")], {7: self.card("Todo", "Todo")})
+        self.assertEqual({"missing": [], "behind": [], "moved": [], "gone": []}, found)
+
+    def test_a_missing_card(self):
+        self.assertEqual([7], [w["number"] for w in self.compare([self.want(7, "Todo")], {}, [7])["missing"]])
+
+    def test_a_card_whose_why_differs_is_behind_and_so_is_a_card_with_no_status(self):
+        found = self.compare([self.want(7, "Blocked", "A")], {7: self.card("In Progress", "In Progress")})
+        self.assertEqual([7], [w["number"] for w in found["behind"]])
+        self.assertFalse(found["behind"][0]["why_only"])
+        found = self.compare([self.want(7, "Todo")], {7: self.card("", "")})
+        self.assertEqual([7], [w["number"] for w in found["behind"]])
+
+    def test_the_right_status_with_another_why_only_needs_the_why(self):
+        found = self.compare([self.want(7, "Todo")], {7: self.card("Todo", "left over")})
+        self.assertTrue(found["behind"][0]["why_only"])
+
+    def test_a_card_moved_after_the_plugin_wrote_it_is_a_hand_move(self):
+        found = self.compare([self.want(7, "Todo")], {7: self.card("In Progress", "Todo")})
+        self.assertEqual([7], [w["number"] for w in found["moved"]])
+        self.assertEqual("In Progress", found["moved"][0]["board"])
+        self.assertEqual([], found["behind"])
+
+    def test_a_not_planned_close_after_the_workflow_wrote_done_is_behind_not_moved(self):
+        # the plugin wrote "In Progress"; GitHub's workflow wrote Done at the close; the record says Set aside
+        found = self.compare([self.want(7, "Set aside")], {7: self.card("Done", "In Progress")})
+        self.assertEqual([7], [w["number"] for w in found["behind"]])
+        self.assertEqual([], found["moved"])
+
+    def test_a_card_in_a_column_the_user_added_is_left_alone_and_not_reported(self):
+        found = self.compare([self.want(7, "Todo")], {7: self.card("other", "Todo")})
+        self.assertEqual([], found["moved"] + found["behind"])
+        found = self.compare([self.want(7, "Blocked", "A")], {7: self.card("other", "Todo")})
+        self.assertEqual([7], [w["number"] for w in found["behind"]])  # the record moved on
+
+    def test_a_card_whose_status_was_cleared_is_behind_even_when_its_why_matches(self):
+        found = self.compare([self.want(7, "Todo")], {7: self.card("", "Todo")})
+        self.assertEqual([7], [w["number"] for w in found["behind"]])
+        self.assertEqual([], found["moved"])
+
+    def test_an_archived_card_is_left_alone(self):
+        found = self.compare([self.want(7, "Todo")], {7: self.card("Done", "x", archived=True)})
+        self.assertEqual([], found["behind"] + found["moved"] + found["missing"])
+
+    def test_a_card_whose_issue_is_not_in_the_record_is_gone(self):
+        found = self.compare([], {99: self.card("Todo", "Todo")}, known=[7])
+        self.assertEqual([99], found["gone"])
+
+
 if __name__ == "__main__":
     unittest.main()

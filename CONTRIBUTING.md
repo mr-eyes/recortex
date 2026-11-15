@@ -4,7 +4,7 @@
 
 ```bash
 mkdir -p .tmp
-python3 -m unittest tests.test_scripts.{LintTests,HelperTests,LabelTests,CreateIssuesTests,PostVerifiedTests,ConvertBodyTests,SyncTests,RecoveryTests,CompileTests,TriageAndFormatTests,CatchUpTests,SnapshotTests,PackagingTests,CompatTests,MemoryFormatTests,MindIndexTests,MindModelTests,MindPageTests,FieldFormTests,FieldTests,GraphqlReaderTests,FakeProjectsTests,SubIssueTests}
+python3 -m unittest tests.test_scripts.{LintTests,HelperTests,LabelTests,CreateIssuesTests,PostVerifiedTests,ConvertBodyTests,SyncTests,RecoveryTests,CompileTests,TriageAndFormatTests,CatchUpTests,SnapshotTests,PackagingTests,CompatTests,MemoryFormatTests,MindIndexTests,MindModelTests,MindPageTests,FieldFormTests,FieldTests,GraphqlReaderTests,FakeProjectsTests,SubIssueTests,BoardRulesTests,BoardCompareTests}
 python3 -m unittest tests.test_scripts.{ResumeBlockTests,IndexTests,HookTests,StorageTests,GuardTests,BackgroundTests,DiscoveryTests,SetupTests,EarlierNameTests}
 ```
 
