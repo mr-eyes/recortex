@@ -36,16 +36,9 @@ You need Claude Code, the GitHub CLI `gh` (signed in) and Python 3.8 or newer.
    claude plugin install recortex@mr-eyes-skills
    ```
 
-2. Trust your repository. The plugin shows a session nothing from GitHub until you do.
+2. Open Claude Code in your project and say: "Set up the record for this project." Setup checks `gh` first and says what to run if it is missing or signed out. You answer a few multiple-choice questions, including whether to trust the repository (the plugin shows a session nothing from GitHub until you do), and confirm a summary. Nothing is written before that.
 
-   ```bash
-   mkdir -p ~/.config/recortex
-   echo "your-name/your-project" >> ~/.config/recortex/trusted-repos
-   ```
-
-3. Open Claude Code in your project and say: "Set up the record for this project." You answer a few multiple-choice questions and confirm a summary. Nothing is written before that.
-
-4. Work. Memories are posted as things happen. Say "pause here" when you stop, and "show me the mind of this project" when you want to read it back.
+3. Work. Memories are posted as things happen. Say "pause here" when you stop, and "show me the mind of this project" when you want to read it back.
 
 Already months into a project? Say "catch up the record". Coming from another tracker? Say "migrate the issues of owner/old-tracker". Both are in [Starting from existing work](docs/existing-work.md).
 

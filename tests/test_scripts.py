@@ -9788,6 +9788,16 @@ class DocsTests(unittest.TestCase):
             self.assertNotIn("**", self.text(os.path.join("docs", name)), name)  # no bold list openers in the pages
             self.assertNotIn("\n\n\n", self.text(os.path.join("docs", name)), name)
 
+    def test_the_quick_start_leaves_the_gh_check_and_the_trust_to_setup(self):
+        text = self.text("README.md")
+        start = text.split("\n## Quick start\n", 1)[1].split("\n## ", 1)[0]
+        self.assertNotIn("trusted-repos", text)  # setup asks; the manual step is on the install page
+        self.assertNotIn("echo ", start)
+        self.assertEqual(["1", "2", "3"], re.findall(r"^([0-9]+)\. ", start, re.M))
+        self.assertIn("Setup checks `gh` first and says what to run if it is missing or signed out.", start)
+        self.assertIn("whether to trust the repository", start)
+        self.assertIn("trusted-repos", self.text(os.path.join("docs", "install.md")))
+
     def test_every_relative_link_and_picture_resolves(self):
         found = 0
         for path in self.files():
