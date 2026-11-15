@@ -50,6 +50,10 @@ cp -r recortex/skills/recortex ~/.claude/skills/
 
 Use `<project>/.claude/skills/` in place of `~/.claude/skills/` to install it for one project only. The skill is then available as `/recortex`. The hook is optional in this mode; to add it, see [the hooks](reference.md#the-hooks-and-the-claudemd-snippet).
 
+## Body updates from 1.0.1
+
+Scripts that call `post_verified.py body` must now pass `--expected-body-file` with the unchanged body saved before drafting. Keep the draft in a separate file. A changed live body stops the replacement; merge the latest text before retrying. Comments, existing records and the index format are unchanged. See [the posting example](../skills/recortex/references/posting-and-verification.md#4-post).
+
 ## Upgrading from gh-issues-manager
 
 The plugin was named gh-issues-manager before version 0.5.0. To move an installed copy to the new name, run both commands, one after the other; between them the plugin is not loaded:
