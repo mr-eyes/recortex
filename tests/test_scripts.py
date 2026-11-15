@@ -6807,6 +6807,62 @@ def resume_comment(focus, stamp="2026-03-20 10:00 PST"):
     return re.sub(r"\*\*Current focus:\*\* [^\n]*", "**Current focus:** " + focus, body)
 
 
+class EditHistoryTests(MindSandbox):
+    """The sync reads every page of an edit history: of topic bodies, and of the memories that look edited."""
+
+    def calls(self, word):
+        """The GraphQL queries the fake saw that contain `word`."""
+        return [" ".join(call) for call in self.repo()["log"] if call[:2] == ["api", "graphql"] and word in " ".join(call)]
+
+    @staticmethod
+    def history(entries, created):
+        """An edit history as GitHub keeps it: newest first, ending with the entry for the creation."""
+        return entries + [{"at": created, "by": "octo-dev"}]
+
+    def long_body_history(self, count, outsider=True):
+        data = self.repo()
+        speed = data["issues"]["6"]
+        own = [{"at": "2026-04-07T%02d:%02d:00Z" % divmod(i, 60), "by": "octo-dev"} for i in range(count)]
+        found = own[::-1] + ([{"at": "2026-04-06T10:00:00Z", "by": "mallory"}] if outsider else [])
+        speed["edits"] = self.history(found, speed["created_at"])  # the outsider's edit is the oldest but one
+        speed["updated_at"] = "2026-04-08T11:00:00Z"
+        self.save(data)
+
+    def test_every_page_of_a_body_history_is_read(self):
+        self.long_body_history(230)
+        self.ready()
+        edits = [row[0] for row in self.sql("SELECT actor FROM timeline WHERE event = 'edited' AND issue = 6")]
+        self.assertEqual((231, 1), (len(edits), edits.count("mallory")))  # the outsider's edit is on the third page
+        queries = self.calls("pageInfo")
+        self.assertEqual(3, len(queries))
+        self.assertEqual([0, 1, 1], [query.count(" after: ") for query in queries])
+        self.assertEqual(1, len(re.findall(r"issue\(number: [0-9]+\)", queries[2])))  # only the long history goes on
+        self.assertEqual([(1,)], [tuple(r) for r in self.sql("SELECT edits_read FROM issues WHERE number = 6")])
+
+    def test_a_history_that_is_too_long_never_clears_the_text(self):
+        self.long_body_history(5200, outsider=False)
+        self.ready()
+        self.assertEqual([(None,)], [tuple(r) for r in self.sql("SELECT DISTINCT actor FROM timeline WHERE event = "
+                                                                  "'edited' AND issue = 6 AND actor IS NULL")])
+        self.assertEqual(self.in_index().EDIT_PAGES_MAX, len(self.calls("issue(number: 6)")))
+        self.assertEqual(50 * 100 + 1, self.sql("SELECT COUNT(*) FROM timeline WHERE event = 'edited' AND issue = 6")[0][0])
+
+    def test_a_cursor_that_is_not_a_plain_cursor_is_not_sent_back(self):
+        found = self.in_index().read_edit_pages(
+            lambda cursors: {key: {"pageInfo": {"hasNextPage": True, "endCursor": 'x") { id } #'}, "nodes": [{"n": 1}]}
+                             for key in cursors}, [6, 7])
+        self.assertEqual({6: ([{"n": 1}], True), 7: ([{"n": 1}], True)}, found)
+        good = self.in_index().read_edit_pages(
+            lambda cursors: {key: {"pageInfo": {"hasNextPage": not cursors[key], "endCursor": "Y3Vyc29yOjE="},
+                                   "nodes": [{"n": 1}]} for key in cursors}, [6])
+        self.assertEqual({6: ([{"n": 1}, {"n": 1}], False)}, good)
+
+    def in_index(self):
+        self.in_process()
+        import index
+        return index
+
+
 class MindModelTests(MindSandbox):
     """The model of the mind page (mind_model.py through index.py query mind), on the example record with the chain
     posted one memory at a time."""

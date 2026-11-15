@@ -10,7 +10,7 @@ import os
 import re
 
 SCHEMA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "github-schema-excerpt.graphql")
-TOKEN = re.compile(r'"[^"]*"|\$?[A-Za-z_]\w*|\d+|[{}():!=,\[\]]')
+TOKEN = re.compile(r'"[^"]*"|\.\.\.|\$?[A-Za-z_]\w*|\d+|[{}():!=,\[\]]')
 
 
 def load_schema(path=SCHEMA_FILE):
@@ -44,6 +44,12 @@ def parse_query(query):
         pos += 1
         fields = []
         while tokens[pos] != "}":
+            if tokens[pos] == "...":  # an inline fragment: ... on Type { fields }
+                assert tokens[pos + 1] == "on", "expected 'on' at token %d" % (pos + 1)
+                kind = tokens[pos + 2]
+                children, pos = selection(pos + 3)
+                fields.append(("...", "... on " + kind, {}, children))
+                continue
             alias = name = tokens[pos]
             pos += 1
             if tokens[pos] == ":":
@@ -81,6 +87,9 @@ def check(query, schema=None):
             problems.append("type %s is not in the schema excerpt" % type_name)
             return
         for _, name, args, children in fields:
+            if name.startswith("... on "):  # a fragment: its fields belong to the named type
+                walk(children, name[len("... on "):])
+                continue
             if name not in known:
                 problems.append("Field '%s' doesn't exist on type '%s'" % (name, type_name))
                 continue
