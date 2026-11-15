@@ -72,7 +72,7 @@ A posted memory is never edited; a correction is a new memory. A memory whose co
 
 The allowed list is applied when the index is read, so adding a login to your trusted list tells that login's edits at once, with no new sync. Resume comments are not memories: an edited one stays ignored, whoever edited it. When the repository is not in your trusted list, every account counts and so does every edit.
 
-An edit made in the same second as the post leaves the two times equal and is not seen: only comments whose two times differ are read, to keep the sync's cost small.
+An edit made in the same second as the post is not seen. It leaves the two times equal, and only comments whose two times differ are read, to keep the sync's cost small; such a memory is told as if it was never edited, whoever made the edit. This gap is small (`post_verified.py` reads each comment back right after posting), and it was already there before histories were read.
 
 Every page of an edit history is read, for memories and for the text of a topic, 100 entries at a time. A history of more than 5,000 entries is not read to its end and counts as an edit by someone unknown, so that text is not shown.
 

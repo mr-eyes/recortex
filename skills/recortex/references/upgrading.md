@@ -92,4 +92,4 @@ A memory that your allowed accounts edited, and nobody else, is told again, with
 
 A topic with more than 100 edits was read up to its newest 100 before. Run `python3 scripts/index.py sync --rebuild` once to read the rest: it reads every topic's history again.
 
-The index gains two tables, `comment_edit_reads` and `comment_edits`; no column, trigger or format changes. Versions 0.4.0 to 0.8.0 on the same index ignore them and keep their own rule (an edited memory is left out), and nothing they write makes the new version tell a memory it should not: a comment they rewrite has a new `updated_at`, which the stored history does not match.
+The index gains two tables, `comment_edit_reads` and `comment_edits`; no column, trigger or format changes. Versions 0.4.0 to 0.8.0 on the same index ignore them (0.7.0 and 0.8.0 keep leaving every edited memory out, and 0.6.0 lists it as it always did), and nothing they write makes the new version tell a memory it should not: a comment they rewrite has a new `updated_at`, which the stored history does not match.
