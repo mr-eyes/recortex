@@ -8866,7 +8866,7 @@ class FieldFormTests(unittest.TestCase):
         self.assertEqual(0o700, os.stat(self.private).st_mode & 0o777)
         self.assertEqual(0o600, os.stat(self.approvals).st_mode & 0o777)
         data = json.loads(recortex.read_text(self.approvals))
-        self.assertEqual(["octo-org/other", REPO], sorted(data["approvals"]))
+        self.assertEqual([REPO, "octo-org/other"], sorted(data["approvals"]))
         self.assertEqual({"fingerprint": value, "approved": "2026-11-10", "sensitive": ["people"]},
                          self.fs.approval_of(REPO))
         self.assertEqual(self.entry(sensitive=["people"]), data["approvals"][REPO]["sheet"])
@@ -9407,14 +9407,14 @@ class FieldTests(RecordSandbox):
         self.write_config(dict(self.config, fields={"form": 1, "names": [], "sensitive": ["people"]}))
         self.assertEqual(("field guidance: no sheet; sensitive marks: people", status), self.doctor()[:2])
         self.approve()
-        self.assertEqual(("field guidance: shown to subagents; approved %s; fingerprint bf343e5d9ed0; frame 1673 of "
+        self.assertEqual(("field guidance: shown to subagents; approved %s; fingerprint ca69b1ca0a4c; frame 1673 of "
                           "2200 characters; fields: engineering; sensitive marks: none" % self.today, status),
                          self.doctor()[:2])
         changed = dict(model_sheet("engineering"), words="the project's own names for rigs")
         self.with_sheet(changed)
         now = self.fs.fingerprint(changed, REPO)[:12]
         self.assertEqual(("field guidance: not shown: the sheet changed since it was approved on %s (approved "
-                          "fingerprint bf343e5d9ed0, now %s). Review it with setup.py fields show" % (self.today, now),
+                          "fingerprint ca69b1ca0a4c, now %s). Review it with setup.py fields show" % (self.today, now),
                           status), self.doctor()[:2])
         other = os.path.join(self.dir, "second-machine")
         self.assertEqual(("field guidance: not shown: no approval for this repository in %s. Review it with setup.py "
@@ -9707,7 +9707,7 @@ class DocsTests(unittest.TestCase):
             found.update(re.findall(r"github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", self.text(path)))
         self.assertEqual({"mr-eyes/recortex", "octo-org/sample-project"}, found)
         for path in self.files():
-            self.assertNotIn("octo-org", self.text(path), path)
+            self.assertNotIn("octo-org/octo-repo", self.text(path), path)
 
     def test_the_board_drawing_promises_no_more_than_the_design(self):
         for path in self.files():

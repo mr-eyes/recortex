@@ -46,7 +46,7 @@ Examples:
   setup.py apply --answers answers.json --yes
   setup.py fields show
   setup.py fields set --answers answers.json --dry-run
-  setup.py fields approve --fingerprint bf343e5d9ed0 --yes
+  setup.py fields approve --fingerprint ca69b1ca0a4c --yes
 """
 
 import argparse
