@@ -132,6 +132,7 @@ When the session brief says the field guidance is not shown, tell the user in on
 - To turn field guidance off on one machine, in every project: `{"field_guidance": false}` in `~/.config/recortex/settings.json`.
 - To change the sheet: the questions again, then `setup.py fields set --replace`. To remove it: "No particular field" and "none of these", then `setup.py fields set --replace`, which removes the entry and forgets the approval.
 - One fingerprint is kept per repository, so a sheet that differs between two branches is shown on one of them.
+- `fields set --yes` replaces an approval entry of its own repository that does not have the plugin's form (where `fields approve` refuses and says to move the file aside); the entries of other repositories are kept as they are.
 
 ## Sensitive material
 
