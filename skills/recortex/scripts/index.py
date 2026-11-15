@@ -1413,6 +1413,7 @@ def timeline(db, issue=None, kind=None, since=None):
 # ---------------------------------------------------------------- memories
 
 RECALL_MEMORIES, RECALL_OTHERS, RECALL_WORDS = 12, 12, 40
+CHANGED_MARK = "  [changed on GitHub after it was posted, by allowed accounts only]"
 
 
 def counts_for(allowed):
@@ -1429,6 +1430,37 @@ def edited_comments(db):
                                             "OR updated_at != created_at")}
 
 
+def cleared_comments(db, allowed):
+    """{comment id: its updated_at} of the comments that look edited (edited_comments) and whose edit history shows
+    only edits by allowed accounts; {} when `allowed` is empty. All of these hold, else the comment stays edited:
+    the history was read completely (comment_edit_reads.complete = 1) for the comment's current updated_at, it shows
+    at least one edit besides the creation, every editor is an allowed login (a deleted account has none), the
+    stored edits are as many as the read counted, and the newest of them is the lastEditedAt GitHub gave. The
+    allowed list is applied here, when the index is read, so a change to it takes effect at once."""
+    if not allowed:
+        return {}
+    editors = {}
+    for row in db.execute("SELECT comment, at, editor FROM comment_edits"):
+        editors.setdefault(row["comment"], []).append((row["at"], row["editor"]))
+    found = {}
+    for row in db.execute("SELECT c.id, c.updated_at, r.edits, r.last_edited FROM comments c JOIN comment_edit_reads r "
+                          "ON r.comment = c.id WHERE r.complete = 1 AND r.stamp = c.updated_at "
+                          "AND c.updated_at IS NOT NULL AND c.created_at IS NOT NULL AND c.updated_at != c.created_at"):
+        entries = editors.get(row["id"], [])
+        if (row["edits"] and row["edits"] == len(entries) and max(at or "" for at, _ in entries) == row["last_edited"]
+                and all(isinstance(who, str) and who.lower() in allowed for _, who in entries)):
+            found[row["id"]] = row["updated_at"]
+    return found
+
+
+def unconfirmed_edits(db, allowed):
+    """The ids of the comments that were edited after they were posted and are not cleared (see cleared_comments):
+    the memories among them are not told. Empty when `allowed` is empty, since every account and edit counts then."""
+    if not allowed:
+        return set()
+    return edited_comments(db) - set(cleared_comments(db, allowed))
+
+
 def memories(db, allowed):
     """The one place that decides which memories count, for query recall and the mind page.
 
@@ -1437,12 +1469,14 @@ def memories(db, allowed):
     checkpoints were written by other accounts), edited (how many memories of allowed accounts, checkpoints
     included, were changed on GitHub after they were posted; see edited_comments) and edited_ids (their comment ids,
     sorted). A memory is a dict with id, issue, kind, at, time (sortable), title, plain (or None), reconstructed,
-    author, links (the counted ones, as (key, target id)) and state.
+    author, changed (True when it was edited, but only by allowed accounts; see cleared_comments), links (the
+    counted ones, as (key, target id)) and state.
 
     When `allowed` is not empty (the repository is trusted), an edited memory is left out of items like a memory of
-    another account: its links do not count and nothing of its text is told, since a posted memory is never edited
-    and a correction is a new memory. A link from a memory that is told to one that is not stays in its list. When
-    `allowed` is empty, every account counts and so does every edit.
+    another account, unless its edit history was read and every edit was made by an allowed account: then it is
+    told, marked changed. A memory that is left out has no links that count and nothing of its text is told, since a
+    posted memory is never edited and a correction is a new memory. A link from a memory that is told to one that
+    is not stays in its list. When `allowed` is empty, every account counts and so does every edit.
 
     A link counts when both ends are memories in the index, the memory that carries it was written by an allowed
     account and is not reconstructed, its target is another memory that is not later, and record_format.link_allowed
@@ -1457,17 +1491,19 @@ def memories(db, allowed):
         % ",".join("?" * len(kinds)), kinds)}
     plains = plain_lines(db)
     changed = edited_comments(db) if allowed else set()
+    cleared = cleared_comments(db, allowed)
     items, hidden, edited = {}, 0, []
     for cid, row in every.items():
         if not counts(row["author"]):
             hidden += row["type"] != "checkpoint"
             continue
-        if cid in changed:
+        if cid in changed and cid not in cleared:
             edited.append(cid)
             continue
         items[cid] = {"id": cid, "issue": row["issue"], "kind": row["type"], "at": row["at"] or "",
                       "time": sort_key(row["at"]), "title": row["title"] or "", "plain": plains.get(cid),
-                      "reconstructed": bool(row["reconstructed"]), "author": row["author"], "links": [], "state": ""}
+                      "reconstructed": bool(row["reconstructed"]), "author": row["author"],
+                      "changed": cid in cleared, "links": [], "state": ""}
     for row in db.execute("SELECT source, kind, target FROM links ORDER BY rowid"):
         source, target = items.get(row["source"]), every.get(row["target"])
         if source is None or target is None or row["source"] == row["target"] or source["reconstructed"]:
@@ -1498,10 +1534,11 @@ def memories(db, allowed):
 def explained(db, allowed, kind):
     """The explanations of `kind` ("word" or "thread") written by allowed accounts (every account when `allowed` is
     empty), oldest first, as dicts with comment, issue, at, word, key, revised, meaning, why, also and story. A fold
-    in a memory that was edited after it was posted explains nothing when `allowed` is not empty (see memories)."""
+    in a memory that was edited after it was posted explains nothing when `allowed` is not empty, unless every edit
+    was made by an allowed account (see memories)."""
     counts = counts_for(allowed)
     kinds = record_format.MEMORY_TYPES
-    changed = edited_comments(db) if allowed else set()
+    changed = unconfirmed_edits(db, allowed)
     rows = []
     for row in db.execute("SELECT x.*, e.issue, e.at, e.author FROM explanations x JOIN events e ON e.comment = "
                           "x.comment WHERE x.kind = ? AND e.type IN (%s)" % ",".join("?" * len(kinds)),
@@ -1575,7 +1612,8 @@ def plural(count, one, many):
 def print_recall(found):
     """The text of query recall: every value from the record through clean(), under DATA_HEADER."""
     def told(memory):
-        return clean(memory["plain"]) if memory["plain"] else "(no plain line) " + clean(memory["title"])
+        line = clean(memory["plain"]) if memory["plain"] else "(no plain line) " + clean(memory["title"])
+        return line + (CHANGED_MARK if memory.get("changed") else "")
 
     thread = ", ".join(clean(label, 60) for label in found["labels"]) or "#" + clean(found["issues"][0], 12)
     opening = found["opening"]

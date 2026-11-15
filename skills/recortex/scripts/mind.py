@@ -218,6 +218,7 @@ PAUSE_UNTOLD = ("The last pause is not told here: the comment that holds it is n
 NOT_SHOWN = ("The text of this thread is not shown here: someone outside your allowed accounts wrote or changed it, or "
              "its history has not been read yet.")
 OLD_NOTE = "Recorded before plain lines and links were kept, so this is told in the record's own short words."
+CHANGED_NOTE = "Changed on GitHub after it was posted."
 CHAIN_NOTE = ("The first memories here were recorded before links between memories were kept. They are in time order "
               "only.")
 
@@ -524,6 +525,7 @@ class Page:
                  E("div", {"class": "f refs"}, E("span", {"class": "lab"}, "If you want to see for yourself"), *refs)
                  if refs else "",
                  E("p", {"class": "quiet oldnote"}, OLD_NOTE) if memory.get("old") is True else "",
+                 E("p", {"class": "quiet changednote"}, CHANGED_NOTE) if memory.get("changed") is True else "",
                  E("details", {"class": "where"}, E("summary", None, "Where this was said"),
                    *[self.field(entry) for entry in memory.get("where", [])],
                    E("p", None, "Written by ", E("span", {"class": "people"}, who), " at %s, as a comment in the "

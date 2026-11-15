@@ -81,7 +81,8 @@ class Lookup:
 
     def memory(self, cid):
         """The comment `cid` of this repository: dict(type, time, at, issue, author, edited), or None when there is
-        none. edited is True when GitHub's updated_at of the comment differs from its created_at."""
+        none. edited is True when GitHub's updated_at of the comment differs from its created_at, unless the local
+        index holds a complete edit history for that updated_at that shows only allowed accounts (index.cleared_comments)."""
         return self.remember(("memory", cid), lambda: self._memory(cid))
 
     def issue(self, number):
@@ -118,10 +119,16 @@ class Lookup:
         import index
         return ask(db, index)
 
-    @staticmethod
-    def _edited(created, updated):
-        """True when a comment was changed after it was posted: GitHub's two times differ, or one is missing."""
-        return not created or not updated or created != updated
+    def _edited(self, cid, created, updated):
+        """True when a comment was changed after it was posted: GitHub's two times differ, or one is missing; but not
+        when the index read the comment's edit history for this updated_at and every edit is by an allowed account."""
+        if created and updated and created == updated:
+            return False
+        if not created or not updated or not self.allowed:
+            return True
+        found = self.remember(("cleared",), lambda: self._from_index(
+            lambda db, index: index.cleared_comments(db, self.allowed)))
+        return found is UNKNOWN or found.get(cid) != updated
 
     def _memory(self, cid):
         if not self.online:
@@ -131,7 +138,7 @@ class Lookup:
                 return None
             return {"type": row["type"], "at": row["at"] or "", "time": record_format.sort_key(row["at"]),
                     "issue": row["issue"], "author": row["author"] or "",
-                    "edited": self._edited(row["created_at"], row["updated_at"])}
+                    "edited": self._edited(cid, row["created_at"], row["updated_at"])}
         try:
             data = json.loads(recortex.gh(["api", "repos/%s/issues/comments/%d" % (self.repo, cid)]))
         except recortex.GhError as error:
@@ -149,7 +156,7 @@ class Lookup:
         at = record_format.event_at(event, data.get("created_at"))
         return {"type": event["type"], "at": at or "", "time": record_format.sort_key(at),
                 "issue": int(match.group(1)), "author": (data.get("user") or {}).get("login") or "",
-                "edited": self._edited(data.get("created_at"), data.get("updated_at"))}
+                "edited": self._edited(cid, data.get("created_at"), data.get("updated_at"))}
 
     def _issue(self, number):
         if not self.online:

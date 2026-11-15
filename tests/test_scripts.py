@@ -7002,6 +7002,147 @@ class EditHistoryTests(MindSandbox):
         self.assertEqual([(9104, 1)], [(row[0], row[3]) for row in self.reads()])
 
 
+    # ------------------------------------------------------------ who is told
+
+    def recalled(self):
+        return json.loads(self.tool("index.py", "query", "recall", "--issue", "5", "--json").stdout)
+
+    def mind_model(self):
+        result = self.tool("index.py", "query", "mind", "--json", gh="false")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        return json.loads(result.stdout)
+
+    def lint_question(self, target=9105):
+        text = chain_text("4-question.md").replace("because=9105", "because=%d" % target)
+        return self.lint(text, "question")[0]
+
+    def test_a_memory_edited_only_by_allowed_accounts_is_told_with_a_note(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev")  # replaces=9102, and a fold that explains "strict quoting"
+        self.edited_by(9105, "example-org", "octo-dev", when="2026-04-21T10:00:00Z")  # the owner counts too
+        self.ready()
+        found = self.memories()
+        self.assertEqual("replaced", found[9102]["state"])  # its replaces= counts again
+        self.assertEqual({9105: True, 9107: True}, {cid: m["changed"] for cid, m in found.items() if m["changed"]})
+        self.assertFalse(found[9104]["changed"])
+        recalled = self.recalled()
+        self.assertEqual((0, 0), (recalled["edited"], recalled["hidden"]))
+        words = {w["key"]: w for w in recalled["words"]}
+        self.assertEqual(9107, words["strict quoting"]["comment"])
+        self.assertIn("line splitter", words)  # the fold of 9105 explains again
+        lines = [line for line in self.recall().stdout.split("\n") if "[changed on GitHub" in line]
+        self.assertEqual([9107, 9105], sorted((int(line.split()[0]) for line in lines), reverse=True))
+        self.assertNotIn("edited after", self.recall().stdout)
+        self.assertEqual([], self.lint_question(9105))  # a link to it is accepted, from GitHub's answer and the index
+        offline = self.tool("lint_drafts.py", "--kind", "question", "--index", "--issue", "5",
+                            self.write("q.md", chain_text("4-question.md")), gh="false")
+        self.assertNotIn("was edited after it was posted", offline.stdout)
+        model = self.mind_model()
+        self.assertEqual({9105: True, 9107: True}, {m["id"]: m["changed"] for m in model["memories"] if m["changed"]})
+        self.assertEqual(0, model["not_told"]["edited"])
+        built = self.tool("mind.py", gh="false")
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        page = recortex.read_text(os.path.join(self.data, "private", "example-org__tinycsv", "mind.html"))
+        self.assertEqual(2, page.count("Changed on GitHub after it was posted.</p>"))
+        self.assertNotIn("was changed on GitHub after it was posted, so it is not told", page)
+
+    def test_a_memory_that_anyone_else_edited_is_left_out(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev", "mallory", "octo-dev")  # one of three edits is by an outsider
+        self.ready()
+        self.assertNotIn(9107, self.memories())
+        self.assertEqual((1, "stands"), (self.recalled()["edited"], self.memories()[9102]["state"]))
+        self.assertEqual(["link-target"], codes(self.lint_question(9107)))
+        self.assertEqual(1, self.mind_model()["not_told"]["edited"])
+
+    def test_the_allowed_list_is_applied_when_the_index_is_read(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev", "sam-r", "octo-dev")
+        self.ready()
+        self.assertNotIn(9107, self.memories())
+        with open(self.trusted, "w") as handle:  # no sync in between: the edits were stored with their editors' names
+            handle.write("%s octo-dev sam-r\n" % REPO)
+        self.assertTrue(self.memories()[9107]["changed"])
+        with open(self.trusted, "w") as handle:
+            handle.write("%s octo-dev\n" % REPO)
+        self.assertNotIn(9107, self.memories())
+
+    def test_an_edit_by_a_deleted_account_is_never_by_an_allowed_one(self):
+        self.add_chain()
+        self.edited_by(9107, None, "octo-dev")  # GitHub answers editor null for an account that is gone
+        self.ready()
+        self.assertEqual([(None,), ("octo-dev",)], [tuple(r) for r in self.sql(
+            "SELECT editor FROM comment_edits ORDER BY seq")])
+        self.assertNotIn(9107, self.memories())
+
+    def test_a_history_that_is_not_whole_current_and_consistent_does_not_clear(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev")
+        self.ready()
+        self.assertIn(9107, self.memories())
+        for name, statement in (
+                ("not read yet", "DELETE FROM comment_edit_reads"),
+                ("marked unreadable", "UPDATE comment_edit_reads SET complete = 2"),
+                ("read for an older updated_at", "UPDATE comment_edit_reads SET stamp = '2026-04-19T10:00:00Z'"),
+                ("rewritten by an older version", "UPDATE comments SET updated_at = '2026-04-22T10:00:00Z' WHERE id = 9107"),
+                ("fewer edits stored than read", "DELETE FROM comment_edits"),
+                ("no last edit", "UPDATE comment_edit_reads SET last_edited = NULL"),
+                ("another last edit", "UPDATE comment_edit_reads SET last_edited = '2026-04-19T10:00:00Z'"),
+                ("no edit besides the creation", "UPDATE comment_edit_reads SET edits = 0")):
+            self.sql("DELETE FROM comment_edit_reads", "DELETE FROM comment_edits",
+                     "UPDATE comments SET updated_at = '2026-04-20T10:00:00Z' WHERE id = 9107")
+            self.ready()
+            self.assertIn(9107, self.memories(), name)
+            self.sql(statement, "UPDATE meta SET value = '1' WHERE key = 'mind_derived'")  # a write to comments clears it
+            self.assertNotIn(9107, self.memories(), name)
+            self.assertEqual(1, self.recalled()["edited"], name)
+
+    def test_an_empty_history_is_not_a_clearance(self):
+        self.add_chain()
+        self.edit_comment(9107)  # updated_at moved, and GitHub's history of it is empty (a stale answer, a reaction)
+        self.ready()
+        self.assertEqual([(9107, 1, 0)], [tuple(r) for r in self.sql(
+            "SELECT comment, complete, edits FROM comment_edit_reads WHERE complete = 1")])
+        self.assertNotIn(9107, self.memories())
+
+    def test_an_empty_history_with_a_last_edit_is_not_a_clearance_either(self):
+        self.add_chain()
+        self.edit_comment(9107)
+        data = self.repo()
+        data["comments"]["9107"]["last_edited_at"] = "2026-04-20T10:00:00Z"  # GitHub's two answers disagree
+        self.save(data)
+        self.ready()
+        self.assertNotIn(9107, self.memories())
+
+    def test_a_link_to_a_cleared_memory_needs_an_index_that_agrees_with_github(self):
+        self.add_chain(3)
+        self.edited_by(9105, "octo-dev")
+        self.ready()
+        self.assertEqual([], self.lint_question(9105))
+        self.edited_by(9105, "mallory", "octo-dev", when="2026-04-21T10:00:00Z")  # edited again, not synced yet
+        self.assertEqual(["link-target"], codes(self.lint_question(9105)))
+        self.edited_by(9105, "octo-dev", when="2026-04-20T10:00:00Z")
+        self.assertEqual([], self.lint_question(9105))
+        os.rename(self.index_file(), self.index_file() + ".away")  # no index to say who edited it
+        self.assertEqual(["link-target"], codes(self.lint_question(9105)))
+
+    def test_with_the_repository_untrusted_no_memory_is_marked_changed(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev")
+        self.ready()
+        untrusted = {"RECORTEX_TRUSTED_FILE": os.path.join(self.dir, "absent")}
+        found = json.loads(self.tool("index.py", "query", "recall", "--issue", "5", "--json", env=untrusted).stdout)
+        self.assertEqual([False], sorted({m["changed"] for m in found["memories"]}))
+
+    def test_a_resume_comment_edited_by_an_allowed_account_is_still_left_out(self):
+        self.add_chain()
+        self.put(9604, 4, resume_comment("MARK-RESUME-EDITED", "2026-03-21 10:00 PST"))
+        self.edited_by(9604, "octo-dev")
+        self.ready()
+        self.assertEqual([], self.calls("IC_kwDOfake9604"))  # it is no memory: its history is not read
+        self.assertNotIn("MARK-RESUME-EDITED", json.dumps(self.mind_model()))
+
+
     def in_index(self):
         self.in_process()
         import index
