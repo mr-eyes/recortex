@@ -23,6 +23,13 @@ once per project (off with RECORTEX_DISCOVERY=0 or "discovery": false in
 when only that one is there); and in a project that is set up and
 trusted, one line says why the brief is not shown. Nothing here writes to GitHub.
 
+A project's field sheet (field_sheet.py) reaches a subagent brief only when the
+user approved that exact text on this machine, in its own frame between BEGIN and
+END FIELD GUIDANCE lines. The session brief gets one fixed line about it: that it
+is shown, or why it is not, with no text of the sheet. In a project with no
+fields entry, the session start carries one fixed line, once per project and
+machine, that offers to set the field.
+
 --print shows the four payloads and their sizes, for the user to check.
 --doctor says why a brief is not shown: configuration, trust, the storage
 folders with owner and mode, the index and its age, the last sync failure and
@@ -51,6 +58,7 @@ import names  # noqa: E402
 import index  # noqa: E402
 import brief  # noqa: E402
 import storage  # noqa: E402
+import field_sheet  # noqa: E402
 
 EVENTS = ("session-start", "subagent-start", "prompt-submit", "pre-compact")
 HOOK_NAMES = {"session-start": "SessionStart", "subagent-start": "SubagentStart",
@@ -239,6 +247,21 @@ def new_signal(repo, config, room):
     return ""
 
 
+def field_offer(repo, record, room):
+    """The offer to set the field: one fixed line, once per project and machine, in a project with no fields entry.
+    It is remembered before it is returned. The line is optional: any failure (refused storage, an unreadable file)
+    gives no line, and the brief is shown as usual."""
+    try:
+        if record.field.get("state") != "none" or field_sheet.off() or len(field_sheet.OFFER) + 1 > room:
+            return ""
+        if field_sheet.offered(repo):
+            return ""
+        field_sheet.mark_offered(repo)
+        return field_sheet.OFFER
+    except Exception:  # noqa: BLE001 - the line is optional; the brief does not depend on it
+        return ""
+
+
 BUILDING = ("recortex: record brief not shown: building the local index in the background (first run); "
             "the brief appears at your next prompt. Run hooks.py --doctor for status.")
 REBUILDING = ("recortex: record brief not shown: the local index was refused (often a key that differs between "
@@ -356,7 +379,9 @@ def produce(event, data, budget, config, repo, hub):
             text = brief.session_payload(record, fresh)
             remember(repo, session, digest(record.key()), brief=True)
             signal = new_signal(repo, config, brief.CAPS["session-start"] - len(text))
-            return text + ("\n" + signal if signal else "")
+            text += "\n" + signal if signal else ""
+            offer = field_offer(repo, record, brief.CAPS["session-start"] - len(text))
+            return text + ("\n" + offer if offer else "")
         if event == "subagent-start":
             return json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart",
                                                       "additionalContext": brief.subagent_payload(record)}})
@@ -488,6 +513,37 @@ def earlier_name_lines(config):
     return lines
 
 
+def field_line(config, repo):
+    """For --doctor: one line on the field guidance. Never a problem, and never text of a sheet that is not approved:
+    field names only when approved; places, codes, fingerprints and sizes otherwise."""
+    info = field_sheet.state(config, repo)
+    marks = ", ".join(field_sheet.sensitive_marks(config, repo)) or "none"
+    kind = info["state"]
+    if kind == "none":
+        text = "none (no fields entry in the configuration file)"
+    elif kind == "off":
+        text = "off (\"field_guidance\": false in %s)" % recortex.settings_file()
+    elif kind == "mark":
+        return "field guidance: no sheet; sensitive marks: %s" % marks
+    elif kind == "approved":
+        size = len("\n".join(brief.field_frame(info, config)))
+        return ("field guidance: shown to subagents; approved %s; fingerprint %s; frame %d of %d characters; fields: "
+                "%s; sensitive marks: %s" % (info["approved"], info["fingerprint"][:12], size, field_sheet.FRAME_CAP,
+                                             ", ".join(info["entry"]["names"]), marks))
+    elif kind == "changed":
+        text = ("not shown: the sheet changed since it was approved on %s (approved fingerprint %s, now %s). Review it "
+                "with setup.py fields show" % (info["approved"], info["approved_fingerprint"][:12],
+                                               info["fingerprint"][:12]))
+    elif kind == "new":
+        text = ("not shown: no approval for this repository in %s. Review it with setup.py fields show"
+                % field_sheet.approvals_path())
+    elif kind == "malformed":
+        text = "not shown: the fields entry is refused: %s" % field_sheet.problem_text(info["problems"])
+    else:
+        text = "not shown: the approvals cannot be read: %s. The file's text is not shown" % info["reason"]
+    return "field guidance: %s%s" % (text, "; sensitive marks: %s" % marks if marks != "none" else "")
+
+
 def top_note(path):
     """For the storage line of --doctor: whether a top folder has the name from before the rename."""
     return " (the folder name from before the rename, used in place)" if os.path.basename(path) == names.OLD_NAME \
@@ -571,6 +627,8 @@ def doctor():
         if db is None:
             problems.append("no index yet; a session start or `index.py sync` makes it")
             print("index: none yet")
+    if db is None:
+        print(field_line(config, repo))  # after the storage rows, also when there is no index
     if db is not None:
         synced = index.get_meta(db, "synced_at")
         print("index: synced %s (%s)%s; %s" % (synced or "never", index.age_text(synced),
@@ -582,6 +640,7 @@ def doctor():
         failure = index.get_meta(db, "last_sync_error")
         print("last sync failure: %s" % (failure or "none since the last good sync"))
         print("resume block: %s" % (index.get_meta(db, "resume_note") or "not read"))
+        print(field_line(config, repo))
         if synced:
             for event, text in brief.all_payloads(db, config, repo).items():
                 print("payload %-15s %5d characters (cap %d)" % (event, len(text), brief.CAPS[event]))
