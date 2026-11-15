@@ -6521,6 +6521,34 @@ class MindModelTests(MindSandbox):
                 self.assertEqual((1, index_not_ready()), (refused.returncode, refused.stdout), statement)
             self.ready()
 
+    def page(self):
+        built = self.tool("mind.py", gh="false")
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        return recortex.read_text(os.path.join(self.data, "private", "example-org__tinycsv", "mind.html"))
+
+    def test_the_last_pause_is_not_told_once_its_author_leaves_the_allowed_list(self):
+        self.add_chain()
+        with open(self.trusted, "w") as handle:
+            handle.write("%s octo-dev sam-r\n" % REPO)
+        self.put(9603, 4, resume_comment("MARK-LEFT tag the release today"), user="sam-r")
+        self.ready()
+        model = self.model()
+        self.assertEqual(9603, model["last"]["id"])
+        self.assertIn("MARK-LEFT", json.dumps(model))
+        with open(self.trusted, "w") as handle:  # no sync in between: the stored block was checked for the old list
+            handle.write("%s octo-dev\n" % REPO)
+        model = self.model()
+        self.assertNotIn("MARK-LEFT", json.dumps(model))
+        self.assertEqual((None, True, [], None), (model["last"], model["not_told"]["pause"], model["since"],
+                                                  model["open"]["holds"]))
+        self.assertEqual([9100], [p["id"] for p in model["pauses"]])
+        text = self.page()
+        self.assertNotIn("MARK-LEFT", text)
+        self.assertIn("The last pause is not told here", text)
+        self.assertNotIn("No pause has been recorded yet", text)
+        self.ready()  # the sync chooses the pause again, for the list as it is now
+        self.assertEqual((9100, False), (self.model()["last"]["id"], self.model()["not_told"]["pause"]))
+
 
 def index_not_ready():
     return ("the index was last written by an older version of the plugin, or never by this one; run index.py "

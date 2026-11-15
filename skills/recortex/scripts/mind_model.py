@@ -765,7 +765,9 @@ class Build:
 
     def read_pauses(self):
         """Earlier pauses (resume comments of allowed accounts never edited, and told checkpoints) and the last one,
-        from meta.resume, which the sync stores only after its author and never-edited checks."""
+        from meta.resume, which the sync stores only after its author and never-edited checks. The stored block is told
+        only when the hub comment that holds it is one of the told pauses of this build: the allowed list may have
+        changed since the sync."""
         hub = self.meta("hub")
         hub = int(hub) if hub.isdigit() else None
         edited = index.edited_comments(self.db)
@@ -796,8 +798,13 @@ class Build:
         for i, pause in enumerate(pauses):
             pause["index"] = i
         self.pauses = pauses
-        self.last = None
-        if resume:
+        self.last, self.pause_untold = None, False
+        last = next((p for p in pauses if p["kind"] == "resume" and p["id"] == last_id), None)
+        if resume and last is None:
+            # The sync stored this block for the allowed list of its day. The hub comment that holds it is not one
+            # this build may tell (its author is not allowed now, it was edited, or it is not in the index yet).
+            self.pause_untold = True
+        elif resume:
             values = dict(record_format.fields(resume))
             seen = set()
             next_rows = []
@@ -810,8 +817,7 @@ class Build:
                     cell = lambda i: row[i] if i < len(row) else ""
                     next_rows.append({"action": self.runs(cell(spots[0]), seen), "owner": short(cell(spots[1])),
                                       "where": self.runs(cell(spots[2]), seen)})
-            last = next((p for p in pauses if p["kind"] == "resume" and p["id"] == last_id), None)
-            self.last = {"id": last_id, "day": last["day"] if last else None, "wall": last["wall"] if last else None,
+            self.last = {"id": last_id, "day": last["day"], "wall": last["wall"],
                          "focus": self.doc(values.get("Current focus", ""), seen),
                          "next": next_rows, "holds": self.doc(values["Holds"], seen) if values.get("Holds") else None}
 
@@ -1039,7 +1045,7 @@ class Build:
                 edited.append({"id": cid, "issue": row["issue"]})
         bodies = [{"thread": t["n"], "topic": t["topic"]} for t in self.threads if t["topic"] and not t["shown"]]
         return {"others": self.found["hidden"], "edited": self.found["edited"], "edited_ids": edited,
-                "older": self.older, "words": self.words_cut, "bodies": bodies}
+                "older": self.older, "words": self.words_cut, "bodies": bodies, "pause": self.pause_untold}
 
     # ------------------------------------------------------------ the map
 

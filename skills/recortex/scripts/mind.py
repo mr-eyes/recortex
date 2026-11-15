@@ -209,6 +209,8 @@ NAV = (("now", "Where are we?"), ("threads", "How did we get here?"), ("lessons"
        ("ask", "Ask the mind"))
 CUT = "This is cut here; the whole text is on GitHub."
 TABLE_CUT = "Only the first 40 rows and 12 columns are shown here."
+PAUSE_UNTOLD = ("The last pause is not told here: the comment that holds it is not by one of your allowed accounts, was "
+                "changed after it was posted, or has not been read yet. Run index.py sync and build the page again.")
 NOT_SHOWN = ("The text of this thread is not shown here: someone outside your allowed accounts wrote or changed it, or "
              "its history has not been read yet.")
 OLD_NOTE = "Recorded before plain lines and links were kept, so this is told in the record's own short words."
@@ -551,7 +553,8 @@ class Page:
                         E("div", {"class": "stack"}, *since) if since else
                         E("p", {"class": "quiet"}, "Nothing has been recorded since.")]
         else:
-            out.append(E("p", {"class": "nothing"}, "No pause has been recorded yet."))
+            out.append(E("p", {"class": "nothing"}, PAUSE_UNTOLD if (self.model.get("not_told") or {}).get("pause")
+                         is True else "No pause has been recorded yet."))
         latest = []
         for kind, label in (("decision", "The last thing we decided"), ("result", "The last thing we found"),
                             ("failure", "The last thing that went wrong"), ("question", "The last thing we asked")):

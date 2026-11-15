@@ -53,7 +53,7 @@ The page speaks as "we", so it tells only what your allowed accounts wrote: the 
 | A memory, with its fields, links and folds | An allowed account wrote it and it was never edited | Not told; its links do not count and its folds explain nothing. Counted in the last lines |
 | A word's meaning, what a thread is about | The memory that holds it is told | Not used |
 | The text of a topic (its name line, sections, tables, figures, sources) | An allowed account opened the issue, its edit history has been read, and every edit was made by an allowed account | One sentence and the thread's address; the thread is named after its `topic:` label |
-| The last pause | The resume block the sync checked (allowed author, never edited) | "No pause has been recorded yet" |
+| The last pause | The resume block the sync checked (allowed author, never edited), when its comment is still one the page may tell | "No pause has been recorded yet", or one sentence that says to sync |
 | Another issue's title | An allowed account opened it, its history is read, and nobody else renamed it | "an issue someone else opened"; the box gives who, when, open or closed and the address |
 | Another issue's first lines, an open task's goal | As the text of a topic | Not shown |
 | An account name | It has the form of a GitHub login | "an account" |
