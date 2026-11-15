@@ -286,7 +286,7 @@ def build(db, repo, allowed, today):
 class Build:
     def __init__(self, db, repo, allowed, today):
         self.db, self.repo, self.allowed, self.today = db, repo, allowed, today
-        self.cited = {}
+        self.cited, self.first_lines = {}, []
 
     def ok(self, author):
         return bool(author) and clean(author).lower() in self.allowed
@@ -495,13 +495,20 @@ class Build:
                                   "author": login(issue["author"]), "opened": full_day(issue["created"]),
                                   "open": issue["state"] == "open", "closed": full_day(issue["closed"])
                                   if issue["state"] != "open" and issue["closed"] else None, "first": None}
-            if not issue["pull"] and self.body_shown(number):  # stored first, so that two issues citing each
-                lines = [re.sub(r"^#{1,6}\s+", "", line) for line in clean(issue["body"]).split("\n")  # other end
+            if not issue["pull"] and self.body_shown(number):
+                lines = [re.sub(r"^#{1,6}\s+", "", line) for line in clean(issue["body"]).split("\n")
                          if not line.lstrip().startswith("<!--")]
                 text = "\n".join(lines).strip()
                 if text:
-                    self.cited[number]["first"] = self.doc(text, set(), cap=CAP_FIRST_LINES)
+                    self.first_lines.append((number, text))  # read by read_first_lines: a body may cite further issues
         return self.cited[number]["title"]
+
+    def read_first_lines(self):
+        """The first lines of the cited issues, one after another and not one inside the other, so that a long chain
+        of issues that cite each other is walked without recursion."""
+        while self.first_lines:
+            number, text = self.first_lines.pop(0)
+            self.cited[number]["first"] = self.doc(text, set(), cap=CAP_FIRST_LINES)
 
     def doc(self, text, seen, cap=CAP_FIELD):
         """Record text as blocks: paragraphs at blank lines, a list for lines that start with "- ", a quotation for
@@ -855,6 +862,7 @@ class Build:
         words = [self.word_model(n, rows) for n, rows in self.word_rows]
         opened = self.open_model()
         not_told = self.not_told_model()
+        self.read_first_lines()
         return {
             "repo": self.repo, "name": self.repo.split("/")[1],
             "built": {"day": self.today.isoformat(), "words": full_day(self.today.isoformat()),

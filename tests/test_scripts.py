@@ -6597,6 +6597,24 @@ class MindModelTests(MindSandbox):
         self.assertNotIn("no longer in what we say now", memory)  # the figure is still there; the page does not show it
         self.assertNotIn("MARK-FIGURE", text)
 
+    def test_a_long_chain_of_issues_that_cite_each_other_is_told(self):
+        self.add_chain()
+        data = self.repo()
+        for number in range(100, 400):
+            data["issues"][str(number)] = {"title": "Step %d" % number, "body": "Continues in #%d.\n" % (number + 1),
+                                           "labels": [], "state": "open", "created_at": "2026-04-05T10:00:00Z",
+                                           "updated_at": "2026-04-05T10:00:00Z"}
+        data["next_issue"] = 401
+        self.save(data)
+        self.put(9600, 5, memory_draft("idea", "2026-03-13T10:00-08:00", rest="**Why it might help:** See #100.\n\n"
+                                          "**What it would take:** Time.\n\n**Next step:** None, owner Claude session"))
+        self.ready()
+        model = self.model()
+        cited = {c["n"]: c for c in model["cited"]}
+        self.assertTrue(set(range(100, 400)) <= set(cited))
+        self.assertEqual({"cite": "issue", "n": 400, "text": "Step 400"} if 400 in cited else
+                         {"cite": "none", "n": 0, "text": "an issue on GitHub"}, cited[399]["first"]["blocks"][0]["p"][1])
+
 
 def index_not_ready():
     return ("the index was last written by an older version of the plugin, or never by this one; run index.py "
