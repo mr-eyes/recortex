@@ -66,6 +66,7 @@ import lint_drafts  # noqa: E402
 import setup_labels  # noqa: E402
 import storage  # noqa: E402
 import field_sheet  # noqa: E402
+import board_api  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(HERE, "..", "templates")
@@ -441,6 +442,11 @@ def check_existing(existing, name=recortex.CONFIG_NAME):
     profiles = existing.get("profiles", [])
     if not (isinstance(profiles, list) and len(recortex.shipped_profiles(profiles)) == len(profiles)):
         problems.append("profiles (shipped profile names, or entries with valid sections)")
+    board = existing.get("board")
+    if board is not None and not (isinstance(board, dict) and set(board) == {"owner", "number"}
+                                  and isinstance(board["owner"], str) and board_api.OWNER.fullmatch(board["owner"])
+                                  and type(board["number"]) is int and 1 <= board["number"] <= 10 ** 8):
+        problems.append("board")
     if problems:
         raise AnswerError("the existing %s has values that do not fit: %s. Fix them by hand, then run again"
                           % (name, ", ".join(problems)))
@@ -1263,10 +1269,9 @@ def apply(answers, root, dry, drafts):
     run([python, os.path.join(scripts, "index.py"), "--repo", answers["repo"], "sync"], dry,
         "build the local index in the foreground, so the first session has a brief", cwd=root)
     if answers["board"] and existing.get("board"):
-        print("board: this project already has a board entry (%s/%s); no second board is made. To change it, edit "
+        print("board: this project already has a board entry (%s/%d); no second board is made. To change it, edit "
               "the entry by hand and run board.py setup --mode existing --number N --yes"
-              % (str(existing["board"].get("owner"))[:40] if isinstance(existing["board"], dict) else "?",
-                 str(existing["board"].get("number"))[:10] if isinstance(existing["board"], dict) else "?"))
+              % (existing["board"]["owner"], existing["board"]["number"]))  # checked by check_existing
     elif answers["board"]:
         board_step(answers["board"], root, python, dry)
     present = [item["kind"] for item in detect(root)]
