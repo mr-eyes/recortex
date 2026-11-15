@@ -1,0 +1,33 @@
+{
+  "form": 1,
+  "names": [
+    "engineering",
+    "bioinformatics",
+    "business"
+  ],
+  "sensitive": [],
+  "brief": {
+    "parts": [
+      "a unit and a tolerance on every dimension; a safety factor with its basis and load case; the drawing revision and the standard's edition; a simulation with a convergence check.",
+      "tool versions, parameters and reference build; what is counted and of how many; correction for multiple tests; a pipeline that finished is not yet a valid result.",
+      "source, date and method for each figure; measured, estimated or forecast; currency, year and period; percent or percentage points."
+    ],
+    "across": "a number that passes from one part to another keeps its unit, its uncertainty and its source. Sample, coverage, model, run, tolerance and significant mean different things in each field: say which.",
+    "never": "what any of these fields keeps out, for the whole record: data about individual people, supplier and customer terms, unreleased financial figures, export-controlled data."
+  },
+  "checks": [
+    "Does the draft say which field's checks it used, and when it writes sample, coverage, model, run, tolerance or significant, which field's meaning it intends?",
+    "Engineering: does every value carry a unit in one system and every dimension a tolerance, is each value marked measured, nominal or simulated, and is the standard named with edition and clause?",
+    "Engineering: does each safety factor name its basis and load case, each simulation its mesh, boundary conditions, material model and convergence check, and is 'safe' always tied to a criterion?",
+    "Engineering: is a break reported with mode, place, load and cycles, and are runs that did not converge, parts that differ from the drawing revision, and one specimen read as proof called out?",
+    "Bioinformatics: could the result be rerun from the command, tool versions, parameters, reference build, annotation release and input checksums given, and are coordinates marked 0- or 1-based?",
+    "Bioinformatics: does each count say what is counted (reads or read pairs, samples, cells, genes) and of how many after which filter, and each test its multiple-test correction and effect size?",
+    "Bioinformatics: was the output checked for empty or cut-off files, swapped samples, batch mixed with condition and mismatched references, rather than trusted because the pipeline finished?",
+    "Business: does each figure give its source, date and method (survey with its sample, transactions, filings, interviews with their count), and is it marked measured, estimated or forecast?",
+    "Business: does each number give currency code and year, period, geography and metric definition, each percentage its base, and keep percent apart from percentage points?",
+    "Business: is a test with no effect reported, and are double counting, a metric whose definition changed, a period picked to flatter, and a conclusion resting on one unsupported assumption caught?",
+    "When a number passes from one part or field to another, does it keep its unit, its uncertainty, its source and whether it was measured, estimated, simulated or forecast?",
+    "Does any line hold data about a single person, data under an access agreement, supplier or customer terms, unreleased financial figures or export-controlled data?"
+  ],
+  "words": "the project's own names for parts, sample sets, runs and scenarios. Where a memory uses sample, coverage, model, run, tolerance or significant, it says which field's meaning it uses; these general words get no fold."
+}

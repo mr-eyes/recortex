@@ -1,0 +1,28 @@
+{
+  "form": 1,
+  "names": [
+    "policy"
+  ],
+  "sensitive": [],
+  "brief": {
+    "proof": "primary documents (the measure's text with its version and date, official statistics with their release, vote records), polls with their full method, statements with speaker, date and place. Keep fact, estimate and position apart; attribute every contested claim; describe each side in words it would accept; keep findings apart from recommendations.",
+    "numbers": "a poll needs sample size, population (adults, registered or likely voters), field dates, mode, margin of error, question wording and sponsor; a subgroup needs its own count; a budget figure needs its fiscal year and who scored it; percent or percentage points.",
+    "failures": "a hypothesis the data do not support is a result. Also report a sample that does not represent the population, a subgroup too small to read, loaded question wording, an outdated version of the text, a quote cut from its context, one source for a contested claim, and a lead inside the margin of error written as a lead.",
+    "never": "a named private person's views, respondent or voter-file records, or an unverified allegation about a named person."
+  },
+  "checks": [
+    "Is each claim about a measure tied to its text, with version and date, and is its status (introduced, amended, enacted, vetoed, struck down) current as of the draft?",
+    "Does each poll figure give sample size, population, field dates, mode, margin of error, question wording and sponsor?",
+    "Is a lead or change called real only when it is outside the margin of error, and does each subgroup figure carry its own count and margin?",
+    "Are percent and percentage points kept apart, and does each percentage name its base?",
+    "Does each budget figure give its fiscal year, the period it covers, nominal or inflation-adjusted terms, and who scored it?",
+    "Are official statistics cited with their release, and are revisions, changed definitions and comparisons across places or years on different bases flagged?",
+    "Is every contested claim attributed, and does each quoted statement carry speaker, date and place?",
+    "Is each side described in words it would accept, without one side's loaded labels used as neutral terms?",
+    "Are fact, estimate and position marked apart, and are findings kept apart from recommendations?",
+    "Does a claim that a policy caused an outcome rest on evidence that can show cause, not a before-and-after comparison or a correlation alone?",
+    "Are polls, data or results that cut against the draft's argument reported, not dropped, and are stalled, failed or reversed measures noted as such?",
+    "Is the draft free of a named private person's views, respondent or voter-file records, and unverified allegations about a named person?"
+  ],
+  "words": "the project's own names for scenarios, groupings of districts and coalitions, and nicknames for measures. Not general terms such as margin of error."
+}

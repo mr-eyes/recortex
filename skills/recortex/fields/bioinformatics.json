@@ -1,0 +1,28 @@
+{
+  "form": 1,
+  "names": [
+    "bioinformatics"
+  ],
+  "sensitive": [],
+  "brief": {
+    "proof": "a result is the command, tool versions, parameters, reference build, annotation release and input checksums that produced it. A pipeline that finished is not yet a valid result.",
+    "numbers": "say what is counted (reads or read pairs, samples, plants or donors, cells, genes) and of how many after which filter; coordinates with the build and 0- or 1-based; a test with its correction for multiple tests and an effect size.",
+    "failures": "an empty or cut-off output is a failure, not a count of zero. Also report swapped samples, a batch that coincides with the condition, references whose names or builds do not match, and a tool whose defaults changed between versions.",
+    "never": "identifiers or genotypes of individual people, sample names that lead back to a person, or data held under an access agreement."
+  },
+  "checks": [
+    "Could the result be rerun from what is written: the command, tool versions, parameters, reference build, annotation release and input checksums?",
+    "Does each count say what is counted (reads or read pairs, samples, cells, genes) and of how many, after which filter?",
+    "Are cells, reads or technical replicates treated as independent samples when the unit of the study is the donor, plant or biological replicate?",
+    "Does each test name its correction for multiple tests and give an effect size, and is significant ever written with no test behind it?",
+    "Are coordinates given with their build and as 0- or 1-based, and are two builds or two annotation releases mixed anywhere?",
+    "Was the output checked for empty or cut-off files, swapped samples and mismatched references, or trusted because the pipeline finished?",
+    "Does batch, lane, date or site coincide with the condition, so that the two cannot be told apart?",
+    "Were features or thresholds chosen and then tested on the same data?",
+    "Are filters and thresholds stated with their values, and is depth given as mean or median?",
+    "Is each database or reference cited with its version or release date, and is the random seed given where one was used?",
+    "Could a spreadsheet or a format conversion have altered gene names, identifiers or dates?",
+    "Does any line hold an identifier or genotype of a person, a sample name that leads back to a person, or data under an access agreement?"
+  ],
+  "words": "the project's own names for sample sets, filter settings, pipeline versions and reference builds (for example a set the project calls the strict set). Not general terms such as read depth."
+}

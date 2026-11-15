@@ -25,6 +25,12 @@ key stays under XDG_STATE_HOME), with no earlier name. Like every top folder,
 only the folder the plugin names (recortex, or the earlier name where that one
 is used) is created or tightened, never a folder above it.
 
+A third top folder, $XDG_CONFIG_HOME/recortex (by default ~/.config/recortex,
+or the earlier name where only that one is there), is the folder of the user's
+trusted list. The plugin keeps one file of its own in its private folder: the
+user's approvals of field sheets (field_sheet.py), under the same checks. The
+hooks only read it, without creating or tightening anything.
+
 Inside the top folder the plugin keeps everything in a private folder it creates
 and controls, `private/`, with mode 0700:
 
@@ -102,6 +108,13 @@ def state_top(for_key=False):
     if not for_key and test_home():
         return test_home()
     return choose_top(_env_dir("XDG_STATE_HOME", os.path.join(os.path.expanduser("~"), ".local", "state")))
+
+
+def config_top():
+    """The plugin's top folder in the user's configuration folder: $XDG_CONFIG_HOME/recortex (or the earlier name,
+    see above), where the trusted list is. It holds the field approvals in its private folder. RECORTEX_DATA_HOME and
+    RECORTEX_TRUSTED_FILE do not move it."""
+    return choose_top(_env_dir("XDG_CONFIG_HOME", os.path.join(os.path.expanduser("~"), ".config")))
 
 
 def repo_folder(repo):

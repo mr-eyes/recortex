@@ -1,0 +1,28 @@
+{
+  "form": 1,
+  "names": [
+    "business"
+  ],
+  "sensitive": [],
+  "brief": {
+    "proof": "each figure has a source, its date and its method (a survey with its sample, transactions, filings, interviews with their count). Mark every number as measured, estimated or forecast, and list a model's assumptions.",
+    "numbers": "currency code and year; the period; the geography; the metric's definition (revenue or bookings, gross or net); the base of each percentage; percent or percentage points; a market size with its method and a range.",
+    "failures": "a test with no effect is a result. Also report double counting, a metric whose definition changed, a period picked to flatter, and a conclusion that rests on one unsupported assumption.",
+    "never": "names or contacts of customers and employees, contract terms and prices, unreleased financial figures. Refer to an interviewee by role."
+  },
+  "checks": [
+    "Does each figure give its source, the source's date and its method (a survey with its sample, transactions, filings, interviews with their count)?",
+    "Is each number marked as measured, estimated or forecast, and is a forecast ever written as a fact?",
+    "Does each amount give its currency code and year, nominal or adjusted, and the date of the exchange rate where one was used?",
+    "Does each figure name its period (month, year, fiscal year) and its geography, and are different periods or currencies mixed in one comparison?",
+    "Is each metric defined (revenue or bookings, gross or net, what counts as an active user), and did a definition change inside a series?",
+    "Does each percentage name its base, are percent and percentage points kept apart, and does growth name its base period?",
+    "Does a market size give its method and a range, not one number, and are the assumptions of a model listed?",
+    "Are segments or customers counted twice, or is a period picked that flatters the result?",
+    "Is a competitor's claim taken from its own advertising, or are a few interviews generalized to a market?",
+    "Were only customers who stayed asked, and is a correlation written as a cause?",
+    "Is a test with no effect reported, and does any conclusion rest on one unsupported assumption?",
+    "Does any line hold the name or contact of a customer or employee, the terms or price of a single contract, or an unreleased financial figure?"
+  ],
+  "words": "code names, plan names, and the project's own segment names and metric names (for example a qualified site as this project defines it). Not general terms such as churn."
+}
