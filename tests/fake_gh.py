@@ -19,13 +19,22 @@ Fault switches:
   FAKE_GH_SLEEP=5                sleep before answering
   FAKE_GH_RESUME_SLEEP=8         sleep before answering the hub comments query (the GraphQL call with a number)
   FAKE_GH_RESUME_FAIL=1          exit 1 for the hub comments query
+  FAKE_GH_NODE_FAIL=1            exit 1 for a GraphQL query that reads comments by node id (the edit histories)
 The repository itself (`api repos/<owner>/<name>`, no further path) answers from the state's "private" key, default
 true: `--jq .private` prints true or false, and without --jq the object {"private": ...} is printed.
+Edit histories come in pages of at most 100 entries, as GitHub's userContentEdits does: `first`, `after` and a
+`pageInfo` with an opaque cursor are answered. A comment is found by its node id, "IC_kwDOfake<id>", which the REST
+listing and the single-comment read give as `node_id`; a node id of a comment that does not exist answers the error
+"Could not resolve to a node with the global id of '<id>'".
+A state comment may set "node_id" (its node id), "database_id" (what the node answers as fullDatabaseId; databaseId
+is null, with an error, above 2^31 - 1, as GraphQL's Int is), "cursor" (the endCursor it answers), "gone" (its node no
+longer resolves) and "resolves" (how many more times its node resolves), to test hostile answers.
 A comment of another repository is one whose state entry has a "repo" other than the repository in the request:
 reading it by id answers "Not Found", as for an id that does not exist, and the listings leave it out. A comment
 without "repo" belongs to every repository.
 """
 
+import base64
 import json
 import os
 import re
@@ -93,13 +102,44 @@ def elsewhere(comment, repo):
     return "repo" in comment and comment["repo"].lower() != repo.lower()
 
 
+def node_id(cid, state=None):
+    """The node id of comment `cid`; a state entry may set its own "node_id" (a hostile one, in a test)."""
+    return ((state or {}).get("comments", {}).get(str(cid)) or {}).get("node_id") or "IC_kwDOfake%s" % cid
+
+
+def cursor_for(offset):
+    return base64.b64encode(("cursor:%d" % offset).encode()).decode()
+
+
+def offset_of(cursor):
+    return int(base64.b64decode(cursor.strip('"')).decode().split(":")[1])
+
+
+def edit_connection(edits, arguments, selection, cursor=None):
+    """The answer for userContentEdits(first:, after:) { totalCount pageInfo nodes } over `edits` (newest first)."""
+    start = offset_of(arguments["after"]) if "after" in arguments else 0
+    rows = edits[start:start + min(100, int(arguments.get("first", 100)))]
+    end = start + len(rows)
+    out = {}
+    for alias, name, _, children in selection:
+        if name == "totalCount":
+            out[alias] = len(edits)
+        elif name == "pageInfo":
+            info = {"endCursor": cursor or cursor_for(end), "hasNextPage": end < len(edits)}
+            out[alias] = {a: info[n] for a, n, _, _ in children}
+        elif name == "nodes":
+            out[alias] = [{a: ({"login": e["by"]} if n == "editor" and e["by"] else None if n == "editor" else e["at"])
+                           for a, n, _, c in children} for e in rows]
+    return out
+
+
 def api_comment(state, repo, cid):
     comment = state["comments"].get(str(cid))
     if comment is None or elsewhere(comment, repo):  # GitHub scopes the route to the repository
         sys.stdout.write('{"message":"Not Found","status":"404"}')
         fail("gh: Not Found (HTTP 404)")
     return {
-        "id": int(cid), "body": comment["body"], "user": {"login": comment.get("user", ME)},
+        "id": int(cid), "node_id": node_id(cid, state), "body": comment["body"], "user": {"login": comment.get("user", ME)},
         "created_at": comment.get("created_at", "2026-01-07T09:15:00Z"),
         "updated_at": comment.get("updated_at", comment.get("created_at", "2026-01-07T09:15:00Z")),
         "issue_url": "https://api.github.com/repos/%s/issues/%d" % (repo, comment["issue"]),
@@ -216,9 +256,43 @@ def main():
         if problems:  # the real API rejects the whole query
             print(json.dumps({"errors": [{"message": m} for m in problems]}))
             fail("gh: " + problems[0])
+        top = graphql_check.parse_query(fields["query"])
+        if top and top[0][1] == "node":  # comments named by node id, for their edit histories
+            if os.environ.get("FAKE_GH_NODE_FAIL"):
+                fail("gh: simulated failure of the edit history query (HTTP 502)")
+            out, errors = {}, []
+            for alias, name, arguments, children in top:
+                wanted = arguments["id"].strip('"')
+                found = [c for c in state["comments"] if node_id(c, state) == wanted and not state["comments"][c].get("gone")]
+                if found and "resolves" in state["comments"][found[0]]:  # a test: it resolves this many more times
+                    state["comments"][found[0]]["resolves"] -= 1
+                    found = found if state["comments"][found[0]]["resolves"] >= 0 else []
+                if not found:
+                    out[alias] = None
+                    errors.append({"type": "NOT_FOUND", "path": [alias], "message":
+                                   "Could not resolve to a node with the global id of '%s'." % wanted})
+                    continue
+                comment = state["comments"][found[0]]
+                edits = comment.get("edits", [])
+                newest = edits[0] if edits else None
+                database_id = int(comment.get("database_id", int(found[0])))
+                values = {"databaseId": database_id if database_id < 2 ** 31 else None, "fullDatabaseId": str(database_id),
+                          "lastEditedAt": comment.get("last_edited_at", newest["at"] if newest else None)}
+                if database_id >= 2 ** 31 and any(n == "databaseId" for _, n, _, _ in children[0][3]):
+                    errors.append({"path": [alias, "databaseId"], "message":  # GraphQL's Int holds 32 bits only
+                                   "Int cannot represent non 32-bit signed integer value: %d" % database_id})
+                out[alias] = {}
+                for a, n, arguments_of, kids in children[0][3]:
+                    out[alias][a] = edit_connection(edits, arguments_of, kids, comment.get("cursor")) \
+                        if n == "userContentEdits" else values[n]
+            print(json.dumps(dict({"data": out}, **({"errors": errors} if errors else {}))))
+            save(state)
+            if errors:
+                fail("gh: " + errors[0]["message"])
+            return
         if "number" not in fields:  # issues named in the query by aliases, for their body edits
             out, errors = {}, []
-            for alias, name, arguments, children in graphql_check.parse_query(fields["query"])[0][3]:
+            for alias, name, arguments, children in top[0][3]:
                 issue = state["issues"].get(arguments.get("number"))
                 if issue is None or (name == "issue" and issue.get("pull_request")):
                     out[alias] = None  # GitHub: "Could not resolve to an Issue with the number of N."
@@ -226,9 +300,10 @@ def main():
                                    "Could not resolve to an Issue with the number of %s." % arguments.get("number")})
                     continue
                 edits = issue.get("edits", [])
-                out[alias] = {"lastEditedAt": issue.get("last_edited_at"),
-                              "userContentEdits": {"totalCount": len(edits), "nodes": [
-                                  {"editedAt": e["at"], "editor": {"login": e["by"]}} for e in edits]}}
+                out[alias] = {}
+                for a, n, arguments_of, kids in children:
+                    out[alias][a] = edit_connection(edits, arguments_of, kids) if n == "userContentEdits" \
+                        else issue.get("last_edited_at")
             print(json.dumps(dict({"data": {"repository": out}}, **({"errors": errors} if errors else {}))))
             save(state)
             if errors:

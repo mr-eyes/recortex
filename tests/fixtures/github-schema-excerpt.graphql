@@ -4,7 +4,12 @@
 # with descriptions removed. The tests check every queried field against this file.
 
 type Query {
+  node( id: ID! ): Node
   repository( followRenames: Boolean = true name: String! owner: String! ): Repository
+}
+
+interface Node {
+  id: ID!
 }
 
 type Repository {
@@ -27,6 +32,7 @@ type IssueComment {
   body: String!
   createdAt: DateTime!
   editor: Actor
+  fullDatabaseId: BigInt
   id: ID!
   lastEditedAt: DateTime
   url: URI!
@@ -35,7 +41,13 @@ type IssueComment {
 
 type UserContentEditConnection {
   nodes: [UserContentEdit]
+  pageInfo: PageInfo!
   totalCount: Int!
+}
+
+type PageInfo {
+  endCursor: String
+  hasNextPage: Boolean!
 }
 
 type UserContentEdit {

@@ -6807,6 +6807,428 @@ def resume_comment(focus, stamp="2026-03-20 10:00 PST"):
     return re.sub(r"\*\*Current focus:\*\* [^\n]*", "**Current focus:** " + focus, body)
 
 
+class EditHistoryTests(MindSandbox):
+    """The sync reads every page of an edit history: of topic bodies, and of the memories that look edited."""
+
+    def calls(self, word):
+        """The GraphQL queries the fake saw that contain `word`."""
+        return [" ".join(call) for call in self.repo()["log"] if call[:2] == ["api", "graphql"] and word in " ".join(call)]
+
+    @staticmethod
+    def history(entries, created):
+        """An edit history as GitHub keeps it: newest first, ending with the entry for the creation."""
+        return entries + [{"at": created, "by": "octo-dev"}]
+
+    def long_body_history(self, count, outsider=True):
+        data = self.repo()
+        speed = data["issues"]["6"]
+        own = [{"at": "2026-04-07T%02d:%02d:00Z" % divmod(i, 60), "by": "octo-dev"} for i in range(count)]
+        found = own[::-1] + ([{"at": "2026-04-06T10:00:00Z", "by": "mallory"}] if outsider else [])
+        speed["edits"] = self.history(found, speed["created_at"])  # the outsider's edit is the oldest but one
+        speed["updated_at"] = "2026-04-08T11:00:00Z"
+        self.save(data)
+
+    def test_every_page_of_a_body_history_is_read(self):
+        self.long_body_history(230)
+        self.ready()
+        edits = [row[0] for row in self.sql("SELECT actor FROM timeline WHERE event = 'edited' AND issue = 6")]
+        self.assertEqual((231, 1), (len(edits), edits.count("mallory")))  # the outsider's edit is on the third page
+        queries = self.calls("pageInfo")
+        self.assertEqual(3, len(queries))
+        self.assertEqual([0, 1, 1], [query.count(" after: ") for query in queries])
+        self.assertEqual(1, len(re.findall(r"issue\(number: [0-9]+\)", queries[2])))  # only the long history goes on
+        self.assertEqual([(1,)], [tuple(r) for r in self.sql("SELECT edits_read FROM issues WHERE number = 6")])
+
+    def test_a_history_that_is_too_long_never_clears_the_text(self):
+        self.long_body_history(5200, outsider=False)
+        self.ready()
+        self.assertEqual([(None,)], [tuple(r) for r in self.sql("SELECT DISTINCT actor FROM timeline WHERE event = "
+                                                                  "'edited' AND issue = 6 AND actor IS NULL")])
+        self.assertEqual(self.in_index().EDIT_PAGES_MAX, len(self.calls("issue(number: 6)")))
+        self.assertEqual(50 * 100 + 1, self.sql("SELECT COUNT(*) FROM timeline WHERE event = 'edited' AND issue = 6")[0][0])
+
+    def test_a_cursor_that_is_not_a_plain_cursor_is_not_sent_back(self):
+        found = self.in_index().read_edit_pages(
+            lambda cursors: {key: {"pageInfo": {"hasNextPage": True, "endCursor": 'x") { id } #'}, "nodes": [{"n": 1}]}
+                             for key in cursors}, [6, 7])
+        self.assertEqual({6: ([{"n": 1}], True), 7: ([{"n": 1}], True)}, found)
+        good = self.in_index().read_edit_pages(
+            lambda cursors: {key: {"pageInfo": {"hasNextPage": not cursors[key], "endCursor": "Y3Vyc29yOjE="},
+                                   "nodes": [{"n": 1}]} for key in cursors}, [6])
+        self.assertEqual({6: ([{"n": 1}, {"n": 1}], False)}, good)
+
+    def edited_by(self, cid, *editors, when="2026-04-20T10:00:00Z", count=None):
+        """Comment `cid` was edited by each of `editors` (newest first), the newest at `when`; `count` makes that many
+        edits by the first editor instead."""
+        data = self.repo()
+        comment = data["comments"][str(cid)]
+        names = [editors[0]] * count if count else list(editors)
+        edits = [{"at": "2026-04-19T%02d:%02d:00Z" % divmod(1000 - i, 60), "by": by} for i, by in enumerate(names)]
+        edits[0]["at"] = when
+        comment["edits"] = self.history(edits, comment["created_at"])
+        comment["updated_at"] = when
+        self.save(data)
+
+    def reads(self):
+        return [tuple(r) for r in self.sql("SELECT comment, stamp, edits, complete FROM comment_edit_reads ORDER BY comment")]
+
+    def test_only_a_memory_that_looks_edited_has_its_history_read(self):
+        self.add_chain(3)
+        self.put(9110, 5, "A plain comment that is no memory.")
+        self.edited_by(9104, "octo-dev")
+        self.edited_by(9110, "octo-dev")  # edited, but it is not a memory
+        self.ready()
+        queries = self.calls("node(id:")
+        self.assertEqual(1, len(queries))
+        self.assertEqual(1, queries[0].count("node(id:"))
+        self.assertIn("c9104: node(id: \"IC_kwDOfake9104\") { ... on IssueComment { fullDatabaseId lastEditedAt "
+                      "userContentEdits(first: 100) { pageInfo { endCursor hasNextPage } nodes { editedAt editor { login } } } } }",
+                      queries[0])
+        self.assertEqual([(9104, "2026-04-20T10:00:00Z", 1, 1)], self.reads())
+        self.assertEqual([(9104, 1, "2026-04-20T10:00:00Z", "octo-dev")], [tuple(r) for r in self.sql(
+            "SELECT comment, seq, at, editor FROM comment_edits")])  # the creation entry is not kept
+        self.assertEqual([], self.calls("IC_kwDOfake9103"))
+        self.assertEqual([], [c for c in self.repo()["log"] if c[:1] == ["api"] and "issues/comments/" in " ".join(c)
+                              and "?" not in " ".join(c)])  # the node id came with the listing: no REST read
+        self.ready()
+        self.assertEqual(1, len(self.calls("node(id:")))  # nothing changed: nothing is read again
+
+    def test_a_comment_edited_again_is_read_again_and_a_rebuild_reads_all(self):
+        self.add_chain(3)
+        self.edited_by(9104, "octo-dev")
+        self.ready()
+        self.edited_by(9104, "mallory", "octo-dev", when="2026-04-21T10:00:00Z")
+        self.ready()
+        self.assertEqual(2, len(self.calls("node(id:")))
+        self.assertEqual([(9104, 1, "mallory"), (9104, 2, "octo-dev")],
+                         [tuple(r) for r in self.sql("SELECT comment, seq, editor FROM comment_edits ORDER BY seq")])
+        self.assertEqual("2026-04-21T10:00:00Z", self.reads()[0][1])
+        self.assertEqual(0, self.tool("index.py", "sync", "--rebuild").returncode)
+        self.assertEqual(3, len(self.calls("node(id:")))
+
+    def test_every_page_of_a_comment_history_is_read(self):
+        self.add_chain(3)
+        self.edited_by(9104, "octo-dev", count=230)
+        data = self.repo()
+        data["comments"]["9104"]["edits"].insert(215, {"at": "2026-04-19T10:00:00Z", "by": "mallory"})
+        self.save(data)
+        self.ready()
+        self.assertEqual([(9104, 231, 1)], [tuple(r) for r in self.sql(
+            "SELECT comment, COUNT(*), SUM(editor = 'mallory') FROM comment_edits")])
+        self.assertEqual([0, 1, 1], [query.count(" after: ") for query in self.calls("node(id:")])
+
+    def test_a_comment_without_a_stored_node_id_is_asked_for_one(self):
+        self.add_chain(3)
+        self.edited_by(9104, "octo-dev")
+        self.ready()
+        self.sql("DELETE FROM comment_edit_reads")
+        self.ready()
+        rest = [c for c in self.repo()["log"] if c[:1] == ["api"] and c[1:2] == ["repos/example-org/tinycsv/issues/comments/9104"]]
+        self.assertEqual(1, len(rest))
+        self.assertEqual([(9104, "2026-04-20T10:00:00Z", 1, 1)], self.reads())
+
+    def test_a_node_id_that_is_not_a_node_id_is_never_sent(self):
+        self.add_chain(3)
+        hostile = 'x") { id } #'
+        data = self.repo()
+        data["comments"]["9104"]["node_id"] = hostile
+        self.save(data)
+        self.edited_by(9104, "octo-dev")
+        self.ready()
+        self.assertEqual([], self.calls("node(id:"))
+        self.assertEqual([], self.calls("{ id } #"))
+        self.assertEqual([], self.reads())  # not kept at the listing, and not taken from a REST read either
+        data = self.repo()
+        del data["comments"]["9104"]["node_id"]
+        self.save(data)
+        self.ready()  # a forged node id in the index is not used either: the comment is asked for again
+        self.sql("UPDATE comment_edit_reads SET node = '%s', complete = 0" % hostile.replace("'", "''"))
+        self.ready()
+        self.assertEqual([], self.calls("{ id } #"))
+        self.assertEqual([(9104, 1, "IC_kwDOfake9104")], [tuple(r) for r in self.sql(
+            "SELECT comment, complete, node FROM comment_edit_reads")])
+
+    def test_a_comment_github_cannot_resolve_is_marked_and_not_asked_again(self):
+        self.add_chain(3)
+        self.edited_by(9104, "octo-dev")
+        self.edited_by(9105, "octo-dev")
+        data = self.repo()
+        data["comments"]["9104"]["gone"] = True  # GitHub no longer resolves its node id
+        self.save(data)
+        self.ready()
+        self.assertEqual([(9104, "2026-04-20T10:00:00Z", 0, 2), (9105, "2026-04-20T10:00:00Z", 1, 1)], self.reads())
+        asked = len(self.calls("node(id:"))
+        self.ready()
+        self.assertEqual(asked, len(self.calls("node(id:")))
+
+    def test_an_answer_for_another_comment_is_not_trusted(self):
+        self.add_chain(3)
+        self.edited_by(9104, "octo-dev")
+        data = self.repo()
+        data["comments"]["9104"]["database_id"] = 9105
+        self.save(data)
+        self.ready()
+        self.assertEqual([(9104, "2026-04-20T10:00:00Z", 0, 2)], self.reads())
+        self.assertEqual([], self.sql("SELECT * FROM comment_edits"))
+
+    def test_a_comment_history_that_is_too_long_or_has_a_bad_cursor_never_clears(self):
+        self.add_chain(3)
+        self.edited_by(9104, "octo-dev", count=150)
+        data = self.repo()
+        data["comments"]["9104"]["cursor"] = 'x") { id } #'
+        self.save(data)
+        self.ready()
+        self.assertEqual([(1,)], [tuple(r) for r in self.sql("SELECT COUNT(*) FROM comment_edits WHERE editor IS NULL")])
+        self.assertEqual([], self.calls("{ id } #"))
+        self.assertEqual([], [c for c in self.calls("node(id:") if " after: " in c])
+        self.assertEqual(101, self.sql("SELECT COUNT(*) FROM comment_edits")[0][0])
+
+    def test_a_failing_edit_history_read_stops_the_sync_and_the_next_one_goes_on(self):
+        self.add_chain(3)
+        self.edited_by(9104, "octo-dev")
+        failed = self.tool("index.py", "sync", env={"FAKE_GH_NODE_FAIL": "1"})
+        self.assertNotEqual(0, failed.returncode)
+        self.ready()
+        self.assertEqual([(9104, "2026-04-20T10:00:00Z", 1, 1)], self.reads())
+
+    def test_a_sync_whose_time_is_up_reads_the_histories_next_time(self):
+        self.add_chain(3)
+        self.edited_by(9104, "octo-dev")
+        capped = self.in_index()
+        summary = capped.sync(REPO, 4, timeline_cap=0)
+        self.assertFalse(summary["complete"])
+        self.assertEqual([], [row for row in self.reads() if row[3]])
+        self.assertTrue(capped.sync(REPO, 4)["complete"])
+        self.assertEqual([(9104, 1)], [(row[0], row[3]) for row in self.reads()])
+
+
+    # ------------------------------------------------------------ who is told
+
+    def recalled(self):
+        return json.loads(self.tool("index.py", "query", "recall", "--issue", "5", "--json").stdout)
+
+    def mind_model(self):
+        result = self.tool("index.py", "query", "mind", "--json", gh="false")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        return json.loads(result.stdout)
+
+    def lint_question(self, target=9105):
+        text = chain_text("4-question.md").replace("because=9105", "because=%d" % target)
+        return self.lint(text, "question")[0]
+
+    def test_a_memory_edited_only_by_allowed_accounts_is_told_with_a_note(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev")  # replaces=9102, and a fold that explains "strict quoting"
+        self.edited_by(9105, "example-org", "octo-dev", when="2026-04-21T10:00:00Z")  # the owner counts too
+        self.ready()
+        found = self.memories()
+        self.assertEqual("replaced", found[9102]["state"])  # its replaces= counts again
+        self.assertEqual({9105: True, 9107: True}, {cid: m["changed"] for cid, m in found.items() if m["changed"]})
+        self.assertFalse(found[9104]["changed"])
+        recalled = self.recalled()
+        self.assertEqual((0, 0), (recalled["edited"], recalled["hidden"]))
+        words = {w["key"]: w for w in recalled["words"]}
+        self.assertEqual(9107, words["strict quoting"]["comment"])
+        self.assertIn("line splitter", words)  # the fold of 9105 explains again
+        lines = [line for line in self.recall().stdout.split("\n") if "[changed on GitHub" in line]
+        self.assertEqual([9107, 9105], sorted((int(line.split()[0]) for line in lines), reverse=True))
+        self.assertNotIn("edited after", self.recall().stdout)
+        self.assertEqual([], self.lint_question(9105))  # a link to it is accepted, from GitHub's answer and the index
+        offline = self.tool("lint_drafts.py", "--kind", "question", "--index", "--issue", "5",
+                            self.write("q.md", chain_text("4-question.md")), gh="false")
+        self.assertNotIn("was edited after it was posted", offline.stdout)
+        model = self.mind_model()
+        self.assertEqual({9105: True, 9107: True}, {m["id"]: m["changed"] for m in model["memories"] if m["changed"]})
+        self.assertEqual(0, model["not_told"]["edited"])
+        built = self.tool("mind.py", gh="false")
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        page = recortex.read_text(os.path.join(self.data, "private", "example-org__tinycsv", "mind.html"))
+        self.assertEqual(2, page.count("Changed on GitHub after it was posted.</p>"))
+        self.assertNotIn("was changed on GitHub after it was posted, so it is not told", page)
+
+    def test_a_memory_that_anyone_else_edited_is_left_out(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev", "mallory", "octo-dev")  # one of three edits is by an outsider
+        self.ready()
+        self.assertNotIn(9107, self.memories())
+        self.assertEqual((1, "stands"), (self.recalled()["edited"], self.memories()[9102]["state"]))
+        self.assertEqual(["link-target"], codes(self.lint_question(9107)))
+        self.assertEqual(1, self.mind_model()["not_told"]["edited"])
+
+    def test_the_allowed_list_is_applied_when_the_index_is_read(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev", "sam-r", "octo-dev")
+        self.ready()
+        self.assertNotIn(9107, self.memories())
+        with open(self.trusted, "w") as handle:  # no sync in between: the edits were stored with their editors' names
+            handle.write("%s octo-dev sam-r\n" % REPO)
+        self.assertTrue(self.memories()[9107]["changed"])
+        with open(self.trusted, "w") as handle:
+            handle.write("%s octo-dev\n" % REPO)
+        self.assertNotIn(9107, self.memories())
+
+    def test_an_edit_by_a_deleted_account_is_never_by_an_allowed_one(self):
+        self.add_chain()
+        self.edited_by(9107, None, "octo-dev")  # GitHub answers editor null for an account that is gone
+        self.ready()
+        self.assertEqual([(None,), ("octo-dev",)], [tuple(r) for r in self.sql(
+            "SELECT editor FROM comment_edits ORDER BY seq")])
+        self.assertNotIn(9107, self.memories())
+
+    def test_a_history_that_is_not_whole_current_and_consistent_does_not_clear(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev")
+        self.ready()
+        self.assertIn(9107, self.memories())
+        for name, statement in (
+                ("not read yet", "DELETE FROM comment_edit_reads"),
+                ("marked unreadable", "UPDATE comment_edit_reads SET complete = 2"),
+                ("read for an older updated_at", "UPDATE comment_edit_reads SET stamp = '2026-04-19T10:00:00Z'"),
+                ("rewritten by an older version", "UPDATE comments SET updated_at = '2026-04-22T10:00:00Z' WHERE id = 9107"),
+                ("fewer edits stored than read", "DELETE FROM comment_edits"),
+                ("no last edit", "UPDATE comment_edit_reads SET last_edited = NULL"),
+                ("another last edit", "UPDATE comment_edit_reads SET last_edited = '2026-04-19T10:00:00Z'"),
+                ("no edit besides the creation", "UPDATE comment_edit_reads SET edits = 0")):
+            self.sql("DELETE FROM comment_edit_reads", "DELETE FROM comment_edits",
+                     "UPDATE comments SET updated_at = '2026-04-20T10:00:00Z' WHERE id = 9107")
+            self.ready()
+            self.assertIn(9107, self.memories(), name)
+            self.sql(statement, "UPDATE meta SET value = '1' WHERE key = 'mind_derived'")  # a write to comments clears it
+            self.assertNotIn(9107, self.memories(), name)
+            self.assertEqual(1, self.recalled()["edited"], name)
+
+    def test_an_empty_history_is_not_a_clearance(self):
+        self.add_chain()
+        self.edit_comment(9107)  # updated_at moved, and GitHub's history of it is empty (a stale answer, a reaction)
+        self.ready()
+        self.assertEqual([(9107, 1, 0)], [tuple(r) for r in self.sql(
+            "SELECT comment, complete, edits FROM comment_edit_reads WHERE complete = 1")])
+        self.assertNotIn(9107, self.memories())
+
+    def test_an_empty_history_with_a_last_edit_is_not_a_clearance_either(self):
+        self.add_chain()
+        self.edit_comment(9107)
+        data = self.repo()
+        data["comments"]["9107"]["last_edited_at"] = "2026-04-20T10:00:00Z"  # GitHub's two answers disagree
+        self.save(data)
+        self.ready()
+        self.assertNotIn(9107, self.memories())
+
+    def test_a_link_to_a_cleared_memory_needs_an_index_that_agrees_with_github(self):
+        self.add_chain(3)
+        self.edited_by(9105, "octo-dev")
+        self.ready()
+        self.assertEqual([], self.lint_question(9105))
+        self.edited_by(9105, "mallory", "octo-dev", when="2026-04-21T10:00:00Z")  # edited again, not synced yet
+        self.assertEqual(["link-target"], codes(self.lint_question(9105)))
+        self.edited_by(9105, "octo-dev", when="2026-04-20T10:00:00Z")
+        self.assertEqual([], self.lint_question(9105))
+        os.rename(self.index_file(), self.index_file() + ".away")  # no index to say who edited it
+        self.assertEqual(["link-target"], codes(self.lint_question(9105)))
+
+    def test_with_the_repository_untrusted_no_memory_is_marked_changed(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev")
+        self.ready()
+        untrusted = {"RECORTEX_TRUSTED_FILE": os.path.join(self.dir, "absent")}
+        found = json.loads(self.tool("index.py", "query", "recall", "--issue", "5", "--json", env=untrusted).stdout)
+        self.assertEqual([False], sorted({m["changed"] for m in found["memories"]}))
+
+    def test_a_resume_comment_edited_by_an_allowed_account_is_still_left_out(self):
+        self.add_chain()
+        self.put(9604, 4, resume_comment("MARK-RESUME-EDITED", "2026-03-21 10:00 PST"))
+        self.edited_by(9604, "octo-dev")
+        self.ready()
+        self.assertEqual([], self.calls("IC_kwDOfake9604"))  # it is no memory: its history is not read
+        self.assertNotIn("MARK-RESUME-EDITED", json.dumps(self.mind_model()))
+
+    # ------------------------------------------------------------ the review's tests
+
+    def test_a_comment_id_beyond_graphql_int_is_read(self):
+        """GitHub's comment ids are past 2^31 - 1, which GraphQL's Int (databaseId) cannot hold."""
+        cid = 4100000001
+        self.put(cid, 5, chain_text("1-idea.md"))
+        self.edited_by(cid, "octo-dev")
+        self.ready()
+        self.assertEqual([(cid, "2026-04-20T10:00:00Z", 1, 1)], self.reads())
+        self.assertTrue(self.memories()[cid]["changed"])
+
+    def test_a_later_page_that_cannot_be_read_is_not_a_whole_history(self):
+        pages = iter([{6: {"pageInfo": {"hasNextPage": True, "endCursor": "Y3Vyc29yOjE="}, "nodes": [{"n": 1}]}},
+                      {6: None}])
+        self.assertEqual({6: ([{"n": 1}], True)}, self.in_index().read_edit_pages(lambda cursors: next(pages), [6]))
+        self.assertEqual({6: ([], True)}, self.in_index().read_edit_pages(lambda cursors: {6: {"nodes": []}}, [6]))
+
+    def test_a_comment_gone_between_two_pages_of_its_history_never_clears(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev", count=150)
+        data = self.repo()
+        data["comments"]["9107"]["edits"].insert(120, {"at": "2026-04-19T10:00:00Z", "by": "mallory"})  # page 2
+        data["comments"]["9107"]["resolves"] = 1  # its node resolves for the first page, then it is deleted
+        self.save(data)
+        self.ready()
+        self.assertNotIn(9107, self.memories())
+        self.assertEqual(1, self.recalled()["edited"])
+
+    def test_an_outside_edit_in_the_minute_of_the_post_is_seen(self):
+        self.add_chain()
+        data = self.repo()
+        comment = data["comments"]["9107"]
+        later = comment["created_at"][:17] + "40Z"  # same minute, another second
+        comment["edits"] = [{"at": later, "by": "mallory"}, {"at": comment["created_at"], "by": "octo-dev"}]
+        comment["updated_at"] = later
+        self.save(data)
+        self.ready()
+        self.assertEqual([(1, later, "mallory")], [tuple(r) for r in self.sql("SELECT seq, at, editor FROM comment_edits")])
+        self.assertNotIn(9107, self.memories())
+
+    def test_a_deleted_memory_without_a_stored_node_id_does_not_stop_the_sync(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev")
+        self.ready()
+        self.sql("DELETE FROM comment_edit_reads", "DELETE FROM comment_edits")  # an index from before, no node id
+        data = self.repo()
+        del data["comments"]["9107"]  # deleted on GitHub; an incremental sync keeps its row
+        self.save(data)
+        self.ready()
+        self.assertEqual([(9107, "2026-04-20T10:00:00Z", 0, 2)], self.reads())
+        self.assertNotIn(9107, self.memories())
+
+    def test_a_history_older_than_the_comment_does_not_clear(self):
+        """GitHub's GraphQL answer can be behind its REST answer: the newest edit must not be older than updated_at."""
+        self.add_chain()
+        self.edited_by(9107, "octo-dev", when="2026-04-20T10:00:00Z")
+        data = self.repo()
+        data["comments"]["9107"]["updated_at"] = "2026-04-21T10:00:00Z"  # REST: changed again since
+        self.save(data)
+        self.ready()
+        self.assertNotIn(9107, self.memories())
+
+    def test_a_failing_edit_history_read_keeps_the_newest_pause_and_the_node_ids(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev")
+        self.ready()
+        self.sql("DELETE FROM comment_edit_reads", "DELETE FROM comment_edits")  # an index from before, no node id
+        self.put(9604, 4, resume_comment("MARK-NEW-PAUSE", "2026-04-11 10:00 PST"))
+        failed = self.tool("index.py", "sync", env={"FAKE_GH_NODE_FAIL": "1"})
+        self.assertNotEqual(0, failed.returncode)
+        self.assertIn("MARK-NEW-PAUSE", self.sql("SELECT value FROM meta WHERE key = 'resume'")[0][0])
+        self.assertEqual([(9107, "IC_kwDOfake9107", 0)], [tuple(r) for r in self.sql(
+            "SELECT comment, node, complete FROM comment_edit_reads")])
+
+    def test_the_index_needs_no_newer_sqlite_than_the_supported_pythons_bring(self):
+        """README: Python 3.8 or newer, whose SQLite can be 3.22 (Ubuntu 18.04): no UPSERT (3.24) or RETURNING (3.35)."""
+        for name in ("index.py", "mind_model.py", "lookup.py", "compile.py"):
+            text = recortex.read_text(os.path.join(SCRIPTS, name))
+            for word in ("ON CONFLICT", "RETURNING", "DO NOTHING", " OVER ("):
+                self.assertNotIn(word, text, name)
+
+    def in_index(self):
+        self.in_process()
+        import index
+        return index
+
+
 class MindModelTests(MindSandbox):
     """The model of the mind page (mind_model.py through index.py query mind), on the example record with the chain
     posted one memory at a time."""

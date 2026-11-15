@@ -4,7 +4,8 @@
 Python 3 standard library only. No network, no hook, no write. build(db, repo, allowed, today) reads the index in one
 transaction and returns one dict that json.dumps can print; mind.py renders it and derives nothing itself.
 
-Who is told (references/mind.md): the memories of allowed accounts that were never edited, as index.memories decides;
+Who is told (references/mind.md): the memories of allowed accounts that were never edited, or edited only by allowed
+accounts (their edit history read), as index.memories decides;
 a topic body only when an allowed account wrote it, its edit history is read and every edit was made by an allowed
 account; another issue's title only under the title rule of the brief. Everything else is counted, never told.
 
@@ -354,7 +355,7 @@ class Build:
                 "time": item["time"], "wall": wall_key(item["at"]), "day": day_words(item["at"], self.years),
                 "plain": short(item["plain"]).rstrip(".").strip() or None if item["plain"] is not None else None,
                 "title": short(item["title"]), "state": item["state"], "author": login(item["author"]),
-                "links": [(key, target) for key, target in item["links"]],
+                "changed": bool(item.get("changed")), "links": [(key, target) for key, target in item["links"]],
             }
         self.order = [self.m[item["id"]] for item in kept]
         self.incoming = {}
@@ -692,7 +693,7 @@ class Build:
         return {
             "id": cid, "issue": memory["issue"], "thread": memory["thread"], "kind": memory["kind"],
             "at": memory["at"], "day": memory["day"], "plain": memory["plain"], "title": memory["title"],
-            "old": memory["old"], "state": memory["state"], "css": memory["css"], "chip": memory["chip"],
+            "old": memory["old"], "changed": memory["changed"], "state": memory["state"], "css": memory["css"], "chip": memory["chip"],
             "latest": memory.get("latest", ""), "group": memory["group"], "sentence": sentence,
             "passage": memory["passage"], "out": out, "in": incoming, "fields": fields, "where": where,
             "evidence": [self.evidence_model(row, thread) for row in self.evidence.get(cid, [])],

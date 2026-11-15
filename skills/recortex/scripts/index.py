@@ -110,7 +110,14 @@ CREATE TABLE IF NOT EXISTS evidence(comment INTEGER, ordinal INTEGER, kind TEXT,
   path TEXT, line_from INTEGER, line_to INTEGER);
 CREATE TABLE IF NOT EXISTS explanations(comment INTEGER, ordinal INTEGER, kind TEXT, word TEXT, revised INTEGER,
   meaning TEXT, why TEXT, also TEXT, story TEXT);
+CREATE TABLE IF NOT EXISTS comment_edit_reads(comment INTEGER PRIMARY KEY, node TEXT, stamp TEXT, edits INTEGER,
+  last_edited TEXT, complete INTEGER);
+CREATE TABLE IF NOT EXISTS comment_edits(comment INTEGER, seq INTEGER, at TEXT, editor TEXT);
 """
+# What the sync read from GitHub about who edited a memory (see read_comment_histories): not derived, and unknown to
+# the versions before it, which neither read nor write these two tables. A read counts only while its stamp equals
+# the comment's updated_at, so a comment that an older version rewrote, or that was edited again, is not trusted.
+EDIT_TABLES = ("comment_edit_reads", "comment_edits")
 DERIVED = ("labels", "sections", "events", "blocks", "sources", "refs", "numbers", "mentions", "changes")
 # What memories say (links, fields, evidence, explanations), kept by derive_mind per comment. An older version of the
 # plugin on the same index leaves these tables alone; the triggers below record that it wrote comments or events, and
@@ -134,6 +141,10 @@ RAW = ("issues", "comments", "timeline", "meta")
 TIMELINE_KEEP = {"labeled", "unlabeled", "renamed", "closed", "reopened", "pinned", "unpinned",
                  "transferred", "milestoned", "demilestoned", "connected", "referenced"}
 GRAPHQL_BATCH = 40
+EDITS_PAGE = 100          # entries of an edit history asked for per page (GitHub's most)
+EDIT_PAGES_MAX = 50       # pages read of one history; a longer one fails closed (see read_edit_pages)
+COMMENT_NODE = re.compile(r"[A-Za-z0-9_=-]{1,100}")      # used with fullmatch before an id enters a query
+CURSOR = re.compile(r"[A-Za-z0-9+/=_-]{1,200}")          # used with fullmatch before a cursor enters a query
 # An open issue with none of these labels has not been placed in the record. `type:` labels other than the
 # closed-out ones describe an issue; they do not place it. The `triage` label always asks for triage.
 ROLE_LABELS = {"hub", "final-record", "active"}
@@ -275,11 +286,171 @@ class Deadline:
         return self.end is not None and time.time() >= self.end
 
 
-def edits_query(repo, numbers):
+def edits_query(repo, cursors):
+    """The query for the edit history of issues: `cursors` is {issue number: the cursor to continue after, or None}.
+    Each history is asked for EDITS_PAGE entries at a time; pageInfo says whether another page follows."""
     owner, name = repo.split("/")
-    parts = ["i%d: issue(number: %d) { lastEditedAt userContentEdits(first: 100) { nodes { editedAt editor { login } } } }"
-             % (n, n) for n in numbers]
+    parts = ["i%d: issue(number: %d) { lastEditedAt userContentEdits(first: %d%s) { pageInfo { endCursor hasNextPage } "
+             "nodes { editedAt editor { login } } } }"
+             % (n, n, EDITS_PAGE, ' after: "%s"' % cursor if cursor else "") for n, cursor in cursors.items()]
     return 'query { repository(owner: "%s", name: "%s") { %s } }' % (owner, name, " ".join(parts))
+
+
+def comment_edits_query(cursors):
+    """The query for the edit history of comments: `cursors` is {comment id: (node id, cursor or None)}."""
+    parts = ['c%d: node(id: "%s") { ... on IssueComment { fullDatabaseId lastEditedAt userContentEdits(first: %d%s) '
+             '{ pageInfo { endCursor hasNextPage } nodes { editedAt editor { login } } } } }'
+             % (cid, node, EDITS_PAGE, ' after: "%s"' % cursor if cursor else "")
+             for cid, (node, cursor) in cursors.items()]
+    return "query { %s }" % " ".join(parts)
+
+
+def read_edit_pages(fetch, keys):
+    """Read every page of the edit history of each of `keys`; returns {key: (nodes, overflowed)}.
+
+    fetch({key: cursor or None}) makes one call for at most GRAPHQL_BATCH keys and returns {key: the connection
+    (a dict with pageInfo and nodes) or None}; a key whose first answer is None is left out of the result (not
+    readable); a later answer that is None, or an answer without pageInfo, makes the history overflowed. A history goes on while pageInfo.hasNextPage is true; one whose cursor is not a plain cursor, or that
+    is longer than EDIT_PAGES_MAX pages, is returned as overflowed with what was read: the caller treats it as a
+    history that cannot be trusted.
+    """
+    result, cursors, rounds = {}, {key: None for key in keys}, 0
+    while cursors:
+        rounds += 1
+        got = fetch(cursors)
+        following = {}
+        for key in cursors:
+            connection = got.get(key)
+            if not isinstance(connection, dict):
+                if cursors[key] is not None:  # a later page that cannot be read: what was read is not the whole history
+                    result[key] = (result[key][0], True)
+                continue
+            found = result.setdefault(key, ([], False))
+            found[0].extend(node for node in connection.get("nodes") or [])
+            info = connection.get("pageInfo")
+            if not isinstance(info, dict):  # pageInfo is never null on GitHub: an answer without it is not whole
+                result[key] = (found[0], True)
+            elif info.get("hasNextPage"):
+                cursor = info.get("endCursor")
+                if rounds >= EDIT_PAGES_MAX or not isinstance(cursor, str) or not CURSOR.fullmatch(cursor):
+                    result[key] = (found[0], True)
+                else:
+                    following[key] = cursor
+        cursors = following
+    return result
+
+
+def comment_histories_pending(db):
+    """The comments whose edit history is to be read: memories (by their markers) whose two times differ and whose
+    history is not stored as read for the comment's current updated_at. Comments are never read otherwise."""
+    pending = []
+    for row in db.execute("SELECT c.id, c.body, c.created_at, c.updated_at, c.author, r.node, r.stamp, r.complete "
+                          "FROM comments c LEFT JOIN comment_edit_reads r ON r.comment = c.id "
+                          "WHERE c.created_at IS NOT NULL AND c.updated_at IS NOT NULL "
+                          "AND c.updated_at != c.created_at ORDER BY c.id"):
+        if row["complete"] in (1, 2) and row["stamp"] == row["updated_at"]:
+            continue
+        if record_format.parse_event(row["body"] or "")["type"] not in record_format.MEMORY_TYPES:
+            continue
+        pending.append(row)
+    return pending
+
+
+def read_comment_histories(db, repo, call, clock, timeline_cap, summary):
+    """Read, for each memory that looks edited, who edited it, and store the answer (comment_edit_reads and
+    comment_edits). One GraphQL call per GRAPHQL_BATCH comments and per further page of a history; a comment without
+    a stored node id costs one REST read first. A comment GitHub cannot resolve (deleted) is stored as unreadable for
+    its current updated_at. Marks summary["complete"] False when the time or the cap ends the step early."""
+    pending = comment_histories_pending(db)
+    for start in range(0, len(pending), GRAPHQL_BATCH):
+        if clock.passed() or (timeline_cap is not None and start >= timeline_cap):
+            summary["complete"] = False
+            return
+        batch = pending[start:start + GRAPHQL_BATCH]
+        stamps = {row["id"]: row["updated_at"] for row in batch}
+
+        def unreadable(cid, node=None):
+            db.execute("INSERT OR REPLACE INTO comment_edit_reads(comment, node, stamp, edits, last_edited, complete) "
+                       "VALUES (?, ?, ?, 0, NULL, 2)", (cid, node, stamps[cid]))
+            db.execute("DELETE FROM comment_edits WHERE comment = ?", (cid,))
+
+        nodes = {}
+        for row in batch:
+            node = row["node"] if row["node"] and COMMENT_NODE.fullmatch(row["node"]) else None
+            if node is None:
+                try:
+                    data = json.loads(call(["api", "repos/%s/issues/comments/%d" % (repo, row["id"])]))
+                except DeadlineReached:
+                    raise
+                except recortex.GhError as error:
+                    if recortex.not_found(error):
+                        unreadable(row["id"])
+                        continue
+                    raise
+                except ValueError:
+                    continue  # an answer that is not JSON: read again at the next sync
+                node = data.get("node_id") if isinstance(data, dict) else None
+                if not isinstance(node, str) or not COMMENT_NODE.fullmatch(node):
+                    continue
+                keep_node(db, row["id"], node)  # kept at once: a sync that stops later does not ask for it again
+                db.commit()
+            nodes[row["id"]] = node
+        last_edited = {}
+
+        def fetch(cursors):
+            asked = {cid: (nodes[cid], cursor) for cid, cursor in cursors.items()}
+            try:
+                raw = call(["api", "graphql", "-f", "query=" + comment_edits_query(asked)])
+            except DeadlineReached:
+                raise
+            except recortex.GhError as error:
+                if len(cursors) > 1:  # one comment GitHub cannot resolve fails the whole call: ask one by one
+                    got = {}
+                    for cid, cursor in cursors.items():
+                        got.update(fetch({cid: cursor}))
+                    return got
+                if "Could not resolve" in str(error):
+                    return {cid: None for cid in cursors}
+                raise
+            found = json.loads(raw).get("data") or {}
+            got = {}
+            for cid in cursors:
+                node = found.get("c%d" % cid)
+                if not isinstance(node, dict) or str(node.get("fullDatabaseId")) != str(cid):  # a BigInt, as a string
+                    got[cid] = None  # not the comment that was asked for: not trusted
+                    continue
+                last_edited.setdefault(cid, node.get("lastEditedAt"))
+                got[cid] = node.get("userContentEdits") or {}
+            return got
+
+        read = read_edit_pages(fetch, list(nodes))
+        for row in batch:
+            cid = row["id"]
+            if cid not in nodes:
+                continue
+            if cid not in read:
+                unreadable(cid, nodes[cid])
+                continue
+            entries, overflowed = read[cid]
+            if overflowed:  # a history too long to read: an edit by nobody known, so it never clears
+                entries = entries + [{"editedAt": now_utc(), "editor": None}]
+            created, author, skipped = row["created_at"], (row["author"] or "").lower(), False
+            db.execute("DELETE FROM comment_edits WHERE comment = ?", (cid,))
+            seq = 0
+            for edit in entries:
+                at = (edit or {}).get("editedAt")
+                editor = ((edit or {}).get("editor") or {}).get("login")
+                if not at:
+                    editor, at = None, now_utc()  # an entry without a time cannot be placed: nobody known
+                if (not skipped and at[:16] == created[:16] and author and (editor or "").lower() == author):
+                    skipped = True  # the entry for the creation of the comment: the author's own, in the minute of the post
+                    continue
+                seq += 1
+                db.execute("INSERT INTO comment_edits(comment, seq, at, editor) VALUES (?,?,?,?)", (cid, seq, at, editor))
+            db.execute("INSERT OR REPLACE INTO comment_edit_reads(comment, node, stamp, edits, last_edited, complete) "
+                       "VALUES (?, ?, ?, ?, ?, 1)", (cid, nodes[cid], stamps[cid], seq, last_edited.get(cid)))
+            summary["comment_edits"] += 1
+        db.commit()
 
 
 def store_issue_page(db, rows, changed):
@@ -299,6 +470,13 @@ def store_issue_page(db, rows, changed):
         changed.add(number)
 
 
+def keep_node(db, cid, node):
+    """Store the node id of comment `cid` for its edit-history read; a stored read keeps its stamp and its state."""
+    db.execute("INSERT OR IGNORE INTO comment_edit_reads(comment, node, stamp, edits, last_edited, complete) "
+               "VALUES (?, ?, NULL, 0, NULL, 0)", (cid, node))
+    db.execute("UPDATE comment_edit_reads SET node = ? WHERE comment = ?", (node, cid))
+
+
 def store_comment_page(db, rows, changed):
     for row in rows:
         match = re.search(r"/issues/([0-9]+)$", row.get("issue_url", ""))
@@ -314,6 +492,10 @@ def store_comment_page(db, rows, changed):
                     (row.get("body") or "").replace("\r\n", "\n"), row.get("created_at"), updated,
                     row.get("html_url")))
         changed.add(int(row["id"]))
+        node = row.get("node_id")
+        if (row.get("created_at") != updated and isinstance(node, str) and COMMENT_NODE.fullmatch(node)
+                and record_format.parse_event(row.get("body") or "")["type"] in record_format.MEMORY_TYPES):
+            keep_node(db, int(row["id"]), node)  # the id to read its edit history by, kept for a comment that looks edited
 
 
 def since_query(db, key):
@@ -399,7 +581,7 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
     full = rebuild or not get_meta(db, "synced_at") or get_meta(db, "derive_pending") == "1" or not mind_ready(db)
     set_meta(db, "derive_pending", "1")  # cleared next to synced_at, once everything stored has been derived
     db.commit()
-    summary = {"issues": 0, "comments": 0, "timelines": 0, "edits": 0, "complete": True, "pages": 0}
+    summary = {"issues": 0, "comments": 0, "timelines": 0, "edits": 0, "comment_edits": 0, "complete": True, "pages": 0}
     changed_issues, changed_comments = set(), set()
     rebuilt = False
     try:
@@ -410,7 +592,7 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
                         for row in page]
             changed_issues, changed_comments = set(), set()
             try:  # one transaction: the old rows stay until the new ones are all in
-                for table in ("issues", "comments", "timeline") + DERIVED + MIND:
+                for table in ("issues", "comments", "timeline") + EDIT_TABLES + DERIVED + MIND:
                     db.execute("DELETE FROM %s" % table)
                 store_issue_page(db, issues, changed_issues)
                 store_comment_page(db, comments, changed_comments)
@@ -489,16 +671,29 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
                 summary["complete"] = False
                 break
             batch = pending[start:start + GRAPHQL_BATCH]
-            raw = call(["api", "graphql", "-f", "query=" + edits_query(repo, batch)])
-            found = ((json.loads(raw).get("data") or {}).get("repository") or {})
+            last_edited = {}
+
+            def fetch_issues(cursors):
+                raw = call(["api", "graphql", "-f", "query=" + edits_query(repo, cursors)])
+                found = ((json.loads(raw).get("data") or {}).get("repository") or {})
+                got = {}
+                for number in cursors:
+                    node = found.get("i%d" % number) or {}
+                    last_edited.setdefault(number, node.get("lastEditedAt"))
+                    got[number] = node.get("userContentEdits") or {}
+                return got
+
+            read = read_edit_pages(fetch_issues, batch)
             for number in batch:
-                node = found.get("i%d" % number) or {}
+                nodes, overflowed = read.get(number, ([], False))
                 opened = db.execute("SELECT created_at, author FROM issues WHERE number = ?", (number,)).fetchone()
                 created, author = opened["created_at"], (opened["author"] or "").lower()
-                db.execute("UPDATE issues SET last_edited_at = ? WHERE number = ?", (node.get("lastEditedAt"), number))
+                db.execute("UPDATE issues SET last_edited_at = ? WHERE number = ?", (last_edited.get(number), number))
                 db.execute("DELETE FROM timeline WHERE issue = ? AND event = 'edited'", (number,))
                 seq = 10000
-                for edit in (node.get("userContentEdits") or {}).get("nodes") or []:
+                if overflowed:  # a history too long to read: one edit by nobody known, so the text is never shown
+                    nodes = nodes + [{"editedAt": now_utc(), "editor": None}]
+                for edit in nodes:
                     at = (edit or {}).get("editedAt")
                     editor = ((edit or {}).get("editor") or {}).get("login")
                     if not at or (created and at[:16] == created[:16] and author and (editor or "").lower() == author):
@@ -518,8 +713,11 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
                 if clock.passed():  # the read is not a call through call(); a timeout at the budget is the budget
                     raise DeadlineReached("deadline reached during the resume read")
                 raise
+            db.commit()  # the pause the brief shows does not wait for the edit histories below
         elif hub:
             summary["complete"] = False
+
+        read_comment_histories(db, repo, call, clock, timeline_cap, summary)
     except DeadlineReached:
         if rebuild and not rebuilt:
             raise  # a rebuild that cannot finish its listings changes nothing
@@ -1227,6 +1425,7 @@ def timeline(db, issue=None, kind=None, since=None):
 # ---------------------------------------------------------------- memories
 
 RECALL_MEMORIES, RECALL_OTHERS, RECALL_WORDS = 12, 12, 40
+CHANGED_MARK = "  [changed on GitHub after it was posted, by allowed accounts only]"
 
 
 def counts_for(allowed):
@@ -1243,6 +1442,38 @@ def edited_comments(db):
                                             "OR updated_at != created_at")}
 
 
+def cleared_comments(db, allowed):
+    """{comment id: its updated_at} of the comments that look edited (edited_comments) and whose edit history shows
+    only edits by allowed accounts; {} when `allowed` is empty. All of these hold, else the comment stays edited:
+    the history was read completely (comment_edit_reads.complete = 1) for the comment's current updated_at, it shows
+    at least one edit besides the creation, every editor is an allowed login (a deleted account has none), the
+    stored edits are as many as the read counted, and the newest of them is the lastEditedAt GitHub gave. The
+    allowed list is applied here, when the index is read, so a change to it takes effect at once."""
+    if not allowed:
+        return {}
+    editors = {}
+    for row in db.execute("SELECT comment, at, editor FROM comment_edits"):
+        editors.setdefault(row["comment"], []).append((row["at"], row["editor"]))
+    found = {}
+    for row in db.execute("SELECT c.id, c.updated_at, r.edits, r.last_edited FROM comments c JOIN comment_edit_reads r "
+                          "ON r.comment = c.id WHERE r.complete = 1 AND r.stamp = c.updated_at "
+                          "AND c.updated_at IS NOT NULL AND c.created_at IS NOT NULL AND c.updated_at != c.created_at"):
+        entries = editors.get(row["id"], [])
+        if (row["edits"] and row["edits"] == len(entries) and max(at or "" for at, _ in entries) == row["last_edited"]
+                and row["last_edited"] >= row["updated_at"]  # an answer from behind REST's updated_at is not current
+                and all(isinstance(who, str) and who.lower() in allowed for _, who in entries)):
+            found[row["id"]] = row["updated_at"]
+    return found
+
+
+def unconfirmed_edits(db, allowed):
+    """The ids of the comments that were edited after they were posted and are not cleared (see cleared_comments):
+    the memories among them are not told. Empty when `allowed` is empty, since every account and edit counts then."""
+    if not allowed:
+        return set()
+    return edited_comments(db) - set(cleared_comments(db, allowed))
+
+
 def memories(db, allowed):
     """The one place that decides which memories count, for query recall and the mind page.
 
@@ -1251,12 +1482,14 @@ def memories(db, allowed):
     checkpoints were written by other accounts), edited (how many memories of allowed accounts, checkpoints
     included, were changed on GitHub after they were posted; see edited_comments) and edited_ids (their comment ids,
     sorted). A memory is a dict with id, issue, kind, at, time (sortable), title, plain (or None), reconstructed,
-    author, links (the counted ones, as (key, target id)) and state.
+    author, changed (True when it was edited, but only by allowed accounts; see cleared_comments), links (the
+    counted ones, as (key, target id)) and state.
 
     When `allowed` is not empty (the repository is trusted), an edited memory is left out of items like a memory of
-    another account: its links do not count and nothing of its text is told, since a posted memory is never edited
-    and a correction is a new memory. A link from a memory that is told to one that is not stays in its list. When
-    `allowed` is empty, every account counts and so does every edit.
+    another account, unless its edit history was read and every edit was made by an allowed account: then it is
+    told, marked changed. A memory that is left out has no links that count and nothing of its text is told, since a
+    posted memory is never edited and a correction is a new memory. A link from a memory that is told to one that
+    is not stays in its list. When `allowed` is empty, every account counts and so does every edit.
 
     A link counts when both ends are memories in the index, the memory that carries it was written by an allowed
     account and is not reconstructed, its target is another memory that is not later, and record_format.link_allowed
@@ -1271,17 +1504,19 @@ def memories(db, allowed):
         % ",".join("?" * len(kinds)), kinds)}
     plains = plain_lines(db)
     changed = edited_comments(db) if allowed else set()
+    cleared = cleared_comments(db, allowed)
     items, hidden, edited = {}, 0, []
     for cid, row in every.items():
         if not counts(row["author"]):
             hidden += row["type"] != "checkpoint"
             continue
-        if cid in changed:
+        if cid in changed and cid not in cleared:
             edited.append(cid)
             continue
         items[cid] = {"id": cid, "issue": row["issue"], "kind": row["type"], "at": row["at"] or "",
                       "time": sort_key(row["at"]), "title": row["title"] or "", "plain": plains.get(cid),
-                      "reconstructed": bool(row["reconstructed"]), "author": row["author"], "links": [], "state": ""}
+                      "reconstructed": bool(row["reconstructed"]), "author": row["author"],
+                      "changed": cid in cleared, "links": [], "state": ""}
     for row in db.execute("SELECT source, kind, target FROM links ORDER BY rowid"):
         source, target = items.get(row["source"]), every.get(row["target"])
         if source is None or target is None or row["source"] == row["target"] or source["reconstructed"]:
@@ -1312,10 +1547,11 @@ def memories(db, allowed):
 def explained(db, allowed, kind):
     """The explanations of `kind` ("word" or "thread") written by allowed accounts (every account when `allowed` is
     empty), oldest first, as dicts with comment, issue, at, word, key, revised, meaning, why, also and story. A fold
-    in a memory that was edited after it was posted explains nothing when `allowed` is not empty (see memories)."""
+    in a memory that was edited after it was posted explains nothing when `allowed` is not empty, unless every edit
+    was made by an allowed account (see memories)."""
     counts = counts_for(allowed)
     kinds = record_format.MEMORY_TYPES
-    changed = edited_comments(db) if allowed else set()
+    changed = unconfirmed_edits(db, allowed)
     rows = []
     for row in db.execute("SELECT x.*, e.issue, e.at, e.author FROM explanations x JOIN events e ON e.comment = "
                           "x.comment WHERE x.kind = ? AND e.type IN (%s)" % ",".join("?" * len(kinds)),
@@ -1389,7 +1625,8 @@ def plural(count, one, many):
 def print_recall(found):
     """The text of query recall: every value from the record through clean(), under DATA_HEADER."""
     def told(memory):
-        return clean(memory["plain"]) if memory["plain"] else "(no plain line) " + clean(memory["title"])
+        line = clean(memory["plain"]) if memory["plain"] else "(no plain line) " + clean(memory["title"])
+        return line + (CHANGED_MARK if memory.get("changed") else "")
 
     thread = ", ".join(clean(label, 60) for label in found["labels"]) or "#" + clean(found["issues"][0], 12)
     opening = found["opening"]
