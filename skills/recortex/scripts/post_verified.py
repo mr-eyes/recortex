@@ -9,8 +9,10 @@ earlier one gets a note before it is posted; after a verified post the line
 `memory id: <id>` gives the id to link to it.
 
 body: lints the draft, prints a diff against the body now on GitHub, saves the
-old body to a backup file, edits the issue and reads it back. Use it when what
-the deliverable says changes: the draft is the whole new text, with no folded
+old body to a backup file, edits the issue and reads it back. A replacement
+requires --expected-body-file, the live body saved before drafting; a changed
+body stops the write. A second read narrows the race but is not an atomic lock.
+Use it when what the deliverable says changes: the draft is the whole new text, with no folded
 old text. For a final record the issue must be labeled final-record (not hub
 or active), and the section labels then follow the headings: the labels of new
 sections are added, those of removed sections are removed (only with
@@ -20,7 +22,7 @@ older form and keep it as a comment, use convert_body.py.
 Examples:
   post_verified.py comment --issue 12 --kind result --body-file .tmp/result.md --dry-run
   post_verified.py comment --issue 12 --kind decision --body-file .tmp/decision.md
-  post_verified.py body --issue 12 --kind final-record --body-file .tmp/topic.md --backup .tmp/topic-12.before.md --dry-run
+  post_verified.py body --issue 12 --kind final-record --body-file .tmp/topic.md --expected-body-file .tmp/topic-12.base.md --backup .tmp/topic-12.before.md --dry-run
 """
 
 import argparse
@@ -68,6 +70,8 @@ def main(argv=None):
                             "cited comments, evidence and explanations are checked against the local index)")
         if name == "body":
             p.add_argument("--backup", help="file that receives the body being replaced (required unless --dry-run)")
+            p.add_argument("--expected-body-file", help="live body saved before drafting; required for a real "
+                           "replacement, checked in an online dry run when supplied")
             p.add_argument("--profile", help="comma-separated profiles that define a final record's section "
                            "headings (default: profiles in .recortex.json)")
             p.add_argument("--allow-label-removal", action="store_true",
@@ -84,6 +88,11 @@ def main(argv=None):
     if not os.path.isfile(args.body_file):
         sys.exit("error: not a file: %s" % args.body_file)
     draft = recortex.read_text(args.body_file)
+    expected = None
+    if args.command == "body" and args.expected_body_file:
+        if not os.path.isfile(args.expected_body_file):
+            sys.exit("error: not a file: %s" % args.expected_body_file)
+        expected = recortex.read_text(args.expected_body_file)
     chosen = getattr(args, "profile", None)
     profiles = [p.strip() for p in chosen.split(",") if p.strip()] if chosen else list(config.get("profiles") or [])
     follow = args.command == "body" and args.kind == "final-record" and not args.offline
@@ -140,6 +149,7 @@ def main(argv=None):
     command = ["issue", "edit", str(args.issue), "--repo", repo, "--body-file", args.body_file]
     if args.dry_run and args.offline:
         print("would run: " + recortex.show_command(command, "%d characters" % len(draft)))
+        print("expected body not checked: --offline reads nothing from GitHub")
         if args.kind == "final-record":
             print("section labels not checked: --offline reads nothing from GitHub")
         return 0
@@ -169,8 +179,20 @@ def main(argv=None):
     if not diff and not labels_command:
         print("no change: %s#%d already matches %s" % (repo, args.issue, args.body_file))
         return 0
+    if diff:
+        if expected is None and not args.dry_run:
+            print("not posted: --expected-body-file FILE is required for a body replacement; use the live body "
+                  "saved before drafting. Read the current body, merge your changes, and rerun.")
+            return 1
+        if expected is not None and recortex.normalize(old) != recortex.normalize(expected):
+            print("not posted: the live body of %s#%d differs from --expected-body-file; "
+                  "read the current body and merge your changes before rerunning. No body or labels were changed."
+                  % (repo, args.issue))
+            return 1
     print("\n".join(diff))
     if args.dry_run:
+        if diff and expected is None:
+            print("note: a real replacement requires --expected-body-file with the body saved before drafting")
         if diff:
             print("would run: " + recortex.show_command(command, "%d characters" % len(draft)))
         if labels_command:
@@ -181,29 +203,46 @@ def main(argv=None):
             print("section labels not checked: no profile defines any")
         return 0
     if not diff:
-        return follow_labels(repo, args.issue, labels_command, plan, profiles)
+        return follow_labels(repo, args.issue, labels_command, plan, profiles, draft)
     if not args.backup:
         sys.exit("error: --backup FILE is required so the replaced body is kept")
     if os.path.exists(args.backup):
         sys.exit("error: backup file exists and is not overwritten: %s" % args.backup)
-    with open(args.backup, "w", encoding="utf-8") as handle:
-        handle.write(old)
+    # There is still a race between this read and GitHub's write; do not claim an atomic compare-and-swap.
+    if not body_still_matches(repo, args.issue, old, "the body was not replaced and no labels were changed"):
+        return 1
+    try:
+        with open(args.backup, "x", encoding="utf-8") as handle:
+            handle.write(old)
+    except FileExistsError:
+        sys.exit("error: backup file exists and is not overwritten: %s" % args.backup)
     print("backup of the replaced body: %s" % args.backup)
     recortex.gh(command)
     print("ran: " + recortex.show_command(command))
     ok = recortex.verify_body(draft, recortex.read_issue_body(repo, args.issue), "%s#%d" % (repo, args.issue))
     if not ok:
         return 1
-    return follow_labels(repo, args.issue, labels_command, plan, profiles) if follow else 0
+    return follow_labels(repo, args.issue, labels_command, plan, profiles, draft) if follow else 0
 
 
-def follow_labels(repo, number, command, plan, profiles):
+def body_still_matches(repo, number, expected, consequence):
+    """Refuse a write if another edit appeared since the body was checked."""
+    if recortex.normalize(recortex.read_issue_body(repo, number)) == recortex.normalize(expected):
+        return True
+    print("stopped: the live body of %s#%d changed during this run; %s. "
+          "Read the current body and merge your changes before rerunning." % (repo, number, consequence))
+    return False
+
+
+def follow_labels(repo, number, command, plan, profiles, draft):
     """Apply the section-label change, read the labels back and compare."""
     if not plan["checked"]:
         print("section labels not checked: no profile defines any")
         return 0
     wanted = plan["wanted"]
     if command:
+        if not body_still_matches(repo, number, draft, "section labels were not changed"):
+            return 1
         recortex.gh(command)
         print("ran: " + recortex.show_command(command))
     now = recortex.read_issue(repo, number)["labels"]
