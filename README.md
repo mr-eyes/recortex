@@ -133,7 +133,7 @@ The setup wizard asks which field the work is in, in your own words, and whether
 ```bash
 python3 skills/recortex/scripts/setup.py fields show
 python3 skills/recortex/scripts/setup.py fields set --answers answers.json --dry-run
-python3 skills/recortex/scripts/setup.py fields approve --fingerprint <the 12 characters fields show printed> --yes
+python3 skills/recortex/scripts/setup.py fields approve --fingerprint <the fingerprint in the line fields show printed> --yes
 ```
 
 ## What survives compaction, and why

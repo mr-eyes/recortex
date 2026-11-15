@@ -739,7 +739,7 @@ def print_state(config, repo):
                 earlier = None
         print("\n".join(proposal_lines(info["entry"], earlier, kind == "changed")))
         print("To approve it as it stands, after the user has read all of it: setup.py fields approve --fingerprint "
-              "%s --yes" % info["fingerprint"][:12])
+              "%s --yes" % info["fingerprint"])  # all 64 characters: the session copies this line
     return info
 
 

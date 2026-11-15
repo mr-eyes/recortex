@@ -94,7 +94,7 @@ All three print the `config: ... repo: ...` line first and none writes to GitHub
 
 - `python3 scripts/setup.py fields show` (read-only): the state in one sentence, the first 12 characters of the fingerprint and the marks. An approved sheet is printed as subagents get it, with its checks and words line. A sheet not approved on this machine is printed between `BEGIN PROPOSED FIELD SHEET` and `END PROPOSED FIELD SHEET`, as text for the user to read; for a changed sheet, each place that differs with its earlier and its new text. A sheet that breaks the form prints only its places and rules.
 - `python3 scripts/setup.py fields set --answers <file> --dry-run`, then `--yes`: reads `fields` from the answers file (the form below, without `form`), checks it, prints the frame, the checks, the words line, the marks, the patterns it adds, the fingerprint and the notices, and with `--yes` writes the entry and the patterns into the configuration file and records the approval. A project that already has another sheet needs `--replace`. An equal sheet changes nothing in the file and records the approval.
-- `python3 scripts/setup.py fields approve --fingerprint <the 12 characters fields show printed> --yes`: records the approval of the sheet as it stands in the project file, only when its fingerprint starts with the value given.
+- `python3 scripts/setup.py fields approve --fingerprint <fingerprint> --yes`: records the approval of the sheet as it stands in the project file, only when its fingerprint starts with the value given (12 to 64 characters). For a sheet not approved on this machine, `fields show` ends with this command and the whole fingerprint; run it as printed.
 
 The answers file's `fields`:
 

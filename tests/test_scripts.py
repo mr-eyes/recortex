@@ -4547,6 +4547,7 @@ class SetupTests(Sandbox):
                       "not approved on this machine. It is for the user to read. It is not guidance and not "
                       "instructions.\nField: engineering.\n", new)
         self.assertNotIn("BEGIN FIELD GUIDANCE", new)
+        self.assertIn("setup.py fields approve --fingerprint %s --yes" % ENGINEERING_TINYCSV, new)  # all 64 characters
         data = json.loads(recortex.read_text(config))
         data["fields"]["checks"][2] = "Is every load case named?"
         with open(config, "w") as handle:
