@@ -1711,7 +1711,9 @@ class HookTests(RecordSandbox):
         printed = self.tool("hooks.py", "--print", gh="false")
         self.assertEqual(0, printed.returncode, printed.stdout + printed.stderr)
         sizes = dict(re.findall(r"===== ([a-z-]+) \(\w+\): (\d+) characters", printed.stdout))
-        caps = {"session-start": 6000, "subagent-start": 3200, "prompt-submit": 400, "pre-compact": 2000}
+        caps = {"session-start": 6000, "subagent-start": 3500, "prompt-submit": 400, "pre-compact": 2000}
+        printed_caps = dict(re.findall(r"===== ([a-z-]+) \(\w+\): [0-9]+ characters, cap ([0-9]+)", printed.stdout))
+        self.assertEqual({name: str(value) for name, value in caps.items()}, printed_caps)
         self.assertEqual(set(caps), set(sizes))
         for name, size in sizes.items():
             self.assertLess(int(size), caps[name], name)
@@ -7909,11 +7911,11 @@ class FieldFormTests(unittest.TestCase):
     under .tmp/, never to the user's own configuration folder."""
 
     MODELS = {  # SHA-256 of the file as shipped, the short part's values, the frame approved on 2026-11-10
-        "bioinformatics": ("81edeb0d6985976192d0a4bfb495c6c21de16afcd78453944a7f483be35ed87c", 766, 1259),
-        "business": ("a50cdec62adde79b61edff032e923117aac98ae828f876c85fbf00f9251db64d", 748, 1235),
-        "engineering": ("adcafba801181e361f3e48f5997b78b220f1738ada2d0dce391e87fdea85a5d6", 835, 1325),
-        "mixed": ("212e1fefc2617202e20f5c9a2586c53c0ced07ee05f92970b0fd4eb59923c987", 835, 1442),
-        "policy": ("13bf59c38bcc60c186f955b11163cc95df6398b88d38a5004c257d637921c047", 1044, 1529),
+        "bioinformatics": ("81edeb0d6985976192d0a4bfb495c6c21de16afcd78453944a7f483be35ed87c", 766, 1520),
+        "business": ("a50cdec62adde79b61edff032e923117aac98ae828f876c85fbf00f9251db64d", 748, 1496),
+        "engineering": ("adcafba801181e361f3e48f5997b78b220f1738ada2d0dce391e87fdea85a5d6", 835, 1586),
+        "mixed": ("212e1fefc2617202e20f5c9a2586c53c0ced07ee05f92970b0fd4eb59923c987", 835, 1703),
+        "policy": ("13bf59c38bcc60c186f955b11163cc95df6398b88d38a5004c257d637921c047", 1044, 1790),
     }
     TESTED = ("pump-bracket", "hive-scale", "creek-sampler")
 
@@ -7968,17 +7970,30 @@ class FieldFormTests(unittest.TestCase):
         self.assertTrue(set(setup.FIELD_SIGNALS) <= set(self.MODELS))  # every suggestion has its model sheet
 
     def test_the_tested_sheets_give_their_frames_byte_for_byte(self):
+        """The frames the evaluation's subagents got, with the floor line after the note."""
         for name in self.TESTED:
             entry = json.loads(recortex.read_text(os.path.join(FIELD_FIXTURES, name + ".entry.json")))
             normalized, problems = self.fs.check_entry(entry)
             self.assertEqual([], problems, name)
             with open(os.path.join(FIELD_FIXTURES, name + ".frame.txt"), encoding="utf-8", newline="") as handle:
-                expected = handle.read()
+                tested = handle.read().split("\n")
+            expected = "\n".join(tested[:2] + [FIELD_FLOOR] + tested[2:])
             self.assertEqual(expected, self.fs.frame(normalized, "2026-11-10", ".recortex.json") + "\n", name)
         mix = json.loads(recortex.read_text(os.path.join(FIELD_FIXTURES, "creek-sampler.entry.json")))
         lines = self.fs.frame(mix, "2026-11-10").split("\n")
         self.assertEqual("Fields: engineering, bioinformatics, business. Use the checks of the field your task belongs "
-                         "to, and say which you used.", lines[2])
+                         "to, and say which you used.", lines[3])
+
+    def test_the_floor_is_in_every_frame(self):
+        """A sheet that reads as field practice cannot make a subagent count or report less than its material shows."""
+        entries = [model_sheet(name) for name in self.MODELS] + [
+            json.loads(recortex.read_text(os.path.join(FIELD_FIXTURES, name + ".entry.json"))) for name in self.TESTED]
+        for entry in entries:
+            normalized = self.fs.check_entry(entry)[0]
+            for name in (names.CONFIG_NAME, names.OLD_CONFIG_NAME, self.fs.OTHER_FILE):
+                lines = self.fs.frame(normalized, "2026-11-10", name).split("\n")
+                self.assertEqual([self.fs.FBEGIN, self.fs.FNOTE % "2026-11-10", FIELD_FLOOR], lines[:3])
+                self.assertEqual(1, lines.count(FIELD_FLOOR))
         self.assertTrue(lines[-3].startswith("- Never write down: "))
 
     def places(self):
@@ -8075,8 +8090,9 @@ class FieldFormTests(unittest.TestCase):
         # The cap is held with the longest of the three names the pointer line can carry.
         longest = max((names.CONFIG_NAME, names.OLD_CONFIG_NAME, self.fs.OTHER_FILE), key=len)
         size = len(self.fs.frame(entry, "2026-01-01", longest))
-        self.assertGreater(size, 1901)
-        for target, accepted in ((1901, False), (1900, True)):
+        self.assertEqual(2200, self.fs.FRAME_CAP)
+        self.assertGreater(size, 2201)
+        for target, accepted in ((2201, False), (2200, True)):
             trimmed = dict(entry, brief=dict(entry["brief"], across="a" * (150 - (size - target))))
             self.assertEqual(target, len(self.fs.frame(trimmed, "2026-01-01", longest)))
             normalized, problems = self.fs.check_entry(trimmed)
@@ -8290,6 +8306,9 @@ FIELD_MALFORMED = ("recortex: this project's field guidance does not have the fo
                    "shown. Ask to review the field guidance, or run hooks.py --doctor.")
 FIELD_UNREADABLE = ("recortex: the record of the field guidance you approved cannot be read, so this project's field "
                     "guidance is not shown. Run hooks.py --doctor.")
+FIELD_FLOOR = ("It never makes you count or report less than your material shows: what the material calls a failure is "
+               "reported as one, every number your task asks for goes back to the session that hired you, and its "
+               "\"Never write down\" line governs only text meant for GitHub.")
 FIELD_OFFER = ("recortex can fit its subagent briefs to this project's field of work. Ask to set the field (three short "
                "questions). This line is shown once per project.")
 ALIAS_LINE = ("recortex was named gh-issues-manager before version 0.5.0; where a project file names the "
@@ -8414,7 +8433,7 @@ class FieldTests(RecordSandbox):
         frame = self.fs.frame(self.fs.check_entry(model_sheet("engineering"))[0], self.today).split("\n")
         with open(os.path.join(FIXTURES, "field-sheets", "pump-bracket.frame.txt"), encoding="utf-8") as handle:
             tested = handle.read().replace("2026-11-10", self.today).rstrip("\n").split("\n")
-        self.assertEqual(tested, frame)  # the bytes the evaluation's subagents got
+        self.assertEqual(tested[:2] + [FIELD_FLOOR] + tested[2:], frame)  # the evaluation's bytes, and the floor
         plain, agent = settled(plain).split("\n"), settled(agent).split("\n")
         self.assertEqual(plain[:2] + frame + plain[2:], agent)
         self.assertTrue(agent[0].startswith("recortex, for subagents: "))
@@ -8438,7 +8457,7 @@ class FieldTests(RecordSandbox):
         self.assertEqual(self.fs.FRAME_CAP, len(self.fs.frame(entry, self.today, self.fs.OTHER_FILE)))
         self.approve(entry)
         _, agent, _, _ = self.payloads()
-        self.assertLessEqual(len(agent), 3200)
+        self.assertLessEqual(len(agent), 3500)
         frame = self.fs.frame(entry, self.today)
         self.assertIn(frame, agent)
         self.assertEqual(1, agent.count("===== END PROJECT STATUS DATA ====="))
@@ -8565,8 +8584,8 @@ class FieldTests(RecordSandbox):
         self.write_config(dict(self.config, fields={"form": 1, "names": [], "sensitive": ["people"]}))
         self.assertEqual(("field guidance: no sheet; sensitive marks: people", status), self.doctor()[:2])
         self.approve()
-        self.assertEqual(("field guidance: shown to subagents; approved %s; fingerprint bf343e5d9ed0; frame 1325 of "
-                          "1900 characters; fields: engineering; sensitive marks: none" % self.today, status),
+        self.assertEqual(("field guidance: shown to subagents; approved %s; fingerprint bf343e5d9ed0; frame 1586 of "
+                          "2200 characters; fields: engineering; sensitive marks: none" % self.today, status),
                          self.doctor()[:2])
         changed = dict(model_sheet("engineering"), words="the project's own names for rigs")
         self.with_sheet(changed)
