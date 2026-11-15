@@ -5397,6 +5397,23 @@ class EarlierNameTests(RecordSandbox):
             handle.write("{")
         self.assertIn("not approved on this machine", self.tool("setup.py", "fields", "show").stdout)
 
+    def test_a_changed_sheet_shows_what_differs_from_an_approval_in_the_earlier_folder(self):
+        config = os.path.join(self.dir, "xdg-config")
+        os.makedirs(os.path.join(config, names.OLD_NAME), mode=0o700)  # the approval goes into the earlier folder
+        result = self.tool("setup.py", "fields", "set", "--answers", self.field_answers(), "--yes")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        os.makedirs(os.path.join(config, names.NAME), mode=0o700)  # then the current folder appears
+        path = os.path.join(self.project, recortex.CONFIG_NAME)
+        data = json.loads(recortex.read_text(path))
+        data["fields"]["words"] = "other words"
+        with open(path, "w") as handle:
+            json.dump(data, handle)
+        shown = self.tool("setup.py", "fields", "show").stdout
+        self.assertIn("changed since it was approved", shown)
+        self.assertIn("\nwords\nwas: ", shown)  # the approved copy, read from the earlier folder
+        self.assertIn("\nis: other words\n", shown)
+        self.assertNotIn("not available here", shown)
+
 DECISION_060 = """<!-- ghim:event type=decision at=2026-03-07T09:30-08:00 because=9104 instead=9103 -->
 ### Decision: 2026-03-07 09:30 PST - rewrite the reader as a state machine
 
@@ -8248,6 +8265,45 @@ class FieldFormTests(unittest.TestCase):
         self.assertEqual([], self.fs.sensitive_marks({"repo": REPO}, REPO))
         self.assertFalse(os.path.lexists(self.private))  # nothing made in the current folder
         self.assertFalse(self.fs.forget_approval(REPO))
+
+    def test_a_removal_at_the_same_moment_as_an_approval_keeps_both(self):
+        # forget_approval reads, changes and writes under the same lock as record_approval; without it, one of the two
+        # writes is lost.
+        code = ("import json, sys, time\n"
+                "sys.path.insert(0, sys.argv[1])\n"
+                "import field_sheet\n"
+                "write = field_sheet.write_approvals\n"
+                "def slow(*args):\n"
+                "    time.sleep(0.5)\n"
+                "    write(*args)\n"
+                "field_sheet.write_approvals = slow\n"
+                "if sys.argv[2] == 'forget':\n"
+                "    field_sheet.forget_approval(sys.argv[3])\n"
+                "else:\n"
+                "    entry = field_sheet.check_entry(json.load(open(sys.argv[4], encoding='utf-8')))[0]\n"
+                "    field_sheet.record_approval(sys.argv[3], entry, '2026-11-10')\n")
+        model = os.path.join(FIELD_DIR, "engineering.json")
+        self.fs.record_approval("example-org/first", self.entry(), "2026-11-09")
+        self.fs.record_approval(REPO, self.entry(), "2026-11-09")
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+        runs = [subprocess.Popen([sys.executable, "-c", code, SCRIPTS, "forget", REPO], env=env),
+                subprocess.Popen([sys.executable, "-c", code, SCRIPTS, "record", "example-org/writer0", model], env=env)]
+        for run in runs:
+            self.assertEqual(0, run.wait(timeout=60))
+        data = json.loads(recortex.read_text(self.approvals))
+        self.assertEqual(["example-org/first", "example-org/writer0"], sorted(data["approvals"]))
+
+    def test_the_lock_follows_no_symlink(self):
+        import storage
+        self.fs.record_approval("example-org/first", self.entry(), "2026-11-09")
+        lock = os.path.join(self.private, "field-approvals.lock")
+        os.unlink(lock)
+        target = os.path.join(self.dir, "made-through-the-link")
+        os.symlink(target, lock)
+        with self.assertRaises((storage.StorageError, OSError)):
+            self.fs.record_approval(REPO, self.entry(), "2026-11-10")
+        self.assertFalse(os.path.lexists(target))  # nothing made where the link points
+        self.assertIsNone(self.fs.approval_of(REPO))
 
     def test_the_approvals_follow_no_symlink_and_replace_no_unreadable_file(self):
         import storage
