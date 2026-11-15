@@ -5458,8 +5458,10 @@ def memory_draft(kind, at, links="", plain=None, rest=None):
         lint_drafts.record_format.PLAIN_LABELS[kind], plain, fields)
 
 
-class MindIndexTests(RecordSandbox):
-    """What 0.6.0 records about memories, in the index, in query recall and at posting, on the example record."""
+class MindSandbox(RecordSandbox):
+    """The example record with helpers to post memories one at a time and to read the index, the recall and the
+    linter, for the tests of memories and of the mind."""
+
 
     THREAD = ("\n<details>\n<summary>This thread is about how tinycsv writes files and how it names its columns"
               "</summary>\n\n**Why we care:** Both matter.\n\n</details>\n")
@@ -5520,6 +5522,16 @@ class MindIndexTests(RecordSandbox):
         draft = self.write("draft-%d.md" % len(os.listdir(self.dir)), text)
         return self.tool("post_verified.py", "comment", "--issue", str(issue), "--kind", kind, "--body-file", draft,
                          *extra, env=env)
+
+    def edit_comment(self, cid, when="2026-04-20T10:00:00Z"):
+        """Mark comment `cid` as changed on GitHub after it was posted: its updated_at moves past its created_at."""
+        data = self.repo()
+        data["comments"][str(cid)]["updated_at"] = when
+        self.save(data)
+
+
+class MindIndexTests(MindSandbox):
+    """What 0.6.0 records about memories, in the index, in query recall and at posting, on the example record."""
 
     # ------------------------------------------------------------ the fake
 
@@ -5647,12 +5659,6 @@ class MindIndexTests(RecordSandbox):
         self.assertEqual("tried", {m["id"]: m["state"] for m in recalled["memories"]}[9109])
 
     # ------------------------------------------------------------ edited memories
-
-    def edit_comment(self, cid, when="2026-04-20T10:00:00Z"):
-        """Mark comment `cid` as changed on GitHub after it was posted: its updated_at moves past its created_at."""
-        data = self.repo()
-        data["comments"][str(cid)]["updated_at"] = when
-        self.save(data)
 
     def test_an_edited_memory_is_not_told_and_its_links_and_folds_do_not_count(self):
         self.add_chain()
@@ -6168,6 +6174,339 @@ class MindIndexTests(RecordSandbox):
         self.assertEqual([], codes(lint_drafts.lint_text(text, kind="decision")))
         edited = text.replace(" source=pr:12 -->", " source=pr:12 because=9104 -->", 1)
         self.assertIn("link-kind", codes(lint_drafts.lint_text(edited, kind="decision")))
+
+
+def without_plain(text, kind):
+    """A memory as an older version wrote it: the same comment without its plain line."""
+    return re.sub(r"\n\n\*\*%s:\*\* [^\n]*" % re.escape(lint_drafts.record_format.PLAIN_LABELS[kind]), "", text,
+                  count=1)
+
+
+def told_text(sentence):
+    """A sentence of the model as the page prints it."""
+    if sentence["quoted"]:
+        return sentence["lead"] + "\u201c" + sentence["words"] + ".\u201d"
+    return sentence["lead"] + sentence["words"] + "."
+
+
+def resume_comment(focus, stamp="2026-03-20 10:00 PST"):
+    body = recortex.read_text(os.path.join(EXAMPLE, "resume-1.md")).replace("2026-03-04 16:40 PST", stamp)
+    return re.sub(r"\*\*Current focus:\*\* [^\n]*", "**Current focus:** " + focus, body)
+
+
+class MindModelTests(MindSandbox):
+    """The model of the mind page (mind_model.py through index.py query mind), on the example record with the chain
+    posted one memory at a time."""
+
+    def model(self, env=None):
+        result = self.tool("index.py", "query", "mind", "--json", gh="false", env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        return json.loads(result.stdout)
+
+    def chain_model(self):
+        self.add_chain()
+        self.ready()
+        return self.model()
+
+    @staticmethod
+    def told(model):
+        return {m["id"]: m for m in model["memories"]}
+
+    def test_the_chain_is_told_in_sentences_with_states_chips_and_passages(self):
+        model = self.chain_model()
+        told = self.told(model)
+        threads = {t["n"]: t for t in model["threads"]}
+        self.assertEqual([6, 5], [t["n"] for t in model["threads"]])  # in the order of their first memory
+        self.assertEqual(("Read speed against the standard library", "body", "Settled for now", False),
+                         tuple(threads[6][k] for k in ("name", "name_from", "status", "set_aside")))
+        self.assertEqual(("Reader: quoted fields and line endings", "body", "1 open thought", False),
+                         tuple(threads[5][k] for k in ("name", "name_from", "status", "set_aside")))
+        self.assertEqual([9102, 9103, 9104, 9105, 9106, 9107], threads[5]["memories"])
+        self.assertEqual({
+            9101: ("stands", "stands", "Still stands", "The latest result here"),
+            9102: ("replaced", "replaced", "Replaced on March 12", ""),
+            9103: ("set aside", "aside", "Set aside on March 7", ""),
+            9104: ("stands", "led", "Led to a change", ""),
+            9105: ("stands", "stands", "Still stands", ""),
+            9106: ("open", "open", "Still open", ""),
+            9107: ("stands", "stands", "Still stands", "The latest decision here; it replaced an earlier one"),
+        }, {cid: (m["state"], m["css"], m["chip"], m["latest"]) for cid, m in told.items()})
+        self.assertEqual({
+            9101: "On March 4 we found that tinycsv read the 100 MB file in a median of 1.84 s, against 1.21 s for the "
+                  "standard library.",
+            9102: "On March 4 we decided to make strict quoting the default mode of the reader.",
+            9103: "On March 5 we had the idea to keep the current reader and remember from one line to the next whether "
+                  "a quoted field is still open.",
+            9104: "On March 6, remembering an open quote from one line to the next broke files with mixed line endings: "
+                  "4 of 6 failed.",
+            9105: "On March 7 we decided to rewrite the reader so that it reads one character at a time, and stop "
+                  "patching the line splitter.",
+            9106: "On March 10 we asked whether the new reader still works when the input is a pipe and not a file.",
+            9107: "On March 12 we decided to keep strict quoting as the default and make the lenient mode warn about "
+                  "each stray quote it accepts.",
+        }, {cid: told_text(m["sentence"]) for cid, m in told.items()})
+        self.assertEqual("On March 6, remembering an open quote from one line to the next broke files with mixed line "
+                         "endings: 4 of 6 failed, so on March 7 we decided to rewrite the reader so that it reads one "
+                         "character at a time, and stop patching the line splitter.", told[9105]["passage"])
+        self.assertEqual(told_text(told[9103]["sentence"]) + " We tried it: " + told_text(told[9104]["sentence"])
+                         .replace("On", "on", 1), told[9104]["passage"])
+        self.assertEqual(told_text(told[9102]["sentence"]) + " Later that changed: " + told_text(told[9107]["sentence"])
+                         .replace("On", "on", 1), told[9107]["passage"])
+        self.assertEqual(told[9101]["passage"], told_text(told[9101]["sentence"]))  # nothing linked: alone
+        self.assertEqual([None, "then", "we tried it", "so", "so", "later that changed, going back to "],
+                         [s["conn"]["phrase"] if s["conn"] else None for s in threads[5]["steps"]])
+        self.assertEqual([{"kind": "because", "id": 9104, "told": True, "phrase": "so"},
+                          {"kind": "instead", "id": 9103, "told": True, "phrase": "that was set aside; instead"}],
+                         told[9105]["out"])
+        self.assertEqual([{"id": 9107, "replaced": [9102]}, {"id": 9105, "replaced": []}], threads[5]["rests"])
+        self.assertEqual({"memories": 7, "threads": 2, "words": 2, "open": 1}, model["counts"])
+        self.assertEqual([9106], [q["id"] for q in model["open"]["questions"]])
+        self.assertEqual(["Who decided", "In their exact words", "What it changes", "Next step"],
+                         [f["name"] for f in told[9105]["fields"]])  # Decision is told by the sentence
+        self.assertEqual((["Where recorded"], "people", "Sam Rivera, 2026-03-07 09:30 PST"),
+                         ([f["name"] for f in told[9105]["where"]], told[9105]["fields"][0]["type"],
+                          told[9105]["fields"][0]["people"]))
+        effect = told[9105]["fields"][2]["doc"]["blocks"][0]["p"]
+        self.assertIn({"cite": "issue", "n": 7, "text": "Task: support newlines inside quoted fields"}, effect)
+        self.assertIn({"cite": "memory", "n": 9104, "text": "the memory of March 6"}, effect)
+        self.assertNotIn("#7", json.dumps(effect))
+
+    def test_a_memory_without_a_plain_line_is_quoted_and_never_joined(self):
+        self.add_chain()
+        self.put(9120, 5, without_plain(memory_draft("decision", "2026-03-13T10:00-08:00", "replaces=9107"), "decision"))
+        self.put(9121, 6, without_plain(memory_draft("failure", "2026-03-14T10:00-08:00"), "failure"))
+        self.put(9122, 5, memory_draft("question", "2026-03-15T10:00-08:00", "because=9120"))
+        self.ready()
+        told = self.told(self.model())
+        self.assertEqual(("On March 13 we decided: \u201cKeep it.\u201d", True),
+                         (told_text(told[9120]["sentence"]), told[9120]["old"]))
+        self.assertEqual("On March 14 something went wrong: \u201cThe third of 3 tests.\u201d",
+                         told_text(told[9121]["sentence"]))
+        self.assertEqual(("plain", ""), (told[9121]["css"], told[9121]["chip"]))  # no plain line, no link: no chip
+        self.assertEqual("replaced", told[9107]["state"])
+        for memory in told.values():
+            if memory["id"] != 9120:
+                self.assertNotIn("Keep it", memory["passage"], memory["id"])
+        self.assertEqual(told_text(told[9120]["sentence"]), told[9120]["passage"])
+        self.assertEqual(told_text(told[9122]["sentence"]), told[9122]["passage"])
+
+    def test_words_are_marked_as_whole_names_from_told_explanations_only(self):
+        self.add_chain()
+        fold = ('\n<details>\n<summary>We use "%s" to mean a part of the reader that this project names so</summary>'
+                '\n\n**Why it matters here:** Test.\n%s\n</details>\n')
+        self.put(9120, 5, memory_draft("idea", "2026-03-13T10:00-08:00", plain="drop the splitter and keep the QF in "
+                                       "one place") + fold % ("quote flag", "\n**Also called:** QF\n"))
+        self.put(9121, 5, memory_draft("idea", "2026-03-14T10:00-08:00", plain="test the qf and the line splitters "
+                                       "again"))
+        self.put(9122, 6, memory_draft("idea", "2026-03-13T11:00-08:00", plain="keep one bench clock") + fold % (
+            "bench clock", ""), user="mallory")
+        self.put(9123, 6, memory_draft("idea", "2026-03-13T12:00-08:00", plain="read the speed sheet") + fold % (
+            "speed sheet", ""))
+        self.edit_comment(9123)
+        self.put(9124, 6, memory_draft("result", "2026-03-15T10:00-08:00", plain="the bench clock and the speed sheet "
+                                       "agree"))
+        self.ready()
+        model = self.model()
+        words = {w["word"]: w for w in model["words"]}
+        self.assertEqual(["line splitter", "quote flag", "strict quoting"], sorted(words))  # by key, numbered so
+        self.assertEqual([1, 2, 3], [w["n"] for w in model["words"]])
+        strict = words["strict quoting"]
+        self.assertEqual("the reader's default mode, which stops at a stray quote and names its line and column",
+                         strict["meaning"])
+        self.assertEqual([(9102, "tinycsv's rule that a quote character inside an unquoted field stops the read with an "
+                                 "error")], [(e["comment"], e["meaning"]) for e in strict["earlier"]])
+        self.assertEqual((9102, True), (strict["first"]["comment"], strict["first"]["told"]))
+        told = self.told(model)
+
+        def marked(cid):
+            sentence = told[cid]["sentence"]
+            return [(sentence["words"][start:end], n) for start, end, n in sentence["marks"]]
+
+        self.assertEqual([("the splitter", 1), ("QF", 2)], marked(9120))
+        self.assertEqual([], marked(9121))  # "qf" in another letter case, "splitters" a longer word
+        self.assertEqual([], marked(9124))  # explained only by another account and by an edited memory
+        self.assertEqual([("line splitter", 1)], marked(9105))
+        self.assertEqual([9105, 9120], words["line splitter"]["uses"])
+        story = json.dumps(words["line splitter"]["story"])
+        self.assertIn('{"cite": "issue", "n": 7, "text": "Task: support newlines inside quoted fields"}', story)
+
+    def test_only_what_allowed_accounts_wrote_and_nobody_else_changed_is_told(self):
+        self.add_chain()
+        self.put(9600, 5, memory_draft("idea", "2026-03-13T10:00-08:00", plain="MARK-OTHER keep it"), user="mallory")
+        self.put(9601, 5, memory_draft("idea", "2026-03-13T11:00-08:00", plain="MARK-EDITED keep it"))
+        self.edit_comment(9601)
+        self.put(9602, 3, memory_draft("result", "2026-03-13T12:00-08:00", rest="**What ran:** See #3 and #2.\n\n"
+                                       "**Numbers:** None."))
+        self.put(9603, 4, resume_comment("MARK-RESUME-OTHER"), user="mallory")
+        self.put(9604, 4, resume_comment("MARK-RESUME-EDITED", "2026-03-21 10:00 PST"))
+        data = self.repo()
+        data["comments"]["9604"].update(updated_at="2026-04-20T10:00:00Z", edits=[
+            {"at": "2026-04-20T10:00:00Z", "by": "octo-dev"}, {"at": data["comments"]["9604"]["created_at"],
+                                                               "by": "octo-dev"}])
+        data["issues"]["8"] = {"title": "Writer", "body": "# MARK-AUTHOR writer\n\n## Changed\n\n- MARK-AUTHOR text\n",
+                               "user": "mallory", "labels": ["final-record", "rel:changed", "topic:writer"],
+                               "created_at": "2026-04-05T10:00:00Z", "updated_at": "2026-04-05T10:00:00Z"}
+        speed = data["issues"]["6"]
+        speed["body"] = speed["body"].replace("# Read speed against", "# MARK-EDITOR Read speed against")
+        speed["edits"] = [{"at": "2026-04-06T10:00:00Z", "by": "mallory"}, {"at": speed["created_at"], "by": "octo-dev"}]
+        speed["updated_at"] = "2026-04-06T10:00:00Z"
+        data["issues"]["3"].update(body="## Goal\n\nMARK-UNREAD goal\n", updated_at="2026-04-06T11:00:00Z")
+        for number, title in (("7", "MARK-RENAMED task"), ("2", "MARK-RENAMED-PULL")):
+            data["issues"][number]["title"] = title
+            data["issues"][number]["updated_at"] = "2026-04-06T12:00:00Z"
+            data["issues"][number]["timeline"] = [{"event": "renamed", "created_at": "2026-04-06T12:00:00Z",
+                                                   "actor": {"login": "mallory"}, "rename": {"from": "a", "to": title}}]
+        self.save(data)
+        self.ready()
+        self.sql("UPDATE issues SET edits_read = 0 WHERE number = 3")  # its edit history is not read yet
+        model = self.model()
+        text = json.dumps(model)
+        for mark in ("MARK-OTHER", "MARK-EDITED", "MARK-AUTHOR", "MARK-EDITOR", "MARK-UNREAD", "MARK-RENAMED",
+                     "MARK-RESUME-OTHER", "MARK-RESUME-EDITED"):
+            self.assertNotIn(mark, text)
+        self.assertEqual((1, 1, [{"id": 9601, "issue": 5}]), (model["not_told"]["others"], model["not_told"]["edited"],
+                                                              model["not_told"]["edited_ids"]))
+        threads = {t["label"]: t for t in model["threads"]}
+        self.assertEqual(("speed", "label", False), (threads["topic:speed"]["name"], threads["topic:speed"]["name_from"],
+                                                     threads["topic:speed"]["shown"]))
+        self.assertEqual(("writer", False, []), (threads["topic:writer"]["name"], threads["topic:writer"]["shown"],
+                                                 threads["topic:writer"]["sections"]))
+        self.assertEqual(sorted([threads["topic:speed"]["n"], threads["topic:writer"]["n"]]),
+                         sorted(b["thread"] for b in model["not_told"]["bodies"]))
+        told = self.told(model)
+        self.assertEqual("A pull request", [e for e in told[9105]["evidence"] if e["kind"] == "pull"][0]["title"])
+        cited = {c["n"]: c for c in model["cited"]}
+        self.assertEqual(("Benchmark the reader", None), (cited[3]["title"], cited[3]["first"]))  # title rule
+        self.assertEqual("an issue someone else opened", cited[7]["title"])
+        self.assertEqual("A pull request", cited[2]["title"])
+        self.assertEqual([(3, None), (7, [{"t": "Make the reader accept a newline inside a quoted field."}])],
+                         [(t["issue"], t["goal"]) for t in model["open"]["tasks"]])  # a rename leaves the body alone
+        self.assertEqual([9100], [p["id"] for p in model["pauses"]])
+        self.assertEqual(9100, model["last"]["id"])
+
+    def test_the_pause_tells_its_focus_next_actions_and_holds(self):
+        model = self.chain_model()
+        last = model["last"]
+        self.assertEqual((9100, "March 4"), (last["id"], last["day"]))
+        self.assertEqual("Release 0.3.0. The reader handles quoted fields; newlines inside quoted fields are the last "
+                         "open item.", last["focus"]["blocks"][0]["p"][0]["t"])
+        self.assertEqual([("Finish the state machine for quoted newlines and add the 12 test files", "Claude session"),
+                          ("Rerun the speed benchmark after the reader change", "Claude session"),
+                          ("Choose a license before the release", "Sam Rivera")],
+                         [(row["action"][0]["t"], row["owner"]) for row in last["next"]])
+        self.assertEqual([[{"cite": "issue", "n": 7, "text": "Task: support newlines inside quoted fields"}],
+                          [{"cite": "thread", "n": 6, "text": "Read speed against the standard library"}],
+                          [{"t": "this hub"}]], [row["where"] for row in last["next"]])
+        self.assertEqual("Do not tag 0.3.0 until Sam Rivera says so.", last["holds"]["blocks"][0]["p"][0]["t"])
+        self.assertEqual(last["holds"], model["open"]["holds"])
+        self.assertNotIn("Active issues", json.dumps(model))
+        self.assertNotIn("Last decisions", json.dumps(model))
+        self.assertEqual([9103, 9104, 9105, 9106, 9107], model["since"])
+        self.assertEqual(0, self.told(model)[9104]["remind"]["pause"])
+        self.sql("UPDATE meta SET value = '' WHERE key = 'resume'")
+        none = self.model()
+        self.assertEqual((None, [], None), (none["last"], none["since"], none["open"]["holds"]))
+
+    def test_evidence_resolves_to_checked_parts(self):
+        self.add_chain()
+        self.put(9120, 5, memory_draft("decision", "2026-03-13T10:00-08:00").rstrip("\n") +
+                 "\n\n**Evidence:**\n- table nosuch\n- code tinycsv/x.py#L3 at 9c3e1ab in other-org/fork\n")
+        self.ready()
+        told = self.told(self.model())
+        table, code, pull = told[9105]["evidence"]
+        self.assertEqual(("table", "conformance", True), (table["kind"], table["id"], table["found"]))
+        self.assertEqual([[{"t": "Kind of file"}], [{"t": "Passing"}], [{"t": "Files"}]], table["table"]["head"])
+        self.assertEqual([["Mixed line endings", "6", "6"], ["Newline inside a quoted field", "0", "12"],
+                          ["All other files", "35", "35"], ["All files", "41", "53"]],
+                         [[cell[0]["t"] for cell in row] for row in table["table"]["rows"]])
+        self.assertEqual(("data", "tests/conformance/report-4f2a9c1.txt"), ("data", table["data"]))
+        self.assertEqual({"kind": "code", "repo": REPO, "ref": "9c3e1ab", "path": "tinycsv/reader.py", "from": 41,
+                          "to": 59}, code)
+        self.assertEqual({"kind": "pull", "repo": REPO, "number": 2, "title": "Add tolerance option"}, pull)
+        figure = told[9101]["evidence"][0]
+        self.assertEqual(("figure", REPO, "4f2a9c1", "bench/out/run-0304/read-time.png", "Median read time by file "
+                          "size"), (figure["kind"], figure["repo"], figure["ref"], figure["path"], figure["title"]))
+        self.assertNotIn("raw=true", json.dumps(figure))
+        gone, other = told[9120]["evidence"]
+        self.assertEqual({"kind": "table", "found": False, "shown": True}, gone)
+        self.assertEqual(("other-org/fork", 3, 3), (other["repo"], other["from"], other["to"]))
+
+    def test_the_newest_memories_are_told_and_long_fields_are_cut(self):
+        self.put(9120, 5, memory_draft("result", "2026-03-20T10:00-08:00", rest="**What ran:** " + "x" * 5000 +
+                                       "\n\n**Numbers:** None."))
+        self.ready()
+        import sqlite3
+        db = sqlite3.connect(self.index_file())
+        try:
+            for number in range(2097):  # with 9101, 9102 and 9120: 2,100 memories
+                cid, at = 200000 + number, "2025-01-%02dT%02d:%02d:00Z" % (1 + number // 1440, number // 60 % 24,
+                                                                         number % 60)
+                db.execute("INSERT INTO comments(id, issue, author, body, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+                           (cid, 6, "octo-dev", "synthetic", at, at))
+                db.execute("INSERT INTO events(comment, issue, type, at, reconstructed, title, author, created_at) "
+                           "VALUES (?,?,?,?,?,?,?,?)", (cid, 6, "result", at, 0, "synthetic %d" % number, "octo-dev",
+                                                       at))
+                db.execute("INSERT INTO event_fields VALUES (?,?,?,?)", (cid, 0, "plain", "result number %d" % number))
+            db.execute("UPDATE meta SET value = '1' WHERE key = 'mind_derived'")
+            db.commit()
+        finally:
+            db.close()
+        model = self.model()
+        self.assertEqual((2000, 100), (len(model["memories"]), model["not_told"]["older"]))
+        self.assertEqual(200100, model["memories"][0]["id"])  # the 100 oldest are counted, not told
+        self.assertTrue(model["years"])
+        self.assertEqual("On March 20, 2026 we found that the 3 pipe tests pass on the new reader.",
+                         told_text(self.told(model)[9120]["sentence"]))
+        ran = self.told(model)[9120]["fields"][0]
+        self.assertEqual(("What ran", True), (ran["name"], ran["doc"]["cut"]))
+        self.assertLessEqual(len(json.dumps(ran["doc"])), 1400)
+        self.assertIn("mind of example-org/tinycsv: 2000 memories told in 2 threads, 1 word, 0 open thoughts; not "
+                      "told: 0 by other accounts, 0 edited, 100 older", self.tool("index.py", "query", "mind").stdout)
+
+    def test_the_model_is_the_same_after_sync_rebuild_and_step_by_step(self):
+        def settled(model):
+            return json.dumps(dict(model, built=None), sort_keys=True)
+
+        whole = settled(self.chain_model())
+        self.tool("index.py", "sync", "--rebuild")
+        self.assertEqual(whole, settled(self.model()))
+        self.env["RECORTEX_DATA_HOME"] = os.path.join(self.dir, "step-data")
+        self.data = os.path.join(self.env["RECORTEX_DATA_HOME"], "recortex")
+        data = self.repo()
+        chain = {cid: data["comments"].pop(str(cid)) for cid in range(9103, 9108)}
+        self.save(data)
+        self.ready()
+        for cid in sorted(chain):
+            data = self.repo()
+            data["comments"][str(cid)] = chain[cid]
+            data["issues"]["5"]["updated_at"] = chain[cid]["created_at"]
+            self.save(data)
+            self.ready()
+        self.assertEqual(whole, settled(self.model()))
+
+    def test_query_mind_prints_counts_and_refuses_an_index_that_is_not_ready(self):
+        self.add_chain()
+        self.put(9120, 5, memory_draft("idea", "2026-03-13T10:00-08:00", plain="MARK-PLAIN keep it"))
+        self.ready()
+        text = self.tool("index.py", "query", "mind", gh="false")
+        self.assertEqual((0, "mind of example-org/tinycsv: 8 memories told in 2 threads, 2 words, 2 open thoughts; not "
+                             "told: 0 by other accounts, 0 edited, 0 older\n"), (text.returncode, text.stdout))
+        self.assertIn("MARK-PLAIN", json.dumps(self.model()))
+        untrusted = self.tool("index.py", "query", "mind", env={"RECORTEX_TRUSTED_FILE": os.path.join(self.dir, "no")})
+        self.assertEqual((1, "mind: this repository is not in your trusted list; the mind tells only the memories of "
+                             "accounts you allow\n"), (untrusted.returncode, untrusted.stdout))
+        for statement in ("UPDATE meta SET value = '0' WHERE key = 'mind_derived'",
+                          "DELETE FROM meta WHERE key = 'mind_derived'"):
+            self.sql(statement)
+            for args in ((), ("--json",)):
+                refused = self.tool("index.py", "query", "mind", *args, gh="false")
+                self.assertEqual((1, index_not_ready()), (refused.returncode, refused.stdout), statement)
+            self.ready()
+
+
+def index_not_ready():
+    return ("the index was last written by an older version of the plugin, or never by this one; run index.py "
+            "sync\n")
 
 
 COMPAT = os.path.join(FIXTURES, "compat-0.5.0")

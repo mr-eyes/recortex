@@ -22,6 +22,8 @@ query    answers from the index alone, with no network:
                          older than their newest event, section labels that
                          disagree with headings, figures and tables without a source
            impact        bodies, figures, tables and events that cite --path or --commit
+           mind          what the mind page tells, as counts (--json: the whole model, which
+                         mind.py renders)
            recall        for a new memory on --issue N: the newest memories of its thread
                          with their state, open questions and untried ideas elsewhere,
                          and the words explained so far
@@ -38,6 +40,7 @@ Examples:
   index.py query impact --path bench/out/run-0304/summary.tsv
   index.py query timeline --issue 3 --type decision
   index.py query recall --issue 5
+  index.py query mind
 """
 
 import argparse
@@ -1463,7 +1466,7 @@ def main(argv=None):
                         "folder, for at most background_sync_seconds (default 300)")
     p.add_argument("--lock-held", action="store_true", help=argparse.SUPPRESS)
     p = sub.add_parser("query", help="answer from the index, with no network")
-    p.add_argument("name", choices=["brief", "consistency", "impact", "recall", "timeline", "triage"])
+    p.add_argument("name", choices=["brief", "consistency", "impact", "mind", "recall", "timeline", "triage"])
     p.add_argument("--path")
     p.add_argument("--commit")
     p.add_argument("--issue", type=int)
@@ -1540,6 +1543,28 @@ def main(argv=None):
             print(json.dumps(found, indent=1))
         else:
             print_recall(found)
+        return 0
+    if args.name == "mind":
+        if not mind_ready(db):
+            print(NOT_READY)
+            return 1
+        allowed = recortex.allowed_users(repo)
+        if not allowed:
+            print("mind: this repository is not in your trusted list; the mind tells only the memories of accounts "
+                  "you allow")
+            return 1
+        import mind_model  # noqa: E402
+        model = mind_model.build(db, repo, allowed, datetime.date.today())
+        if args.json:
+            print(json.dumps(model, indent=1))
+            return 0
+        counts, missing = model["counts"], model["not_told"]
+        print("mind of %s: %s told in %s, %s, %s; not told: %d by other accounts, %d edited, %d older"
+              % (repo, mind_model.plural(counts["memories"], "1 memory", "%d memories"),
+                 mind_model.plural(counts["threads"], "1 thread", "%d threads"),
+                 mind_model.plural(counts["words"], "1 word", "%d words"),
+                 mind_model.plural(counts["open"], "1 open thought", "%d open thoughts"),
+                 missing["others"], missing["edited"], missing["older"]))
         return 0
     if args.name == "triage":
         rows = triage(db, recortex.allowed_users(repo))
