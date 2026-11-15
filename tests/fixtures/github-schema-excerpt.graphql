@@ -61,6 +61,7 @@ type Repository implements Node {
   id: ID!
   isPrivate: Boolean!
   issue( number: Int! ): Issue
+  issueOrPullRequest( number: Int! ): IssueOrPullRequest
   nameWithOwner: String!
   owner: RepositoryOwner!
 }
@@ -168,6 +169,7 @@ enum ProjectV2ItemType {
   REDACTED
 }
 
+union IssueOrPullRequest = Issue | PullRequest
 union ProjectV2ItemContent = DraftIssue | Issue | PullRequest
 
 type DraftIssue implements Node {

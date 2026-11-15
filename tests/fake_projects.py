@@ -188,13 +188,18 @@ def run_query(state, repo, fields, selection):
             repo_object = {"__typename": "Repository", "id": "R_1", "isPrivate": bool(state.get("private", True)),
                            "nameWithOwner": "%s/%s" % (owner_login, name_), "owner": dict(owner_of(state, owner_login))}
             for kid in children:
-                if kid[1] == "issue":
+                if kid[1] in ("issue", "issueOrPullRequest"):
                     repo_object[kid[0]] = None
             result = {}
             for kid in children:
                 kalias, kname, kargs, kkids = kid
-                if kname == "issue":
+                if kname == "issueOrPullRequest":
                     node = issue_node(state, "%s/%s" % (owner_login, name_), graphql_check.literal(kargs["number"]))
+                    result[kalias] = None if node is None else evaluate(state, repo, kkids, node, node["__typename"], {})
+                elif kname == "issue":
+                    node = issue_node(state, "%s/%s" % (owner_login, name_), graphql_check.literal(kargs["number"]))
+                    if node is not None and node["__typename"] != "Issue":  # Repository.issue is of type Issue
+                        raise Refused("Could not resolve to an Issue with the number of %s." % kargs["number"], 1)
                     result[kalias] = None if node is None else evaluate(state, repo, kkids, node, node["__typename"], {})
                 else:
                     result[kalias] = evaluate(state, repo, [kid], repo_object, "Repository", {})[kalias]

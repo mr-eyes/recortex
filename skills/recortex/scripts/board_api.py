@@ -293,7 +293,8 @@ def mutation(name, fields, selection, timeout=60):
 def repo_ids(repo, numbers, timeout=60):
     """({repository id, private flag, owner id}, {number: node id}) for issues and pull requests of `repo`."""
     owner, name = repo.split("/")
-    aliases = " ".join("i%d: issue(number: %d) { id }" % (n, n) for n in sorted(numbers))
+    aliases = " ".join("i%d: issueOrPullRequest(number: %d) { ... on Issue { id } ... on PullRequest { id } }" % (n, n)
+                       for n in sorted(numbers))
     data = graphql("query { repository(owner: %s, name: %s) { id isPrivate owner { id login } %s } }"
                    % (quote(owner), quote(name), aliases), timeout)
     found = data.get("repository") or {}

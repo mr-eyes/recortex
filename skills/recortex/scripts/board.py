@@ -180,7 +180,11 @@ def apply_command(args):
     need = [w["number"] for w in work if w["number"] not in cards]
     contents = {}
     if need:
-        _, contents = board_api.repo_ids(repo, need)
+        try:
+            _, contents = board_api.repo_ids(repo, need)
+        except board_api.BoardError as error:
+            print(failure(error.code))
+            return 1
     status_ids, why_field, status_field = project["status"]["ids"], project["why"], project["status"]["id"]
     if args.dry_run:
         for want in work:

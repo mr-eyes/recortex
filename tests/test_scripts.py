@@ -9993,6 +9993,14 @@ class BoardWriteTests(BoardSandbox):
             self.hook(event)
         self.assertEqual([], [a for a in self.repo()["log"][before:] if "mutation" in " ".join(a)])
 
+    def test_a_pull_request_gets_its_card(self):
+        self.make_board()
+        self.pull(20)
+        self.ready()
+        result = self.apply()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("written: #20 is in In Progress", result.stdout)
+
 
 class BoardSyncTests(BoardSandbox):
     """The sync's board step, the two brief lines, --doctor and the resume reminder."""
