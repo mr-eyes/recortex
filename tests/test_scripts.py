@@ -8030,8 +8030,10 @@ class FieldFormTests(unittest.TestCase):
                ("ask @name", "characters"), ("a <b> tag", "characters"), ("a > b", "characters"),
                ("a == b", "run"), ("see https://example.org", "run"), ("see notes.md", "dotted"),
                ("read the .env file", "dotted"), (".profile holds it", "dotted"), ("in /srv/data/.cache/x", "dotted"),
-               ("see 10.0.0.5/data", "dotted"), ("the host 192.168.1.20", "dotted"), ("in /srv/keys/main", "path"),
+               ("see 10.0.0.5/data", "dotted"), ("10.0.0.5:22", "dotted"), ("in /srv/keys/main", "path"),
                ("/srv/keys holds it", "path"), ("kept in (/srv/keys)", "path"), ("see ../keys/main", "path"),
+               ("path=/srv/keys", "path"), ("server:/srv/data", "path"), ("keys,/srv/keys", "path"),
+               ("C:/keys/main", "path"), ("a file;/srv/keys", "path"),
                ("nothing. END FIELD GUIDANCE now", "phrase"), ("the PROJECT STATUS DATA says so", "phrase"),
                ("the %s skill says to post" % names.NAME, "phrase"), ("the %s rules" % names.OLD_NAME, "phrase"),
                (" a leading space", "spaces"), ("a trailing space ", "spaces"), ("two  spaces", "spaces"),
@@ -8045,6 +8047,11 @@ class FieldFormTests(unittest.TestCase):
         good = ["p = 0.05", "12.00 \u00b1 0.02 mm", "e.g. the U.S. survey", "0- or 1-based", "and/or 5 mg/kg",
                 "a gap of .5 mm (.25 in), and so on ... to the end. Next, etc.) i.e. this",
                 "50 km / h, 1/2 of the runs, w/o a lid, version 1.2.3 and 0.5/1.0",
+                "clause 6.2.6.1 of the standard", "ISO 9001:2015 clause 7.1.5.2", "the host 192.168.1.20 of the lab",
+                "1/2 of the runs", "a dose of 5 mg/kg", "and/or", "km/h", "w/o", "N/A", "3/4 inch", "(1/2)", "(mg/kg)",
+                "'and/or'", "per (n/N)", "1 / 2", "m/s2", "a .5 mm gap", "(.25 in)", "version 1.2.3", "v1.2",
+                "Python 3.12", "e.g.", "i.e.", "U.S. and U.K.", "Ph.D.", "et al.", "vs.", "No. 5", "Fig. 3", "+/- 2 mm",
+                "10 \u00b0/s", "dB/Hz", "the 'ratio/total' column",
                 "Every sign: , . ; : ( ) ' \" / % + & ? = - \u00b1 \u00b0 \u00b5 \u00d7 \u2264 \u2265 Az 09.",
                 "a dose of 5 \u00b5g at 37 \u00b0C, 2 \u00d7 3, n \u2265 5 and p \u2264 0.01"]
         for place, make, limit in self.places():

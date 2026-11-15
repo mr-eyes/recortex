@@ -40,10 +40,12 @@ NAME = re.compile(r"[A-Za-z][A-Za-z0-9 '&-]{1,39}")
 # The six signs beyond ASCII: plus-minus, degree, micro, times, at most, at least.
 EXTRA = "\u00b1\u00b0\u00b5\u00d7\u2264\u2265"
 TEXT = re.compile("[A-Za-z0-9 ,.;:()'\"/%+&?=" + EXTRA + "-]+")
-# A dot inside a word (a file name or an address), or a dot that starts a word (a hidden file such as a settings file).
-DOTTED = re.compile(r"[A-Za-z0-9]\.[A-Za-z]{2}|(?:^|[^A-Za-z0-9.])\.[A-Za-z]|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+")
-# A path that starts with a slash (/srv/keys), also after one or two dots (../keys); "and/or" and "mg/kg" pass.
-PATH = re.compile(r"(?:^|[ (\"'])\.{0,2}/[A-Za-z0-9]")
+# A dot inside a word (a file name or an address), a dot that starts a word (a hidden file such as a settings file),
+# or four numbers joined by dots with a "/" or a ":" after them (10.0.0.5/data, 10.0.0.5:22; "clause 6.2.6.1" passes).
+DOTTED = re.compile(r"[A-Za-z0-9]\.[A-Za-z]{2}|(?:^|[^A-Za-z0-9.])\.[A-Za-z]|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+[/:]")
+# A path that starts with a slash (/srv/keys), also after one or two dots (../keys) or after = : ; , (path=/srv/keys,
+# server:/srv/data); "and/or" and "mg/kg" pass.
+PATH = re.compile(r"(?:^|[ (\"'=:;,])\.{0,2}/[A-Za-z0-9]")
 RUNS = ("==", "://")
 PHRASES = ("field guidance", "project status data", names.NAME, names.OLD_NAME)
 RESERVED = ("what counts as proof", "numbers", "failures", "never write down", "across fields", "field", "fields")
