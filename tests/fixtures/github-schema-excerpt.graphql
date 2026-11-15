@@ -31,8 +31,8 @@ type IssueComment {
   author: Actor
   body: String!
   createdAt: DateTime!
-  databaseId: Int
   editor: Actor
+  fullDatabaseId: BigInt
   id: ID!
   lastEditedAt: DateTime
   url: URI!

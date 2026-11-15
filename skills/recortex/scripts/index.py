@@ -298,7 +298,7 @@ def edits_query(repo, cursors):
 
 def comment_edits_query(cursors):
     """The query for the edit history of comments: `cursors` is {comment id: (node id, cursor or None)}."""
-    parts = ['c%d: node(id: "%s") { ... on IssueComment { databaseId lastEditedAt userContentEdits(first: %d%s) '
+    parts = ['c%d: node(id: "%s") { ... on IssueComment { fullDatabaseId lastEditedAt userContentEdits(first: %d%s) '
              '{ pageInfo { endCursor hasNextPage } nodes { editedAt editor { login } } } } }'
              % (cid, node, EDITS_PAGE, ' after: "%s"' % cursor if cursor else "")
              for cid, (node, cursor) in cursors.items()]
@@ -309,8 +309,8 @@ def read_edit_pages(fetch, keys):
     """Read every page of the edit history of each of `keys`; returns {key: (nodes, overflowed)}.
 
     fetch({key: cursor or None}) makes one call for at most GRAPHQL_BATCH keys and returns {key: the connection
-    (a dict with pageInfo and nodes) or None}; a key whose connection is None is left out of the result (not
-    readable). A history goes on while pageInfo.hasNextPage is true; one whose cursor is not a plain cursor, or that
+    (a dict with pageInfo and nodes) or None}; a key whose first answer is None is left out of the result (not
+    readable); a later answer that is None, or an answer without pageInfo, makes the history overflowed. A history goes on while pageInfo.hasNextPage is true; one whose cursor is not a plain cursor, or that
     is longer than EDIT_PAGES_MAX pages, is returned as overflowed with what was read: the caller treats it as a
     history that cannot be trusted.
     """
@@ -322,11 +322,15 @@ def read_edit_pages(fetch, keys):
         for key in cursors:
             connection = got.get(key)
             if not isinstance(connection, dict):
+                if cursors[key] is not None:  # a later page that cannot be read: what was read is not the whole history
+                    result[key] = (result[key][0], True)
                 continue
             found = result.setdefault(key, ([], False))
             found[0].extend(node for node in connection.get("nodes") or [])
-            info = connection.get("pageInfo") or {}
-            if info.get("hasNextPage"):
+            info = connection.get("pageInfo")
+            if not isinstance(info, dict):  # pageInfo is never null on GitHub: an answer without it is not whole
+                result[key] = (found[0], True)
+            elif info.get("hasNextPage"):
                 cursor = info.get("endCursor")
                 if rounds >= EDIT_PAGES_MAX or not isinstance(cursor, str) or not CURSOR.fullmatch(cursor):
                     result[key] = (found[0], True)
@@ -388,6 +392,8 @@ def read_comment_histories(db, repo, call, clock, timeline_cap, summary):
                 node = data.get("node_id") if isinstance(data, dict) else None
                 if not isinstance(node, str) or not COMMENT_NODE.fullmatch(node):
                     continue
+                keep_node(db, row["id"], node)  # kept at once: a sync that stops later does not ask for it again
+                db.commit()
             nodes[row["id"]] = node
         last_edited = {}
 
@@ -410,7 +416,7 @@ def read_comment_histories(db, repo, call, clock, timeline_cap, summary):
             got = {}
             for cid in cursors:
                 node = found.get("c%d" % cid)
-                if not isinstance(node, dict) or node.get("databaseId") != cid:
+                if not isinstance(node, dict) or str(node.get("fullDatabaseId")) != str(cid):  # a BigInt, as a string
                     got[cid] = None  # not the comment that was asked for: not trusted
                     continue
                 last_edited.setdefault(cid, node.get("lastEditedAt"))
@@ -464,6 +470,13 @@ def store_issue_page(db, rows, changed):
         changed.add(number)
 
 
+def keep_node(db, cid, node):
+    """Store the node id of comment `cid` for its edit-history read; a stored read keeps its stamp and its state."""
+    db.execute("INSERT OR IGNORE INTO comment_edit_reads(comment, node, stamp, edits, last_edited, complete) "
+               "VALUES (?, ?, NULL, 0, NULL, 0)", (cid, node))
+    db.execute("UPDATE comment_edit_reads SET node = ? WHERE comment = ?", (node, cid))
+
+
 def store_comment_page(db, rows, changed):
     for row in rows:
         match = re.search(r"/issues/([0-9]+)$", row.get("issue_url", ""))
@@ -482,9 +495,7 @@ def store_comment_page(db, rows, changed):
         node = row.get("node_id")
         if (row.get("created_at") != updated and isinstance(node, str) and COMMENT_NODE.fullmatch(node)
                 and record_format.parse_event(row.get("body") or "")["type"] in record_format.MEMORY_TYPES):
-            db.execute("INSERT INTO comment_edit_reads(comment, node, stamp, edits, last_edited, complete) "
-                       "VALUES (?, ?, NULL, 0, NULL, 0) ON CONFLICT(comment) DO UPDATE SET node = excluded.node",
-                       (int(row["id"]), node))  # the id to read its edit history by, kept for a comment that looks edited
+            keep_node(db, int(row["id"]), node)  # the id to read its edit history by, kept for a comment that looks edited
 
 
 def since_query(db, key):
@@ -695,8 +706,6 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
                 changed_issues.add(number)
             db.commit()
 
-        read_comment_histories(db, repo, call, clock, timeline_cap, summary)
-
         if hub and not clock.passed():
             try:
                 read_resume(db, repo, hub, clock.left(timeout))
@@ -704,8 +713,11 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
                 if clock.passed():  # the read is not a call through call(); a timeout at the budget is the budget
                     raise DeadlineReached("deadline reached during the resume read")
                 raise
+            db.commit()  # the pause the brief shows does not wait for the edit histories below
         elif hub:
             summary["complete"] = False
+
+        read_comment_histories(db, repo, call, clock, timeline_cap, summary)
     except DeadlineReached:
         if rebuild and not rebuilt:
             raise  # a rebuild that cannot finish its listings changes nothing
@@ -1448,6 +1460,7 @@ def cleared_comments(db, allowed):
                           "AND c.updated_at IS NOT NULL AND c.created_at IS NOT NULL AND c.updated_at != c.created_at"):
         entries = editors.get(row["id"], [])
         if (row["edits"] and row["edits"] == len(entries) and max(at or "" for at, _ in entries) == row["last_edited"]
+                and row["last_edited"] >= row["updated_at"]  # an answer from behind REST's updated_at is not current
                 and all(isinstance(who, str) and who.lower() in allowed for _, who in entries)):
             found[row["id"]] = row["updated_at"]
     return found

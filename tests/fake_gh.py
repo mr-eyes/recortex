@@ -26,8 +26,9 @@ Edit histories come in pages of at most 100 entries, as GitHub's userContentEdit
 `pageInfo` with an opaque cursor are answered. A comment is found by its node id, "IC_kwDOfake<id>", which the REST
 listing and the single-comment read give as `node_id`; a node id of a comment that does not exist answers the error
 "Could not resolve to a node with the global id of '<id>'".
-A state comment may set "node_id" (its node id), "database_id" (what the node answers as databaseId) and "cursor"
-(the endCursor it answers) and "gone" (its node no longer resolves), to test hostile answers.
+A state comment may set "node_id" (its node id), "database_id" (what the node answers as fullDatabaseId; databaseId
+is null, with an error, above 2^31 - 1, as GraphQL's Int is), "cursor" (the endCursor it answers), "gone" (its node no
+longer resolves) and "resolves" (how many more times its node resolves), to test hostile answers.
 A comment of another repository is one whose state entry has a "repo" other than the repository in the request:
 reading it by id answers "Not Found", as for an id that does not exist, and the listings leave it out. A comment
 without "repo" belongs to every repository.
@@ -263,6 +264,9 @@ def main():
             for alias, name, arguments, children in top:
                 wanted = arguments["id"].strip('"')
                 found = [c for c in state["comments"] if node_id(c, state) == wanted and not state["comments"][c].get("gone")]
+                if found and "resolves" in state["comments"][found[0]]:  # a test: it resolves this many more times
+                    state["comments"][found[0]]["resolves"] -= 1
+                    found = found if state["comments"][found[0]]["resolves"] >= 0 else []
                 if not found:
                     out[alias] = None
                     errors.append({"type": "NOT_FOUND", "path": [alias], "message":
@@ -271,8 +275,12 @@ def main():
                 comment = state["comments"][found[0]]
                 edits = comment.get("edits", [])
                 newest = edits[0] if edits else None
-                values = {"databaseId": comment.get("database_id", int(found[0])), "lastEditedAt": comment.get("last_edited_at",
-                                                                                   newest["at"] if newest else None)}
+                database_id = int(comment.get("database_id", int(found[0])))
+                values = {"databaseId": database_id if database_id < 2 ** 31 else None, "fullDatabaseId": str(database_id),
+                          "lastEditedAt": comment.get("last_edited_at", newest["at"] if newest else None)}
+                if database_id >= 2 ** 31 and any(n == "databaseId" for _, n, _, _ in children[0][3]):
+                    errors.append({"path": [alias, "databaseId"], "message":  # GraphQL's Int holds 32 bits only
+                                   "Int cannot represent non 32-bit signed integer value: %d" % database_id})
                 out[alias] = {}
                 for a, n, arguments_of, kids in children[0][3]:
                     out[alias][a] = edit_connection(edits, arguments_of, kids, comment.get("cursor")) \

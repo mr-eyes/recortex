@@ -6881,7 +6881,7 @@ class EditHistoryTests(MindSandbox):
         queries = self.calls("node(id:")
         self.assertEqual(1, len(queries))
         self.assertEqual(1, queries[0].count("node(id:"))
-        self.assertIn("c9104: node(id: \"IC_kwDOfake9104\") { ... on IssueComment { databaseId lastEditedAt "
+        self.assertIn("c9104: node(id: \"IC_kwDOfake9104\") { ... on IssueComment { fullDatabaseId lastEditedAt "
                       "userContentEdits(first: 100) { pageInfo { endCursor hasNextPage } nodes { editedAt editor { login } } } } }",
                       queries[0])
         self.assertEqual([(9104, "2026-04-20T10:00:00Z", 1, 1)], self.reads())
@@ -7142,6 +7142,86 @@ class EditHistoryTests(MindSandbox):
         self.assertEqual([], self.calls("IC_kwDOfake9604"))  # it is no memory: its history is not read
         self.assertNotIn("MARK-RESUME-EDITED", json.dumps(self.mind_model()))
 
+    # ------------------------------------------------------------ the review's tests
+
+    def test_a_comment_id_beyond_graphql_int_is_read(self):
+        """GitHub's comment ids are past 2^31 - 1, which GraphQL's Int (databaseId) cannot hold."""
+        cid = 4100000001
+        self.put(cid, 5, chain_text("1-idea.md"))
+        self.edited_by(cid, "octo-dev")
+        self.ready()
+        self.assertEqual([(cid, "2026-04-20T10:00:00Z", 1, 1)], self.reads())
+        self.assertTrue(self.memories()[cid]["changed"])
+
+    def test_a_later_page_that_cannot_be_read_is_not_a_whole_history(self):
+        pages = iter([{6: {"pageInfo": {"hasNextPage": True, "endCursor": "Y3Vyc29yOjE="}, "nodes": [{"n": 1}]}},
+                      {6: None}])
+        self.assertEqual({6: ([{"n": 1}], True)}, self.in_index().read_edit_pages(lambda cursors: next(pages), [6]))
+        self.assertEqual({6: ([], True)}, self.in_index().read_edit_pages(lambda cursors: {6: {"nodes": []}}, [6]))
+
+    def test_a_comment_gone_between_two_pages_of_its_history_never_clears(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev", count=150)
+        data = self.repo()
+        data["comments"]["9107"]["edits"].insert(120, {"at": "2026-04-19T10:00:00Z", "by": "mallory"})  # page 2
+        data["comments"]["9107"]["resolves"] = 1  # its node resolves for the first page, then it is deleted
+        self.save(data)
+        self.ready()
+        self.assertNotIn(9107, self.memories())
+        self.assertEqual(1, self.recalled()["edited"])
+
+    def test_an_outside_edit_in_the_minute_of_the_post_is_seen(self):
+        self.add_chain()
+        data = self.repo()
+        comment = data["comments"]["9107"]
+        later = comment["created_at"][:17] + "40Z"  # same minute, another second
+        comment["edits"] = [{"at": later, "by": "mallory"}, {"at": comment["created_at"], "by": "octo-dev"}]
+        comment["updated_at"] = later
+        self.save(data)
+        self.ready()
+        self.assertEqual([(1, later, "mallory")], [tuple(r) for r in self.sql("SELECT seq, at, editor FROM comment_edits")])
+        self.assertNotIn(9107, self.memories())
+
+    def test_a_deleted_memory_without_a_stored_node_id_does_not_stop_the_sync(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev")
+        self.ready()
+        self.sql("DELETE FROM comment_edit_reads", "DELETE FROM comment_edits")  # an index from before, no node id
+        data = self.repo()
+        del data["comments"]["9107"]  # deleted on GitHub; an incremental sync keeps its row
+        self.save(data)
+        self.ready()
+        self.assertEqual([(9107, "2026-04-20T10:00:00Z", 0, 2)], self.reads())
+        self.assertNotIn(9107, self.memories())
+
+    def test_a_history_older_than_the_comment_does_not_clear(self):
+        """GitHub's GraphQL answer can be behind its REST answer: the newest edit must not be older than updated_at."""
+        self.add_chain()
+        self.edited_by(9107, "octo-dev", when="2026-04-20T10:00:00Z")
+        data = self.repo()
+        data["comments"]["9107"]["updated_at"] = "2026-04-21T10:00:00Z"  # REST: changed again since
+        self.save(data)
+        self.ready()
+        self.assertNotIn(9107, self.memories())
+
+    def test_a_failing_edit_history_read_keeps_the_newest_pause_and_the_node_ids(self):
+        self.add_chain()
+        self.edited_by(9107, "octo-dev")
+        self.ready()
+        self.sql("DELETE FROM comment_edit_reads", "DELETE FROM comment_edits")  # an index from before, no node id
+        self.put(9604, 4, resume_comment("MARK-NEW-PAUSE", "2026-04-11 10:00 PST"))
+        failed = self.tool("index.py", "sync", env={"FAKE_GH_NODE_FAIL": "1"})
+        self.assertNotEqual(0, failed.returncode)
+        self.assertIn("MARK-NEW-PAUSE", self.sql("SELECT value FROM meta WHERE key = 'resume'")[0][0])
+        self.assertEqual([(9107, "IC_kwDOfake9107", 0)], [tuple(r) for r in self.sql(
+            "SELECT comment, node, complete FROM comment_edit_reads")])
+
+    def test_the_index_needs_no_newer_sqlite_than_the_supported_pythons_bring(self):
+        """README: Python 3.8 or newer, whose SQLite can be 3.22 (Ubuntu 18.04): no UPSERT (3.24) or RETURNING (3.35)."""
+        for name in ("index.py", "mind_model.py", "lookup.py", "compile.py"):
+            text = recortex.read_text(os.path.join(SCRIPTS, name))
+            for word in ("ON CONFLICT", "RETURNING", "DO NOTHING", " OVER ("):
+                self.assertNotIn(word, text, name)
 
     def in_index(self):
         self.in_process()
