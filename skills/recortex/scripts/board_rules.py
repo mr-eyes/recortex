@@ -166,7 +166,15 @@ def desired(db, allowed, now=None):
     return cards
 
 
-def compare(wanted, cards, known):
+def written(why):
+    """The status the plugin last wrote on a card: the status name at the start of its Why, or None."""
+    for name in sorted(STATUSES, key=len, reverse=True):
+        if why == name or why.startswith(name + " "):
+            return name
+    return None
+
+
+def compare(wanted, cards, known, closed=frozenset()):
     """Set the wanted cards against the stored ones. `cards` is {number: {"status", "why", "archived", "item"}}, and
     `known` the numbers that are issues or pull requests of the record. Returns a dict of lists of cards (by number):
     missing (no card yet), behind (the record moved on, or the card has no state yet), moved (someone moved the card
@@ -182,6 +190,11 @@ def compare(wanted, cards, known):
         if card["status"] == want["status"]:
             if card["why"] != want["mark"]:
                 out["behind"].append(dict(want, why_only=True))
+            continue
+        last = written(card["why"])
+        workflow = card["status"] == "Done" and want["number"] in closed  # GitHub's default workflows
+        if card["status"] not in ("", "other") and last and last != card["status"] and not workflow:
+            out["moved"].append(dict(want, board=card["status"]))  # moved since the plugin wrote it, whatever came after
             continue
         if card["status"] and card["why"] == want["mark"]:
             if card["status"] != "other":
@@ -199,7 +212,8 @@ def stored_cards(db):
 def plan(db, allowed, now=None):
     wanted = desired(db, allowed, now)
     known = {row["number"] for row in db.execute("SELECT number FROM issues")}
-    result = compare(wanted, stored_cards(db), known)
+    closed = {row["number"] for row in db.execute("SELECT number FROM issues WHERE state = 'closed'")}
+    result = compare(wanted, stored_cards(db), known, closed)
     result["wanted"] = wanted
     return result
 

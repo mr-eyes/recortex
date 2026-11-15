@@ -68,7 +68,7 @@ The next session-start brief says, inside its data frame, `Board: 2 cards were m
 - "Record it": post the memory that makes it true (a checkpoint for work that began, a failure, a decision with the user's exact words, a closed task). Record and board then agree with no board write.
 - "Put it back": `board.py apply --restore 13`.
 
-A card dragged to a column the user added is left where it is and not reported, until the record itself moves on. A closed or merged item gets Done from GitHub's default workflow at once; the next `apply` corrects a not-planned close to Set aside.
+A card whose Status differs from the status the plugin last wrote (the first words of its Why) stays reported as moved by hand, whatever the record does after, until the user answers; the one exception is Done on a closed issue or pull request, which is GitHub's own workflow. A card dragged to a column the user added is left where it is and not reported, until the record itself moves on. A closed or merged item gets Done from GitHub's default workflow at once; the next `apply` corrects a not-planned close to Set aside.
 
 ### What is read back, and what is never done
 

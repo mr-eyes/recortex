@@ -155,9 +155,10 @@ def apply_command(args):
         allowed = recortex.allowed_users(repo)
         wanted = board_rules.desired(db, allowed)
         known = {row["number"] for row in db.execute("SELECT number FROM issues")}
+        closed = {row["number"] for row in db.execute("SELECT number FROM issues WHERE state = 'closed'")}
     finally:
         db.close()
-    found = board_rules.compare(wanted, cards, known)
+    found = board_rules.compare(wanted, cards, known, closed)
     by_number = {w["number"]: w for w in wanted}
     if args.restore is not None:
         want = by_number.get(args.restore)

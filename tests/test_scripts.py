@@ -9729,8 +9729,8 @@ class BoardCompareTests(unittest.TestCase):
         return {"number": number, "kind": "issue", "status": status, "address": address,
                 "mark": self.rules.mark(status, address)}
 
-    def compare(self, wanted, cards, known=None):
-        return self.rules.compare(wanted, cards, set(known if known is not None else cards))
+    def compare(self, wanted, cards, known=None, closed=()):
+        return self.rules.compare(wanted, cards, set(known if known is not None else cards), set(closed))
 
     def test_a_card_that_is_where_the_record_puts_it_is_quiet(self):
         found = self.compare([self.want(7, "Todo")], {7: self.card("Todo", "Todo")})
@@ -9758,7 +9758,7 @@ class BoardCompareTests(unittest.TestCase):
 
     def test_a_not_planned_close_after_the_workflow_wrote_done_is_behind_not_moved(self):
         # the plugin wrote "In Progress"; GitHub's workflow wrote Done at the close; the record says Set aside
-        found = self.compare([self.want(7, "Set aside")], {7: self.card("Done", "In Progress")})
+        found = self.compare([self.want(7, "Set aside")], {7: self.card("Done", "In Progress")}, closed={7})
         self.assertEqual([7], [w["number"] for w in found["behind"]])
         self.assertEqual([], found["moved"])
 
@@ -9772,6 +9772,20 @@ class BoardCompareTests(unittest.TestCase):
         found = self.compare([self.want(7, "Todo")], {7: self.card("", "Todo")})
         self.assertEqual([7], [w["number"] for w in found["behind"]])
         self.assertEqual([], found["moved"])
+
+    def test_a_card_moved_after_the_plugin_wrote_it_stays_moved_when_the_record_moves_on(self):
+        found = self.compare([self.want(7, "In Progress", "A")], {7: self.card("Blocked", "Todo")})
+        self.assertEqual([7], [w["number"] for w in found["moved"]])
+        self.assertEqual("Blocked", found["moved"][0]["board"])
+        self.assertEqual([], found["behind"])
+
+    def test_done_on_a_closed_item_is_the_workflow_and_a_card_never_written_is_not_moved(self):
+        found = self.compare([self.want(7, "Set aside")], {7: self.card("Done", "Blocked A")}, closed={7})
+        self.assertEqual([], found["moved"])
+        found = self.compare([self.want(7, "Todo")], {7: self.card("In Progress", "left over text")})
+        self.assertEqual([], found["moved"])  # its Why does not start with a status the plugin wrote
+        found = self.compare([self.want(7, "Todo")], {7: self.card("Done", "Blocked A")})
+        self.assertEqual([7], [w["number"] for w in found["moved"]])  # Done on an open item is a drag
 
     def test_an_archived_card_is_left_alone(self):
         found = self.compare([self.want(7, "Todo")], {7: self.card("Done", "x", archived=True)})
@@ -10100,6 +10114,16 @@ class BoardWriteTests(BoardSandbox):
                            env={"FAKE_GH_IGNORE_MUTATION": "updateProjectV2View"})
         self.assertEqual(1, result.returncode, result.stdout)
         self.assertIn("the board does not read back as it was set up", result.stdout)
+
+    def test_a_hand_move_is_reported_after_the_record_moves_on(self):
+        self.make_board()
+        self.assertEqual(0, self.apply().returncode)
+        self.moved_by_hand(7, "Blocked")
+        self.memory(9300, 7, "checkpoint")  # the record moves on; nobody answered about the drag
+        self.ready()
+        result = self.apply()
+        self.assertIn("moved by hand: #7", result.stdout)
+        self.assertEqual("Blocked", self.cards()[7][0])
 
 
 class BoardSyncTests(BoardSandbox):
