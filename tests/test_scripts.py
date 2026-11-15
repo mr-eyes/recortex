@@ -9439,6 +9439,26 @@ class SubIssueTests(RecordSandbox):
         self.assertEqual([(0,)], self.sql_rows("SELECT COUNT(*) FROM issues WHERE edits_read = 0 AND is_pr = 0"))
 
 
+    def test_a_link_made_before_a_failure_is_read_back(self):
+        data = self.repo()
+        for issue in data["issues"].values():
+            issue.pop("parent", None)
+        self.save(data)
+        self.ready()
+        result = self.tool("sub_issues.py", "apply", "--pause", "0", env={"FAKE_GH_FAIL_AFTER_MUTATION": "addSubIssue"})
+        self.assertEqual(1, result.returncode)
+        self.assertIn("linked: #5 is under #4", result.stdout)
+
+    def test_apply_writes_at_most_the_limit(self):
+        data = self.repo()
+        for issue in data["issues"].values():
+            issue.pop("parent", None)
+        self.save(data)
+        self.ready()
+        result = self.tool("sub_issues.py", "apply", "--pause", "0", "--limit", "1")
+        self.assertIn("linked: #5 is under #4", result.stdout)
+        self.assertIn("2 more link(s) wait", result.stdout)
+
 
 def utc_ago(days, hours=0):
     """An ISO UTC stamp `days` days and `hours` hours before now."""

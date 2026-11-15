@@ -148,6 +148,8 @@ def main(argv=None):
         if name == "apply":
             p.add_argument("--dry-run", action="store_true", help="print the exact commands; write nothing")
             p.add_argument("--pause", type=float, default=1.0, help="seconds between writes")
+            p.add_argument("--limit", type=int, default=60, metavar="N",
+                           help="links written at most in one run (default 60); run again for the rest")
     args = parser.parse_args(argv)
     config = recortex.load_config()
     repo = recortex.resolve_repo(args.repo, config)
@@ -178,23 +180,34 @@ def main(argv=None):
                                                                                                       ids[child])]))
         print("dry run: nothing was written")
         return 0
-    failed = 0
-    for parent, child in todo:
+    failed, written, stopped = 0, [], False
+    for parent, child in todo[:args.limit]:
+        written.append((parent, child))  # read back even when the call fails: GitHub may have acted first
         try:
             board_api.graphql(add_text(ids[parent], ids[child]))
         except board_api.BoardError:
-            print(REFUSED)
-            return 1
+            stopped = True
+            break
         if args.pause > 0:
             time.sleep(args.pause)
-    if todo:
-        _, parents = read_parents(repo, [c for _, c in todo])
-        for parent, child in todo:
+    if written:
+        try:
+            _, parents = read_parents(repo, [c for _, c in written])
+        except board_api.BoardError:
+            print(UNREAD)
+            return 1
+        for position, (parent, child) in enumerate(written):
             if parents.get(child) == parent:
                 print("linked: #%d is under #%d" % (child, parent))
-            else:
+            elif not (stopped and position == len(written) - 1):
                 print("MISMATCH: #%d does not read back under #%d" % (child, parent))
                 failed += 1
+    if stopped:
+        print(REFUSED)
+        failed += 1
+    if len(todo) > args.limit:
+        print("sub-issues: %d more link(s) wait; at most %d are written at a time; run again"
+              % (len(todo) - args.limit, args.limit))
     return 1 if failed else 0
 
 
