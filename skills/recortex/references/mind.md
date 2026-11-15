@@ -76,7 +76,7 @@ When you ask to see or open the project's memory, the session runs `index.py syn
 
 ## How the page is kept inert
 
-The file is self-contained: one style and one script, both fixed files of the plugin allowed by their hashes in a Content-Security-Policy that loads nothing else (no pictures, fonts, frames or connections). Record text is only ever text in the page, never markup, an attribute or an address; every link out is an address on GitHub that the page built from checked parts. An allowed account can still write a misleading plain line; the fields and the original comment are one step away.
+The file is self-contained: one style and one script, both fixed files of the plugin allowed by their hashes in a Content-Security-Policy that loads nothing else (no pictures, fonts, frames or connections). Record text is only ever text in the page, never markup, an attribute or an address; every link out is an address on GitHub that the page built from checked parts. The brand icon above the project's name is a third fixed file, `page/icon.txt`: two lines of path data that the build refuses unless they hold only `M`, `C`, `Z`, digits, spaces, commas and minus signs. It is drawn as an inline `svg` of the page, not loaded as a picture, so no picture is allowed. An allowed account can still write a misleading plain line; the fields and the original comment are one step away.
 
 ## If the browser says it cannot open the file
 

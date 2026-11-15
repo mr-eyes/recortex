@@ -7668,6 +7668,7 @@ class MindPageTests(MindSandbox):
         page = os.path.join(SKILL, "page")
         script = recortex.read_text(os.path.join(page, "mind.js"))
         style = recortex.read_text(os.path.join(page, "mind.css"))
+        icon = recortex.read_text(os.path.join(page, "icon.txt"))
         for word in SCRIPT_BANNED:
             self.assertNotIn(word, script)
         for word in ("url(", "@import", "expression("):
@@ -7685,7 +7686,7 @@ class MindPageTests(MindSandbox):
         for name, bad in (("mind.js", script + "\n// </script>"), ("mind.css", style + "\n/* <!-- */")):
             folder = os.path.join(self.dir, "page-" + name)
             os.makedirs(folder)
-            for other, text in (("mind.js", script), ("mind.css", style)):
+            for other, text in (("mind.js", script), ("mind.css", style), ("icon.txt", icon)):
                 with open(os.path.join(folder, other), "w") as handle:
                     handle.write(bad if other == name else text)
             mind.PAGE = folder
@@ -7701,6 +7702,105 @@ class MindPageTests(MindSandbox):
         for columns in selects:
             self.assertNotIn("*", columns)
             self.assertIsNone(re.search(r"\b(url|image)\b", columns), columns)
+
+    # ------------------------------------------------------------ the icon and the palette
+
+    ICON_SHA256 = "16dd7c58ecebdc3f8e54e7bbf51181742168895a6e312631f30c6c784fe7d9be"
+
+    def test_the_icon_sits_once_in_the_side_bar(self):
+        text = self.chain_page()
+        icon = recortex.read_text(os.path.join(SKILL, "page", "icon.txt")).split("\n")
+        self.assertEqual(3, len(icon))
+        self.assertEqual("", icon[2])
+        body = text[text.index("</style>"):]  # the classes are named once in the style and nowhere else
+        self.assertEqual(1, body.count('class="logo"'))
+        self.assertEqual(1, body.count('class="lg-a"'))
+        self.assertEqual(1, body.count('class="lg-b"'))
+        side = body[body.index('<nav class="side"'):body.index("</nav>")]
+        self.assertTrue(side.index("<svg") < side.index('<p class="mindname">'))  # first in the side bar
+        found = re.findall(r'<svg viewBox="144 144 968 968" class="logo" aria-hidden="true">'
+                           r'<path class="lg-a" d="([^"]*)"/><path class="lg-b" d="([^"]*)"/></svg>', side)
+        self.assertEqual([tuple(icon[:2])], found)
+        for name in ("logo", "lg-a", "lg-b"):
+            self.assertEqual(1, len(re.findall(r'class="%s"' % name, body)), name)
+
+    def test_the_icon_is_pinned(self):
+        import hashlib
+        with open(os.path.join(SKILL, "page", "icon.txt"), "rb") as handle:
+            self.assertEqual(self.ICON_SHA256, hashlib.sha256(handle.read()).hexdigest())
+
+    def test_a_bad_icon_file_stops_the_build(self):
+        mind = self.mind()
+        page = os.path.join(SKILL, "page")
+        style = recortex.read_text(os.path.join(page, "mind.css"))
+        script = recortex.read_text(os.path.join(page, "mind.js"))
+        good = "M1,2 C3,4 5,6 7,8 Z"
+        bad = {"a tag": [good + "<", good], "a quote": ['M1,2 "', good], "a letter": ["M1,2 L3,4 Z", good],
+               "a lower case letter": ["m1,2 z", good], "a third line": [good, good, good],
+               "a missing line": [good], "an empty line": [good, ""], "a long line": [good, "M" + "1" * 8000],
+               "an attribute": [good + ' onload=x', good]}
+        self.assertEqual((good, good), tuple(self.icon_from(mind, style, script, [good, good])[2]))
+        self.assertEqual("M" + "1" * 7999, self.icon_from(mind, style, script, ["M" + "1" * 7999, good])[2][0])
+        for name, lines in bad.items():
+            with self.assertRaises(ValueError, msg=name):
+                self.icon_from(mind, style, script, lines)
+
+    def icon_from(self, mind, style, script, lines):
+        folder = os.path.join(self.dir, "page-icon-%d" % len(os.listdir(self.dir)))
+        os.makedirs(folder)
+        for name, text in (("mind.css", style), ("mind.js", script), ("icon.txt", "\n".join(lines) + "\n")):
+            with open(os.path.join(folder, name), "w") as handle:
+                handle.write(text)
+        real, mind.PAGE = mind.PAGE, folder
+        try:
+            return mind.fixed_files()
+        finally:
+            mind.PAGE = real
+
+    def test_the_palette_is_the_same_in_light_and_dark(self):
+        style = recortex.read_text(os.path.join(SKILL, "page", "mind.css"))
+        light = re.search(r"^:root\{([^}]*)\}", style, re.M).group(1)
+        media = re.search(r"@media \(prefers-color-scheme:dark\)\{:root:not\(\[data-theme=light\]\)\{([^}]*)\}\}",
+                          style).group(1)
+        attribute = re.search(r"^:root\[data-theme=dark\]\{([^}]*)\}", style, re.M).group(1)
+        tokens = lambda block: dict(re.findall(r"--([a-z]+):(#[0-9A-Fa-f]{6})\b", block))
+        light, media, attribute = tokens(light), tokens(media), tokens(attribute)
+        names = {"fog", "sheet", "ink", "quiet", "rule", "thread", "brand", "wash", "found", "decided", "wrong", "idea",
+                 "asked", "fixed", "paused"}
+        self.assertEqual(names, set(light))
+        self.assertEqual(names, set(media))
+        self.assertEqual(names, set(attribute))
+        self.assertEqual(media, attribute)  # dark by the system and dark by the switch are one palette
+        self.assertEqual("#D76744", light["brand"])  # the brand's terracotta, in shapes and lines only
+        self.assertEqual("#D76744", media["brand"])
+
+    def test_every_text_color_reads_on_both_backgrounds(self):
+        style = recortex.read_text(os.path.join(SKILL, "page", "mind.css"))
+
+        def luminance(color):
+            parts = [int(color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            parts = [p / 12.92 if p <= 0.03928 else ((p + 0.055) / 1.055) ** 2.4 for p in parts]
+            return 0.2126 * parts[0] + 0.7152 * parts[1] + 0.0722 * parts[2]
+
+        def contrast(a, b):
+            high, low = sorted((luminance(a), luminance(b)), reverse=True)
+            return (high + 0.05) / (low + 0.05)
+
+        blocks = re.findall(r"^(?::root|@media[^{]*\{:root:not\(\[data-theme=light\]\)|:root\[data-theme=dark\])"
+                            r"\{([^}]*)\}", style, re.M)
+        self.assertEqual(3, len(blocks))
+        for block in blocks:
+            tokens = dict(re.findall(r"--([a-z]+):(#[0-9A-Fa-f]{6})\b", block))
+            for name in ("ink", "quiet", "thread", "found", "decided", "wrong", "idea", "asked", "fixed", "paused"):
+                for ground in ("fog", "sheet"):
+                    self.assertGreaterEqual(contrast(tokens[name], tokens[ground]), 4.5, (name, ground, tokens[name]))
+        # the contrast function itself: black on white is 21 to 1, and a mid gray fails
+        self.assertAlmostEqual(21.0, contrast("#000000", "#FFFFFF"), places=3)
+        self.assertLess(contrast("#D76744", "#FCF8F1"), 4.5)  # why the brand color is never used for text
+
+    def test_the_icon_takes_its_colors_from_two_classes(self):
+        style = recortex.read_text(os.path.join(SKILL, "page", "mind.css"))
+        self.assertIn(".lg-a{fill:var(--brand)}.lg-b{fill:var(--ink)}", style)
 
     # ------------------------------------------------------------ the command
 
