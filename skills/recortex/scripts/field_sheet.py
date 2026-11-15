@@ -41,6 +41,7 @@ RESERVED = ("what counts as proof", "numbers", "failures", "never write down", "
 DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 APPROVALS = "field-approvals.json"
+OFFER_FILE = "field-offer.json"
 APPROVALS_CAP = 2 * 1024 * 1024  # far above what the plugin writes; a larger file is not read
 
 LABELS = {"proof": "What counts as proof", "numbers": "Numbers", "failures": "Failures", "never": "Never write down",
@@ -350,16 +351,17 @@ def off():
         return False
 
 
-def state(config, repo):
+def state(config, repo, honor_off=True):
     """What the hooks show, from the configuration they already parsed (no project file is read here):
     {"state", "entry", "approved", "fingerprint", "approved_fingerprint", "problems", "reason"}, by the table of states
-    (none, off, malformed, mark, unreadable, new, changed, approved). Never raises."""
+    (none, off, malformed, mark, unreadable, new, changed, approved). Never raises. honor_off=False is for setup.py
+    fields, which shows and approves a sheet also where the user turned the guidance off."""
     out = {"state": "none", "entry": None, "approved": None, "fingerprint": None, "approved_fingerprint": None,
            "problems": [], "reason": ""}
     try:
         if not isinstance(config, dict) or "fields" not in config:
             return out
-        if off():
+        if honor_off and off():
             out["state"] = "off"
             return out
         entry, problems = check_entry(config["fields"])
@@ -414,3 +416,22 @@ def sensitive_marks(config, repo):
     except Exception:  # noqa: BLE001 - an unreadable approval adds nothing
         pass
     return [m for m in SENSITIVE if m in found]
+
+
+# ---------------------------------------------------------------- the offer
+
+def offer_path(repo):
+    """The repository's private state file that says the offer to set the field was made (or the question asked)."""
+    return os.path.join(storage.folder(storage.state_top(), storage.repo_folder(repo)), OFFER_FILE)
+
+
+def offered(repo):
+    """True when the offer was made for this repository on this machine. Raises storage.StorageError."""
+    try:
+        return json.loads(storage.read_file(offer_path(repo)) or "{}") == {"offered": True}
+    except (ValueError, RecursionError):
+        return False  # planted or damaged: counts as not made, and is written again
+
+
+def mark_offered(repo):
+    storage.write_file(offer_path(repo), json.dumps({"offered": True}))

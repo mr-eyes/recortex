@@ -14,6 +14,12 @@ apply   Makes every change, from an answers file written after the user's final
         foreground. --dry-run prints all of it and writes nothing; a real run
         needs --yes. Run again with new answers, it adds deliverables, sections
         and labels and never removes what is there.
+fields  The field sheet (references/fields.md), local only: `show` prints its
+        state and the sheet; `set --answers <file>` writes the "fields" entry of
+        the answers and records the user's approval (--dry-run, or --yes;
+        --replace for a project that has another sheet); `approve --fingerprint
+        <hex> --yes` records the approval of the sheet as it stands, when its
+        fingerprint starts with the value that `show` printed.
 
 Answers file (JSON):
   {"repo": "owner/name",                  the repository that holds the issues
@@ -26,15 +32,21 @@ Answers file (JSON):
    "catch_up": false, "read_transcripts": false,
    "triage_workflow": false, "claude_md": false,
    "prompt_hook": {"enabled": true, "every": 10},
-   "trust": true}                          true: the user agreed to add the repository to their trusted list
+   "trust": true,                          true: the user agreed to add the repository to their trusted list
+   "fields": {"names": [...], "sensitive": [...], "brief": {...}, "checks": [...], "words": "...",
+              "restricted": [{"name": ..., "pattern": ..., "example": ...}]}}   optional; see references/fields.md
 
 Kinds: paper, thesis, software, dataset, report, prototype, proposal, docs,
 other (with "name" and "sections").
 
 Examples:
   setup.py detect
+  setup.py detect --fields --json
   setup.py apply --answers answers.json --dry-run
   setup.py apply --answers answers.json --yes
+  setup.py fields show
+  setup.py fields set --answers answers.json --dry-run
+  setup.py fields approve --fingerprint bf343e5d9ed0 --yes
 """
 
 import argparse
@@ -53,6 +65,7 @@ import names  # noqa: E402
 import lint_drafts  # noqa: E402
 import setup_labels  # noqa: E402
 import storage  # noqa: E402
+import field_sheet  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(HERE, "..", "templates")
@@ -151,6 +164,63 @@ def detect(root):
         if evidence:
             out.append({"kind": kind, "profile": KINDS[kind][0], "evidence": evidence})
     return out
+
+
+# Field suggestions, from file and folder names only: no file is read. A pattern is "*.ext" (a file whose name ends
+# so), "Name" (a file of that name at the top), "name/" (a folder of that name) or "prefix*/" (a folder whose name
+# starts so); both sides are lowered. Every key has a model sheet in fields/. Business and policy names are weak signs.
+FIELD_SIGNALS = {
+    "bioinformatics": ["*.fastq", "*.fastq.gz", "*.fq.gz", "*.bam", "*.cram", "*.vcf", "*.vcf.gz", "*.bcf", "*.fasta",
+                       "*.fa", "*.gff", "*.gff3", "*.gtf", "*.h5ad", "Snakefile", "*.nf"],
+    "engineering": ["*.step", "*.stp", "*.sldprt", "*.sldasm", "*.dxf", "*.dwg", "*.scad", "*.stl", "*.fcstd", "cad/",
+                    "drawings/"],
+    "business": ["financials/", "market*/", "pricing*/", "pitch*/"],
+    "policy": ["polling/", "polls/", "survey*/", "legislation/", "briefs/"],
+}
+FIELD_WEAK = {"business", "policy"}
+
+
+def field_match(pattern, entry):
+    """Whether one name from names_in fits one pattern of FIELD_SIGNALS, ignoring case."""
+    path, depth = entry
+    folder = path.endswith("/")
+    base = path.rstrip("/").split("/")[-1].lower()
+    pattern = pattern.lower()
+    if pattern.startswith("*"):
+        return not folder and base.endswith(pattern[1:])
+    if pattern.endswith("*/"):
+        return folder and base.startswith(pattern[:-2])
+    if pattern.endswith("/"):
+        return folder and base == pattern[:-1]
+    return not folder and depth == 0 and base == pattern
+
+
+def detect_fields(root):
+    """[{"field", "weak", "evidence": [...]}]: field suggestions with their evidence, in fixed words."""
+    entries = names_in(root)
+    out = []
+    for field, patterns in FIELD_SIGNALS.items():
+        evidence = []
+        for pattern in patterns:
+            hits = [e for e in entries if field_match(pattern, e)]
+            if not hits:
+                continue
+            if pattern.startswith("*"):
+                evidence.append("%d %s file%s" % (len(hits), pattern[1:], "" if len(hits) == 1 else "s"))
+            elif pattern.endswith("/"):
+                evidence.append(pattern)
+            else:
+                evidence.append("a %s" % pattern)
+        if evidence:
+            out.append({"field": field, "weak": field in FIELD_WEAK, "evidence": evidence})
+    return out
+
+
+def field_lines(found):
+    if not found:
+        return ["no field suggestion: most fields leave no file names; ask the user"]
+    return ["field %s: %s, because %s" % ("perhaps" if item["weak"] else "suggested", item["field"],
+                                          ", ".join(item["evidence"])) for item in found]
 
 
 def covered_profiles(config):
@@ -268,6 +338,9 @@ def check_answers(answers):
             or isinstance(hook.get("every", 10), bool) or not isinstance(hook.get("every", 10), int):
         raise AnswerError("prompt_hook must be {\"enabled\": true|false, \"every\": N}")
     out["prompt_hook"] = {"enabled": hook.get("enabled", True), "every": min(100, max(1, hook.get("every", 10)))}
+    out["fields"], out["restricted"] = None, []
+    if "fields" in answers:
+        out["fields"], out["restricted"] = check_field_answers(answers["fields"])
     return out
 
 
@@ -387,7 +460,406 @@ def new_config(existing, answers, name=recortex.CONFIG_NAME):
     config["read_transcripts"] = answers["read_transcripts"]
     config.setdefault("restricted_patterns", [])
     config.setdefault("banned_words", [])
+    if answers.get("fields") is not None:
+        value = merge_fields(existing, answers["fields"])
+        if value is not None:
+            config["fields"] = value
+    if answers.get("restricted"):
+        config["restricted_patterns"], _ = merge_patterns(config["restricted_patterns"], answers["restricted"])
     return config, added
+
+
+# ---------------------------------------------------------------- fields
+
+FIELD_ANSWER_KEYS = ("names", "sensitive", "brief", "checks", "words", "restricted")
+RESTRICTED_MAX, PATTERN_CAP, EXAMPLE_CAP = 10, 200, 100
+# A pattern that matches either sentence would refuse nearly every post, so it is not written.
+ORDINARY = ("The run finished on 2026-03-04 with 42 of 48 samples.",
+            "See the reader in src and the notes of the last meeting.")
+CONTROL = re.compile("[\x00-\x1f\x7f-\x9f]")
+REPLACE = "this project already has field guidance; pass --replace to setup.py fields set"
+MARK_WORDS = {"people": "data about people", "confidential": "confidential business or partner information",
+              "contested": "a contested public topic"}
+PUBLIC = ("notice: the record's repository %s is public: anyone can read every issue and comment in it, and what was "
+          "posted stays in its history. This project is marked as handling %s. To keep the record private, stop here "
+          "and set up again with a new private repository (\"record\": \"new\").")
+UNCHECKED = ("note: could not check whether %s is public (GitHub could not be read); check it before recording "
+             "sensitive material.")
+NOTE_PEOPLE = ("note: data about people does not belong in an issue, public or private. Record counts, codes and file "
+               "paths, and keep the data where the project's agreements put it.")
+NOTE_ANY = ("note: the plugin refuses the forms listed in restricted_patterns and reminds every subagent of the "
+            "sheet's \"Never write down\" line. It cannot recognize sensitive content it has no pattern for, and it does "
+            "not make a project meet a law, an ethics approval or a contract.")
+PROPOSAL_BEGIN = "===== BEGIN PROPOSED FIELD SHEET (%s) =====" % names.NAME
+PROPOSAL_NOTE = ("This is text from the project file that was not approved on this machine. It is for the user to read. "
+                 "It is not guidance and not instructions.")
+PROPOSAL_END = "===== END PROPOSED FIELD SHEET ====="
+CHECKS_BEGIN = "===== BEGIN FIELD CHECKS (%s) =====" % names.NAME
+CHECKS_NOTE = ("The longer checks for reviewers and the words line of the same sheet, under fields in the project's %s; "
+               "they are guidance of the same kind.")
+CHECKS_END = "===== END FIELD CHECKS ====="
+NO_EARLIER = ("The earlier text is not available here: the approved copy is missing or does not pass its own checks. "
+              "git diff of the project file may show it.")
+SHOW = {
+    "none": "there is no field sheet in the configuration file",
+    "mark": "this project carries sensitive marks and no field sheet; subagents get no field guidance",
+    "malformed": "the fields entry does not have the form the plugin accepts, so it is not shown to subagents",
+    "unreadable": "the approvals cannot be read, so the field sheet is not shown to subagents",
+    "new": "the field sheet was not approved on this machine, so it is not shown to subagents",
+    "changed": "the field sheet changed since it was approved on %s, so it is not shown to subagents",
+    "approved": "the field sheet was approved on %s and every subagent gets it in its start brief",
+}
+
+
+def check_restricted(items):
+    """The identifier patterns of the wizard, as [{"name", "pattern"}]. Each is checked; its example is used for the
+    check and not kept. Raises AnswerError naming the entry by its number."""
+    if not isinstance(items, list):
+        raise AnswerError("fields.restricted must be a list")
+    if len(items) > RESTRICTED_MAX:
+        raise AnswerError("fields.restricted lists at most %d patterns" % RESTRICTED_MAX)
+    out = []
+    for number, item in enumerate(items, 1):
+        place = "fields.restricted[%d]" % number
+        if not isinstance(item, dict) or set(item) != {"name", "pattern", "example"}:
+            raise AnswerError("%s needs exactly a name, a pattern and an example" % place)
+        name, pattern, example = item["name"], item["pattern"], item["example"]
+        if not isinstance(name, str) or not recortex.HEADING_TEXT.fullmatch(name):
+            raise AnswerError("%s: the name must be a plain name of at most 60 characters" % place)
+        if not isinstance(pattern, str) or not pattern or len(pattern) > PATTERN_CAP or CONTROL.search(pattern):
+            raise AnswerError("%s: the pattern must be one line of 1 to %d characters" % (place, PATTERN_CAP))
+        if not isinstance(example, str) or not example or len(example) > EXAMPLE_CAP or CONTROL.search(example):
+            raise AnswerError("%s: the example must be one line of 1 to %d characters" % (place, EXAMPLE_CAP))
+        try:
+            compiled = re.compile(pattern)
+        except (re.error, RecursionError, OverflowError, ValueError):
+            raise AnswerError("%s: the pattern does not compile" % place)
+        if not compiled.search(example):
+            raise AnswerError("%s: the pattern does not match its example" % place)
+        if compiled.search("") is not None:
+            raise AnswerError("%s: the pattern matches the empty string, so it would refuse every post" % place)
+        if any(compiled.search(sentence) for sentence in ORDINARY):
+            raise AnswerError("%s: the pattern matches an ordinary sentence, so it would refuse nearly every post"
+                              % place)
+        if name.lower() in [e["name"].lower() for e in out]:
+            raise AnswerError("%s: the name is given twice" % place)
+        out.append({"name": name, "pattern": pattern})
+    return out
+
+
+def check_field_answers(value):
+    """(entry, restricted) from the answers' "fields": the entry normalized by field_sheet.check_entry, and the
+    patterns. Raises AnswerError with places and fixed sentences, never text of the answers."""
+    if not isinstance(value, dict) or any(key not in FIELD_ANSWER_KEYS for key in value):
+        raise AnswerError("fields must be an object with the keys %s" % ", ".join(FIELD_ANSWER_KEYS))
+    entry = {key: item for key, item in value.items() if key != "restricted"}
+    entry["form"] = field_sheet.FORM
+    normalized, problems = field_sheet.check_entry(entry)
+    if problems:
+        raise AnswerError("the field sheet does not have the form the plugin accepts: %s"
+                          % field_sheet.problem_text(problems, limit=30))
+    return normalized, check_restricted(value.get("restricted", []))
+
+
+def merge_patterns(existing, new):
+    """(patterns, skipped names): the existing entries kept as they are, and each new one appended unless an entry of
+    that name is there."""
+    if existing is None:
+        existing = []
+    if not isinstance(existing, list):
+        raise AnswerError("restricted_patterns in the configuration file is not a list; fix it by hand")
+    out = list(existing)
+    have = {(e.get("name") if isinstance(e, dict) else e) for e in existing}
+    have = {n.lower() for n in have if isinstance(n, str)}
+    skipped = []
+    for item in new:
+        if item["name"].lower() in have:
+            skipped.append(item["name"])
+        else:
+            out.append(dict(item))
+            have.add(item["name"].lower())
+    return out, skipped
+
+
+def merge_fields(existing, entry, replace=False):
+    """The `fields` value the configuration gets, or None for no entry; raises AnswerError. `existing` is the
+    configuration as read; `entry` the normalized entry of the answers. Without replace, a project that has another
+    sheet keeps it and the run is refused; an equal sheet is carried over as it is."""
+    if "fields" in existing:
+        if field_sheet.check_entry(existing["fields"])[0] == entry:
+            return existing["fields"]
+        if not replace:
+            raise AnswerError(REPLACE)
+    return None if is_empty(entry) else entry
+
+
+def is_empty(entry):
+    """"No particular field" and no mark: nothing to keep."""
+    return not entry["names"] and not entry["sensitive"]
+
+
+def print_patterns(existing, restricted, dry):
+    """Each pattern of the answers: added (it passed its checks and matches its example), or already there."""
+    try:
+        _, skipped = merge_patterns(existing, restricted)
+    except AnswerError:
+        skipped = []
+    for item in restricted:
+        if item["name"] in skipped:
+            print("pattern: %s is already in restricted_patterns; not added" % item["name"])
+        else:
+            print("pattern: %s: %s   # matches its example; %s" % (item["name"], item["pattern"],
+                                                                  "would add" if dry else "added"))
+
+
+def record_fields(repo, entry, dry):
+    """After the configuration file is written: the user's approval of the sheet (none for "No particular field"),
+    and that the field question was asked, so the session start does not offer it again."""
+    value = field_sheet.fingerprint(entry, repo)
+    if dry:
+        if not is_empty(entry):
+            print("would record: your approval of this field guidance, fingerprint %s" % value[:12])
+        print("would record: that the field question was asked, so the session start does not offer it again")
+        return
+    try:
+        if is_empty(entry):
+            field_sheet.forget_approval(repo)
+        else:
+            field_sheet.record_approval(repo, entry, datetime.date.today().isoformat())
+            print("recorded: your approval of this field guidance, fingerprint %s" % value[:12])
+    except (OSError, storage.StorageError, ValueError) as error:
+        raise SystemExit("error: the approval was not recorded: the approvals file %s cannot be written (%s). The "
+                         "configuration is written; move the file aside by hand and run again to record it"
+                         % (field_sheet.approvals_path(), error))
+    record_offer(repo)
+
+
+def approvals_readable():
+    """Stop before any write when the approvals cannot be read: the plugin does not replace the file on its own."""
+    try:
+        field_sheet.read_approvals(create=False)
+    except (storage.StorageError, ValueError) as error:
+        raise SystemExit("error: the approvals file %s cannot be read (%s); move it aside by hand and run again"
+                         % (field_sheet.approvals_path(), error))
+
+
+def mark_words(marks):
+    words = [MARK_WORDS[m] for m in marks]
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def notices(repo, marks, created=False):
+    """The fixed lines of a sensitive-material mark. One read of GitHub (is the record's repository private?), only for
+    data about people or confidential information, and none for a repository that this run creates private."""
+    lines = []
+    if ("people" in marks or "confidential" in marks) and not created:
+        try:
+            value = recortex.gh(["api", "repos/%s" % repo, "--jq", ".private"], timeout=30).strip()
+        except recortex.GhError:
+            value = ""
+        if value == "false":
+            lines.append(PUBLIC % (repo, mark_words(marks)))
+        elif value != "true":
+            lines.append(UNCHECKED % repo)
+    if "people" in marks:
+        lines.append(NOTE_PEOPLE)
+    if marks:
+        lines.append(NOTE_ANY)
+    return lines
+
+
+def sheet_lines(entry, pointer, day):
+    """The sheet as every subagent gets it, then its checks and words line in a frame of the same kind."""
+    if not entry["names"]:
+        return []
+    out = field_sheet.frame(entry, day, pointer).split("\n")
+    out += [CHECKS_BEGIN, CHECKS_NOTE % pointer]
+    out += ["- Check %d: %s" % (number, text) for number, text in enumerate(entry["checks"], 1)]
+    return out + ["- Project words: %s" % entry["words"], CHECKS_END]
+
+
+def difference(was, now):
+    """[(place, earlier text, text now)] for each place where two checked entries differ."""
+    def flat(entry):
+        out = {"names": ", ".join(entry["names"]) or "(none)", "sensitive": ", ".join(entry["sensitive"]) or "(none)"}
+        for key, value in (entry.get("brief") or {}).items():
+            if key == "parts":
+                out.update(("brief.parts[%d]" % n, v) for n, v in enumerate(value, 1))
+            else:
+                out["brief.%s" % key] = value
+        out.update(("checks[%d]" % n, v) for n, v in enumerate(entry.get("checks") or [], 1))
+        if entry.get("words") is not None:
+            out["words"] = entry["words"]
+        return out
+    before, after = flat(was), flat(now)
+    order = list(after) + [place for place in before if place not in after]
+    return [(place, before.get(place, "(none)"), after.get(place, "(none)")) for place in order
+            if before.get(place) != after.get(place)]
+
+
+def proposal_lines(entry, earlier=None, changed=False):
+    """Text of the project file that this machine has not approved, framed as a proposal for the user to read."""
+    out = [PROPOSAL_BEGIN, PROPOSAL_NOTE] + field_sheet.lines(entry)
+    out += ["- Check %d: %s" % (number, text) for number, text in enumerate(entry["checks"], 1)]
+    out.append("- Project words: %s" % entry["words"])
+    if changed:
+        out.append("What differs from the sheet approved on this machine:")
+        if earlier is None:
+            out.append(NO_EARLIER)
+        for place, was, now in difference(earlier, entry) if earlier is not None else []:
+            out += [place, "was: %s" % was, "is: %s" % now]
+    return out + [PROPOSAL_END]
+
+
+def print_state(config, repo):
+    """What `fields show` prints after its first line; returns the state."""
+    info = field_sheet.state(config, repo, honor_off=False)
+    kind = info["state"]
+    text = SHOW[kind] % info["approved"] if "%s" in SHOW[kind] else SHOW[kind]
+    print("field guidance: %s." % text)
+    value = info["fingerprint"] or (field_sheet.fingerprint(info["entry"], repo) if info["entry"] else None)
+    print("fingerprint: %s" % (value[:12] if value else "none"))
+    print("sensitive marks: %s" % (", ".join(field_sheet.sensitive_marks(config, repo)) or "none"))
+    if field_sheet.off():
+        print("note: field guidance is off on this machine (\"field_guidance\": false in %s); subagents get no field "
+              "sheet in any project" % recortex.settings_file())
+    if kind == "malformed":
+        print("refused: %s" % field_sheet.problem_text(info["problems"], limit=len(info["problems"])))
+    elif kind == "unreadable":
+        print("approvals: %s cannot be read: %s. The file's text is not shown" % (field_sheet.approvals_path(),
+                                                                                info["reason"]))
+    elif kind == "approved":
+        print("\n".join(sheet_lines(info["entry"], field_sheet.pointer_name(config), info["approved"])))
+    elif kind in ("new", "changed"):
+        earlier = None
+        if kind == "changed":
+            try:
+                earlier = field_sheet.approved_copy(repo, field_sheet.read_approvals())
+            except (storage.StorageError, ValueError):
+                earlier = None
+        print("\n".join(proposal_lines(info["entry"], earlier, kind == "changed")))
+        print("To approve it as it stands, after the user has read all of it: setup.py fields approve --fingerprint "
+              "%s --yes" % info["fingerprint"][:12])
+    return info
+
+
+def fields_set(config, repo, answers_path, dry, replace):
+    try:
+        with open(answers_path, encoding="utf-8") as handle:
+            answers = json.load(handle)
+    except (OSError, ValueError) as error:
+        sys.exit("error: %s" % error)
+    if not isinstance(answers, dict) or "fields" not in answers:
+        sys.exit("error: the answers file has no \"fields\" entry")
+    try:
+        entry, restricted = check_field_answers(answers["fields"])
+    except AnswerError as error:
+        sys.exit("error: %s" % error)
+    path = config["_path"]
+    base = os.path.dirname(os.path.abspath(path))
+    refuse_unsafe(base, path)
+    approvals_readable()
+    try:
+        data = json.loads(recortex.read_text(path))  # every key as the file has it; only two are changed
+    except ValueError as error:
+        sys.exit("error: %s is not valid JSON (%s); fix it by hand" % (path, error))
+    if not isinstance(data, dict) or data.get("repo") != repo:
+        sys.exit("error: %s changed while it was read; run again" % path)
+    try:
+        value = merge_fields(data, entry, replace)
+        patterns, _ = merge_patterns(data.get("restricted_patterns"), restricted)
+    except AnswerError as error:
+        sys.exit("error: %s" % error)
+    if "fields" in data and value is not data["fields"]:  # only with --replace: the one place setup replaces
+        print("current field sheet:")
+        print_state(config, repo)
+        print("new field sheet:")
+    if is_empty(entry):
+        print("field guidance: none (no particular field and no sensitive mark); no fields entry is kept")
+    elif not entry["names"]:
+        print("field guidance: no field sheet; sensitive marks only")
+    print("\n".join(sheet_lines(entry, field_sheet.pointer_name(config), datetime.date.today().isoformat())))
+    print("sensitive marks: %s" % (", ".join(entry["sensitive"]) or "none"))
+    print_patterns(data.get("restricted_patterns"), restricted, dry)
+    if not is_empty(entry):
+        print("fingerprint: %s" % field_sheet.fingerprint(entry, repo)[:12])
+    for line in notices(repo, entry["sensitive"]):
+        print(line)
+    updated = dict(data)  # the same keys in the same order; only these two change
+    if value is None:
+        updated.pop("fields", None)
+    else:
+        updated["fields"] = value
+    if restricted:
+        updated["restricted_patterns"] = patterns
+    if updated != data:
+        write_text(path, json.dumps(updated, indent=2) + "\n", dry, "the fields entry%s" % (
+            " and restricted patterns" if restricted else ""), base)
+    else:
+        print("unchanged: %s   # the same field sheet is already there" % path)
+    record_fields(repo, entry, dry)
+    if dry:
+        print("dry run: nothing was written")
+    else:
+        print("field guidance set and approved" if not is_empty(entry) else
+              "field guidance removed: no fields entry, and no approval is kept")
+    return 0
+
+
+def record_offer(repo):
+    """The hooks' offer to set the field is not shown again once the question was asked."""
+    try:
+        field_sheet.mark_offered(repo)
+    except (OSError, storage.StorageError) as error:
+        print("not recorded: that the field question was asked, because the local storage was refused: %s" % error)
+
+
+def fields_approve(config, repo, prefix, yes):
+    prefix = (prefix or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{12,64}", prefix):
+        sys.exit("error: --fingerprint takes 12 to 64 characters of the fingerprint that setup.py fields show printed")
+    if not yes:
+        sys.exit("error: pass --yes once the user has read the sheet that setup.py fields show printed and approved it")
+    info = field_sheet.state(config, repo, honor_off=False)
+    kind = info["state"]
+    if kind == "approved":
+        print("approved already: the field sheet was approved on this machine on %s" % info["approved"])
+        return 0
+    if kind == "malformed":
+        sys.exit("error: the fields entry does not have the form the plugin accepts, so it cannot be approved: %s"
+                 % field_sheet.problem_text(info["problems"]))
+    if kind == "unreadable":
+        sys.exit("error: the approvals file %s cannot be read (%s); move it aside by hand and run again"
+                 % (field_sheet.approvals_path(), info["reason"]))
+    if kind == "none":
+        sys.exit("error: there is no field sheet in the configuration file to approve")
+    if kind == "mark":
+        print("nothing to approve: this project carries sensitive marks and no field sheet")
+        return 0
+    if not info["fingerprint"].startswith(prefix):
+        sys.exit("error: the sheet in the project file is not the one that was shown; run setup.py fields show again")
+    field_sheet.record_approval(repo, info["entry"], datetime.date.today().isoformat())
+    print("recorded: your approval of this field guidance, fingerprint %s" % info["fingerprint"][:12])
+    print("\n".join(sheet_lines(info["entry"], field_sheet.pointer_name(config), datetime.date.today().isoformat())))
+    return 0
+
+
+def fields_command(args):
+    try:
+        config = recortex.load_config()  # read once: what is checked, fingerprinted and shown is this object
+    except (OSError, ValueError) as error:
+        sys.exit("error: the configuration file cannot be read (%s)" % error)
+    repo = config.get("repo")
+    if not config.get("_path") or not recortex.valid_repo(repo):
+        sys.exit("error: this project is not set up yet (no configuration file with a valid repo at %s); run setup.py "
+                 "apply first" % recortex.project_root())
+    print(recortex.describe(config, repo))
+    if args.action == "show":
+        print_state(config, repo)
+        return 0
+    if args.action == "set":
+        return fields_set(config, repo, args.answers, args.dry_run, args.replace)
+    return fields_approve(config, repo, args.fingerprint, args.yes)
 
 
 # ---------------------------------------------------------------- drafts
@@ -633,11 +1105,18 @@ def apply(answers, root, dry, drafts):
         config, added = new_config(existing, answers, os.path.basename(config_path))
     except AnswerError as error:
         raise SystemExit("error: %s" % error)
+    if answers["fields"] is not None:
+        approvals_readable()  # before anything is written
     print("profiles: %s" % ", ".join(recortex.profile_names(config["profiles"])))
     if existing:
         kept = [n for n in recortex.profile_names(existing.get("profiles") or [])]
         print("kept from the existing setup: %s" % (", ".join(kept) or "nothing"))
         print("added: %s" % (", ".join(added) or "nothing"))
+    if answers["fields"] is not None:
+        print_patterns(existing.get("restricted_patterns"), answers["restricted"], dry)
+        created = answers["record"] == "new" and not existing.get("repo")
+        for line in notices(answers["repo"], answers["fields"]["sensitive"], created):
+            print(line)
     python = sys.executable
     scripts = HERE
 
@@ -647,8 +1126,15 @@ def apply(answers, root, dry, drafts):
 
     labels = setup_labels.wanted_labels(config["profiles"], config["topics"])  # checked before anything is written
     print("config (%s):" % os.path.basename(config_path))
-    print(json.dumps(config, indent=2))
+    shown = dict(config)
+    if "fields" in shown and not (answers["fields"] is not None and "fields" not in existing):
+        # a sheet this run does not write is not printed: it may be text nobody approved on this machine
+        shown["fields"] = "(field guidance: %s; see setup.py fields show)" % field_sheet.state(
+            {"fields": config["fields"]}, answers["repo"])["state"]
+    print(json.dumps(shown, indent=2))
     write_text(config_path, json.dumps(config, indent=2) + "\n", dry, "the project's setup", root)
+    if answers["fields"] is not None:
+        record_fields(answers["repo"], answers["fields"], dry)
 
     print("labels: %d (%s)" % (len(labels), ", ".join(l["name"] for l in labels)))
     run([python, os.path.join(scripts, "setup_labels.py"), "--repo", answers["repo"]], dry,
@@ -746,26 +1232,49 @@ def apply(answers, root, dry, drafts):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-    p = sub.add_parser("detect", help="suggest deliverables from file and folder names (read-only, local)")
+    p = sub.add_parser("detect", help="suggest deliverables and fields from file and folder names (read-only, local)")
     p.add_argument("--root", help="project folder (default: the project root)")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--fields", action="store_true", help="the field suggestions only")
     p = sub.add_parser("apply", help="apply confirmed answers")
     p.add_argument("--answers", required=True, help="answers file (JSON)")
     p.add_argument("--root", help="project folder (default: the project root)")
     p.add_argument("--drafts", help="folder for the hub drafts (default: <root>/.tmp/recortex-setup)")
     p.add_argument("--dry-run", action="store_true", help="print every change; write nothing")
     p.add_argument("--yes", action="store_true", help="the user confirmed the summary; make the changes")
+    p = sub.add_parser("fields", help="show, set or approve the field sheet (local; nothing on GitHub)")
+    actions = p.add_subparsers(dest="action", required=True)
+    actions.add_parser("show", help="the state of the field sheet, and the sheet (read-only)")
+    a = actions.add_parser("set", help="write the fields entry of an answers file and record the user's approval")
+    a.add_argument("--answers", required=True, help="answers file (JSON) with a \"fields\" entry")
+    mode = a.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true", help="print every change; write nothing")
+    mode.add_argument("--yes", action="store_true", help="the user approved the sheet; make the changes")
+    a.add_argument("--replace", action="store_true", help="replace the sheet the project has")
+    a = actions.add_parser("approve", help="record the approval of the sheet as it stands in the project file")
+    a.add_argument("--fingerprint", required=True, help="the fingerprint that fields show printed (12 to 64 hex)")
+    a.add_argument("--yes", action="store_true", help="the user read the sheet and approved it")
     args = parser.parse_args(argv)
+    if args.command == "fields":
+        return fields_command(args)
     root = os.path.abspath(args.root or recortex.project_root())
     if args.command == "detect":
+        fields = detect_fields(root)
+        if args.fields:
+            if args.json:
+                print(json.dumps(fields, indent=1))
+            else:
+                print("\n".join(field_lines(fields)))
+            return 0
         found = detect(root)
         if args.json:
-            print(json.dumps(found, indent=1))
+            print(json.dumps(found, indent=1))  # the deliverables only, as before: the hooks' signal line reads it
             return 0
         if not found:
             print("no suggestion: nothing in this folder points to a kind of deliverable; ask the user")
         for item in found:
             print("suggested: %s (profile %s), because %s" % (item["kind"], item["profile"], ", ".join(item["evidence"])))
+        print("\n".join(field_lines(fields)))
         return 0
     try:
         with open(args.answers, encoding="utf-8") as handle:

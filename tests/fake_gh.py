@@ -19,6 +19,8 @@ Fault switches:
   FAKE_GH_SLEEP=5                sleep before answering
   FAKE_GH_RESUME_SLEEP=8         sleep before answering the hub comments query (the GraphQL call with a number)
   FAKE_GH_RESUME_FAIL=1          exit 1 for the hub comments query
+The repository itself (`api repos/<owner>/<name>`, no further path) answers from the state's "private" key, default
+true: `--jq .private` prints true or false, and without --jq the object {"private": ...} is printed.
 A comment of another repository is one whose state entry has a "repo" other than the repository in the request:
 reading it by id answers "Not Found", as for an id that does not exist, and the listings leave it out. A comment
 without "repo" belongs to every repository.
@@ -284,6 +286,10 @@ def main():
             return
         path = [a for a in args[1:] if a.startswith("repos/")][0]
         jq = option(args, "--jq")
+        if re.fullmatch(r"repos/[^/]+/[^/?]+", path):
+            private = bool(state.get("private", True))
+            print(("true" if private else "false") if jq == ".private" else json.dumps({"private": private}))
+            return
         match = re.fullmatch(r"repos/([^/]+/[^/]+)/issues/comments/(\d+)", path)
         listing = re.fullmatch(r"repos/([^/]+/[^/]+)/issues/(\d+)/comments(\?.*)?", path)
         timeline = re.fullmatch(r"repos/([^/]+/[^/]+)/issues/(\d+)/timeline(\?.*)?", path)
