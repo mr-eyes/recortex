@@ -1022,7 +1022,7 @@ class Page:
             lines.append(E("p", None, "Every memory of the record by your allowed accounts is told here."))
         return E("section", {"class": "untold", "id": "untold"}, E("h3", None, "What this page leaves out"), *lines)
 
-    def page(self, style, script):
+    def page(self, style, script, icon):
         digest = lambda text: "'sha256-%s'" % base64.b64encode(hashlib.sha256(text.encode("utf-8")).digest()).decode()
         policy = POLICY % (digest(style), digest(script))
         built = self.model.get("built") or {}
@@ -1031,7 +1031,9 @@ class Page:
                  E("meta", {"name": "referrer", "content": "no-referrer"}),
                  E("meta", {"name": "viewport", "content": VIEWPORT}),
                  E("title", None, "The mind of ", text_of(self.model.get("name"))), Safe("<style>%s</style>" % style))
-        side = E("nav", {"class": "side", "aria-label": "Ways into the mind"},
+        logo = E("svg", {"viewBox": "144 144 968 968", "class": "logo", "aria-hidden": "true"},
+                 E("path", {"class": "lg-a", "d": icon[0]}), E("path", {"class": "lg-b", "d": icon[1]}))
+        side = E("nav", {"class": "side", "aria-label": "Ways into the mind"}, logo,
                  E("p", {"class": "mindname"}, text_of(self.model.get("name"))),
                  E("p", {"class": "mindsub"}, "the memory of one project"),
                  E("ul", None, *[E("li", None, E("a", {"href": anchor(key), "data-nav": key}, label))
@@ -1052,8 +1054,13 @@ class Page:
         return "<!doctype html>\n%s\n<html lang=\"en\">%s%s</html>\n" % (NOTICE, head, body)
 
 
+ICON_LINE = re.compile(r"[MCZ0-9 ,-]{1,8000}")
+
+
 def fixed_files():
-    """The style and the script, read from ../page; refused when either could end its element or open a comment."""
+    """The style, the script and the icon, read from ../page; refused when the style or the script could end its
+    element or open a comment, or when the icon is not exactly two lines of path data made of M, C, Z, digits,
+    spaces, commas and minus signs."""
     with open(os.path.join(PAGE, "mind.css"), encoding="utf-8") as handle:
         style = handle.read()
     with open(os.path.join(PAGE, "mind.js"), encoding="utf-8") as handle:
@@ -1061,13 +1068,17 @@ def fixed_files():
     for text in (style, script):
         if "</" in text or "<!--" in text:
             raise ValueError("the fixed style or script holds </ or <!--")
-    return style, script
+    with open(os.path.join(PAGE, "icon.txt"), encoding="utf-8") as handle:
+        icon = handle.read().split("\n")
+    if len(icon) != 3 or icon[2] != "" or not all(ICON_LINE.fullmatch(line) for line in icon[:2]):
+        raise ValueError("the fixed icon is not two lines of path data")
+    return style, script, icon[:2]
 
 
 def render(model):
     """The whole page for a model, as a string. Pure: the same model gives the same text."""
-    style, script = fixed_files()
-    return Page(model).page(style, script)
+    style, script, icon = fixed_files()
+    return Page(model).page(style, script, icon)
 
 
 def main(argv=None):

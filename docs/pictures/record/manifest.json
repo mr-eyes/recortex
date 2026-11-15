@@ -1,0 +1,14 @@
+{
+  "repo": "octo-org/sample-project",
+  "issues": [
+    {"key": "hub", "kind": "hub", "title": "sample-project hub", "labels": ["hub"], "body_file": "hub.md", "pin": true},
+    {"key": "dates", "kind": "final-record", "title": "Dates: reading the date on a page", "labels": ["final-record", "rel:changed", "rel:fixed", "rel:known-issues", "topic:dates"], "body_file": "topic-dates.md"},
+    {"key": "order", "kind": "final-record", "title": "Order: how close the sorted box is to a hand-sorted one", "labels": ["final-record", "rd:methods", "rd:results", "rd:limitations", "topic:order"], "body_file": "topic-order.md"},
+    {"key": "task-two-dates", "kind": "active", "title": "Task: pages that carry two dates", "labels": ["active", "topic:dates"], "body_file": "task-two-dates.md"}
+  ],
+  "comments": [
+    {"issue": "NEW-hub", "kind": "resume", "body_file": "resume-1.md"},
+    {"issue": "NEW-order", "kind": "result", "body_file": "result-order-1.md"},
+    {"issue": "NEW-dates", "kind": "decision", "body_file": "decision-dates-1.md"}
+  ]
+}

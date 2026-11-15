@@ -8090,6 +8090,7 @@ class MindPageTests(MindSandbox):
         page = os.path.join(SKILL, "page")
         script = recortex.read_text(os.path.join(page, "mind.js"))
         style = recortex.read_text(os.path.join(page, "mind.css"))
+        icon = recortex.read_text(os.path.join(page, "icon.txt"))
         for word in SCRIPT_BANNED:
             self.assertNotIn(word, script)
         for word in ("url(", "@import", "expression("):
@@ -8107,7 +8108,7 @@ class MindPageTests(MindSandbox):
         for name, bad in (("mind.js", script + "\n// </script>"), ("mind.css", style + "\n/* <!-- */")):
             folder = os.path.join(self.dir, "page-" + name)
             os.makedirs(folder)
-            for other, text in (("mind.js", script), ("mind.css", style)):
+            for other, text in (("mind.js", script), ("mind.css", style), ("icon.txt", icon)):
                 with open(os.path.join(folder, other), "w") as handle:
                     handle.write(bad if other == name else text)
             mind.PAGE = folder
@@ -8123,6 +8124,107 @@ class MindPageTests(MindSandbox):
         for columns in selects:
             self.assertNotIn("*", columns)
             self.assertIsNone(re.search(r"\b(url|image)\b", columns), columns)
+
+    # ------------------------------------------------------------ the icon and the palette
+
+    ICON_SHA256 = "16dd7c58ecebdc3f8e54e7bbf51181742168895a6e312631f30c6c784fe7d9be"
+
+    def test_the_icon_sits_once_in_the_side_bar(self):
+        text = self.chain_page()
+        icon = recortex.read_text(os.path.join(SKILL, "page", "icon.txt")).split("\n")
+        self.assertEqual(3, len(icon))
+        self.assertEqual("", icon[2])
+        body = text[text.index("</style>"):]  # the classes are named once in the style and nowhere else
+        self.assertEqual(1, body.count('class="logo"'))
+        self.assertEqual(1, body.count('class="lg-a"'))
+        self.assertEqual(1, body.count('class="lg-b"'))
+        side = body[body.index('<nav class="side"'):body.index("</nav>")]
+        self.assertTrue(side.index("<svg") < side.index('<p class="mindname">'))  # first in the side bar
+        found = re.findall(r'<svg viewBox="144 144 968 968" class="logo" aria-hidden="true">'
+                           r'<path class="lg-a" d="([^"]*)"/><path class="lg-b" d="([^"]*)"/></svg>', side)
+        self.assertEqual([tuple(icon[:2])], found)
+        for name in ("logo", "lg-a", "lg-b"):
+            self.assertEqual(1, len(re.findall(r'class="%s"' % name, body)), name)
+
+    def test_the_icon_is_pinned(self):
+        import hashlib
+        with open(os.path.join(SKILL, "page", "icon.txt"), "rb") as handle:
+            self.assertEqual(self.ICON_SHA256, hashlib.sha256(handle.read()).hexdigest())
+
+    def test_a_bad_icon_file_stops_the_build(self):
+        mind = self.mind()
+        page = os.path.join(SKILL, "page")
+        style = recortex.read_text(os.path.join(page, "mind.css"))
+        script = recortex.read_text(os.path.join(page, "mind.js"))
+        good = "M1,2 C3,4 5,6 7,8 Z"
+        bad = {"a tag": [good + "<", good], "a quote": ['M1,2 "', good], "a letter": ["M1,2 L3,4 Z", good],
+               "a lower case letter": ["m1,2 z", good], "a third line": [good, good, good],
+               "a missing line": [good], "an empty line": [good, ""], "a long line": [good, "M" + "1" * 8000],
+               "an attribute": [good + ' onload=x', good]}
+        self.assertEqual((good, good), tuple(self.icon_from(mind, style, script, [good, good])[2]))
+        self.assertEqual("M" + "1" * 7999, self.icon_from(mind, style, script, ["M" + "1" * 7999, good])[2][0])
+        for name, lines in bad.items():
+            with self.assertRaises(ValueError, msg=name):
+                self.icon_from(mind, style, script, lines)
+
+    def icon_from(self, mind, style, script, lines):
+        folder = os.path.join(self.dir, "page-icon-%d" % len(os.listdir(self.dir)))
+        os.makedirs(folder)
+        for name, text in (("mind.css", style), ("mind.js", script), ("icon.txt", "\n".join(lines) + "\n")):
+            with open(os.path.join(folder, name), "w") as handle:
+                handle.write(text)
+        real, mind.PAGE = mind.PAGE, folder
+        try:
+            return mind.fixed_files()
+        finally:
+            mind.PAGE = real
+
+    def test_the_palette_is_the_same_in_light_and_dark(self):
+        style = recortex.read_text(os.path.join(SKILL, "page", "mind.css"))
+        light = re.search(r"^:root\{([^}]*)\}", style, re.M).group(1)
+        media = re.search(r"@media \(prefers-color-scheme:dark\)\{:root:not\(\[data-theme=light\]\)\{([^}]*)\}\}",
+                          style).group(1)
+        attribute = re.search(r"^:root\[data-theme=dark\]\{([^}]*)\}", style, re.M).group(1)
+        tokens = lambda block: dict(re.findall(r"--([a-z]+):(#[0-9A-Fa-f]{6})\b", block))
+        light, media, attribute = tokens(light), tokens(media), tokens(attribute)
+        names = {"fog", "sheet", "ink", "quiet", "rule", "thread", "brand", "wash", "found", "decided", "wrong", "idea",
+                 "asked", "fixed", "paused"}
+        self.assertEqual(names, set(light))
+        self.assertEqual(names, set(media))
+        self.assertEqual(names, set(attribute))
+        self.assertEqual(media, attribute)  # dark by the system and dark by the switch are one palette
+        self.assertEqual("#D76744", light["brand"])  # the brand's terracotta, in shapes and lines only
+        self.assertEqual("#D76744", media["brand"])
+
+    def test_every_text_color_reads_on_both_backgrounds(self):
+        style = recortex.read_text(os.path.join(SKILL, "page", "mind.css"))
+
+        def luminance(color):
+            parts = [int(color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            parts = [p / 12.92 if p <= 0.03928 else ((p + 0.055) / 1.055) ** 2.4 for p in parts]
+            return 0.2126 * parts[0] + 0.7152 * parts[1] + 0.0722 * parts[2]
+
+        def contrast(a, b):
+            high, low = sorted((luminance(a), luminance(b)), reverse=True)
+            return (high + 0.05) / (low + 0.05)
+
+        blocks = re.findall(r"^(?::root|@media[^{]*\{:root:not\(\[data-theme=light\]\)|:root\[data-theme=dark\])"
+                            r"\{([^}]*)\}", style, re.M)
+        self.assertEqual(3, len(blocks))
+        for block in blocks:
+            tokens = dict(re.findall(r"--([a-z]+):(#[0-9A-Fa-f]{6})\b", block))
+            for name in ("ink", "quiet", "thread", "found", "decided", "wrong", "idea", "asked", "fixed", "paused"):
+                for ground in ("fog", "sheet"):
+                    self.assertGreaterEqual(contrast(tokens[name], tokens[ground]), 4.5, (name, ground, tokens[name]))
+            for name in ("ink", "quiet", "thread"):  # chips, the active way in and the reminder fold sit on --wash
+                self.assertGreaterEqual(contrast(tokens[name], tokens["wash"]), 4.5, (name, "wash", tokens[name]))
+        # the contrast function itself: black on white is 21 to 1, and a mid gray fails
+        self.assertAlmostEqual(21.0, contrast("#000000", "#FFFFFF"), places=3)
+        self.assertLess(contrast("#D76744", "#FCF8F1"), 4.5)  # why the brand color is never used for text
+
+    def test_the_icon_takes_its_colors_from_two_classes(self):
+        style = recortex.read_text(os.path.join(SKILL, "page", "mind.css"))
+        self.assertIn(".lg-a{fill:var(--brand)}.lg-b{fill:var(--ink)}", style)
 
     # ------------------------------------------------------------ the command
 
@@ -9303,6 +9405,250 @@ class FieldTests(RecordSandbox):
         self.assertIn("===== BEGIN PROJECT STATUS DATA", once)
         self.assertIn("\n%s\n" % (FIELD_ON % self.today), once)
 
+DOCS_RECORD = os.path.join(ROOT, "docs", "pictures", "record")
+STORY = ("On March 4 we decided to put every page with no readable date in an undated pile, and never give it a "
+         "guessed date.",
+         "On March 5 we had the idea to give an undated page the date of the pages scanned just before and after it.",
+         "On March 6, borrowing the date from the pages around it put 4 of 6 test pages in the wrong year.",
+         "On March 7 we decided to show each undated page to the person and ask for its date, and stop borrowing "
+         "dates from other pages.",
+         "On March 10 we asked whether asking still works when a box has a hundred undated pages and not twelve.")
+
+
+class DocsRecordTests(Sandbox):
+    """The invented record that the pictures and the story of the README come from (docs/pictures/record): it passes
+    the linter, builds through the fake, and its page tells the story as the README tells it."""
+
+    def setUp(self):
+        super().setUp()
+        shutil.rmtree(self.drafts)
+        shutil.copytree(DOCS_RECORD, self.drafts)
+        self.manifest = os.path.join(self.drafts, "manifest.json")
+        self.project = os.path.join(self.dir, "project")
+        os.makedirs(self.project)
+        self.repo_name = json.loads(recortex.read_text(self.manifest))["repo"]
+        with open(os.path.join(self.project, recortex.CONFIG_NAME), "w") as handle:
+            json.dump({"repo": self.repo_name, "hub": 4, "profiles": ["software", "research"]}, handle)
+        trusted = self.write("trusted-repos", "%s octo-dev\n" % self.repo_name)
+        self.env = {"CLAUDE_PROJECT_DIR": self.project, "RECORTEX_TRUSTED_FILE": trusted}
+        shutil.copy(os.path.join(ROOT, "docs", "pictures", "state.json"), self.state)  # the record's own fake GitHub
+
+    def write(self, name, text):
+        path = os.path.join(self.dir, name)
+        with open(path, "w") as handle:
+            handle.write(text)
+        return path
+
+    def script(self, name, *args, cwd=None):
+        return self.run_script(name, *args, env=self.env, cwd=cwd or self.project)
+
+    def test_the_record_is_invented_and_passes_the_linter(self):
+        for folder, _, files in os.walk(DOCS_RECORD):
+            for name in files:
+                text = recortex.read_text(os.path.join(folder, name))
+                self.assertNotIn("tinycsv", text.lower(), name)  # the built-in example is not shown in the docs
+                self.assertIsNone(re.search(r"gh[-_ ]?issues[-_ ]?manager", text, re.I), name)
+        self.assertEqual("octo-org/sample-project", self.repo_name)  # the placeholder, swapped in one sweep
+        labels = self.script("setup_labels.py", "--repo", self.repo_name, "--profile", "software,research",
+                             "--topic", "dates", "--topic", "order", cwd=self.drafts)
+        self.assertEqual(0, labels.returncode, labels.stdout + labels.stderr)
+        lint = self.script("lint_drafts.py", "--manifest", self.manifest, cwd=self.drafts)
+        self.assertEqual(0, lint.returncode, lint.stdout + lint.stderr)
+        for name in os.listdir(os.path.join(self.drafts, "chain")):  # each memory of the story, as it will be posted
+            kind = "idea" if "idea" in name else "failure" if "failure" in name else "question" if "question" in name \
+                else "decision"
+            lint = self.script("lint_drafts.py", "--kind", kind, "--allow-placeholders",
+                               os.path.join(self.drafts, "chain", name), cwd=self.drafts)
+            self.assertEqual(0, lint.returncode, name + lint.stdout + lint.stderr)
+        # a draft that breaks a rule is still caught, so the passes above mean something
+        broken = self.write("broken.md", recortex.read_text(os.path.join(self.drafts, "topic-dates.md"))
+                            .replace("## Sources", "## Notes"))
+        lint = self.script("lint_drafts.py", "--kind", "final-record", "--allow-placeholders", broken, cwd=self.drafts)
+        self.assertNotEqual(0, lint.returncode, lint.stdout)
+
+    def build(self):
+        labels = self.script("setup_labels.py", "--repo", self.repo_name, "--profile", "software,research",
+                             "--topic", "dates", "--topic", "order", cwd=self.drafts)
+        self.assertEqual(0, labels.returncode, labels.stdout + labels.stderr)
+        created = self.script("create_issues.py", "--manifest", self.manifest, cwd=self.drafts)
+        self.assertEqual(0, created.returncode, created.stdout + created.stderr)
+        for name, kind in (("1-idea", "idea"), ("2-failure", "failure"), ("3-decision", "decision"),
+                           ("4-question", "question"), ("5-decision", "decision")):
+            posted = self.script("post_verified.py", "comment", "--issue", "5", "--kind", kind, "--body-file",
+                                 os.path.join(self.drafts, "chain", name + ".md"))
+            self.assertEqual(0, posted.returncode, name + posted.stdout + posted.stderr)
+        synced = self.script("index.py", "sync")
+        self.assertEqual(0, synced.returncode, synced.stdout + synced.stderr)
+        built = self.script("mind.py")
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        path = os.path.join(self.dir, "xdg-cache", "recortex", "private", self.repo_name.replace("/", "__"), "mind.html")
+        return recortex.read_text(path)
+
+    def test_the_record_builds_a_page_that_tells_the_story(self):
+        text = self.build()
+        self.assertEqual([], page_problems(text))
+        words = " ".join("".join(PageReader(text).texts).split())
+        for sentence in STORY:
+            self.assertIn(sentence, words)
+        self.assertIn("Still open" + STORY[-1], words)  # the chip before the last sentence
+        self.assertNotIn("tinycsv", text.lower())
+        fixture = json.loads(recortex.read_text(os.path.join(FIXTURES, "repo-state.json")))
+        for issue in fixture["issues"].values():  # nothing of the tests' fake repository reaches the docs
+            self.assertNotIn(issue["title"], text)
+        self.assertNotIn("tests/fixtures", recortex.read_text(os.path.join(ROOT, "docs", "pictures", "make.sh")))
+
+    def test_the_brief_in_the_readme_is_what_the_record_prints(self):
+        self.build()
+        printed = self.script("hooks.py", "--print")
+        self.assertEqual(0, printed.returncode, printed.stdout + printed.stderr)
+        readme = recortex.read_text(os.path.join(ROOT, "README.md"))
+        sample = readme.split("```text\n", 1)[1].split("```", 1)[0].strip().split("\n")
+        clock = lambda line: re.sub(r"synced \S+ \(UTC\), \d+ minutes? old", "synced (UTC), old", line)
+        lines = [clock(line) for line in printed.stdout.split("\n")]
+        for line in sample:
+            self.assertIn(clock(line), lines, line)
+
+
+def github_slug(heading):
+    """The anchor GitHub gives a heading: lower case, punctuation dropped, spaces to hyphens."""
+    return re.sub(r"[^a-z0-9 _-]", "", heading.strip().lower()).replace(" ", "-")
+
+
+class DocsTests(unittest.TestCase):
+    """The README and the five pages in docs/: size, links, pictures, names and the files they bring."""
+
+    PAGES = ("how-it-works.md", "install.md", "existing-work.md", "security.md", "reference.md")
+
+    def files(self):
+        return ["README.md"] + [os.path.join("docs", name) for name in self.PAGES]
+
+    def text(self, path):
+        return recortex.read_text(os.path.join(ROOT, path))
+
+    def test_the_docs_are_the_five_pages_and_the_pictures_folder(self):
+        self.assertEqual(sorted(self.PAGES + ("pictures",)), sorted(os.listdir(os.path.join(ROOT, "docs"))))
+        for name in self.PAGES:
+            first = [line for line in self.text(os.path.join("docs", name)).split("\n")[1:] if line.strip()][0]
+            self.assertFalse(first.startswith(("#", "|", "-", "`")), name)  # opens with one sentence on its purpose
+
+    def test_the_readme_is_short(self):
+        text = self.text("README.md")
+        self.assertLess(len(text.split()), 1000)
+        self.assertIn("Project memory that survives every session.", text)
+        self.assertNotIn("**", re.sub(r"```.*?```", "", text, flags=re.S))  # no bold in the README's prose
+        for name in ("how-it-works.md", "reference.md"):
+            self.assertNotIn("**", self.text(os.path.join("docs", name)), name)  # no bold list openers in the pages
+            self.assertNotIn("\n\n\n", self.text(os.path.join("docs", name)), name)
+
+    def test_every_relative_link_and_picture_resolves(self):
+        found = 0
+        for path in self.files():
+            text = self.text(path)
+            folder = os.path.dirname(os.path.join(ROOT, path))
+            targets = re.findall(r"\]\(([^)\s]+)\)", text) + re.findall(r'(?:src|srcset|href)="([^"]+)"', text)
+            for target in targets:
+                if re.match(r"[a-z][a-z0-9+.-]*:", target):
+                    continue
+                name, _, anchor = target.partition("#")
+                full = os.path.normpath(os.path.join(folder, name)) if name else os.path.join(ROOT, path)
+                self.assertTrue(os.path.exists(full), "%s links to %s" % (path, target))
+                self.assertTrue(full.startswith(ROOT), "%s leaves the repository: %s" % (path, target))
+                found += 1
+                if anchor and full.endswith(".md"):
+                    slugs = {github_slug(line.lstrip("#")) for line in recortex.read_text(full).split("\n")
+                             if line.startswith("#")}
+                    self.assertIn(anchor, slugs, "%s links to %s" % (path, target))
+        self.assertGreater(found, 25)
+
+    def test_every_picture_has_a_light_and_a_dark_file_and_a_description(self):
+        for path in self.files():
+            text = self.text(path)
+            for block in re.findall(r"<picture>(.*?)</picture>", text, re.S):
+                dark = re.search(r'<source media="\(prefers-color-scheme: dark\)" srcset="([^"]+)"', block).group(1)
+                light = re.search(r'<img src="([^"]+)" alt="([^"]+)"', block)
+                self.assertTrue(light.group(2).strip(), path)
+                self.assertNotEqual(dark, light.group(1))
+                self.assertEqual(os.path.basename(light.group(1)).replace("light", "dark").replace(
+                    "recortex-lockup.svg", "recortex-lockup-reversed.svg"), os.path.basename(dark), path)
+            self.assertNotIn("![", text, path)  # a picture is a <picture>, so that dark mode has its own file
+
+    def test_the_plugin_has_a_square_icon(self):
+        with open(os.path.join(ROOT, ".claude-plugin", "icon.png"), "rb") as handle:
+            head = handle.read(24)
+        self.assertEqual(b"\x89PNG\r\n\x1a\n", head[:8])
+        width, height = int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+        self.assertEqual(width, height)
+        self.assertTrue(512 <= width <= 2048, width)
+
+    def test_the_assets_folder_is_small_and_every_file_is_used(self):
+        assets = os.path.join(ROOT, "assets")
+        used = set()
+        for path in self.files():
+            used.update(os.path.basename(t) for t in re.findall(r'(?:src|srcset)="[^"]*assets/([^"]+)"', self.text(path)))
+        self.assertEqual(sorted(used), sorted(os.listdir(assets)))
+        sizes = {name: os.path.getsize(os.path.join(assets, name)) for name in os.listdir(assets)}
+        self.assertLess(sum(sizes.values()), 600 * 1024, sizes)
+        for name, size in sizes.items():
+            self.assertLess(size, 300 * 1024 if name.endswith(".png") else 40 * 1024, name)
+
+    def test_the_docs_name_no_example_and_no_earlier_name_outside_the_install_page(self):
+        earlier = re.compile(r"gh[-_ ]?issues[-_ ]?manager|ghim|tinycsv", re.I)
+        for folder, dirs, files in os.walk(ROOT):
+            dirs[:] = [d for d in dirs if d not in (".git", ".tmp", "__pycache__")]
+            relative = os.path.relpath(folder, ROOT).replace(os.sep, "/")
+            if relative.split("/")[0] not in ("docs", "assets") and relative != ".":
+                continue
+            for name in files:
+                path = ("" if relative == "." else relative + "/") + name
+                if relative == "." and name != "README.md":
+                    continue
+                if path == "docs/install.md" or name.endswith(".png"):
+                    continue  # the upgrade section keeps the earlier names; the stray-name test limits it to that section
+                text = self.text(path)
+                if path.startswith("docs/pictures/record/"):
+                    text = re.sub(r"ghim:(?:event|resume:start|resume:end)", "", text)  # the record format
+                self.assertIsNone(earlier.search(text), path)
+
+    def test_the_docs_point_at_this_repository_and_the_invented_one_only(self):
+        found = set()
+        for path in self.files() + ["docs/pictures/record/chain/3-decision.md", "docs/pictures/record/manifest.json"]:
+            found.update(re.findall(r"github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", self.text(path)))
+        self.assertEqual({"mr-eyes/recortex", "octo-org/sample-project"}, found)
+        for path in self.files():
+            self.assertNotIn("example-org", self.text(path), path)
+
+    def test_the_board_drawing_promises_no_more_than_the_design(self):
+        for path in self.files():
+            self.assertNotIn("the memory that put it there", self.text(path), path)
+        for mode in ("light", "dark"):
+            texts = re.findall(r">([^<>]+)</text>", self.text(os.path.join("assets", "board-%s.svg" % mode)))
+            self.assertFalse([t for t in texts if t.startswith("Every card")], mode)  # no card or move without a memory
+            self.assertNotIn("Thread: hub", texts)  # a task's thread is a topic; the hub is the top, not a thread
+            self.assertNotIn("Why: merged", texts)  # a pull request's card has no Why
+            self.assertFalse([t for t in texts if t.startswith("Why: a decision")], mode)  # In Progress: a checkpoint
+            self.assertFalse([t for t in texts if t.endswith("\u2026")], mode)  # every title fits its card
+
+    def test_the_docs_write_american_english(self):
+        for path in self.files() + [os.path.join("assets", name) for name in os.listdir(os.path.join(ROOT, "assets"))
+                                    if name.endswith(".svg")]:
+            self.assertNotIn("takes a decision", self.text(path), path)
+
+    def test_the_record_shares_no_time_commit_or_version_with_the_built_in_example(self):
+        def read(folder):
+            return "\n".join(recortex.read_text(os.path.join(top, name)) for top, _, names in os.walk(folder)
+                             for name in names)
+        docs, example = read(DOCS_RECORD) + self.text("README.md"), read(EXAMPLE)
+        for pattern in (r"\b20\d\d-\d\d-\d\d[ T]\d\d:\d\d", r"\b[0-9a-f]{7}\b", r"\b\d+\.\d+\.\d+\b"):
+            self.assertEqual(set(), set(re.findall(pattern, docs)) & set(re.findall(pattern, example)), pattern)
+
+    def test_the_story_in_the_readme_is_the_story_the_record_tells(self):
+        text = self.text("README.md")
+        quoted = " ".join(line[2:].strip() for line in text.split("\n") if line.startswith("> "))
+        for sentence in STORY:
+            self.assertIn(sentence, quoted)
+        self.assertIn("Still open.", quoted)
+
+
 class PackagingTests(unittest.TestCase):
     def read_json(self, *parts):
         return json.loads(recortex.read_text(os.path.join(ROOT, *parts)))
@@ -9366,7 +9712,7 @@ class PackagingTests(unittest.TestCase):
             "skills/recortex/scripts/run_hook.sh": where(lambda line: "GHIM_HOOK_TIMEOUT" in line),
             ".claude-plugin/marketplace.json": where(lambda line: line.strip() == '"gh-issues-manager": "recortex"'),
             "skills/recortex/SKILL.md": where(lambda line: line.startswith("description: ")),
-            "README.md": upgrade_section,
+            "docs/install.md": upgrade_section,
             "CONTRIBUTING.md": where(lambda line: "names.py" in line),
             "skills/recortex/references/templates.md": where(lambda line: "The marker prefix `ghim:` predates" in line),
         }
@@ -9375,7 +9721,11 @@ class PackagingTests(unittest.TestCase):
             dirs[:] = [d for d in dirs if d not in (".git", ".tmp", "__pycache__")]
             for name in files:
                 path = os.path.relpath(os.path.join(folder, name), ROOT).replace(os.sep, "/")
+                if path == ".git":
+                    continue  # in a worktree this is a file that points at the main checkout's folder
                 self.assertIsNone(earlier.search(path), path)  # no path keeps an earlier name
+                if name.endswith(".png"):
+                    continue  # a picture holds no words; the docs test looks at what is drawn in the pictures' SVG files
                 lines = recortex.read_text(os.path.join(ROOT, path)).split("\n")
                 keep = allowed[path](lines) if path in allowed else set()
                 for number, line in enumerate(lines):
@@ -9440,7 +9790,7 @@ class PackagingTests(unittest.TestCase):
         self.assertTrue(os.access(script, os.X_OK))
         snippet = json.loads(recortex.read_text(os.path.join(TEMPLATES, "settings-hook-snippet.json")))
         self.assertEqual("startup|resume|clear|compact|fork", snippet["hooks"]["SessionStart"][0]["matcher"])
-        for name in ("README.md", os.path.join(SKILL, "references", "session-protocol.md")):
+        for name in (os.path.join("docs", "reference.md"), os.path.join(SKILL, "references", "session-protocol.md")):
             self.assertNotIn("`startup`, `resume` and `compact`", recortex.read_text(os.path.join(ROOT, name)))
 
     def test_skill_file(self):
@@ -9466,6 +9816,8 @@ class PackagingTests(unittest.TestCase):
             dirs[:] = [d for d in dirs if d not in (".git", ".tmp", "__pycache__")]
             for name in files:
                 path = os.path.join(folder, name)
+                if name.endswith(".png"):
+                    continue  # a picture holds no words
                 text = recortex.read_text(path)
                 if os.path.abspath(path) != os.path.abspath(__file__):
                     self.assertIsNone(banned.search(text), path)

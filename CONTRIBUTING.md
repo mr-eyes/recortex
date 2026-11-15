@@ -4,7 +4,7 @@
 
 ```bash
 mkdir -p .tmp
-python3 -m unittest tests.test_scripts.{LintTests,HelperTests,LabelTests,CreateIssuesTests,PostVerifiedTests,ConvertBodyTests,SyncTests,RecoveryTests,CompileTests,TriageAndFormatTests,CatchUpTests,SnapshotTests,PackagingTests,CompatTests,MemoryFormatTests}
+python3 -m unittest tests.test_scripts.{LintTests,HelperTests,LabelTests,CreateIssuesTests,PostVerifiedTests,ConvertBodyTests,SyncTests,RecoveryTests,CompileTests,TriageAndFormatTests,CatchUpTests,SnapshotTests,PackagingTests,CompatTests,MemoryFormatTests,DocsRecordTests,DocsTests}
 python3 -m unittest tests.test_scripts.{EditHistoryTests,MindIndexTests,MindModelTests,MindPageTests,FieldFormTests,FieldTests}
 python3 -m unittest tests.test_scripts.{ResumeBlockTests,IndexTests,HookTests,StorageTests,GuardTests,BackgroundTests,DiscoveryTests,SetupTests,EarlierNameTests}
 ```
@@ -16,6 +16,48 @@ The tests run the scripts against `tests/fake_gh.py`, a local stand-in for `gh` 
 The suite passes on Python 3.14 on Linux. The lock race test starts its workers with the `fork` start method and is skipped where that method does not exist.
 
 Check the packaging with `claude plugin validate .`.
+
+## Repository layout
+
+```text
+.claude-plugin/           plugin.json and marketplace.json
+hooks/hooks.json          hook registration for the plugin (four events)
+agents/                   record-drafter, record-reviewer, record-auditor
+skills/recortex/
+  SKILL.md                the skill
+  references/             detail loaded on demand
+  templates/              hub, topic body, active task, comments, snippets
+  profiles/               label sets per project type
+  fields/                 the five model field sheets
+  scripts/                the helpers
+  page/                   the fixed style, script and icon of the mind page
+docs/                     the five pages the README links to
+docs/pictures/            the invented record behind the pictures, and the scripts that remake them
+assets/                   the lockups, the drawings and the story pictures the README uses
+examples/tinycsv/         the built-in example project, used by the tests
+tests/                    offline tests with a local stand-in for gh
+```
+
+## Trying the built-in example
+
+```bash
+cd examples/tinycsv
+S=../../skills/recortex/scripts
+export RECORTEX_CONFIG=$PWD/.recortex.json   # the example is not at a project root
+
+python3 $S/setup_labels.py --dry-run
+python3 $S/lint_drafts.py --manifest manifest.json
+python3 $S/create_issues.py --manifest manifest.json --dry-run
+```
+
+The dry run prints the commands issue by issue and makes no network call. In the drafts, issues refer to each other as `NEW-reader`, `NEW-speed` and so on; a real run replaces them with issue numbers. To try a real run, change `repo` in `manifest.json` and `.recortex.json` to a scratch repository of your own, run `setup_labels.py` and `create_issues.py` without `--dry-run`, and set `hub` in `.recortex.json` to the number printed for `NEW-hub`. The run leaves `manifest.json.state.json` beside the manifest, which is what makes a rerun safe; `.gitignore` excludes it.
+
+## The README and the docs
+
+- The README stays under 1,000 words. A section has a picture, a command or a link; a new feature gets one line under "What you get" and its detail goes into `docs/`.
+- The five pages in `docs/` are for a person deciding whether and how to use the plugin; each opens with one sentence on what it is for. The pages under `skills/recortex/references/` are written for the session and stay the place for detail.
+- The docs and the pictures use the invented record in `docs/pictures/record/`, never a real project and never the built-in example. A test lints that record and builds its page. `docs/pictures/make.sh` remakes the pictures offline through the test fake; it needs Node and Google Chrome and is not run by the tests. Remake them whenever the mind page's look changes.
+- A test checks that every relative link and picture resolves.
 
 ## Rules for changes
 
@@ -36,7 +78,7 @@ Check the packaging with `claude plugin validate .`.
 - The agents in `agents/` never post to GitHub and never start another agent. The drafter's tools are file tools only. The reviewer and the auditor are read-only by instruction: they have Bash for read commands, so do not describe them as unable to write. New hook text is fixed wording plus validated numbers or names, or sits inside the data frame.
 - `SKILL.md` stays short. Detail goes into `references/`, and every reference file is linked from `SKILL.md`.
 - Names live in `names.py`: the plugin's name, the configuration file, the folder, the variable prefix and the workflow, current and from before the rename (`gh-issues-manager`, `.gh-issues-manager.json`, `GHIM_`, `ghim-triage.yml`). Plugin variables are read only through `names.env`, and no other module spells an earlier name, except `run_hook.sh`, which reads the earlier budget name itself; a test scans the tree for them. An earlier name that is still read has a test for the earlier name alone, the current one alone, and both. `renames` in `.claude-plugin/marketplace.json` is append-only history. The `ghim:` markers are the record format and are not renamed. The shared module is `recortex.py`, and the tests also honor `GHIM_TEST_KEEP`.
-- The mind page (`mind.py`, `mind_model.py`, `page/mind.css`, `page/mind.js`): every element goes through `E()`; record text is a text child only, never an attribute value, an element or attribute name, or part of the style or the script; an `href` is `anchor()` or `github_url()`, and no `url` or `image` column of the index is read; the script holds no record text and none of the calls that turn text into markup or reach the network (the page test lists them), and checks every id it reads from the page before a selector or a hash uses it; the style loads nothing. A new element or attribute name goes into `TAGS` or `ATTRS` and into the page test, and fixed wording of the model goes into `PHRASES` or `FIELD_NAMES`. What the page tells follows `index.memories` and the rules of `references/mind.md`, "Who is told".
+- The mind page (`mind.py`, `mind_model.py`, `page/mind.css`, `page/mind.js`, `page/icon.txt`): every element goes through `E()`; record text is a text child only, never an attribute value, an element or attribute name, or part of the style or the script; an `href` is `anchor()` or `github_url()`, and no `url` or `image` column of the index is read; the script holds no record text and none of the calls that turn text into markup or reach the network (the page test lists them), and checks every id it reads from the page before a selector or a hash uses it; the style loads nothing. A new element or attribute name goes into `TAGS` or `ATTRS` and into the page test, and fixed wording of the model goes into `PHRASES` or `FIELD_NAMES`. What the page tells follows `index.memories` and the rules of `references/mind.md`, "Who is told".
 - The field sheet's labels, sizes and characters live in `field_sheet.py` and move together with `references/fields.md`, the model sheets in `fields/` (a test holds their SHA-256 values), `tests/fixtures/field-sheets/` and the paragraph on field guidance in each of the three agent files. Approved text reaches a payload only through `field_sheet.state`, from the configuration the hook parsed once, and only in its own frame; no hook line outside that frame holds text or a name from a sheet, and `--doctor` prints field names only for an approved sheet. A sheet that breaks the form is refused, never cleaned. No sheet, model or form is loaded from a path a project names. The approvals go through `storage.py`, and the hooks only read them.
 - Examples use invented projects only.
 

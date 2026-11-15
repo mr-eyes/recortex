@@ -1,0 +1,28 @@
+{
+  "labels": [],
+  "issues": {
+    "1": {
+      "title": "Read dates written as words",
+      "body": "Reads dates such as \"the third of May\".",
+      "labels": [],
+      "pull_request": true,
+      "state": "closed"
+    },
+    "2": {
+      "title": "Add the question step",
+      "body": "Asks the person for the date of each undated page.",
+      "labels": [],
+      "pull_request": true,
+      "state": "closed"
+    },
+    "3": {
+      "title": "Practice set v2",
+      "body": "The 53 practice pages, with the date a person reads on each.",
+      "labels": [],
+      "state": "closed"
+    }
+  },
+  "comments": {},
+  "next_issue": 4,
+  "next_comment": 9100
+}
