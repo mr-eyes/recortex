@@ -5375,12 +5375,24 @@ class EarlierNameTests(RecordSandbox):
         earlier = os.path.join(config, names.OLD_NAME, "private", "field-approvals.json")
         self.assertIn(ENGINEERING_TINYCSV, recortex.read_text(earlier))
         self.assertIn("approved on", self.tool("setup.py", "fields", "show").stdout)
-        os.makedirs(os.path.join(config, names.NAME), mode=0o700)  # both: the current folder
-        self.assertIn("not approved on this machine", self.tool("setup.py", "fields", "show").stdout)
-        again = self.tool("setup.py", "fields", "set", "--answers", self.field_answers(), "--yes")
+        os.makedirs(os.path.join(config, names.NAME), mode=0o700)  # both: read from both, written to the current one
+        self.assertIn("approved on", self.tool("setup.py", "fields", "show").stdout)  # still found in the earlier one
+        self.ready()
+        agent = json.loads(self.hook("subagent-start").stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("===== BEGIN FIELD GUIDANCE (recortex) =====", agent)
+        business = model_sheet("business")
+        business.pop("form")
+        answers = self.write("business.json", json.dumps({"fields": business}))
+        again = self.tool("setup.py", "fields", "set", "--answers", answers, "--yes", "--replace")
         self.assertEqual(0, again.returncode, again.stdout + again.stderr)
-        self.assertIn(ENGINEERING_TINYCSV, recortex.read_text(os.path.join(config, names.NAME, "private",
-                                                                          "field-approvals.json")))
+        current = os.path.join(config, names.NAME, "private", "field-approvals.json")
+        self.assertNotIn(ENGINEERING_TINYCSV, recortex.read_text(current))  # the new approval, in the current folder
+        self.assertIn(ENGINEERING_TINYCSV, recortex.read_text(earlier))  # the earlier folder is not written
+        self.assertIn("approved on", self.tool("setup.py", "fields", "show").stdout)  # the current folder's entry wins
+        os.unlink(current)
+        with open(earlier, "w") as handle:
+            handle.write("{")
+        self.assertIn("approvals cannot be read", self.tool("setup.py", "fields", "show").stdout)
 
 DECISION_060 = """<!-- ghim:event type=decision at=2026-03-07T09:30-08:00 because=9104 instead=9103 -->
 ### Decision: 2026-03-07 09:30 PST - rewrite the reader as a state machine

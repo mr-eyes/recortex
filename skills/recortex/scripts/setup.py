@@ -734,7 +734,7 @@ def print_state(config, repo):
         earlier = None
         if kind == "changed":
             try:
-                earlier = field_sheet.approved_copy(repo, field_sheet.read_approvals())
+                earlier = field_sheet.approved_copy(repo, field_sheet.approvals_with(repo))
             except (storage.StorageError, ValueError):
                 earlier = None
         print("\n".join(proposal_lines(info["entry"], earlier, kind == "changed")))

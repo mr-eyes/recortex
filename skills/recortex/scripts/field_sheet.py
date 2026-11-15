@@ -275,11 +275,30 @@ def real_day(value):
     return True
 
 
-def read_approvals(create=False):
+def approval_tops():
+    """The top folders whose approvals are read, as the trusted list reads both folder names: the one
+    storage.config_top() chooses, where approvals are written, then the folder of the other name when it is there."""
+    chosen = storage.config_top()
+    name = names.OLD_NAME if os.path.basename(chosen) == names.NAME else names.NAME
+    other = os.path.join(os.path.dirname(chosen), name)
+    return [chosen, other] if os.path.lexists(other) else [chosen]
+
+
+def approvals_with(repo):
+    """The approvals that hold this repository's entry, those of the chosen folder first; an empty top level when none
+    does. Raises as read_approvals does, for the first folder that cannot be read."""
+    for top in approval_tops():
+        data = read_approvals(top=top)
+        if repo.lower() in data["approvals"]:
+            return data
+    return {"form": FORM, "approvals": {}}
+
+
+def read_approvals(create=False, top=None):
     """The validated top level, {"form": 1, "approvals": {...}}, or an empty one when there is no file. Raises
     storage.StorageError for refused storage and ValueError (with a fixed reason) for a file that is not JSON or not of
     the form. With create=False the storage is only read (the hooks): no folder is made or tightened."""
-    private = storage.folder(storage.config_top(), create=create, tighten=create)
+    private = storage.folder(top or storage.config_top(), create=create, tighten=create)
     if private is None:
         return {"form": FORM, "approvals": {}}
     path = os.path.join(private, APPROVALS)
@@ -300,8 +319,9 @@ def read_approvals(create=False):
 
 def approval_of(repo, data=None):
     """The three checked fields of this repository's approval ({"fingerprint", "approved", "sensitive"}), or None.
-    Raises ValueError when that entry does not fit; the approved copy of the sheet is not read here."""
-    data = read_approvals() if data is None else data
+    Raises ValueError when that entry does not fit; the approved copy of the sheet is not read here. Without `data`, the
+    entry is looked for in both configuration folders (approvals_with)."""
+    data = approvals_with(repo) if data is None else data
     entry = data["approvals"].get(repo.lower())
     if entry is None:
         return None
