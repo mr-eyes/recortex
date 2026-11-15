@@ -21,7 +21,7 @@ No hook can make the skill load, so each payload carries the rules itself and sa
 "prompt_hook": {"enabled": true, "every": 10}
 ```
 
-`python3 scripts/hooks.py --print` shows the four payloads and their sizes, for the user to check. `python3 scripts/hooks.py --doctor` says why the brief is or is not shown: the configuration, the trust status, each storage folder with its owner and mode, the index and its age, the last sync failure, the payload sizes and the state of the field guidance (never as a problem, and with field names only for an approved sheet). It reads nothing from GitHub, changes nothing and never prints the key.
+`python3 scripts/hooks.py --print` shows the four payloads and their sizes, for the user to check. `python3 scripts/hooks.py --doctor` says why the brief is or is not shown: the configuration, the trust status, whether `gh` is found and which github.com account it is signed in as (never as a problem, and the login only when it has GitHub's form), each storage folder with its owner and mode, the index and its age, the last sync failure, the payload sizes and the state of the field guidance (never as a problem, and with field names only for an approved sheet). Of GitHub it asks only which account `gh` is signed in as and, for a project with a board, about the board; it changes nothing and never prints the key.
 
 ### Safety
 

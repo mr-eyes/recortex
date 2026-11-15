@@ -31,10 +31,11 @@ fields entry, the session start carries one fixed line, once per project and
 machine, that offers to set the field.
 
 --print shows the four payloads and their sizes, for the user to check.
---doctor says why a brief is not shown: configuration, trust, the storage
-folders with owner and mode, the index and its age, the last sync failure and
-the payload sizes. It reads nothing from GitHub, changes nothing, and never
-prints the key or other secrets.
+--doctor says why a brief is not shown: configuration, trust, whether gh is
+found and signed in, the storage folders with owner and mode, the index and its
+age, the last sync failure and the payload sizes. Of GitHub it asks only which
+account gh is signed in as and, for a project with a board, about the board;
+it changes nothing, and never prints the key or other secrets.
 
 Examples:
   hooks.py --print
@@ -574,6 +575,26 @@ def board_lines(db, config, repo):
     return lines + board_api.doctor_lines(config, repo)
 
 
+GH_STATES = {
+    "ready": "signed in to github.com as %s",
+    "signed-out": "not signed in to github.com; run `gh auth login` in a terminal",
+    "slow": "no answer within %d seconds" % recortex.GH_CHECK_SECONDS,
+    "unnamed": "signed in, but GitHub did not name the account (an answer that is not a GitHub login is not shown)",
+}
+
+
+def gh_line():
+    """For --doctor: one line on gh, found or not, signed in to github.com as <login> or not. Never a problem: the brief
+    can come from the index without gh. Of gh's output, only a login that fits recortex.LOGIN is printed."""
+    import shutil
+    where = (names.env("GH") or shutil.which("gh") or "").split()
+    shown = where[0] if where else "not on PATH"
+    state, login = recortex.gh_account()
+    if state == "missing":
+        return "gh: not found (%s); install it from https://cli.github.com" % shown
+    return "gh: found (%s); %s" % (shown, GH_STATES[state] % login if state == "ready" else GH_STATES[state])
+
+
 def top_note(path):
     """For the storage line of --doctor: whether a top folder has the name from before the rename."""
     return " (the folder name from before the rename, used in place)" if os.path.basename(path) == names.OLD_NAME \
@@ -582,7 +603,6 @@ def top_note(path):
 
 def doctor():
     """Print what the hooks depend on. Returns 1 when something keeps the brief from being shown."""
-    import shutil
     problems = []
     try:
         config = recortex.load_config()
@@ -612,8 +632,7 @@ def doctor():
              "; listed in %s" % ", ".join(sources) if sources else "", ", ".join(allowed) or "none"))
     if not trusted:
         problems.append("the repository is not trusted, so the hooks stay silent")
-    gh = names.env("GH") or shutil.which("gh")
-    print("gh: %s" % (gh.split()[0] if gh else "not found on PATH"))
+    print(gh_line())
     print("storage: index under %s%s, state and key under %s%s; hooks and terminal scripts resolve the same folders "
           "(CLAUDE_PLUGIN_DATA is not used)%s" % (storage.cache_top(), top_note(storage.cache_top()),
                                                  storage.state_top(for_key=True), top_note(storage.state_top(True)),

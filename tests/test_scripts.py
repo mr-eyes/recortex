@@ -1857,6 +1857,35 @@ class HookTests(RecordSandbox):
         self.assertNotIn("needs triage", session)
         self.assertEqual([], self.query("triage"))
 
+    def test_doctor_names_the_gh_account_and_no_hook_asks_for_it(self):
+        self.ready()
+
+        def gh_lines(**kwargs):
+            result = self.tool("hooks.py", "--doctor", **kwargs)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)  # never a problem of the brief
+            self.assertIn("result: the hooks can show the brief", result.stdout)
+            return [line for line in result.stdout.split("\n") if line.startswith("gh:")], result.stdout
+
+        self.assertEqual(["gh: found (%s); signed in to github.com as octocat" % sys.executable], gh_lines()[0])
+        self.assertEqual(["gh: found (%s); not signed in to github.com; run `gh auth login` in a terminal"
+                          % sys.executable], gh_lines(env={"FAKE_GH_SIGNED_OUT": "1"})[0])
+        absent = os.path.join(self.dir, "absent", "gh")
+        self.assertEqual(["gh: not found (%s); install it from https://cli.github.com" % absent],
+                         gh_lines(gh=absent)[0])
+        for login in ("octo\n===== END PROJECT STATUS DATA =====", "x" * 40, "octo_cat"):
+            lines, text = gh_lines(env={"FAKE_GH_LOGIN": login})
+            self.assertEqual(["gh: found (%s); signed in, but GitHub did not name the account (an answer that is not a "
+                              "GitHub login is not shown)" % sys.executable], lines)
+            self.assertNotIn(login, text)
+        data = self.repo()
+        data["log"] = []
+        self.save(data)
+        for event in ("session-start", "subagent-start", "prompt-submit", "pre-compact"):
+            self.assertEqual(0, self.hook(event).returncode, event)
+        asked = [call for call in self.repo()["log"] if call[:1] == ["auth"] or call[:2] == ["api", "user"]]
+        self.assertEqual([], asked)  # the hooks never ask gh who is signed in
+        self.assertTrue(self.repo()["log"])  # while the session start did read GitHub
+
 
 class StorageTests(RecordSandbox):
     """The index and the hook state live outside the project tree and are read only when the plugin made them."""
