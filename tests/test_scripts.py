@@ -9747,6 +9747,20 @@ class BoardRulesTests(BoardSandbox):
             db.close()
         self.assertLess(took, 2.0)
 
+    def test_a_closed_pull_request_with_no_merge_state_waits_for_the_next_sync(self):
+        self.pull(41, state="closed", closed_days=2)
+        self.ready()
+        self.assertEqual(("Set aside", ""), self.want()[41])
+        self.sql("DELETE FROM pull_merge WHERE number = 41")
+        self.in_process()
+        import board_rules
+        import index as index_module
+        db = index_module.connect(REPO, create=False)
+        try:
+            self.assertNotIn(41, {c["number"] for c in board_rules.desired(db, recortex.allowed_users(REPO))})
+        finally:
+            db.close()
+
     def test_a_merge_an_older_version_stored_is_read_again(self):
         self.pull(40)
         self.ready()
@@ -9756,7 +9770,7 @@ class BoardRulesTests(BoardSandbox):
         self.save(data)
         # what a sync of 0.8.0 leaves on a shared index: the row and the listing stamp move on, the merge state does not
         self.sql("UPDATE issues SET state = 'closed', closed_at = '%s', updated_at = '%s' WHERE number = 40" % (stamp, stamp),
-                 "INSERT OR REPLACE INTO meta(key, value) VALUES ('issues_newest', '%s')" % stamp)
+                 "INSERT OR REPLACE INTO meta(key, value) VALUES ('issues_newest', '%s')" % utc_ago(0, -1))
         self.ready()
         self.assertEqual("Done", self.want()[40][0])
 
