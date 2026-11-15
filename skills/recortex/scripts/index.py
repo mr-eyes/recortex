@@ -480,7 +480,8 @@ def store_comment_page(db, rows, changed):
                     row.get("html_url")))
         changed.add(int(row["id"]))
         node = row.get("node_id")
-        if row.get("created_at") != updated and isinstance(node, str) and COMMENT_NODE.fullmatch(node):
+        if (row.get("created_at") != updated and isinstance(node, str) and COMMENT_NODE.fullmatch(node)
+                and record_format.parse_event(row.get("body") or "")["type"] in record_format.MEMORY_TYPES):
             db.execute("INSERT INTO comment_edit_reads(comment, node, stamp, edits, last_edited, complete) "
                        "VALUES (?, ?, NULL, 0, NULL, 0) ON CONFLICT(comment) DO UPDATE SET node = excluded.node",
                        (int(row["id"]), node))  # the id to read its edit history by, kept for a comment that looks edited

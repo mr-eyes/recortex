@@ -27,7 +27,7 @@ Edit histories come in pages of at most 100 entries, as GitHub's userContentEdit
 listing and the single-comment read give as `node_id`; a node id of a comment that does not exist answers the error
 "Could not resolve to a node with the global id of '<id>'".
 A state comment may set "node_id" (its node id), "database_id" (what the node answers as databaseId) and "cursor"
-(the endCursor it answers), to test hostile answers.
+(the endCursor it answers) and "gone" (its node no longer resolves), to test hostile answers.
 A comment of another repository is one whose state entry has a "repo" other than the repository in the request:
 reading it by id answers "Not Found", as for an id that does not exist, and the listings leave it out. A comment
 without "repo" belongs to every repository.
@@ -262,7 +262,7 @@ def main():
             out, errors = {}, []
             for alias, name, arguments, children in top:
                 wanted = arguments["id"].strip('"')
-                found = [c for c in state["comments"] if node_id(c, state) == wanted]
+                found = [c for c in state["comments"] if node_id(c, state) == wanted and not state["comments"][c].get("gone")]
                 if not found:
                     out[alias] = None
                     errors.append({"type": "NOT_FOUND", "path": [alias], "message":
