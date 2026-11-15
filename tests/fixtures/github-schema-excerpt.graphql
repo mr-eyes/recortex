@@ -278,6 +278,10 @@ type ProjectV2View implements Node {
   number: Int!
 }
 
+type RepositoryConnection {
+  nodes: [Repository]
+}
+
 type ProjectV2ViewConnection {
   nodes: [ProjectV2View]
 }

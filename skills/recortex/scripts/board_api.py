@@ -58,6 +58,7 @@ REASONS = {
     "budget": "the budget ran out",
     "unapproved": "the board is not approved on this machine",
     "entry": "the board entry of the project file does not fit",
+    "setup": "the board does not read back as it was set up",
 }
 SCOPE_LINE = ("the gh login lacks the project scope; run `gh auth refresh -s project` in your terminal, then run "
               "setup again. The scope lets gh read and write all of your GitHub projects; the plugin touches only the "
@@ -185,11 +186,12 @@ def scope_probe(timeout=60):
     return login if isinstance(login, str) and OWNER.fullmatch(login) else ""
 
 
-PROJECT_FIELDS = ("id number closed public title "
+PROJECT_FIELDS = ("id number closed public title readme shortDescription "
+                  "repositories(first: 20) { nodes { nameWithOwner } } "
                   "fields(first: 50) { nodes { ... on ProjectV2Field { id name } ... on ProjectV2SingleSelectField "
                   "{ id name options { id name color description } } } } "
                   "workflows(first: 20) { nodes { name enabled } } "
-                  "views(first: 20) { nodes { id name } }")
+                  "views(first: 20) { nodes { id name filter } }")
 
 
 def project_query(owner, number):
@@ -211,7 +213,11 @@ def read_project(owner, number, timeout=60):
     if not isinstance(holder.get("login"), str) or holder["login"].lower() != owner.lower():
         raise BoardError("notfound")
     out = {"id": ident(found.get("id")), "owner_id": ident(holder.get("id")), "closed": bool(found.get("closed")),
-           "public": found.get("public") is not False, "status": None, "why": None, "workflows": {}, "views": {}}
+           "public": found.get("public") is not False, "status": None, "why": None, "workflows": {}, "views": {},
+           "filters": {},  # view name: True when its filter is the plugin's (compared, never shown)
+           "texts": found.get("readme") == README and found.get("shortDescription") == DESCRIPTION,
+           "repos": {r["nameWithOwner"].lower() for r in (found.get("repositories") or {}).get("nodes") or []
+                     if isinstance(r, dict) and recortex.valid_repo(r.get("nameWithOwner"))}}
     for node in (found.get("fields") or {}).get("nodes") or []:
         if not isinstance(node, dict):
             continue
@@ -242,6 +248,7 @@ def read_project(owner, number, timeout=60):
     for node in (found.get("views") or {}).get("nodes") or []:
         if isinstance(node, dict) and node.get("name") in [v[0] for v in VIEWS] and isinstance(node.get("id"), str):
             out["views"][node["name"]] = ident(node["id"])
+            out["filters"][node["name"]] = (node.get("filter") or "") == ({v[0]: v[2] for v in VIEWS}[node["name"]] or "")
     return out
 
 

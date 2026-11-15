@@ -348,9 +348,11 @@ def set_up(args):
             board_api.graphql("mutation { createProjectV2Field(input: {projectId: %s, dataType: TEXT, name: \"Why\"}) "
                               "{ projectV2Field { ... on ProjectV2Field { id } } } }" % board_api.quote(project["id"]))
             print("added: the Why field")
+        made_views = []
         for view, layout, filter_text in board_api.VIEWS:
             if view in project["views"]:
                 continue
+            made_views.append(view)
             made = board_api.graphql("mutation { createProjectV2View(input: {projectId: %s, name: %s, layout: %s}) "
                                      "{ projectV2View { id } } }" % (board_api.quote(project["id"]),
                                                                     board_api.quote(view), layout))
@@ -361,8 +363,14 @@ def set_up(args):
                                                                  board_api.quote(filter_text)))
             print("added: the view %s" % view)
         project = board_api.read_project(owner, number)
-        if project["public"] or not project["why"] or any(n not in project["status"]["ids"] for n in STATUS_NAMES):
-            raise board_api.BoardError("field" if not project["public"] else "public")
+        if project["public"]:
+            raise board_api.BoardError("public")
+        if not project["why"] or any(n not in project["status"]["ids"] for n in STATUS_NAMES):
+            raise board_api.BoardError("field")
+        if any(v[0] not in project["views"] for v in board_api.VIEWS) \
+                or not all(project["filters"].get(v) for v in made_views) \
+                or (args.mode == "new" and (not project["texts"] or repo.lower() not in project["repos"])):
+            raise board_api.BoardError("setup")
     except board_api.BoardError as error:
         print(failure(error.code))
         if args.mode == "new" and type(made_number) is int:

@@ -136,6 +136,8 @@ def field_value(state, repo, obj, name, args, ctx):
                 "pageInfo": {"hasNextPage": more, "endCursor": str(start + first) if more else None}}
     if name == "options":
         return obj.get("options", [])
+    if name == "repositories":  # the repositories a project is linked to; the fake knows one repository, R_1
+        return {"nodes": [{"__typename": "Repository", "nameWithOwner": repo} for r in obj.get("repos", []) if r == "R_1"]}
     if name == "subIssues":
         return obj.get("subIssues")
     return obj.get(name)
@@ -391,8 +393,13 @@ def handle(state, repo, query):
     for alias, name, args, children in selection:
         if name in [n for n in (os.environ.get("FAKE_GH_FAIL_MUTATION") or "").split(",") if n]:
             raise Refused("simulated failure of %s (HTTP 502)" % name, 1)
+        ignored = name in [n for n in (os.environ.get("FAKE_GH_IGNORE_MUTATION") or "").split(",") if n]
+        before = json.dumps(state) if ignored else None
         result = run_mutation(state, repo, name, args)
         data[alias] = payload_for(state, repo, name, children, result)
+        if ignored:  # answered as if it worked; nothing changed
+            state.clear()
+            state.update(json.loads(before))
         if name in [n for n in (os.environ.get("FAKE_GH_FAIL_AFTER_MUTATION") or "").split(",") if n]:
             state["_fail_after"] = "simulated timeout after %s was carried out" % name
     return {"data": data}

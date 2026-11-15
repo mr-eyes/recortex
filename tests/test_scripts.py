@@ -10089,6 +10089,18 @@ class BoardWriteTests(BoardSandbox):
         project = self.repo()["projects"]["example-org/1"]
         self.assertEqual(("Team notes", "Team board"), (project["readme"], project["shortDescription"]))
 
+    def test_setup_reads_back_the_readme_and_description_of_a_new_board(self):
+        result = self.tool("board.py", "setup", "--mode", "new", "--yes",
+                           env={"FAKE_GH_IGNORE_MUTATION": "updateProjectV2"})
+        self.assertEqual(1, result.returncode, result.stdout)
+        self.assertIn("the board does not read back as it was set up", result.stdout)
+
+    def test_setup_reads_back_the_views_it_made(self):
+        result = self.tool("board.py", "setup", "--mode", "new", "--yes",
+                           env={"FAKE_GH_IGNORE_MUTATION": "updateProjectV2View"})
+        self.assertEqual(1, result.returncode, result.stdout)
+        self.assertIn("the board does not read back as it was set up", result.stdout)
+
 
 class BoardSyncTests(BoardSandbox):
     """The sync's board step, the two brief lines, --doctor and the resume reminder."""
