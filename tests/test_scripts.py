@@ -10055,6 +10055,16 @@ class BoardWriteTests(BoardSandbox):
         self.assertEqual(1, result.returncode)
         self.assertIn("MISMATCH: #3 does not read back as Todo", result.stdout)
 
+    def test_an_archived_card_is_left_alone_on_github_too(self):
+        self.make_board()
+        self.assertEqual(0, self.apply().returncode)
+        data = self.repo()
+        [i for i in data["projects"]["example-org/1"]["items"] if i["content"]["number"] == 7][0]["isArchived"] = True
+        self.save(data)
+        result = self.apply()
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertNotIn("MISMATCH", result.stdout)
+
 
 class BoardSyncTests(BoardSandbox):
     """The sync's board step, the two brief lines, --doctor and the resume reminder."""

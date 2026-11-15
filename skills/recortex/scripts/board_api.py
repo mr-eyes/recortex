@@ -246,7 +246,8 @@ def read_project(owner, number, timeout=60):
 
 
 def cards_query(project_id, after):
-    paging = "first: %d%s" % (PAGE, ", after: %s" % quote(after) if after else "")
+    paging = "first: %d, archivedStates: [ARCHIVED, NOT_ARCHIVED]%s" % (PAGE, ", after: %s" % quote(after) if after
+                                                                     else "")
     content = "number repository { nameWithOwner }"
     return ("query { node(id: %s) { ... on ProjectV2 { items(%s) { pageInfo { hasNextPage endCursor } nodes { id "
             "isArchived type content { ... on Issue { %s } ... on PullRequest { %s } } "
