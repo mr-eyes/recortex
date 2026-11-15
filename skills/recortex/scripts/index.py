@@ -577,8 +577,70 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
         set_meta(db, "partial_at", now_utc())
     set_meta(db, "sync_complete", "1" if summary["complete"] else "0")
     db.commit()
+    board_step(db, repo, clock, timeout)
     db.close()
     return summary
+
+
+def board_step(db, repo, clock, timeout):
+    """The last step of a sync, only for a project whose board the user approved on this machine: the cards of the
+    board go into board_cards, and board_error holds a fixed reason code (board_api.REASONS) or "". It writes
+    nothing to GitHub, never makes the record's sync incomplete and never raises. A project without a board makes no
+    call and keeps no row. Text from the board is not kept: only ids, numbers, the plugin's own status names and the
+    Why text, which is compared and never shown."""
+    try:
+        config = recortex.load_config()
+    except (OSError, ValueError):
+        return
+    if not isinstance(config, dict) or str(config.get("repo", "")).lower() != repo.lower():
+        return
+    import board_api  # noqa: E402
+    state, owner, number = board_api.entry(config, repo)
+    if state == "none":
+        if db.execute("SELECT 1 FROM board_cards LIMIT 1").fetchone() or get_meta(db, "board_error"):
+            db.execute("DELETE FROM board_cards")
+            set_meta(db, "board_error", "")
+            db.commit()
+        return
+    if repo.lower() not in recortex.trusted_repos():
+        return
+
+    def keep(code):
+        if code:
+            db.execute("DELETE FROM board_cards")  # cards of an earlier read are not shown as current
+        set_meta(db, "board_error", code)
+        db.commit()
+
+    if state != "approved":
+        return keep("unapproved" if state == "unapproved" else "entry")
+    if clock.passed():
+        return keep("budget")
+
+    def left():
+        if clock.passed():
+            raise board_api.BoardError("budget")
+        return clock.left(timeout)
+
+    try:
+        project = board_api.read_project(owner, number, left())
+        if project["closed"]:
+            raise board_api.BoardError("notfound")
+        if not project["status"] or not project["why"]:
+            raise board_api.BoardError("field")
+        info, _ = board_api.repo_ids(repo, [], left())
+        if info["private"] and project["public"]:
+            raise board_api.BoardError("public")
+        cards = board_api.read_cards(project, repo, left)
+    except board_api.BoardError as error:
+        return keep(error.code)
+    except Exception:  # noqa: BLE001 - the record's sync is done; the board step says so in one fixed line
+        return keep("github")
+    db.execute("DELETE FROM board_cards")
+    db.executemany("INSERT INTO board_cards VALUES (?, ?, ?, ?, ?, ?)",
+                   [(n, c["kind"], c["item"], 1 if c["archived"] else 0, c["status"], c["why"])
+                    for n, c in sorted(cards.items())])
+    set_meta(db, "board_read_at", now_utc())
+    keep("")
 
 
 # ---------------------------------------------------------------- background sync

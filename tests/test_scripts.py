@@ -9629,5 +9629,247 @@ class BoardCompareTests(unittest.TestCase):
         self.assertEqual([99], found["gone"])
 
 
+class BoardWriteTests(BoardSandbox):
+    """board.py: setup, plan and apply, against the fake Projects."""
+
+    STATUSES = ["Todo", "In Progress", "Done", "To triage", "Waiting for a yes", "Blocked", "Set aside"]
+
+    def test_setup_makes_a_private_board_with_the_options_the_field_and_the_views(self):
+        result = self.make_board()
+        project = self.board()
+        self.assertFalse(project["public"])
+        status = [f for f in project["fields"] if f["name"] == "Status"][0]
+        self.assertEqual(self.STATUSES, [o["name"] for o in status["options"]])
+        self.assertEqual(["OPT_1", "OPT_2", "OPT_3"], [o["id"] for o in status["options"]][:3])  # the old ids stay
+        self.assertIn("Why", [f["name"] for f in project["fields"]])
+        self.assertEqual(["Board", "Waiting on you", "By thread"], [v["name"] for v in project["views"]])
+        self.assertEqual('status:"Waiting for a yes","Blocked","To triage"', project["views"][1]["filter"])
+        self.assertEqual(1, len(project["repos"]))
+        self.assertIn("private: the board is private (read back)", result.stdout)
+        self.assertIn("board: example-org/1", result.stdout)
+
+    def test_setup_records_the_approval_and_writes_the_entry_of_the_project_file(self):
+        self.make_board()
+        entry = json.loads(open(os.path.join(self.project, recortex.CONFIG_NAME)).read())["board"]
+        self.assertEqual({"owner": "example-org", "number": 1}, entry)
+        approvals = os.path.join(self.dir, "xdg-config", "recortex", "private", "board-approvals.json")
+        self.assertEqual(0o600, os.stat(approvals).st_mode & 0o777)
+        data = json.loads(open(approvals).read())
+        self.assertEqual({"owner": "example-org", "number": 1}, {k: data["approvals"][REPO.lower()][k]
+                                                                  for k in ("owner", "number")})
+
+    def test_setup_sets_the_board_private_even_when_github_makes_it_public(self):
+        self.make_board(env={"FAKE_GH_DEFAULT_PUBLIC": "1"})
+        self.assertFalse(self.board()["public"])
+
+    def test_setup_of_an_existing_board_adds_what_is_missing_and_removes_nothing(self):
+        self.make_board()
+        data = self.repo()
+        status = [f for f in data["projects"]["example-org/1"]["fields"] if f["name"] == "Status"][0]
+        status["options"] = [o for o in status["options"] if o["name"] != "Blocked"] + [
+            {"id": "OPT_900", "name": "Parked", "color": "PINK", "description": "mine"}]
+        data["projects"]["example-org/1"]["views"].append({"__typename": "ProjectV2View", "id": "V_9", "name": "Mine",
+                                                           "layout": "TABLE_LAYOUT", "filter": "", "number": 9})
+        self.save(data)
+        result = self.tool("board.py", "setup", "--mode", "existing", "--number", "1", "--yes")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        project = self.board()
+        status = [f for f in project["fields"] if f["name"] == "Status"][0]
+        names = [o["name"] for o in status["options"]]
+        self.assertIn("Parked", names)
+        self.assertIn("Blocked", names)
+        self.assertIn("OPT_900", [o["id"] for o in status["options"]])
+        self.assertIn("Mine", [v["name"] for v in project["views"]])
+        self.assertEqual(1, [f["name"] for f in project["fields"]].count("Why"))
+
+    def test_a_missing_scope_prints_the_fixed_line_and_changes_nothing(self):
+        result = self.tool("board.py", "setup", "--mode", "new", "--yes", env={"FAKE_GH_NO_PROJECT_SCOPE": "1"})
+        self.assertEqual(2, result.returncode)
+        self.assertIn("the gh login lacks the project scope; run `gh auth refresh -s project` in your terminal",
+                      result.stdout)
+        self.assertNotIn("projects", self.repo())
+        self.assertNotIn("board", json.loads(open(os.path.join(self.project, recortex.CONFIG_NAME)).read()))
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "xdg-config", "recortex")))
+
+    def test_the_dry_run_of_setup_makes_no_call_and_writes_nothing(self):
+        result = self.tool("board.py", "setup", "--mode", "new", "--dry-run", gh="false")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("would: create a private board owned by example-org and link it to example-org/tinycsv",
+                      result.stdout)
+        self.assertIn("dry run: nothing was written", result.stdout)
+        self.assertNotIn("board", json.loads(open(os.path.join(self.project, recortex.CONFIG_NAME)).read()))
+
+    def test_setup_needs_yes_or_dry_run(self):
+        result = self.tool("board.py", "setup", "--mode", "new")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("pass --dry-run", result.stderr)
+
+    def test_apply_fills_the_board_and_reads_every_card_back(self):
+        self.memory(9300, 7, "failure")
+        self.pull(20)
+        self.make_board()
+        result = self.apply()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual({3: ("Todo", "Todo"), 7: ("Blocked", "Blocked " + self.address(9300)),
+                          20: ("In Progress", "In Progress")}, self.cards())
+        self.assertIn("written: #7 is in Blocked", result.stdout)
+        self.assertIn("written: #20 is in In Progress", result.stdout)
+
+    def test_a_second_apply_has_nothing_to_write(self):
+        self.make_board()
+        self.assertEqual(0, self.apply().returncode)
+        again = self.apply()
+        self.assertEqual(0, again.returncode, again.stdout + again.stderr)
+        self.assertIn("board: every card is where the record puts it", again.stdout)
+        self.assertIn("board: nothing to write", again.stdout)
+
+    def test_the_dry_run_of_apply_prints_the_exact_commands_and_writes_nothing(self):
+        self.make_board()
+        before = len(self.repo()["log"])
+        result = self.apply("--dry-run")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("would run: gh api graphql -f 'query=mutation { addProjectV2ItemById(input: {projectId: ",
+                      result.stdout)
+        self.assertIn("would run: gh api graphql -f 'query=mutation { updateProjectV2ItemFieldValue(input: ",
+                      result.stdout)
+        self.assertIn("dry run: nothing was written", result.stdout)
+        self.assertEqual({}, self.cards())
+        self.assertEqual([], [a for a in self.repo()["log"][before:] if "mutation" in " ".join(a)])
+
+    def test_a_stopped_apply_run_again_reaches_the_same_board_as_a_run_that_was_not_stopped(self):
+        self.memory(9300, 7, "failure")
+        self.pull(20)
+        self.make_board()
+        stopped = self.apply(env={"FAKE_GH_FAIL_MUTATION": "updateProjectV2ItemFieldValue"})
+        self.assertEqual(1, stopped.returncode)
+        self.assertIn("was not written: GitHub could not be read; run again to go on", stopped.stdout)
+        self.assertNotEqual(set(), set(self.cards()))  # the item was added before the field write failed
+        self.assertEqual(0, self.apply().returncode)
+        resumed = self.cards()
+        # the same record on a board that was filled in one run
+        self.save(self.repo())
+        data = self.repo()
+        data["projects"] = {}
+        data["owners"] = {}
+        self.save(data)
+        self.make_board()
+        self.assertEqual(0, self.apply().returncode)
+        self.assertEqual(self.cards(), resumed)
+
+    def test_a_run_that_fails_after_github_acted_is_finished_by_the_next_run(self):
+        self.pull(20)
+        self.make_board()
+        result = self.apply(env={"FAKE_GH_FAIL_AFTER_MUTATION": "addProjectV2ItemById"})
+        self.assertEqual(1, result.returncode)
+        self.assertEqual(0, self.apply().returncode)
+        self.assertEqual("In Progress", self.cards()[20][0])
+        self.assertEqual(1, len([i for i in self.board()["items"] if i["content"]["number"] == 20]))
+
+    def test_a_card_moved_by_hand_is_listed_and_left_alone_and_restore_puts_it_back(self):
+        self.make_board()
+        self.assertEqual(0, self.apply().returncode)
+        data = self.repo()
+        project = data["projects"]["example-org/1"]
+        item = [i for i in project["items"] if i["content"]["number"] == 7][0]
+        item["values"]["Status"]["optionId"] = [o["id"] for f in project["fields"] for o in f.get("options", [])
+                                                if o["name"] == "In Progress"][0]
+        self.save(data)
+        self.ready()
+        plan = self.tool("board.py", "plan")
+        self.assertEqual(0, plan.returncode, plan.stdout + plan.stderr)
+        self.assertIn("moved by hand: #7", plan.stdout)
+        self.assertIn("#7: the record says Todo; the board says In Progress", plan.stdout)
+        left = self.apply()
+        self.assertEqual(0, left.returncode, left.stdout + left.stderr)
+        self.assertIn("1 card(s) were moved by hand and left alone", left.stdout)
+        self.assertEqual("In Progress", self.cards()[7][0])
+        restored = self.apply("--restore", "7")
+        self.assertEqual(0, restored.returncode, restored.stdout + restored.stderr)
+        self.assertEqual("Todo", self.cards()[7][0])
+
+    def test_a_not_planned_close_ends_in_set_aside_after_the_default_workflow_wrote_done(self):
+        self.memory(9300, 7, "decision")
+        self.make_board()
+        self.assertEqual(0, self.apply().returncode)
+        self.assertEqual("In Progress", self.cards()[7][0])
+        self.close(7, reason="not_planned")
+        data = self.repo()  # GitHub's own workflow: a closed issue gets Done
+        project = data["projects"]["example-org/1"]
+        item = [i for i in project["items"] if i["content"]["number"] == 7][0]
+        item["values"]["Status"]["optionId"] = "OPT_3"
+        self.save(data)
+        self.ready()
+        result = self.apply()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(("Set aside", "Set aside " + self.address(9300)), self.cards()[7])
+
+    def test_a_field_write_that_is_accepted_and_not_applied_is_caught_by_the_read_back(self):
+        self.make_board()
+        result = self.apply(env={"FAKE_GH_IGNORE_FIELD_WRITE": "1"})
+        self.assertEqual(1, result.returncode)
+        self.assertIn("MISMATCH: #7 does not read back as Todo", result.stdout)
+
+    def test_a_public_board_for_a_private_record_is_refused_before_any_write(self):
+        self.make_board()
+        data = self.repo()
+        data["projects"]["example-org/1"]["public"] = True
+        self.save(data)
+        before = len(self.repo()["log"])
+        result = self.apply()
+        self.assertEqual(1, result.returncode)
+        self.assertIn("board: not done: the board is public while the record is private", result.stdout)
+        self.assertEqual([], [a for a in self.repo()["log"][before:] if "mutation" in " ".join(a)])
+
+    def test_items_of_other_repositories_and_drafts_are_ignored_and_a_card_without_an_issue_is_gone(self):
+        self.make_board()
+        data = self.repo()
+        items = data["projects"]["example-org/1"]["items"]
+        items.append({"id": "PVTI_90", "isArchived": False, "type": "ISSUE", "values": {},
+                      "content": {"__typename": "Issue", "number": 7, "repository": {"nameWithOwner": "other-org/x"}}})
+        items.append({"id": "PVTI_91", "isArchived": False, "type": "REDACTED", "values": {}, "content": None})
+        items.append({"id": "PVTI_92", "isArchived": False, "type": "ISSUE", "values": {},
+                      "content": {"__typename": "Issue", "number": 99, "repository": {"nameWithOwner": REPO}}})
+        self.save(data)
+        result = self.apply()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("on the board with no issue in the record: #99", result.stdout)
+        self.assertIn("written: #7 is in Todo", result.stdout)  # the card of the other repository is not #7's
+        self.assertEqual(2, len([i for i in self.board()["items"] if i["content"] and i["content"]["number"] == 7]))
+
+    def test_apply_writes_at_most_the_limit_and_says_so(self):
+        for number in (20, 21, 22):
+            self.pull(number)
+        self.make_board()
+        result = self.apply("--limit", "2")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("board: 3 more card(s) wait; run again", result.stdout)
+        self.assertEqual(2, len(self.cards()))
+        self.assertEqual(0, self.apply("--limit", "10").returncode)
+        self.assertEqual({3, 7, 20, 21, 22}, set(self.cards()))
+
+    def test_apply_is_refused_without_a_board_for_an_untrusted_repository_and_for_an_unapproved_entry(self):
+        result = self.apply()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("this project has no board", result.stderr)
+        self.make_board()
+        os.unlink(os.path.join(self.dir, "xdg-config", "recortex", "private", "board-approvals.json"))
+        unapproved = self.apply()
+        self.assertEqual(1, unapproved.returncode)
+        self.assertIn("board: not done: the board is not approved on this machine", unapproved.stdout + unapproved.stderr)
+        self.make_board()
+        open(self.trusted, "w").write("")
+        untrusted = self.apply()
+        self.assertNotEqual(0, untrusted.returncode)
+        self.assertIn("is not in your trusted repositories", untrusted.stderr)
+
+    def test_hooks_never_write_to_github(self):
+        self.make_board()
+        self.memory(9300, 7, "failure")
+        before = len(self.repo()["log"])
+        for event in ("session-start", "subagent-start", "prompt-submit", "pre-compact"):
+            self.hook(event)
+        self.assertEqual([], [a for a in self.repo()["log"][before:] if "mutation" in " ".join(a)])
+
+
 if __name__ == "__main__":
     unittest.main()

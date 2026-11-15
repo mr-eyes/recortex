@@ -204,11 +204,15 @@ def run_query(state, repo, fields, selection):
     return out
 
 
-def default_fields():
+def default_fields(number):
+    """The fields of a new project. The first project's ids are the short ones; another project's carry its number, so
+    that no id is in two projects."""
+    mark = "" if number == 1 else "_%d" % number
     return [
-        {"__typename": "ProjectV2Field", "id": "F_title", "name": "Title", "dataType": "TITLE"},
-        {"__typename": "ProjectV2SingleSelectField", "id": "F_status", "name": "Status", "dataType": "SINGLE_SELECT",
-         "options": [{"id": "OPT_%d" % i, "name": name} for i, name in enumerate(DEFAULT_STATUS, 1)]},
+        {"__typename": "ProjectV2Field", "id": "F_title" + mark, "name": "Title", "dataType": "TITLE"},
+        {"__typename": "ProjectV2SingleSelectField", "id": "F_status" + mark, "name": "Status",
+         "dataType": "SINGLE_SELECT",
+         "options": [{"id": "OPT%s_%d" % (mark, i), "name": name} for i, name in enumerate(DEFAULT_STATUS, 1)]},
     ]
 
 
@@ -218,7 +222,7 @@ def new_project(state, owner_id, login, title):
     project = {"id": "PVT_%d" % (len(projects) + 1), "number": number, "title": title, "closed": False,
                "public": bool(os.environ.get("FAKE_GH_DEFAULT_PUBLIC")),
                "url": "https://github.com/orgs/%s/projects/%d" % (login, number), "readme": "", "shortDescription": "",
-               "fields": default_fields(), "workflows": [
+               "fields": default_fields(number), "workflows": [
                    {"__typename": "ProjectV2Workflow", "name": "Item closed", "number": 1, "enabled": True},
                    {"__typename": "ProjectV2Workflow", "name": "Pull request merged", "number": 2, "enabled": True},
                    {"__typename": "ProjectV2Workflow", "name": "Auto-add to project", "number": 3, "enabled": False}],
@@ -266,8 +270,8 @@ def run_mutation(state, repo, name, args):
                 project[key] = given[key] == "true"
         return {"projectV2": project_object(project)}
     if name == "createProjectV2Field":
-        field = {"__typename": "ProjectV2Field", "id": "F_%d" % (len(project["fields"]) + 1), "name": text("name"),
-                 "dataType": text("dataType")}
+        field = {"__typename": "ProjectV2Field", "id": "F_%s_%d" % (project["number"], len(project["fields"]) + 1),
+                 "name": text("name"), "dataType": text("dataType")}
         project["fields"].append(field)
         return {"projectV2Field": field}
     if name == "updateProjectV2Field":
@@ -290,7 +294,7 @@ def run_mutation(state, repo, name, args):
         project["repos"].append(text("repositoryId"))
         return {"repository": {"__typename": "Repository", "id": text("repositoryId")}}
     if name == "createProjectV2View":
-        view = {"__typename": "ProjectV2View", "id": "V_%d" % (len(project["views"]) + 1), "name": text("name"),
+        view = {"__typename": "ProjectV2View", "id": "V_%s_%d" % (project["number"], len(project["views"]) + 1), "name": text("name"),
                 "layout": given["layout"], "filter": "", "number": len(project["views"]) + 1}
         project["views"].append(view)
         return {"projectV2View": view}
@@ -305,9 +309,11 @@ def run_mutation(state, repo, name, args):
     if name == "addProjectV2ItemById":
         node, kind = content_of(state, repo, text("contentId"))
         for item in project["items"]:
-            if item["content"]["number"] == node["number"]:
+            if item["content"] and item["content"]["number"] == node["number"] \
+                    and item["content"]["repository"]["nameWithOwner"] == repo:
                 return {"item": item_view(state, project, item)}
-        item = {"id": "PVTI_%d" % (len(project["items"]) + 1), "isArchived": False, "type": kind, "values": {},
+        state["_items"] = state.get("_items", 0) + 1
+        item = {"id": "PVTI_%d" % state["_items"], "isArchived": False, "type": kind, "values": {},
                 "content": {"__typename": node["__typename"], "number": node["number"],
                             "repository": {"nameWithOwner": repo}}}
         project["items"].append(item)
