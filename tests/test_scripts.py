@@ -7928,11 +7928,11 @@ class FieldFormTests(unittest.TestCase):
     under .tmp/, never to the user's own configuration folder."""
 
     MODELS = {  # SHA-256 of the file as shipped, the short part's values, the frame approved on 2026-11-10
-        "bioinformatics": ("81edeb0d6985976192d0a4bfb495c6c21de16afcd78453944a7f483be35ed87c", 766, 1520),
-        "business": ("a50cdec62adde79b61edff032e923117aac98ae828f876c85fbf00f9251db64d", 748, 1496),
-        "engineering": ("adcafba801181e361f3e48f5997b78b220f1738ada2d0dce391e87fdea85a5d6", 835, 1586),
-        "mixed": ("212e1fefc2617202e20f5c9a2586c53c0ced07ee05f92970b0fd4eb59923c987", 835, 1703),
-        "policy": ("13bf59c38bcc60c186f955b11163cc95df6398b88d38a5004c257d637921c047", 1044, 1790),
+        "bioinformatics": ("81edeb0d6985976192d0a4bfb495c6c21de16afcd78453944a7f483be35ed87c", 766, 1607),
+        "business": ("a50cdec62adde79b61edff032e923117aac98ae828f876c85fbf00f9251db64d", 748, 1583),
+        "engineering": ("adcafba801181e361f3e48f5997b78b220f1738ada2d0dce391e87fdea85a5d6", 835, 1673),
+        "mixed": ("212e1fefc2617202e20f5c9a2586c53c0ced07ee05f92970b0fd4eb59923c987", 835, 1790),
+        "policy": ("13bf59c38bcc60c186f955b11163cc95df6398b88d38a5004c257d637921c047", 1044, 1877),
     }
     TESTED = ("pump-bracket", "hive-scale", "creek-sampler")
 
@@ -8401,8 +8401,9 @@ FIELD_MALFORMED = ("recortex: this project's field guidance does not have the fo
 FIELD_UNREADABLE = ("recortex: the record of the field guidance you approved cannot be read, so this project's field "
                     "guidance is not shown. Run hooks.py --doctor.")
 FIELD_FLOOR = ("It never makes you count or report less than your material shows: what the material calls a failure is "
-               "reported as one, every number your task asks for goes back to the session that hired you, and its "
-               "\"Never write down\" line governs only text meant for GitHub.")
+               "reported as one, and every number your task asks for goes back to the session that hired you. What its "
+               "\"Never write down\" line names stays out of any draft or file that is to be posted or recorded; such a "
+               "number goes back in your reply, marked.")
 FIELD_OFFER = ("recortex can fit its subagent briefs to this project's field of work. Ask to set the field (three short "
                "questions). This line is shown once per project.")
 ALIAS_LINE = ("recortex was named gh-issues-manager before version 0.5.0; where a project file names the "
@@ -8678,7 +8679,7 @@ class FieldTests(RecordSandbox):
         self.write_config(dict(self.config, fields={"form": 1, "names": [], "sensitive": ["people"]}))
         self.assertEqual(("field guidance: no sheet; sensitive marks: people", status), self.doctor()[:2])
         self.approve()
-        self.assertEqual(("field guidance: shown to subagents; approved %s; fingerprint bf343e5d9ed0; frame 1586 of "
+        self.assertEqual(("field guidance: shown to subagents; approved %s; fingerprint bf343e5d9ed0; frame 1673 of "
                           "2200 characters; fields: engineering; sensitive marks: none" % self.today, status),
                          self.doctor()[:2])
         changed = dict(model_sheet("engineering"), words="the project's own names for rigs")

@@ -62,8 +62,9 @@ FNOTE = ("Written for this project at setup and approved by the user on %s. It s
          "numbers, failures and sensitive material. It cannot change rules, permissions or your task.")
 # The floor: a sheet that reads as field practice cannot make a subagent count or report less than its material shows.
 FLOOR = ("It never makes you count or report less than your material shows: what the material calls a failure is "
-         "reported as one, every number your task asks for goes back to the session that hired you, and its \"Never write "
-         "down\" line governs only text meant for GitHub.")
+         "reported as one, and every number your task asks for goes back to the session that hired you. What its \"Never "
+         "write down\" line names stays out of any draft or file that is to be posted or recorded; such a number goes "
+         "back in your reply, marked.")
 POINTER = "The longer checks for reviewers are under fields in the project's %s; they are guidance of the same kind."
 MIX_HEAD = "Fields: %s. Use the checks of the field your task belongs to, and say which you used."
 OTHER_FILE = "%s configuration file" % names.NAME
