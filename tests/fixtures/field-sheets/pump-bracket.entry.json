@@ -1,0 +1,28 @@
+{
+  "form": 1,
+  "names": [
+    "engineering"
+  ],
+  "sensitive": [],
+  "brief": {
+    "proof": "a calculation with its inputs and load case; a simulation with mesh, boundary conditions, material model and a convergence check; a test with specimen count, fixture and instrument; the drawing revision; the standard with its edition and clause.",
+    "numbers": "always a unit, in one unit system; a dimension with its tolerance; a material with its specification and condition; a safety factor with what it is against (yield, ultimate, fatigue) and the load case; measured, nominal and simulated values told apart.",
+    "failures": "a part that breaks in test is a result (mode, place, load, cycles). Also report runs that did not converge, a tested part that differs from the drawing, and one specimen read as proof.",
+    "never": "supplier prices or customer drawings under agreement, export-controlled data, long passages of a paid standard. Never \"safe\" without the criterion it met."
+  },
+  "checks": [
+    "Does every number carry a unit in one unit system, and every dimension its tolerance, with no silent conversion between systems?",
+    "Could another engineer redo each calculation from what is written: inputs, assumptions, method, load case, and each standard with its edition and clause?",
+    "Does each simulation state mesh, element type, boundary conditions, contacts and material model, and show a mesh convergence check?",
+    "Do the supports, loads and symmetry in a model match how the real part is held and loaded, or do they make it look stiffer or less stressed than it is?",
+    "Is each safety factor, margin or claim of safe tied to a named criterion (yield, ultimate, buckling, fatigue), a load case and the source of its allowable?",
+    "Does each material carry its specification and condition (temper, heat treatment, orientation), and does each property value come from a cited source?",
+    "Does each test give specimen count, fixture, instrument and its calibration, loading rate and environment, and show the scatter between specimens?",
+    "Is one specimen or one run read as proof, or is a result stretched beyond the range of loads, temperatures or sizes actually tested?",
+    "Does the tested or analyzed part match the cited drawing revision, and are deviations in material, process or dimensions written down?",
+    "Are measured, nominal and simulated values labeled apart, and where test and model disagree, is the gap explained rather than tuned away?",
+    "Are breaks, runs that did not converge and out-of-tolerance parts reported with mode, place, load and cycles, not dropped or softened?",
+    "Does the draft hold supplier prices, customer drawings under agreement, export-controlled data, or long passages of a paid standard?"
+  ],
+  "words": "Abbreviations and terms of art (such as FEA, UTS, GD&T, R-ratio), standard and specification designations, material temper and condition codes, and internal part, rig or test names."
+}

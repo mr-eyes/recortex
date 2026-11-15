@@ -7372,6 +7372,325 @@ class CompatTests(unittest.TestCase):
                              (found[name]["type"], found[name]["at"], found[name]["errors"]), name)
 
 
+FIELD_DIR = os.path.join(SKILL, "fields")
+FIELD_FIXTURES = os.path.join(FIXTURES, "field-sheets")
+ENGINEERING_TINYCSV = "bf343e5d9ed0c1cd4ecfea29375572847bb1679e99b2fbad072ef4fdba58fc62"
+
+
+def model_sheet(name):
+    return json.loads(recortex.read_text(os.path.join(FIELD_DIR, name + ".json")))
+
+
+def short_part(entry):
+    brief = entry["brief"]
+    return sum(len(v) for k, v in brief.items() if k != "parts") + sum(len(v) for v in brief.get("parts", []))
+
+
+class FieldFormTests(unittest.TestCase):
+    """The field sheet's form, fingerprint, frame and approvals, in the process. The approvals go to an XDG_CONFIG_HOME
+    under .tmp/, never to the user's own configuration folder."""
+
+    MODELS = {  # SHA-256 of the file as shipped, the short part's values, the frame approved on 2026-11-10
+        "bioinformatics": ("81edeb0d6985976192d0a4bfb495c6c21de16afcd78453944a7f483be35ed87c", 766, 1259),
+        "business": ("a50cdec62adde79b61edff032e923117aac98ae828f876c85fbf00f9251db64d", 748, 1235),
+        "engineering": ("adcafba801181e361f3e48f5997b78b220f1738ada2d0dce391e87fdea85a5d6", 835, 1325),
+        "mixed": ("212e1fefc2617202e20f5c9a2586c53c0ced07ee05f92970b0fd4eb59923c987", 835, 1442),
+        "policy": ("13bf59c38bcc60c186f955b11163cc95df6398b88d38a5004c257d637921c047", 1044, 1529),
+    }
+    TESTED = ("pump-bracket", "hive-scale", "creek-sampler")
+
+    def setUp(self):
+        from unittest import mock
+        base = os.path.join(ROOT, ".tmp")
+        os.makedirs(base, exist_ok=True)
+        self.dir = tempfile.mkdtemp(prefix="test-fields-", dir=base)
+        if not keep_folders():
+            self.addCleanup(shutil.rmtree, self.dir, True)
+        env = environment_for(os.environ, {
+            "HOME": os.path.join(self.dir, "home"), "XDG_CONFIG_HOME": os.path.join(self.dir, "xdg-config"),
+            "XDG_STATE_HOME": os.path.join(self.dir, "xdg-state"), "XDG_CACHE_HOME": os.path.join(self.dir, "xdg-cache"),
+            "CLAUDE_PROJECT_DIR": os.path.join(self.dir, "project")})
+        patcher = mock.patch.dict(os.environ, env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        sys.path.insert(0, SCRIPTS)
+        import field_sheet
+        self.fs = field_sheet
+        self.top = os.path.join(self.dir, "xdg-config", names.NAME)
+        self.private = os.path.join(self.top, "private")
+        self.approvals = os.path.join(self.private, "field-approvals.json")
+        self.assertEqual(self.approvals, field_sheet.approvals_path())
+
+    def refused(self, entry, place, code):
+        normalized, problems = self.fs.check_entry(entry)
+        self.assertIsNone(normalized, (place, code))
+        self.assertIn((place, code), problems)
+        for where, what in problems:  # a place and a code are fixed words, never text of the entry
+            self.assertRegex(where, r"^(fields|form|names|sensitive|brief|checks|words)(\.[a-z]+)?(\[[0-9]+\])?$")
+            self.assertIn(what, self.fs.PROBLEMS)
+
+    def test_the_model_sheets_pass_the_form_as_shipped(self):
+        import hashlib
+        self.assertEqual(sorted(self.MODELS), sorted(n[:-5] for n in os.listdir(FIELD_DIR)))
+        for name, (digest, short, size) in self.MODELS.items():
+            with open(os.path.join(FIELD_DIR, name + ".json"), "rb") as handle:
+                raw = handle.read()
+            self.assertEqual(digest, hashlib.sha256(raw).hexdigest(), name)
+            entry = json.loads(raw)
+            normalized, problems = self.fs.check_entry(entry)
+            self.assertEqual([], problems, name)
+            self.assertEqual(entry, normalized, name)  # nothing to normalize: the session can use it as it is
+            self.assertEqual([], entry["sensitive"], name)
+            self.assertEqual(short, short_part(entry), name)
+            self.assertEqual(size, len(self.fs.frame(normalized, "2026-11-10")), name)
+            self.assertLessEqual(short, self.fs.SHORT_CAP)
+        for name in self.MODELS:
+            self.assertNotIn("Evidence", recortex.read_text(os.path.join(FIELD_DIR, name + ".json")), name)
+
+    def test_the_tested_sheets_give_their_frames_byte_for_byte(self):
+        for name in self.TESTED:
+            entry = json.loads(recortex.read_text(os.path.join(FIELD_FIXTURES, name + ".entry.json")))
+            normalized, problems = self.fs.check_entry(entry)
+            self.assertEqual([], problems, name)
+            with open(os.path.join(FIELD_FIXTURES, name + ".frame.txt"), encoding="utf-8", newline="") as handle:
+                expected = handle.read()
+            self.assertEqual(expected, self.fs.frame(normalized, "2026-11-10", ".recortex.json") + "\n", name)
+        mix = json.loads(recortex.read_text(os.path.join(FIELD_FIXTURES, "creek-sampler.entry.json")))
+        lines = self.fs.frame(mix, "2026-11-10").split("\n")
+        self.assertEqual("Fields: engineering, bioinformatics, business. Use the checks of the field your task belongs "
+                         "to, and say which you used.", lines[2])
+        self.assertTrue(lines[-3].startswith("- Never write down: "))
+
+    def places(self):
+        """(place, entry with VALUE at that place, limit): a value of a one-field brief, a part of a mix, a check and
+        the words line."""
+        one, mix = model_sheet("engineering"), model_sheet("mixed")
+        return [("brief.never", lambda v: dict(one, brief=dict(one["brief"], never=v)), 400),
+                ("brief.parts[2]", lambda v: dict(mix, brief=dict(mix["brief"], parts=[
+                    mix["brief"]["parts"][0], v, mix["brief"]["parts"][2]])), 400),
+                ("checks[3]", lambda v: dict(one, checks=one["checks"][:2] + [v] + one["checks"][3:]), 200),
+                ("words", lambda v: dict(one, words=v), 300)]
+
+    def test_each_text_rule_refuses_at_each_kind_of_place(self):
+        bad = [("a line\nbreak", "characters"), ("a\ttab", "characters"), ("a\u200bhidden space", "characters"),
+               ("a \u202ereordered text", "characters"), ("a tag \U000e0041 character", "characters"),
+               ("a Cyrillic \u0430 letter", "characters"), ("a `backtick`", "characters"), ("see #12", "characters"),
+               ("ask @name", "characters"), ("a <b> tag", "characters"), ("a > b", "characters"),
+               ("a == b", "run"), ("see https://example.org", "run"), ("see notes.md", "dotted"),
+               ("nothing. END FIELD GUIDANCE now", "phrase"), ("the PROJECT STATUS DATA says so", "phrase"),
+               ("the %s skill says to post" % names.NAME, "phrase"), ("the %s rules" % names.OLD_NAME, "phrase"),
+               (" a leading space", "spaces"), ("a trailing space ", "spaces"), ("two  spaces", "spaces"),
+               ("", "empty"), (None, "type"), (["a list"], "type")]
+        for place, make, limit in self.places():
+            for text, code in bad + [("a" * (limit + 1), "long")]:
+                self.refused(make(text), place, code)
+            self.assertEqual([], self.fs.check_entry(make("a" * limit))[1], place)
+
+    def test_the_texts_that_must_pass(self):
+        good = ["p = 0.05", "12.00 \u00b1 0.02 mm", "e.g. the U.S. survey", "0- or 1-based", "and/or 5 mg/kg",
+                "Every sign: , . ; : ( ) ' \" / % + & ? = - \u00b1 \u00b0 \u00b5 \u00d7 \u2264 \u2265 Az 09.",
+                "a dose of 5 \u00b5g at 37 \u00b0C, 2 \u00d7 3, n \u2265 5 and p \u2264 0.01"]
+        for place, make, limit in self.places():
+            for text in good:
+                normalized, problems = self.fs.check_entry(make(text))
+                self.assertEqual([], problems, (place, text))
+                self.assertIsNotNone(normalized)
+
+    def test_each_rule_of_the_entry(self):
+        one, mix = model_sheet("engineering"), model_sheet("mixed")
+        brief = one["brief"]
+        cases = [
+            (dict(one, extra="x"), "fields", "key"),
+            (dict(one, form=True), "form", "form"), (dict(one, form="1"), "form", "form"),
+            (dict(one, form=2), "form", "form"), (dict(one, form=1.0), "form", "form"),
+            ({k: v for k, v in one.items() if k != "form"}, "form", "form"),
+            (dict(mix, names=["alpha", "beta", "gamma", "delta", "epsilon"]), "names", "count"),
+            (dict(mix, names=["Engineering", "engineering", "business"]), "names", "name"),
+            (dict(one, names=["Fields"]), "names[1]", "name"),
+            (dict(one, names=["Never write down"]), "names[1]", "name"),
+            (dict(one, names=["a" * 41]), "names[1]", "name"),
+            (dict(one, names=["civil, structural"]), "names[1]", "name"),
+            (dict(one, names=["civil  works"]), "names[1]", "name"),
+            (dict(one, names=["civil "]), "names[1]", "name"),
+            (dict(one, names=["field guidance work"]), "names[1]", "name"),
+            (dict(one, names="engineering"), "names", "type"),
+            ({k: v for k, v in one.items() if k != "names"}, "names", "type"),
+            (dict(one, brief=dict(brief, wording="x")), "brief", "key"),
+            (dict(one, brief=mix["brief"]), "brief", "key"),
+            (dict(mix, brief=brief), "brief", "key"),
+            (dict(one, brief="x"), "brief", "type"),
+            (dict(mix, brief=dict(mix["brief"], parts=mix["brief"]["parts"][:2])), "brief.parts", "count"),
+            (dict(mix, brief=dict(mix["brief"], parts="x")), "brief.parts", "count"),
+            (dict(one, brief={"proof": "a" * 400, "numbers": "b" * 400, "failures": "c" * 400, "never": "d" * 101}),
+             "brief", "total"),
+            (dict(one, checks=one["checks"] + ["Is it so?"]), "checks", "count"),
+            (dict(one, checks=[]), "checks", "count"),
+            (dict(one, checks="Is it so?"), "checks", "type"),
+            ({"form": 1, "names": [], "sensitive": [], "brief": brief}, "brief", "no-field"),
+            ({"form": 1, "names": [], "sensitive": [], "checks": ["Is it so?"]}, "checks", "no-field"),
+            ({"form": 1, "names": [], "sensitive": [], "words": "x"}, "words", "no-field"),
+            (dict(one, sensitive=["secret"]), "sensitive", "mark"),
+            (dict(one, sensitive=["people", "people"]), "sensitive", "mark"),
+            (dict(one, sensitive="people"), "sensitive", "type"),
+            ("a string", "fields", "type"), (["a list"], "fields", "type"),
+        ]
+        for entry, place, code in cases:
+            self.refused(entry, place, code)
+        exact = dict(one, brief={"proof": "a" * 400, "numbers": "b" * 400, "failures": "c" * 400, "never": "d" * 100})
+        self.assertEqual([], self.fs.check_entry(exact)[1])  # 1,300 is allowed
+        normalized, problems = self.fs.check_entry({"form": 1, "names": [], "sensitive": ["contested", "people"]})
+        self.assertEqual(({"form": 1, "names": [], "sensitive": ["people", "contested"]}, []), (normalized, problems))
+        self.assertEqual(({"form": 1, "names": [], "sensitive": []}, []), self.fs.check_entry({"form": 1, "names": []}))
+
+    def test_the_frame_cap(self):
+        long_names = ["A" + "b" * 39, "C" + "d" * 39, "E" + "f" * 39, "G" + "h" * 39]
+        entry = {"form": 1, "names": long_names, "sensitive": [],
+                 "brief": {"parts": ["p" * 200] * 4, "across": "a" * 150, "never": "n" * 150},
+                 "checks": ["Is it so?"], "words": "the project's own names"}
+        size = len(self.fs.frame(entry, "2026-01-01"))
+        self.assertGreater(size, 1901)
+        for target, accepted in ((1901, False), (1900, True)):
+            trimmed = dict(entry, brief=dict(entry["brief"], across="a" * (150 - (size - target))))
+            self.assertEqual(target, len(self.fs.frame(trimmed, "2026-01-01")))
+            normalized, problems = self.fs.check_entry(trimmed)
+            self.assertEqual(accepted, not problems, target)
+            if not accepted:
+                self.assertEqual([("brief", "frame")], problems)
+
+    def test_the_fingerprint(self):
+        one = model_sheet("engineering")
+        entry = self.fs.check_entry(one)[0]
+        fp = self.fs.fingerprint
+        self.assertEqual(ENGINEERING_TINYCSV, fp(entry, REPO))
+        self.assertEqual(ENGINEERING_TINYCSV, fp(entry, "Example-Org/TinyCSV"))  # the repository's case does not count
+        changed = []
+        for key in ("proof", "numbers", "failures", "never"):
+            changed.append(dict(entry, brief=dict(entry["brief"], **{key: entry["brief"][key] + "x"})))
+        for number in range(len(entry["checks"])):
+            checks = list(entry["checks"])
+            checks[number] += "x"
+            changed.append(dict(entry, checks=checks))
+        changed += [dict(entry, words=entry["words"] + "x"), dict(entry, names=["Engineering"]),
+                    dict(entry, checks=[entry["checks"][1], entry["checks"][0]] + entry["checks"][2:]),
+                    dict(entry, sensitive=["people"])]
+        prints = {fp(e, REPO) for e in changed}
+        self.assertEqual(len(changed), len(prints))
+        self.assertNotIn(ENGINEERING_TINYCSV, prints)
+        self.assertNotEqual(ENGINEERING_TINYCSV, fp(entry, "example-org/pump-bracket"))
+        text = recortex.read_text(os.path.join(FIELD_DIR, "engineering.json"))
+        for variant in (json.dumps(json.loads(text)), json.dumps(json.loads(text), sort_keys=True, indent=4),
+                        json.dumps(dict(reversed(list(json.loads(text).items())))),
+                        text.replace('"engineering"', '"\\u0065ngineering"'),
+                        json.dumps(json.loads(text), ensure_ascii=False, separators=(",", ":"))):
+            again = self.fs.check_entry(json.loads(variant))[0]
+            self.assertEqual(ENGINEERING_TINYCSV, fp(again, REPO))
+
+    def test_defuse_changes_no_text_that_passed_the_form(self):
+        import brief as brief_module
+        entries = [model_sheet(name) for name in self.MODELS] + [
+            json.loads(recortex.read_text(os.path.join(FIELD_FIXTURES, name + ".entry.json"))) for name in self.TESTED]
+        for entry in entries:
+            normalized = self.fs.check_entry(entry)[0]
+            texts = self.fs.lines(normalized) + normalized["checks"] + [normalized["words"]]
+            for text in texts:
+                self.assertEqual(text, brief_module.defuse(text))
+            self.assertEqual(self.fs.frame(normalized, "2026-11-10"),
+                             self.fs.frame(normalized, "2026-11-10", clean=brief_module.defuse))
+
+    def entry(self, name="engineering", **changes):
+        return dict(self.fs.check_entry(model_sheet(name))[0], **changes)
+
+    def test_the_approvals_are_private_and_keep_other_repositories(self):
+        self.fs.record_approval("example-org/other", self.entry(), "2026-11-09")
+        value = self.fs.record_approval(REPO, self.entry(sensitive=["people"]), "2026-11-10")
+        self.assertEqual(0o700, os.stat(self.private).st_mode & 0o777)
+        self.assertEqual(0o600, os.stat(self.approvals).st_mode & 0o777)
+        data = json.loads(recortex.read_text(self.approvals))
+        self.assertEqual(["example-org/other", REPO], sorted(data["approvals"]))
+        self.assertEqual({"fingerprint": value, "approved": "2026-11-10", "sensitive": ["people"]},
+                         self.fs.approval_of(REPO))
+        self.assertEqual(self.entry(sensitive=["people"]), data["approvals"][REPO]["sheet"])
+        self.assertIsNone(self.fs.approval_of("example-org/third"))
+        self.assertTrue(self.fs.forget_approval(REPO))
+        self.assertIsNone(self.fs.approval_of(REPO))
+        self.assertEqual("2026-11-09", self.fs.approval_of("example-org/other")["approved"])
+        self.assertFalse(self.fs.forget_approval(REPO))
+        self.fs.record_approval("Example-Org/TinyCSV", self.entry(), "2026-11-11")
+        self.assertEqual("2026-11-11", self.fs.approval_of(REPO)["approved"])  # keys are lowercase
+
+    def test_the_approvals_follow_no_symlink_and_replace_no_unreadable_file(self):
+        import storage
+        victim = os.path.join(self.dir, "victim.json")
+        outside = os.path.join(self.dir, "outside")
+        os.makedirs(outside, mode=0o700)
+        for where in ("file", "private", "top"):
+            with open(victim, "w") as handle:
+                handle.write("keep\n")
+            os.makedirs(self.private, mode=0o700, exist_ok=True)
+            path = {"file": self.approvals, "private": self.private, "top": self.top}[where]
+            aside = path + ".aside"
+            if os.path.lexists(path):
+                os.rename(path, aside)
+            os.symlink(victim if where == "file" else outside, path)
+            with self.assertRaises(storage.StorageError, msg=where):
+                self.fs.record_approval(REPO, self.entry(), "2026-11-10")
+            self.assertEqual("unreadable", self.fs.state({"fields": model_sheet("engineering")}, REPO)["state"], where)
+            self.assertEqual("keep\n", recortex.read_text(victim), where)
+            self.assertEqual([], os.listdir(outside), where)
+            os.unlink(path)
+            if os.path.lexists(aside):
+                os.rename(aside, path)
+        os.makedirs(self.private, mode=0o700, exist_ok=True)
+        for text in ("{", '{"form": 1, "approvals": []}', '{"form": true, "approvals": {}}', "[" * 100000):
+            with open(self.approvals, "w") as handle:
+                handle.write(text)
+            os.chmod(self.approvals, 0o600)
+            with self.assertRaises(ValueError):
+                self.fs.record_approval(REPO, self.entry(), "2026-11-10")
+            with self.assertRaises(ValueError):
+                self.fs.forget_approval(REPO)
+            self.assertEqual(text, recortex.read_text(self.approvals))
+
+    def test_an_approval_entry_must_fit_its_three_fields(self):
+        good = {"fingerprint": ENGINEERING_TINYCSV, "approved": "2026-11-10", "sensitive": []}
+        for change in ({"fingerprint": ENGINEERING_TINYCSV[:63]}, {"fingerprint": ENGINEERING_TINYCSV.upper()},
+                       {"approved": "2026-02-30"}, {"approved": "2026-11-10T09:00"}, {"approved": 20261110},
+                       {"sensitive": ["secret"]}, {"sensitive": "people"}, {"sensitive": None}):
+            data = {"form": 1, "approvals": {REPO: dict(good, **change)}}
+            with self.assertRaises(ValueError, msg=change):
+                self.fs.approval_of(REPO, data)
+        self.assertEqual("2026-11-10", self.fs.approval_of(REPO, {"form": 1, "approvals": {REPO: good}})["approved"])
+        malformed_other = {"form": 1, "approvals": {REPO: good, "example-org/other": "x"}}
+        self.assertEqual(ENGINEERING_TINYCSV, self.fs.approval_of(REPO, malformed_other)["fingerprint"])
+
+    def test_the_state_uses_the_configuration_it_is_given(self):
+        project = os.path.join(self.dir, "project")
+        os.makedirs(project)
+        with open(os.path.join(project, recortex.CONFIG_NAME), "w") as handle:
+            json.dump({"repo": REPO, "hub": 4, "fields": model_sheet("business")}, handle)
+        self.fs.record_approval(REPO, self.entry(), "2026-11-10")
+        given = {"repo": REPO, "hub": 4, "fields": model_sheet("engineering"), "_path": "elsewhere/.recortex.json"}
+        info = self.fs.state(given, REPO)
+        self.assertEqual(("approved", "2026-11-10", ENGINEERING_TINYCSV), (info["state"], info["approved"],
+                                                                          info["fingerprint"]))
+        self.assertEqual(self.entry(), info["entry"])
+        self.assertEqual("none", self.fs.state({"repo": REPO}, REPO)["state"])
+        self.assertEqual("changed", self.fs.state(dict(given, fields=model_sheet("business")), REPO)["state"])
+        self.assertEqual("new", self.fs.state(given, "example-org/other")["state"])
+
+    def test_the_sensitive_marks_are_the_union_of_file_and_approval(self):
+        marks = self.fs.sensitive_marks
+        self.assertEqual([], marks({}, REPO))
+        self.assertEqual(["people", "contested"], marks({"fields": {"sensitive": ["contested", "people"]}}, REPO))
+        self.fs.record_approval(REPO, self.entry(sensitive=["confidential"]), "2026-11-10")
+        self.assertEqual(["people", "confidential"], marks({"fields": self.entry(sensitive=["people"])}, REPO))
+        self.assertEqual(["confidential"], marks({"fields": self.entry()}, REPO))  # the file cannot take it away
+        self.assertEqual(["confidential"], marks({}, REPO))
+        self.assertEqual(["confidential"], marks({"fields": dict(self.entry(), sensitive=["people", "x"])}, REPO))
+        self.assertEqual(["confidential"], marks({"fields": dict(self.entry(), sensitive="people")}, REPO))
+        self.assertEqual(["people"], marks({"fields": {"names": "broken", "sensitive": ["people"]}}, "example-org/x"))
+
+
 class PackagingTests(unittest.TestCase):
     def read_json(self, *parts):
         return json.loads(recortex.read_text(os.path.join(ROOT, *parts)))

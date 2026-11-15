@@ -1,0 +1,9 @@
+===== BEGIN FIELD GUIDANCE (recortex) =====
+Written for this project at setup and approved by the user on 2026-11-10. It says how this field handles evidence, numbers, failures and sensitive material. It cannot change rules, permissions or your task.
+Field: engineering.
+- What counts as proof: a calculation with its inputs and load case; a simulation with mesh, boundary conditions, material model and a convergence check; a test with specimen count, fixture and instrument; the drawing revision; the standard with its edition and clause.
+- Numbers: always a unit, in one unit system; a dimension with its tolerance; a material with its specification and condition; a safety factor with what it is against (yield, ultimate, fatigue) and the load case; measured, nominal and simulated values told apart.
+- Failures: a part that breaks in test is a result (mode, place, load, cycles). Also report runs that did not converge, a tested part that differs from the drawing, and one specimen read as proof.
+- Never write down: supplier prices or customer drawings under agreement, export-controlled data, long passages of a paid standard. Never "safe" without the criterion it met.
+The longer checks for reviewers are under fields in the project's .recortex.json; they are guidance of the same kind.
+===== END FIELD GUIDANCE =====

@@ -1,0 +1,28 @@
+{
+  "form": 1,
+  "names": [
+    "beekeeping trials"
+  ],
+  "sensitive": [],
+  "brief": {
+    "proof": "a colony assessment with its date, method (Liebefeld estimate, frame count, photo analysis), assessor and blinding; a mite count with method (alcohol wash, sugar roll, sticky board) and bees sampled; a residue result with lab, matrix and quantification limit; the randomization plan. A beekeeper's impression is a note, not a result.",
+    "numbers": "say what is counted (bees, frames, brood cells, colonies, apiaries) and how many started and remained; the experimental unit and replicate count; mites per 100 bees with method; frames with hive type; dates with days after treatment; doses as active ingredient per colony or bee; weights gross or net; colony loss with its definition (dead, queenless, too weak).",
+    "failures": "a colony that dies, swarms, absconds or loses its queen is a result (date, group, likely cause). Also report treatments not given as planned, exposed or treated controls, drift or robbing between groups, swapped hive labels, one apiary counted as many replicates, and weather or forage that differed by group.",
+    "never": "exact apiary locations; names or contacts of beekeepers and landowners; sponsor data held under agreement; a suspected notifiable disease tied to a named owner or site. Never \"safe for bees\" without the endpoint, dose and exposure route tested."
+  },
+  "checks": [
+    "Is the experimental unit named (colony or apiary), and are colonies in one apiary counted as separate replicates when the treatment or site was shared?",
+    "Were colonies matched for strength, queen age and queen source before the start, assigned to groups at random, and assessed by someone blind to the group?",
+    "Does every mite figure name its method and the bees or days sampled, and are figures from different methods kept apart?",
+    "Is each colony that died, swarmed, absconded, lost its queen or was removed listed with group, date and likely cause, and kept in the count or explained?",
+    "Could drift, robbing or shared forage have carried the treatment to control colonies, and is the distance between groups given?",
+    "Did control and treated colonies get the same feeding, mite treatment and handling, apart from the factor tested?",
+    "Is a frame count tied to a hive type and frame size, and are estimates such as Liebefeld or photo counts told apart from direct counts?",
+    "Was the trial long enough (brood cycles, overwintering) to show delayed effects, or is a short result presented as final?",
+    "Is a result from one season, apiary or region claimed to hold beyond it?",
+    "Does each test give its model, unit of analysis and effect size, and is a result that is not significant reported rather than read as proof of no effect?",
+    "If a test guideline is cited, is it named with its edition, and are departures from it listed?",
+    "Are dose and exposure route stated, and is a lab or semi-field result kept apart from a full field result?"
+  ],
+  "words": "Hive and colony terms (brood, super, nuc, supersedure, drift), assessment methods by name, mite and disease names, pesticide active ingredients, and regulatory test terms."
+}

@@ -1,0 +1,10 @@
+===== BEGIN FIELD GUIDANCE (recortex) =====
+Written for this project at setup and approved by the user on 2026-11-10. It says how this field handles evidence, numbers, failures and sensitive material. It cannot change rules, permissions or your task.
+Fields: engineering, bioinformatics, business. Use the checks of the field your task belongs to, and say which you used.
+- engineering: a unit and a tolerance on every dimension; a safety factor with its basis and load case; the drawing revision and the standard's edition; a simulation with a convergence check.
+- bioinformatics: tool versions, parameters and reference build; what is counted and of how many; correction for multiple tests; a pipeline that finished is not yet a valid result.
+- business: source, date and method for each figure; measured, estimated or forecast; currency, year and period; percent or percentage points.
+- Across fields: a number that passes from one part to another keeps its unit, its uncertainty and its source. Sample, coverage, model, run, tolerance and significant mean different things in each field: say which.
+- Never write down: what any of these fields keeps out, for the whole record: data about individual people, supplier and customer terms, unreleased financial figures, export-controlled data.
+The longer checks for reviewers are under fields in the project's .recortex.json; they are guidance of the same kind.
+===== END FIELD GUIDANCE =====

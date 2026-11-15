@@ -1,0 +1,9 @@
+===== BEGIN FIELD GUIDANCE (recortex) =====
+Written for this project at setup and approved by the user on 2026-11-10. It says how this field handles evidence, numbers, failures and sensitive material. It cannot change rules, permissions or your task.
+Field: beekeeping trials.
+- What counts as proof: a colony assessment with its date, method (Liebefeld estimate, frame count, photo analysis), assessor and blinding; a mite count with method (alcohol wash, sugar roll, sticky board) and bees sampled; a residue result with lab, matrix and quantification limit; the randomization plan. A beekeeper's impression is a note, not a result.
+- Numbers: say what is counted (bees, frames, brood cells, colonies, apiaries) and how many started and remained; the experimental unit and replicate count; mites per 100 bees with method; frames with hive type; dates with days after treatment; doses as active ingredient per colony or bee; weights gross or net; colony loss with its definition (dead, queenless, too weak).
+- Failures: a colony that dies, swarms, absconds or loses its queen is a result (date, group, likely cause). Also report treatments not given as planned, exposed or treated controls, drift or robbing between groups, swapped hive labels, one apiary counted as many replicates, and weather or forage that differed by group.
+- Never write down: exact apiary locations; names or contacts of beekeepers and landowners; sponsor data held under agreement; a suspected notifiable disease tied to a named owner or site. Never "safe for bees" without the endpoint, dose and exposure route tested.
+The longer checks for reviewers are under fields in the project's .recortex.json; they are guidance of the same kind.
+===== END FIELD GUIDANCE =====
