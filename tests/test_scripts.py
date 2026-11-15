@@ -10336,6 +10336,23 @@ class BoardTrustTests(BoardSandbox):
         self.assertEqual("unapproved", board_api.entry(config, REPO)[0])
         self.assertEqual('{"form": 2, "approvals": {}}', open(approvals).read())
 
+    def test_a_held_approvals_lock_is_waited_for_then_refused(self):
+        import fcntl
+        private = os.path.join(self.dir, "xdg-config", "recortex", "private")
+        os.makedirs(private, mode=0o700, exist_ok=True)
+        held = os.open(os.path.join(private, "board-approvals.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, held)
+        fcntl.flock(held, fcntl.LOCK_EX)
+        code = ("import sys\nsys.path.insert(0, sys.argv[1])\nimport field_sheet, board_api, storage\n"
+                "field_sheet.LOCK_WAIT = 0.5\n"
+                "try:\n    board_api.record_approval('example-org/other', 'example-org', 2)\n"
+                "except storage.StorageError as error:\n    print(error)\n    sys.exit(3)\n")
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", XDG_CONFIG_HOME=os.path.join(self.dir, "xdg-config"))
+        child = subprocess.run([sys.executable, "-c", code, SCRIPTS], env=env, capture_output=True, text=True,
+                               timeout=30)
+        self.assertEqual(3, child.returncode, child.stdout + child.stderr)
+        self.assertIn("board-approvals.lock", child.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

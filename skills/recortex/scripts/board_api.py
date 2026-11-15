@@ -40,6 +40,7 @@ README = ("Kept current by the recortex plugin from the project's record in GitH
           "of truth: a card moved by hand is reported to the next session, and nothing changes until the user answers.")
 DESCRIPTION = "The work of the project, kept current from its record."
 APPROVALS = "board-approvals.json"
+APPROVALS_LOCK = "board-approvals.lock"
 FORM = 1
 GH_ID = re.compile(r"[A-Za-z0-9_=-]{1,100}")
 OWNER = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
@@ -124,12 +125,17 @@ def read_approvals(create=False):
 
 
 def record_approval(repo, owner, number):
-    """The user's choice of board for this record on this machine; the entries of other records are kept."""
-    data = read_approvals(create=True)
-    data["approvals"][repo.lower()] = {"owner": owner, "number": number,
-                                       "approved": datetime.date.today().isoformat()}
-    private = storage.folder(storage.config_top())
-    storage.write_file(os.path.join(private, APPROVALS), json.dumps(data, indent=1) + "\n")
+    """The user's choice of board for this record on this machine; the entries of other records are kept. Read,
+    changed and written under the lock that keeps two writers of an approvals file apart, then read back."""
+    import field_sheet  # the lock of the field approvals, on a file of its own
+    with field_sheet.approvals_lock(name=APPROVALS_LOCK):
+        data = read_approvals(create=True)
+        data["approvals"][repo.lower()] = {"owner": owner, "number": number,
+                                           "approved": datetime.date.today().isoformat()}
+        private = storage.folder(storage.config_top())
+        storage.write_file(os.path.join(private, APPROVALS), json.dumps(data, indent=1) + "\n")
+    if entry({"board": {"owner": owner, "number": number}}, repo)[0] != "approved":
+        raise ValueError("the approval does not read back")
 
 
 # ---------------------------------------------------------------- calls

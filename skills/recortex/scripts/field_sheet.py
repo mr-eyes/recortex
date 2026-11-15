@@ -388,11 +388,11 @@ class LockError(storage.StorageError):
 
 
 @contextlib.contextmanager
-def approvals_lock(top=None):
+def approvals_lock(top=None, name=APPROVALS_LOCK):
     """One writer at a time: the approvals are read, changed and written under an exclusive lock on a file beside them,
     so that two setups that finish at the same moment both keep their approval. The hooks never take it."""
     private = storage.folder(top or storage.config_top())
-    path = os.path.join(private, APPROVALS_LOCK)
+    path = os.path.join(private, name)
     try:
         if os.path.lexists(path):
             storage.check_path(path, "file")
