@@ -42,12 +42,13 @@ def gh_command():
     return shlex.split(names.env("GH", "gh"))
 
 
-def gh(args, stdin=None, timeout=60):
-    """Run gh with the given arguments and return stdout. Raise GhError on failure."""
+def gh(args, stdin=None, timeout=60, errors=None):
+    """Run gh with the given arguments and return stdout. Raise GhError on failure. errors="replace" reads an answer
+    that is not text in the locale's encoding with replacement characters; by default it raises UnicodeDecodeError."""
     cmd = gh_command() + list(args)
     try:
         proc = subprocess.run(
-            cmd, input=stdin, capture_output=True, text=True, timeout=timeout
+            cmd, input=stdin, capture_output=True, text=True, timeout=timeout, errors=errors
         )
     except FileNotFoundError:
         raise GhMissing("gh CLI not found (looked for: %s)" % cmd[0])
@@ -78,7 +79,7 @@ def gh_account(timeout=GH_CHECK_SECONDS):
     the login is returned only when it fits LOGIN.
     """
     try:
-        gh(["auth", "status", "--hostname", "github.com"], timeout=timeout)
+        gh(["auth", "status", "--hostname", "github.com"], timeout=timeout, errors="replace")
     except (GhMissing, ValueError):  # ValueError: a RECORTEX_GH that does not split into a command
         return "missing", None
     except GhTimeout:
@@ -86,7 +87,7 @@ def gh_account(timeout=GH_CHECK_SECONDS):
     except GhError:
         return "signed-out", None
     try:
-        login = gh(["api", "user", "--jq", ".login"], timeout=timeout).strip()
+        login = gh(["api", "user", "--jq", ".login"], timeout=timeout, errors="replace").strip()
     except GhTimeout:
         return "slow", None
     except GhError:

@@ -26,6 +26,7 @@ Fault switches:
                                  with gh's own messages
   FAKE_GH_LOGIN=name             the login that `api user` answers and `auth status` names (default octocat); a test
                                  sets one that is not a GitHub login
+  FAKE_GH_NOT_TEXT="auth status" that command (or "api user") answers with bytes that are not UTF-8, and exits 0
 `auth status` answers as a gh signed in to github.com, and `api user` with the login.
 Projects and sub-issues (tests/fake_projects.py answers them, and lists its own fault switches): a closed issue has
 "closed_at", a merged pull request "merged_at", a sub-issue "parent" (the parent's number).
@@ -189,6 +190,10 @@ def main():
             fail("You are not logged into any GitHub hosts. To log in, run: gh auth login")
         fail("To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN "
              "environment variable with a GitHub API authentication token.", 4)
+    if os.environ.get("FAKE_GH_NOT_TEXT") == words:  # an answer that is not UTF-8
+        sys.stdout.flush()
+        sys.stdout.buffer.write(b"\xff\xfe signed in\n" if words == "auth status" else b"\xffocto\n")
+        return
     fail_on = os.environ.get("FAKE_GH_FAIL_ON")
     if fail_on and words.startswith(fail_on):
         fail("gh: simulated failure (HTTP 502)")

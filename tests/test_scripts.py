@@ -1886,6 +1886,13 @@ class HookTests(RecordSandbox):
         self.assertEqual([], asked)  # the hooks never ask gh who is signed in
         self.assertTrue(self.repo()["log"])  # while the session start did read GitHub
 
+    def test_the_doctor_survives_an_answer_that_is_not_text(self):
+        self.ready()
+        result = self.tool("hooks.py", "--doctor", env={"FAKE_GH_NOT_TEXT": "api user"})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("gh: found (%s); signed in, but GitHub did not name the account" % sys.executable, result.stdout)
+        self.assertIn("result: the hooks can show the brief", result.stdout)
+
 
 class StorageTests(RecordSandbox):
     """The index and the hook state live outside the project tree and are read only when the plugin made them."""
@@ -4111,6 +4118,13 @@ class SetupTests(Sandbox):
         with mock.patch.object(recortex, "gh", side_effect=lambda args, **kw: limits.append(kw.get("timeout")) or "x\n"):
             self.assertEqual(("ready", "x"), recortex.gh_account(timeout=3))
         self.assertEqual([3, 3], limits)  # both calls have the limit
+
+    def test_an_answer_that_is_not_text_gets_a_fixed_line(self):
+        ready = self.setup_script("preflight", gh=FAKE, env={"FAKE_GH_NOT_TEXT": "auth status"})
+        self.assertEqual((0, "ready: gh is signed in to github.com as octocat; Python %d.%d\n" % sys.version_info[:2],
+                          ""), (ready.returncode, ready.stdout, ready.stderr))
+        unnamed = self.setup_script("preflight", gh=FAKE, env={"FAKE_GH_NOT_TEXT": "api user"})
+        self.assertEqual((1, "", self.UNNAMED), (unnamed.returncode, unnamed.stdout, unnamed.stderr))
         sys.path.insert(0, SCRIPTS)
         import setup
         self.assertEqual("not ready: gh did not answer within 10 seconds. Check the network, or run `gh auth status` "
