@@ -178,16 +178,33 @@ class ObserverHookTests(unittest.TestCase):
         with Store(REPO) as store:
             self.assertFalse(store.get_control("publication_paused"))
 
-    def test_resume_and_automatic_mode_are_denied_from_the_session_while_a_hold_applies(self):
-        self.append("/recortex hold git-push")
-        self.run_hook()
-        for command in ("python3 skills/recortex/scripts/observer.py resume all",
-                        "python3 observer.py enable --mode automatic --model haiku --yes",
-                        "python3 observer.py enable --mode=automatic --model haiku --yes"):
-            result = self.run_hook(command=command)
-            self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"], command)
-            self.assertIn("in a separate terminal", result["hookSpecificOutput"]["permissionDecisionReason"])
-        self.assertNotIn("hookSpecificOutput", self.run_hook(command="python3 observer.py status"))
+    def test_the_users_control_commands_are_denied_from_the_session_always(self):
+        # release, disable, resume and automatic mode are the user's, run in their own terminal: a session's Bash
+        # call naming them is denied whether or not a hold applies, read as the shell splits it. A guard against
+        # mistakes, not a boundary.
+        import observer_runtime
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+                                                     "publisher_id": observer_runtime.publisher_id(create=True)}},
+                                 str(self.project))
+        denied = ("python3 skills/recortex/scripts/observer.py resume all", "python3 observer.py resume publication",
+                  "python3 'observer.py' 're''sume' all", 'python3 obs"erver".py "resume"',
+                  "python3 observer.py release 0123456789abcdef01234567", "python3 observer.py disable",
+                  "python3 observer.py enable --mode automatic --model haiku --yes",
+                  "python3 observer.py enable --mode=automatic --model haiku --yes",
+                  "python3 observer.py 'resume all")  # does not split: read as written
+        for with_hold in (False, True):
+            if with_hold:
+                self.append("/recortex hold git-push")
+                self.run_hook(event="stop")
+            for command in denied:
+                result = self.run_hook(command=command)
+                self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"], (with_hold, command))
+                self.assertIn("in a separate terminal", result["hookSpecificOutput"]["permissionDecisionReason"])
+            for command in ("python3 observer.py status", "python3 observer.py pending", "python3 observer.py holds",
+                            "python3 observer.py pause publication", "python3 observer.py enable --model haiku"):
+                self.assertNotIn("hookSpecificOutput", self.run_hook(command=command), (with_hold, command))
+        with mock.patch("observer_hooks.observer_runtime.stored_approval", return_value=None):
+            self.assertNotIn("hookSpecificOutput", self.run_hook(command="python3 observer.py resume all"))
 
     def test_disable_checks_the_entrys_holds_whatever_the_project_file_names(self):
         import contextlib, io, observer, observer_runtime

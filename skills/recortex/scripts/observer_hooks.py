@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -184,6 +185,20 @@ SELF_RELEASE = {"reason": "recortex observer: only the user releases a hold, swi
 UNDO = re.compile(r"observer(?:\.py)?\b.*\b(?:release|disable|resume|automatic)\b")
 
 
+def _undo(data):
+    """True for a Bash call that names observer.py together with release, disable, resume or automatic mode: the
+    user's own commands, which a session never needs. The command is read as the shell splits it (quotes taken out),
+    and as written when it does not split. A guard against mistakes: a session with shell access can get round it."""
+    command = (data.get("tool_input") or {}).get("command") if isinstance(data.get("tool_input"), dict) else None
+    if data.get("tool_name") not in ("Bash", "bash") or not isinstance(command, str):
+        return False
+    try:
+        spoken = " ".join(shlex.split(command))
+    except ValueError:
+        spoken = command
+    return bool(UNDO.search(spoken) or UNDO.search(command))
+
+
 def _held(repo, data):
     """The decision before a tool call, from holds read without any lock (observer_store.read_holds). When they cannot
     be read, every Bash command is denied with one fixed reason, except pwd, ls and cat with plain path arguments
@@ -202,10 +217,6 @@ def _held(repo, data):
             return UNCHECKED if observer_store._command_digest(command) in observer_store.held_commands(repo) else None
         except observer_store.StoreError:
             return None  # the plainest reads go on even when the held commands are unknown
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    if (isinstance(command, str) and UNDO.search(command)
-            and any(isinstance(hold, dict) and hold.get("state") == "active" for hold in holds)):
-        return SELF_RELEASE  # a release or disable run from the session, also through a terminal of its own (script)
     result = observer_holds.check_action(holds, repo, tool_name, tool_input, session_id=data.get("session_id"))
     return result if result["decision"] == "deny" else None
 
@@ -272,6 +283,9 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
     held, checked = None, False
     if event == "PreToolUse":
         held_repo = _entry_repo()
+        if held_repo is not None and _undo(data):
+            # Always, not only while a hold applies: these are the user's commands, run in their own terminal.
+            return _output(event, denial=SELF_RELEASE)
         if held_repo is not None:
             held, checked = (_held(held_repo, data) if held_repo else _unchecked(data)), True
             if not held and recortex.valid_repo(repo) and repo.lower() != held_repo:
