@@ -198,7 +198,7 @@ REVIEW_CONTEXT = 12000  # characters of the rest of the stretch a reviewer is sh
 # ("uncertain_2"); a source that has had its attempts stays deferred, in `pending`, for `record --source`.
 RETRY_SOON = {"input_limit": 6, "candidate_limit": 6, "uncertain": 3, "candidate_lint": 2, "excerpt_binding": 2,
               "agent_account": 2, "decision_authority": 2, "outbound_local": 2, "outbound_address": 2,
-              "link_binding": 2, "candidate_event": 2}
+              "link_binding": 2, "candidate_event": 2, "destination": 2}
 # An uncertain source is offered again once its session has gone on (new sources of that session are in the pass), or
 # after five minutes; the others in RETRY_SOON at the next pass.
 WAITING = ("uncertain",)

@@ -391,6 +391,15 @@ class WorkerTests(unittest.TestCase):
         self.run_worker(call)
         self.assertEqual(left,shown[1][:len(left)])  # the deferred ones first, still in order
         self.assertEqual(('ignored',''),self.state(left[0]))
+    def test_a_candidate_for_an_issue_that_is_not_a_target_is_tried_once_more(self):
+        sid=self.capture()
+        self.run_worker(self.invoke(self.candidate(sid,issue=99)))
+        self.assertEqual(('deferred','destination'),self.state(sid))
+        self.capture(QUOTE+' Next.')  # its session goes on
+        self.calls=[];self.run_worker(self.invoke(self.candidate(sid,issue=99)))
+        self.assertEqual(('deferred','destination_2'),self.state(sid))
+        self.calls=[];self.capture(QUOTE+' And on.');self.run_worker(self.invoke(self.candidate(sid,issue=99)))
+        self.assertNotIn(sid,[item['id'] for purpose,payload in self.calls for item in payload['sources']])
     def test_a_long_source_is_shown_by_its_start_and_its_end(self):
         text='START '+'y'*20000+' END'
         sid=self.capture(text)
