@@ -291,6 +291,72 @@ class WorkerTests(unittest.TestCase):
             with store.Store(REPO,config=self.config) as db:db.defer(sid,'source_unavailable')
         sid=self.capture()
         self.assertEqual(1,len(self.run_worker(self.invoke(self.candidate(sid)))['ready']))
+    def offered(self,ignore=()):
+        """A selector that cites nothing and sets aside only `ignore`; returns the ids each pass was shown."""
+        shown=[]
+        def call(payload,schema,purpose,config):
+            shown.append([item['id'] for item in payload['sources']])
+            return {'ok':True,'structured':{'candidates':[],'ignored':[i for i in shown[-1] if i in ignore]}}
+        return shown,call
+    def state(self,sid):
+        with store.Store(REPO,config=self.config) as db:
+            item=db.observation(sid);return item['state'],item['reason']
+    def test_uncertain_sources_are_offered_again_as_their_session_goes_on_a_bounded_number_of_times(self):
+        # The live test left 26 sources "uncertain" for good: what the selector neither used nor set aside waits
+        # for its session to go on (or five minutes), is offered again with what followed, at most three times in all,
+        # and then stays deferred, visible in pending, for observer.py record --source.
+        first=self.capture('Run the tests and tell me which one fails.')
+        shown,call=self.offered()
+        self.run_worker(call)
+        self.assertEqual([[first]],shown);self.assertEqual(('deferred','uncertain'),self.state(first))
+        self.run_worker(call)  # nothing new in its session yet: not offered again
+        self.assertEqual(1,len(shown))
+        second=self.capture('The fix is in; run them again.')
+        self.run_worker(call)
+        self.assertEqual([first,second],shown[-1]);self.assertEqual(('deferred','uncertain_2'),self.state(first))
+        with store.Store(REPO,config=self.config) as db:  # five minutes later, with nothing new
+            db.db.execute("UPDATE observations SET updated=updated-301")
+        self.run_worker(call)
+        self.assertEqual([first,second],shown[-1])
+        self.assertEqual((('deferred','uncertain_3'),('deferred','uncertain_2')),(self.state(first),self.state(second)))
+        third=self.capture('Thanks.')
+        self.run_worker(call)
+        self.assertEqual([second,third],shown[-1])  # the first had its three attempts
+        self.assertEqual(('deferred','uncertain_3'),self.state(first))
+        self.assertEqual(('uncertain',1),worker._attempts('uncertain'))
+        self.assertEqual(('input_limit',1),worker._attempts('input_limit'))
+        self.assertEqual(('candidate_limit',4),worker._attempts('candidate_limit_4'))
+        self.assertEqual('candidate_lint_3',worker._again('candidate_lint','uncertain_2'))
+    def test_sources_that_did_not_fit_go_first_next_time_and_in_transcript_order(self):
+        # One scan captures them all at the same moment, so only the transcript gives their order.
+        with self.path.open('a') as f:
+            for n in range(6):
+                f.write(json.dumps({'type':'user','userType':'external','message':{'role':'user','content':'Note %d. '%n+'x'*5000}})+'\n')
+        rows,_=sources.scan(self.hook,self.project)
+        with store.Store(REPO,config=self.config) as db:db.capture(rows)
+        sids=[row['source_id'] for row in rows]
+        self.assertNotEqual(sids,sorted(sids))
+        shown,call=self.offered(ignore=sids)
+        self.run_worker(call)
+        fitted=shown[0]
+        self.assertEqual(sids[:len(fitted)],fitted)  # in the order they happened
+        self.assertLess(len(fitted),6)
+        left=[sid for sid in sids if sid not in fitted]
+        self.assertEqual({('deferred','input_limit')},{self.state(sid) for sid in left})
+        later=self.capture('A later note.')
+        self.run_worker(call)
+        self.assertEqual(left,shown[1][:len(left)])  # the deferred ones first, still in order
+        self.assertEqual(('ignored',''),self.state(left[0]))
+    def test_a_long_source_is_shown_by_its_start_and_its_end(self):
+        text='START '+'y'*20000+' END'
+        sid=self.capture(text)
+        shown=[]
+        def call(payload,schema,purpose,config):
+            shown.append(payload['sources'][0]['text'])
+            return {'ok':True,'structured':{'candidates':[],'ignored':[sid]}}
+        self.run_worker(call)
+        self.assertTrue(shown[0].startswith('START '));self.assertTrue(shown[0].endswith(' END'))
+        self.assertLessEqual(len(shown[0]),worker.SOURCE_TEXT+100);self.assertIn('characters left out',shown[0])
     def test_ready_events_do_not_starve_new_work(self):
         sid=self.capture();self.run_worker(self.invoke(self.candidate(sid)))
         for n in range(10):

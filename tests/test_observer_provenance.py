@@ -45,7 +45,8 @@ class ObserverProvenanceTests(unittest.TestCase):
             self.assertFalse(result["is_error"])
             self.assertEqual(rows[0]["source_id"], result["invocation_source_id"])
             self.assertIn("ORIGINAL-ARGS", result["input"]["command"])
-            self.assertEqual("Observed benchmark output", result["output"])
+            self.assertEqual("Observed benchmark output", supplied[rows[1]["source_id"]]["text"])
+            self.assertNotIn("output", result)  # the output is the source's text, shown once
             with store.Store(fixtures.REPO, config=self.config) as db:
                 self.assertEqual([], db.events())
                 self.assertNotIn(b"ORIGINAL-ARGS", Path(db.path).read_bytes())
@@ -67,12 +68,26 @@ class ObserverProvenanceTests(unittest.TestCase):
             self.assertEqual([], db.events())
             self.assertIn("observed_evidence", {row["reason"] for row in db.pending()})
 
-    def test_result_cannot_drop_its_matching_request_from_reviewed_sources(self):
-        rows, candidate = self.tool_pair()
+    def test_a_result_citing_only_its_output_is_reviewed_with_its_matched_request(self):
+        # The selector cites the result of a Bash call; the call is found by matching ids in the transcript, and the
+        # reviewer sees it beside the result.
+        rows, candidate = self.tool_pair(command="python bench/run.py --repeat 5 --probe MATCHED-CALL")
         candidate["sources"] = [rows[1]["source_id"]]
         report = self.run_worker(self.invoke(candidate))
-        self.assertEqual([], report["ready"])
-        self.assertEqual(["extract"], [purpose for purpose, _ in self.calls])
+        self.assertEqual(["extract", "review"], [purpose for purpose, _ in self.calls])
+        self.assertEqual(1, len(report["ready"]))
+        reviewed = {item["id"]: item for item in self.calls[1][1]["sources"]}
+        self.assertEqual([rows[1]["source_id"], rows[0]["source_id"]], list(reviewed))
+        self.assertIn("MATCHED-CALL", reviewed[rows[0]["source_id"]]["text"])
+
+    def test_a_result_resting_on_a_shown_file_or_a_printed_line_is_not_an_observed_run(self):
+        for command in ("cat results.txt", "curl -s http://bench.example.test/notes", "echo 4 tests pass"):
+            with self.subTest(command=command):
+                self.calls = []
+                rows, candidate = self.tool_pair(command=command, output="4 tests pass in " + command)
+                candidate["sources"] = [rows[1]["source_id"]]
+                report = self.run_worker(self.invoke(candidate))
+                self.assertEqual(([], ["extract"]), (report["ready"], [purpose for purpose, _ in self.calls]))
 
     def test_changed_request_is_deferred_without_either_model(self):
         rows, candidate = self.tool_pair()

@@ -28,7 +28,7 @@ CANDIDATE = {"type": "object", "properties": {
     "required": ["kind", "issue", "body", "sources", "excerpts"], "additionalProperties": False}
 EXTRACTION = {"type": "object", "properties": {
     "candidates": {"type": "array", "items": CANDIDATE, "maxItems": 4},
-    "ignored": {"type": "array", "items": ID, "maxItems": 8}},
+    "ignored": {"type": "array", "items": ID, "maxItems": 64}},
     "required": ["candidates", "ignored"], "additionalProperties": False}
 REVIEW = {"type": "object", "properties": {
     "candidate_hash": ID, "accepted": {"type": "boolean"},
@@ -105,16 +105,23 @@ def template_context():
 MIN_WORDS = 6  # a shorter quote ("go ahead", "this is fine") cannot back a change of status
 
 
+# Runs that only show a file, a page or their own arguments: their output is not an observed result.
+READERS = frozenset(("cat", "head", "tail", "less", "more", "curl", "wget", "echo", "printf"))
+
+
+def _ran(item):
+    """True for a tool result of a Bash call that ran, found by matching its id to the call in the transcript, other
+    than a call that only shows a file, fetches a page or prints its arguments."""
+    command = ((item.get("input") or {}).get("command") or "") if isinstance(item.get("input"), dict) else ""
+    return (item.get("matched") is True and item.get("tool_name") == "Bash"
+            and os.path.basename((command.split() or [""])[0]) not in READERS)
+
+
 def _executed(candidate, supplied):
-    """True when the candidate rests on a Bash call that ran, matched to its tool result among its own sources."""
-    selected = candidate["sources"]
-    return any(item.get("matched") is True and item.get("tool_name") == "Bash"
-               and item.get("invocation_source_id") in selected
-               for source in selected if supplied[source]["role"] == "tool"
+    """True when the candidate cites the result of a Bash call that ran (_ran); the call itself is found by matching,
+    so the candidate need not cite it too."""
+    return any(_ran(item) for source in candidate["sources"] if supplied[source]["role"] == "tool"
                for item in supplied[source].get("tool_results", []))
-
-
-READERS = frozenset(("cat", "head", "tail", "less", "more", "curl", "wget"))  # runs that only show a file or a page
 
 
 def _own_sources(candidate, supplied):
@@ -129,10 +136,7 @@ def _own_sources(candidate, supplied):
         if sid in calls or source.get("role") == "user" and source.get("direct_user") is True:
             continue
         results = source.get("tool_results") or []
-        if source.get("role") == "tool" and results and all(
-                item.get("matched") is True and item.get("tool_name") == "Bash" and os.path.basename(
-                    (((item.get("input") or {}).get("command") or "").split() or [""])[0]) not in READERS
-                for item in results):
+        if source.get("role") == "tool" and results and all(_ran(item) for item in results):
             continue
         return False
     return True
@@ -196,8 +200,114 @@ def candidate_problem(candidate, supplied, context, config, repo=None):
     return None
 
 
+MAX_SOURCES = 16  # queued observations offered to one selection call
+SOURCE_TEXT = 6000  # characters of one source a model sees; a longer one keeps its start and its end
+RECORD_ROOM = 18000  # what the record context may take of a call (destinations, the task packet and their quoting)
+# Deferrals tried again at the next pass, up to this many attempts in all: the pass was full (input_limit,
+# candidate_limit); the selector neither used nor set aside the source (uncertain), often because what it belongs with
+# had not happened yet; or the selector's draft failed a mechanical check. Each attempt is counted in the reason
+# ("uncertain_2"); a source that has had its attempts stays deferred, in `pending`, for `record --source`.
+RETRY_SOON = {"input_limit": 6, "candidate_limit": 6, "uncertain": 3, "candidate_lint": 2, "excerpt_binding": 2,
+              "observed_evidence": 2, "decision_authority": 2, "outbound_local": 2, "outbound_address": 2,
+              "link_binding": 2, "candidate_event": 2}
+# An uncertain source is offered again once its session has gone on (new sources of that session are in the pass), or
+# after five minutes; the others in RETRY_SOON at the next pass.
+WAITING = ("uncertain",)
+# Deferrals tried again after five minutes: a failed call, the budget, the record.
+RETRY_LATER = ("budget", "extract_failed", "review_failed", "worker_budget", "record_unavailable")
+
+
+def _attempts(reason):
+    """(kind, attempts so far) of a deferral reason: "uncertain_2" is the second uncertain pass of a source."""
+    kind, _, count = (reason or "").rpartition("_")
+    if kind in RETRY_SOON and count.isdigit():
+        return kind, int(count)
+    return reason or "", 1
+
+
+def _again(kind, previous=""):
+    """The reason for one more deferral as `kind`, counting the automatic attempts the source has had."""
+    base, count = _attempts(previous)
+    count = count + 1 if base in RETRY_SOON else 1
+    return kind if count == 1 else "%s_%d" % (kind, count)
+
+
+def _order(item):
+    meta = item["metadata"]
+    return (meta.get("observed_at", 0), meta.get("path", ""), meta.get("offset", 0), item["source_id"])
+
+
+def _queued(store):
+    """The observations offered to one pass, oldest first: deferrals due again soon, new ones and older failures,
+    with places kept for each so that none starves the others."""
+    now = time.time()
+    fresh = sorted((store.observation(row[0]) for row in store.db.execute(
+        "SELECT source_id FROM observations WHERE state='observed' ORDER BY created,source_id LIMIT 64")), key=_order)
+    going_on = {item["metadata"].get("session_id") for item in fresh}
+    soon, later = [], []
+    rows = store.db.execute(
+        "SELECT source_id,reason,updated FROM observations WHERE state='deferred' AND (reason IN (%s) OR %s) "
+        "ORDER BY created,source_id LIMIT 256" % (",".join("?" * len(RETRY_LATER)),
+                                                  " OR ".join("reason LIKE ?" for _ in RETRY_SOON)),
+        RETRY_LATER + tuple(kind + "%" for kind in RETRY_SOON)).fetchall()
+    for sid, reason, updated in rows:
+        kind, count = _attempts(reason)
+        if kind in RETRY_SOON and count < RETRY_SOON[kind]:
+            item = store.observation(sid)
+            if kind not in WAITING or item["metadata"].get("session_id") in going_on or updated < now - 300:
+                soon.append(item)
+        elif reason in RETRY_LATER and updated < now - 300:
+            later.append(store.observation(sid))
+    soon.sort(key=_order)
+    chosen = soon[:6] + fresh[:7] + later[:3]
+    chosen += [item for item in fresh[7:] + soon[6:] + later[3:] if item not in chosen][:MAX_SOURCES - len(chosen)]
+    return chosen[:MAX_SOURCES]
+
+
+def _brief(value):
+    """A tool call's input as a model sees it: each long string cut to its start, nested values left out."""
+    if not isinstance(value, dict):
+        return None
+    return {key: (item[:500] + " [...]" if isinstance(item, str) and len(item) > 500 else
+                  "[...]" if isinstance(item, (dict, list)) else item) for key, item in value.items()}
+
+
+def _view(source):
+    """What a model is shown of one source: its role and text (a long text keeps its start and its end, marked) and,
+    for a tool result, which call it answers and whether that call failed. The worker's checks use the whole source."""
+    text = source["text"]
+    if len(text) > SOURCE_TEXT:
+        text = text[:4000] + "\n[... %d characters left out ...]\n" % (len(text) - 5500) + text[-1500:]
+    view = {"id": source["id"], "message_id": source.get("message_id"), "role": source["role"], "at": source.get("at"),
+            "direct_user": source.get("direct_user"), "subagent": source.get("subagent"), "text": text}
+    results = [{"tool_use_id": item.get("tool_use_id"), "tool_name": item.get("tool_name"),
+                "input": _brief(item.get("input")), "is_error": item.get("is_error"), "matched": item.get("matched"),
+                "invocation_source_id": item.get("invocation_source_id")} for item in source.get("tool_results") or []]
+    if results:
+        view["tool_results"] = results
+    if source.get("invocation_source_id"):
+        view["invocation_source_id"] = source["invocation_source_id"]
+    return view
+
+
+def _calls(candidate, supplied):
+    """The tool calls the candidate's cited results answer, found by matching, for the reviewer to see."""
+    return [item["invocation_source_id"] for sid in candidate["sources"]
+            for item in supplied[sid].get("tool_results") or []
+            if item.get("matched") is True and item.get("invocation_source_id") in supplied
+            and item["invocation_source_id"] not in candidate["sources"]]
+
+
+def _account(repo):
+    """The account a decision's words came from, when the record allows only one: the publisher can post as no other,
+    and on one machine with one account it is the person typing. "" otherwise."""
+    allowed = recortex.allowed_users(repo)
+    return next(iter(allowed)) if len(allowed) == 1 else ""
+
+
 def _process(repo, config, project_root=None, invoke_fn=None):
-    """Process eight queued observations plus matched requests/four candidates; bounded model input."""
+    """One pass: up to MAX_SOURCES queued observations, in the order they happened, with the tool calls they answer,
+    to one selection call within the call's input limit, then a fresh review of each of at most four candidates."""
     invoke = invoke_fn or runtime.invoke
     options = runtime.settings(config)
     report = {"code": "disabled", "selected": 0, "reviewed": 0, "ready": [], "deferred": 0, "ignored": 0}
@@ -215,22 +325,12 @@ def _process(repo, config, project_root=None, invoke_fn=None):
         if not runtime.gate_valid(gate, options):
             return dict(report, code="runtime-gate")
         options["runtime_gate"] = gate
-        supplied, length = {}, 0
-        # Ambiguity, privacy and unavailable sources wait for an explicit retry.
-        # New work wins over bounded retries; an old permanent deferral cannot starve it.
-        fresh_ids = [row[0] for row in store.db.execute(
-            "SELECT source_id FROM observations WHERE state='observed' ORDER BY created,source_id LIMIT 8")]
-        retry_ids = [row[0] for row in store.db.execute(
-            "SELECT source_id FROM observations WHERE state='deferred' AND reason IN "
-            "('budget','extract_failed','review_failed','worker_budget','record_unavailable','candidate_limit') "
-            "AND updated < ? ORDER BY updated,source_id LIMIT 8", (time.time() - 300,))]
-        # Reserve three places for eligible retries even during continuous arrivals.
-        pending_ids = fresh_ids[:5] + retry_ids[:3]
-        pending_ids += [sid for sid in fresh_ids[5:] + retry_ids[3:] if sid not in pending_ids][:8-len(pending_ids)]
-        for item in (store.observation(sid) for sid in pending_ids):
-            if item["state"] not in ("observed", "deferred"):
-                continue
-            sid = item["source_id"]
+        templates = template_context()
+        room = (options["max_input_chars"] - len(runtime.PROMPTS["extract"]) - len(runtime.canonical(EXTRACTION))
+                - len(runtime.canonical(templates)) - RECORD_ROOM - 1000)
+        supplied, offered, length = {}, [], 0
+        for item in _queued(store):
+            sid, previous = item["source_id"], item["reason"] if item["state"] == "deferred" else ""
             if item["metadata"].get("event_type") == "source_gap":
                 store.defer(sid, "source_gap"); report["deferred"] += 1
                 continue
@@ -241,9 +341,6 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 continue
             if source_privacy_problem(source, config):
                 store.defer(sid, "privacy"); report["deferred"] += 1
-                continue
-            if length + len(source["text"]) > 12000:
-                store.defer(sid, "input_limit"); report["deferred"] += 1
                 continue
             related = {}
             related_error = "privacy"
@@ -256,59 +353,71 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 if source_privacy_problem(invocation, config):
                     related = None
                     break
+                invocation.pop("invocation_descriptors", None)
                 related[descriptor["source_id"]] = (descriptor, invocation)
             if related is None:
                 store.defer(sid, related_error); report["deferred"] += 1
                 continue
-            extra = sum(len(runtime.canonical(pair[1])) for key, pair in related.items() if key not in supplied)
-            if length + len(runtime.canonical(source)) + extra > 12000:
-                store.defer(sid, "input_limit"); report["deferred"] += 1
+            extra = sum(len(runtime.canonical(_view(pair[1]))) for key, pair in related.items() if key not in supplied)
+            if length + len(runtime.canonical(_view(source))) + extra > room:
+                store.defer(sid, _again("input_limit", previous)); report["deferred"] += 1
                 continue
             if related:
                 store.capture([pair[0] for pair in related.values()])
                 for key, pair in related.items():
                     if key not in supplied:
                         supplied[key] = pair[1]
-                        length += len(runtime.canonical(pair[1]))
+                        length += len(runtime.canonical(_view(pair[1])))
             supplied[sid] = source
-            length += len(runtime.canonical(source))
-        if not supplied:
+            offered.append(item)
+            length += len(runtime.canonical(_view(source)))
+        if not offered:
             return dict(report, code="no-sources")
         context = record_context(repo, config, query="\n".join(source["text"] for source in supplied.values()))
         if not context or not context["targets"] or context["incomplete"]:
-            for sid in supplied: store.defer(sid, "record_unavailable")
+            for item in offered: store.defer(item["source_id"], "record_unavailable")
             return dict(report, code="record-unavailable")
         if source_privacy_problem(context, config):
-            for sid in supplied: store.defer(sid, "privacy_context")
+            for item in offered: store.defer(item["source_id"], "privacy_context")
             return dict(report, code="privacy")
         reservation = store.reserve_invocation("extract", options["max_invocations"], options["window_hours"] * 3600)
         if reservation is None:
-            for sid in supplied: store.defer(sid, "budget")
+            for item in offered: store.defer(item["source_id"], "budget")
             return dict(report, code="budget")
         started = time.monotonic()
         sheet = field_sheet.state(config, repo)
         never = (sheet["entry"] or {}).get("brief", {}).get("never", "") if sheet["state"] == "approved" else ""
-        payload = {"sources": list(supplied.values()), "record": context, "templates": template_context(),
-                   "max_candidates": options["max_candidates"], "never_write_down": never}
+        account = _account(repo)
+        # In the order they happened: a turn reads as it ran.
+        order = {item["source_id"]: _order(item) for item in offered}
+        views = [_view(supplied[key]) for key in sorted(supplied, key=lambda key: order.get(key) or _order(
+            {"source_id": key, "metadata": store.observation(key)["metadata"]}))]
+        payload = {"sources": views, "record": context, "templates": templates,
+                   "max_candidates": options["max_candidates"], "never_write_down": never, "account": account}
         result = invoke(payload, EXTRACTION, "extract", options)
         valid = result.get("ok") is True and runtime.validate(result.get("structured"), EXTRACTION)
         store.complete_invocation(reservation, valid, runtime.candidate_hash(result["structured"]) if valid else "")
         if not valid:
-            for sid in supplied: store.defer(sid, "extract_failed")
+            for item in offered: store.defer(item["source_id"], "extract_failed")
             return dict(report, code="extract-failed")
         extracted = result["structured"]
         candidates = extracted["candidates"][:options["max_candidates"]]
         report["selected"] = len(candidates)
         selected_sources = {sid for candidate in candidates for sid in candidate["sources"]}
-        for sid in set(extracted["ignored"]) & set(supplied) - selected_sources:
-            store.mark_handled(sid); report["ignored"] += 1
         handled = set(extracted["ignored"]) & set(supplied) - selected_sources
+        for sid in handled:
+            if store.observation(sid)["state"] in ("observed", "deferred"):
+                store.mark_handled(sid); report["ignored"] += 1
         for candidate in candidates:
             primary = next((sid for sid in candidate["sources"] if sid in supplied), None)
             problem = candidate_problem(candidate, supplied, context, config, repo)
             if problem or not primary or set(candidate["sources"]) & handled:
                 if primary and primary not in handled:
-                    store.defer(primary, (problem or "source-overlap").replace("-", "_"))
+                    reason = (problem or "source-overlap").replace("-", "_")
+                    before = store.observation(primary)
+                    store.defer(primary, _again(reason, before["reason"] if before["state"] == "deferred" else "")
+                                if reason in RETRY_SOON else reason)
+                    handled.add(primary)
                 report["deferred"] += 1
                 continue
             newest = max(store.observation(sid)["metadata"].get("observed_at", 0) for sid in candidate["sources"])
@@ -321,23 +430,29 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 continue
             if time.monotonic() - started + options["timeout_seconds"] > 240:
                 store.defer(primary, "worker_budget"); report["deferred"] += 1
+                handled.add(primary)
                 continue
             review_id = store.reserve_invocation("reviewer", options["max_invocations"], options["window_hours"] * 3600)
             if review_id is None:
                 store.defer(primary, "budget"); report["deferred"] += 1
+                handled.add(primary)
                 continue
             digest = runtime.candidate_hash(candidate)
-            reviewed = invoke({"candidate": candidate, "candidate_hash": digest, "sources": [supplied[sid] for sid in candidate["sources"]],
-                               "record": context, "never_write_down": never}, REVIEW, "review", options)
+            shown = candidate["sources"] + [sid for sid in dict.fromkeys(_calls(candidate, supplied))]
+            reviewed = invoke({"candidate": candidate, "candidate_hash": digest,
+                               "sources": [_view(supplied[sid]) for sid in shown], "record": context,
+                               "never_write_down": never, "account": account}, REVIEW, "review", options)
             answer = reviewed.get("structured")
             valid = reviewed.get("ok") is True and runtime.validate(answer, REVIEW) and answer["candidate_hash"] == digest
             store.complete_invocation(review_id, valid, digest if valid else "")
             report["reviewed"] += 1
             if not valid:
                 store.defer(primary, "review_failed"); report["deferred"] += 1
+                handled.add(primary)
                 continue
             if not answer["accepted"] or answer["reason"] != "supported":
                 store.defer(primary, "review_rejected"); report["deferred"] += 1
+                handled.add(primary)
                 continue
             review = {"accepted": True, "candidate_hash": digest, "reservation_id": review_id}
             if observer_publisher.status_change(candidate["body"]):
@@ -345,12 +460,19 @@ def _process(repo, config, project_root=None, invoke_fn=None):
             eventkey = store.review_complete(primary, candidate, review)
             if eventkey is None:
                 report["deferred"] += 1
+                handled.add(primary)
                 continue
             report["ready"].append(eventkey)
             handled.update(candidate["sources"])
-        for sid in set(supplied) - handled:
-            if store.observation(sid)["state"] == "observed":
-                store.defer(sid, "candidate_limit" if len(candidates) == options["max_candidates"] else "uncertain")
+        # What the selector neither used nor set aside is offered again, a bounded number of times.
+        leftover = "candidate_limit" if len(candidates) == options["max_candidates"] else "uncertain"
+        for item in offered:
+            current = store.observation(item["source_id"])
+            if item["source_id"] in handled or current["state"] not in ("observed", "deferred"):
+                continue
+            if current["state"] == "observed" or _attempts(current["reason"])[0] in RETRY_SOON:
+                store.defer(item["source_id"], _again(leftover, current["reason"] if current["state"] == "deferred"
+                                                      else ""))
         store.set_control("worker_last", {"at": time.time(), "code": "ok", "selected": report["selected"], "reviewed": report["reviewed"], "ready": len(report["ready"])})
     return dict(report, code="ok")
 
