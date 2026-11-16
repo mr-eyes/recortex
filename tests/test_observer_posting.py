@@ -85,6 +85,28 @@ class ObserverPostingTests(unittest.TestCase):
         self.assertIn("already holds this decision (event %s" % held, output)
         self.assertEqual([], self.calls())
 
+    def test_the_main_session_posts_a_deferred_event_of_a_marked_project_past_the_daily_cap(self):
+        # post_verified.py --eventkey is the main session's own post, after its review and the user's word
+        # (references/observer.md): a deferred event, a marked project and a full day of automatic comments do not
+        # stop it, and a refusal names its real reason.
+        self.config["fields"] = {"sensitive": ["people"]}
+        self.config["observer"]["max_posts"] = 1
+        observer_runtime.approve(fixtures.REPO, self.config)
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.transition(self.key, "deferred", reason="sensitive_project")
+            db.set_control("automatic_posts", [__import__("time").time()])
+            db.set_control("publication_paused", True)
+        result, output = self.post()
+        self.assertEqual(1, result, output)
+        self.assertIn("refused this event (publication_paused)", output)
+        self.assertEqual([], self.calls())
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.set_control("publication_paused", False)
+        result, output = self.post()
+        self.assertEqual(0, result, output)
+        self.assertIn("memory id: 9100", output)
+        self.assertEqual(1, len([args for args in self.calls() if args[:2] == ["issue", "comment"]]))
+
     def test_exact_reviewed_body_target_and_kind_are_required_before_network(self):
         for changes in ({"issue": 2}, {"kind": "decision"}, {"text": "Altered private draft"}):
             with self.subTest(changes=changes):

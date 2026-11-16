@@ -55,6 +55,20 @@ def lint(path, text, kind, repo, config, offline, labels=None, profiles=None, lo
     return lint_drafts.report(path, findings)
 
 
+REFUSALS = {
+    "not_approved": "Posting a reviewed event needs this folder's approval in automatic mode. Shadow mode retains "
+                    "reviewed events locally.",
+    "not_trusted": "The repository is not in your trusted list.",
+    "runtime_unavailable": "Run observer.py runtime-check first.",
+    "publication_paused": "Publication is paused; the user resumes it in their own terminal.",
+    "explicit_hold": "The user has asked that this action not be taken.",
+    "not_ready": "Only a reviewed event that is ready or deferred can be posted.",
+    "lint_failed": "The reviewed body does not pass the record's rules.",
+    "outbound_local": "The body names something of this machine (a local path, the home folder, a user name or an "
+                      "email address); discard the event and post your own memory instead.",
+}
+
+
 def observer_comment(args, draft, repo, config):
     """Use the same frozen event and receipt as the automatic publisher.
 
@@ -103,15 +117,22 @@ def observer_comment(args, draft, repo, config):
                 observer_publisher._payload_bound(event)
             else:
                 observer_publisher._bound(event, store)
-        result = observer_publisher.publish(repo, args.eventkey, config, dry_run=args.dry_run)
+        # The main session, after its own review and the user's word: it may post a deferred event, one in a marked
+        # project or one that changes what an earlier memory means; the daily cap of automatic comments is not its.
+        result = observer_publisher.publish(repo, args.eventkey, config, dry_run=args.dry_run, main_session=True)
     except observer_store.StoreError as error:
         if not args.eventkey and error.reason == "missing":
             return None
         print("not posted: the observer queue could not be validated; run observer.py status.")
         return 1
-    except (observer_publisher.PublishError, storage.StorageError, OSError, ValueError, KeyError, TypeError):
-        print("not posted: the reviewed event is unavailable or publication is not approved; run observer.py status. "
-              "Shadow mode retains reviewed events locally.")
+    except observer_publisher.PublishError as error:
+        print("not posted: the observer refused this event (%s); run observer.py status. %s" % (
+            error.reason if re.fullmatch(r"[a-z_]{1,40}", error.reason or "") else "unknown",
+            REFUSALS.get(error.reason, "")))
+        return 1
+    except (storage.StorageError, OSError, ValueError, KeyError, TypeError):
+        print("not posted: the reviewed event or this machine's observer state could not be read; run observer.py "
+              "status. Shadow mode retains reviewed events locally.")
         return 1
     if args.dry_run:
         print("would run: " + result["command"])
