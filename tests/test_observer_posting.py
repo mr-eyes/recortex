@@ -305,6 +305,8 @@ class ObserverPostingTests(unittest.TestCase):
         self.assertEqual(1, result, output)
         self.assertIn("refused this event (held_unanswered)", output)
         self.assertIn("options Post and Drop", output)
+        self.assertIn("quotes its line exactly", output)  # why an answer did not count
+        self.assertIn("one --eventkey only", output)
         self.assertEqual(before, len(self.calls()))
         now = __import__("time").time()
         with store.Store(fixtures.REPO, config=self.config) as db:

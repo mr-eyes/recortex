@@ -226,6 +226,17 @@ class ObserverHookTests(unittest.TestCase):
         first = start()
         self.assertEqual(hooks.waiting_line(2), first["hookSpecificOutput"]["additionalContext"])
         self.assertTrue(hooks.waiting_line(2).startswith("recortex observer: 2 reviewed memories wait for "))
+        # The session loads the skill first, and finds the scripts at a path checked against a strict pattern.
+        self.assertIn("Load the recortex skill first", hooks.waiting_line(2))
+        self.assertIn("Its scripts are in %s." % hooks.SCRIPTS, hooks.waiting_line(2))
+        self.assertIn("Its scripts are in /opt/tools/skills/recortex/scripts.",
+                      hooks.waiting_line(1, "/opt/tools/skills/recortex/scripts"))
+        for odd in ("/opt/my tools/skills/recortex/scripts", "/opt/a/../skills/recortex/scripts",
+                    "relative/skills/recortex/scripts", "/opt/x\n/skills/recortex/scripts", "/opt/other/scripts",
+                    "/opt/'x'/skills/recortex/scripts", "/opt/./skills/recortex/scripts"):
+            line = hooks.waiting_line(1, odd)
+            self.assertIn("Its scripts are in the recortex skill's scripts folder.", line, odd)
+            self.assertNotIn(odd, line)
         self.assertIn(hooks.NOTICES["held"], first["systemMessage"])
         again = start()
         self.assertEqual(hooks.waiting_line(2), again["hookSpecificOutput"]["additionalContext"])  # after a compaction too

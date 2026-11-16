@@ -43,16 +43,26 @@ NOTICES = {
 # At session start, for the main session, while reviewed memories wait for the user's answer (the number is the only
 # value in it).
 WAITING = ("recortex observer: %s for the user's answer. %s the status of an earlier memory without the user's "
-           "words or your message to the user. Run observer.py pending --held, and ask the user with the "
-           "multiple-choice question tool, one question per memory that names its short id and quotes its line as "
-           "pending --held gives it, with the options Post and Drop. For each Post, run post_verified.py comment "
-           "--eventkey KEY right after; for each Drop, observer.py discard KEY.")
+           "words or your message to the user. Load the recortex skill first (its session protocol, step 6). %s Run "
+           "observer.py pending --held, and ask the user with the multiple-choice question tool, one question per "
+           "memory from the skill's template, which names its short id and quotes its line exactly as pending --held "
+           "gives it, with the options Post and Drop. For each Post, run post_verified.py comment --eventkey KEY right "
+           "after, one --eventkey per command; for each Drop, observer.py discard KEY.")
+SCRIPTS = os.path.dirname(os.path.abspath(__file__))
+# A scripts folder named in a payload: an absolute path of plain characters that ends in the skill's own folder.
+SCRIPTS_PATH = re.compile(r"/(?:[A-Za-z0-9_.@+-]+/){0,30}skills/recortex/scripts")
 
 
-def waiting_line(count):
-    """WAITING for `count` memories, the number its only value, in the singular for one."""
-    return WAITING % (("1 reviewed memory waits", "It changes") if count == 1 else
-                      ("%d reviewed memories wait" % count, "Each changes"))
+def waiting_line(count, scripts=None):
+    """WAITING for `count` memories: the number, in the singular for one, and the scripts folder when it matches
+    SCRIPTS_PATH (no .. part), are its only values."""
+    scripts = SCRIPTS if scripts is None else scripts
+    where = ("Its scripts are in %s." % scripts if SCRIPTS_PATH.fullmatch(scripts) and "/../" not in scripts + "/"
+             and "/./" not in scripts + "/" else "Its scripts are in the recortex skill's scripts folder.")
+    return WAITING % (("1 reviewed memory waits", "It changes", where) if count == 1 else
+                      ("%d reviewed memories wait" % count, "Each changes", where))
+
+
 # Once, at the next session start after a session switched automatic mode on (the date is the only value in it).
 SWITCHED = ("recortex observer: automatic mode was switched on for this folder on %s from a session; run observer.py "
             "disable in your own terminal to turn it off.")

@@ -66,10 +66,12 @@ REFUSALS = {
     "lint_failed": "The reviewed body does not pass the record's rules.",
     "withheld": "The user asked in that session that its moments not be posted. Only the user lifts that, with "
                 "observer.py release HOLD_ID in their own terminal (observer.py holds lists it).",
-    "held_unanswered": "This memory waits for the user's answer. List it with observer.py pending --held, ask the "
-                       "user one multiple-choice question that names its short id, with the options Post and Drop, "
-                       "and run this again within 10 minutes of a Post answer; drop it with observer.py discard after "
-                       "a Drop answer.",
+    "held_unanswered": "This memory waits for the user's answer, and no answer that counts was found for it. It "
+                       "counts when the question names the memory's short id and quotes its line exactly as "
+                       "observer.py pending --held gives it (the template in the recortex skill), with the options "
+                       "Post and Drop, the user answered Post less than 10 minutes ago, and this command posts one "
+                       "--eventkey only. Ask again, then run this right after; after a Drop, run observer.py discard "
+                       "KEY.",
     "outbound_local": "The body names something of this machine (a local path, the home folder, a user name or an "
                       "email address); discard the event and post your own memory instead.",
 }
