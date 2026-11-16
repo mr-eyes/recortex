@@ -82,6 +82,54 @@ class ObserverHookTests(unittest.TestCase):
                         "python3 skills/recortex/scripts/observer.py disable"):
             self.assertEqual("deny", self.run_hook(command=command)["hookSpecificOutput"]["permissionDecision"], command)
 
+    def entry_and_hold(self):
+        import observer_runtime
+        self.append("/recortex hold git-push")
+        self.run_hook()
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+                                                     "publisher_id": observer_runtime.publisher_id(create=True)}},
+                                 str(self.project))
+
+    def test_the_held_repository_comes_from_this_folders_entry_not_the_project_file(self):
+        import contextlib, io, observer
+        self.entry_and_hold()
+        data = dict(self.data, tool_name="Bash", tool_input={"command": "git push"})
+        for name in ("octo-org/other", "not a repository", None):
+            edited = {"repo": name, "hub": 1, "observer": {"enabled": True}} if name else {"hub": 1}
+            result = hooks.handle("pre-tool", data, edited, name)
+            self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"], name)
+        for loaded in ({"repo": "octo-org/other"}, {"repo": "not a repository"}, ValueError("not JSON")):
+            out = io.StringIO()
+            with mock.patch.object(observer.recortex, "load_config", side_effect=[loaded] if isinstance(loaded, dict) else loaded), \
+                    mock.patch.object(observer.sys, "stdin", io.StringIO(json.dumps(data))), contextlib.redirect_stdout(out):
+                self.assertEqual(0, observer.hook("pre-tool"))
+            self.assertEqual("deny", json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"], loaded)
+
+    def test_disable_checks_the_entrys_holds_whatever_the_project_file_names(self):
+        import contextlib, io, observer, observer_runtime
+        self.entry_and_hold()
+        out = io.StringIO()
+        with mock.patch.object(observer.recortex, "load_config", return_value={"repo": "octo-org/other", "hub": 1}), \
+                mock.patch.object(observer, "terminal", return_value=None), contextlib.redirect_stdout(out):
+            self.assertEqual(1, observer.main(["disable"]))
+        self.assertEqual("terminal-required", json.loads(out.getvalue())["code"])
+        self.assertIsNotNone(observer_runtime.stored_approval(str(self.project)))
+
+    def test_unreadable_approvals_stop_what_a_hold_could_stop(self):
+        import contextlib, io, observer, observer_runtime
+        self.entry_and_hold()
+        path = Path(observer_runtime.approvals_folder()) / observer_runtime.APPROVALS
+        path.write_text("not JSON")
+        for command, denied in (("git push", True), ("python other.py", True), ("ls", False)):
+            data = dict(self.data, tool_name="Bash", tool_input={"command": command})
+            result = hooks.handle("pre-tool", data, {"repo": REPO, "hub": 1}, REPO)
+            self.assertEqual(denied, "hookSpecificOutput" in result, command)
+            out = io.StringIO()
+            with mock.patch.object(observer.recortex, "load_config", return_value={"repo": REPO, "hub": 1}), \
+                    mock.patch.object(observer.sys, "stdin", io.StringIO(json.dumps(data))), contextlib.redirect_stdout(out):
+                observer.hook("pre-tool")
+            self.assertEqual(denied, "could not be checked" in out.getvalue(), command)
+
     def test_disable_from_the_session_keeps_the_holds(self):
         import contextlib, io, observer, observer_runtime
         self.append("/recortex hold git-push")

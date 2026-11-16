@@ -184,20 +184,28 @@ def hook(event, config=None, repo=None):
     previous = signal.signal(signal.SIGALRM, _alarm)
     signal.setitimer(signal.ITIMER_REAL, 3.5)
     trusted = unreadable = False
+    holds = event == "pre-tool"  # the holds follow this folder's private entry, whatever the project file says
     try:
         if config is None:
-            loaded = recortex.load_config()
+            try:
+                loaded = recortex.load_config()
+            except (OSError, ValueError, RecursionError):
+                if not holds:
+                    raise
+                loaded = {}
             repo = repo or loaded.get("repo")
-            if not recortex.valid_repo(repo):
+            if not recortex.valid_repo(repo) and not holds:
                 return 0
-            trusted = bool(recortex.allowed_users(repo))
+            trusted = recortex.valid_repo(repo) and bool(recortex.allowed_users(repo))
             try:
                 config = runtime.local_config(loaded)
             except (ValueError, storage.StorageError):
                 unreadable = True  # this machine's approvals exist but cannot be read
-                raise
+                if not holds:
+                    raise
+                config = {key: value for key, value in loaded.items() if key != "observer"}
         repo = repo or config.get("repo")
-        if not recortex.valid_repo(repo):
+        if not recortex.valid_repo(repo) and not holds:
             return 0
         raw = sys.stdin.read(8388609)
         if len(raw) > 8388608:
@@ -252,10 +260,16 @@ def main(argv=None):
             return hook(args.event, repo=args.repo)
         loaded = recortex.load_config()
         if args.command == "disable":
-            name = loaded.get("repo")
+            # The holds to check are those of the repository this folder's private entry names, never the project
+            # file's; an entry that cannot be read, or names no valid repository, may have active holds.
             try:
-                active = [h for h in observer_store.read_holds(name) if h.get("state") == "active"] \
-                    if recortex.valid_repo(name) else []
+                entry = runtime.stored_approval()
+            except (ValueError, storage.StorageError, OSError):
+                entry = {}
+            name = entry.get("repo") if isinstance(entry, dict) else None
+            try:
+                active = [] if entry is None else [h for h in observer_store.read_holds(name)
+                                                   if h.get("state") == "active"] if recortex.valid_repo(name) else [None]
             except (observer_store.StoreError, storage.StorageError, OSError, ValueError, KeyError, TypeError):
                 active = [None]  # holds that cannot be read may be active
             if active:

@@ -155,14 +155,26 @@ def _notices(store, notices, data, event):
     return fresh
 
 
-def _folder_entry(repo):
-    """True when this folder has an entry for `repo` in this machine's approvals, enabled or not; unreadable approvals
-    count as one, so that _held decides (it fails closed)."""
+def _entry_repo():
+    """The repository whose holds apply here: the one this folder's private entry names, never the project file's,
+    which a single edit could change. None without an entry; False when the approvals cannot be read or the entry
+    names no valid repository, so that the check fails closed."""
     try:
         entry = observer_runtime.stored_approval()
     except (ValueError, storage.StorageError, OSError):
-        return True
-    return isinstance(entry, dict) and entry.get("repo") == repo.lower()
+        return False
+    if entry is None:
+        return None
+    repo = entry.get("repo") if isinstance(entry, dict) else None
+    return repo if recortex.valid_repo(repo) else False
+
+
+def _unchecked(data):
+    """The decision when the holds cannot be known: every Bash command but the plainest reads is denied."""
+    tool_name, tool_input = data.get("tool_name"), data.get("tool_input")
+    if observer_holds.classify_action(tool_name, tool_input)["command"] is None:
+        return None
+    return None if observer_holds.read_only(tool_name, tool_input) else UNCHECKED
 
 
 SELF_RELEASE = {"reason": "recortex observer: only the user releases a hold or switches the observer off, in a separate "
@@ -252,11 +264,15 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
     event = EVENTS.get(event, event)
     if event not in EVENTS.values() or not isinstance(data, dict) or not isinstance(config, dict):
         return {}
+    # A hold stays in force while this folder has an entry on this machine, whatever the project file says (its
+    # repository, its trust, or "observer": false): one edit of a shared file must not lift what the user held.
+    held, checked = None, False
+    if event == "PreToolUse":
+        held_repo = _entry_repo()
+        if held_repo is not None:
+            held, checked = (_held(held_repo, data) if held_repo else _unchecked(data)), True
     if not recortex.valid_repo(repo) or repo.lower() not in recortex.trusted_repos():
-        return {}
-    # A hold stays in force while this folder has an entry on this machine, whatever the project file says: one edit
-    # of a shared file must not lift what the user held.
-    held = _held(repo, data) if event == "PreToolUse" and _folder_entry(repo) else None
+        return _output(event, denial=held) if held else {}
     raw = config.get("observer", {})
     if not isinstance(raw, dict) or raw.get("enabled") is not True:
         return _output(event, denial=held) if held else {}
@@ -268,7 +284,7 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
             # This machine's entry for the folder does not hold (another repository or machine key, or settings
             # that no longer validate). Nothing is created, and the line shows at session start only.
             return _output(event, notices=["approval"] if event == "SessionStart" else [], denial=held)
-        if event == "PreToolUse" and held is None:
+        if event == "PreToolUse" and not checked:
             denial = _held(repo, data)
         with observer_store.Store(repo, max_bytes=settings["max_pending_bytes"], wait=0.1,
                                   max_pending=settings["max_pending_observations"], config=config) as store:
