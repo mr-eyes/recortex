@@ -398,11 +398,39 @@ class Store:
         else:
             self._observation_state(source_id, "deferred", "source_overlap")
 
-    def mark_handled(self, source_id, state="ignored"):
+    def mark_handled(self, source_id, state="ignored", reason=""):
         if state not in ("ignored", "rejected"):
             raise StoreError("invalid_state")
         with self.transaction():
-            self._observation_state(source_id, state)
+            self._observation_state(source_id, state, _reason(reason) if reason else "")
+
+    def register_main(self, issue, kind, comment_id, now=None):
+        """A memory the main session posted itself, so that nothing is posted twice: the observer drops its own
+        candidates of the same kind for the same issue that rest on what came before this post (main_post_after), and
+        its ready events of that kind for that issue wait for the main session. The keys of those events are returned.
+        The record is refreshed before the next selection."""
+        if (type(issue) is not int or issue < 1 or kind not in record_format.MEMORY_TYPES
+                or type(comment_id) is not int or comment_id < 1):
+            raise StoreError("invalid_candidate")
+        now = time.time() if now is None else now
+        posts = [post for post in self.get_control("main_posts", [])
+                 if isinstance(post, dict) and type(post.get("at")) in (int, float) and now - post["at"] < 7 * 86400]
+        posts = (posts + [{"issue": issue, "kind": kind, "comment_id": comment_id, "at": now}])[-200:]
+        with self.transaction():
+            self.db.execute("INSERT OR REPLACE INTO controls VALUES ('main_posts',?)", (canonical(posts),))
+            self.db.execute("INSERT OR REPLACE INTO controls VALUES ('sync_needed',?)", (canonical(True),))
+        waiting = []
+        for event in self.events(states=["ready"], limit=10000):
+            if event["candidate"]["issue"] == issue and event["candidate"]["kind"] == kind and event["created"] <= now:
+                self.transition(event["eventkey"], "deferred", reason="main_session")
+                waiting.append(event["eventkey"])
+        return waiting
+
+    def main_post_after(self, issue, kind, since):
+        """True when the main session posted a memory of this kind for this issue at or after `since`."""
+        return any(isinstance(post, dict) and post.get("issue") == issue and post.get("kind") == kind
+                   and type(post.get("at")) in (int, float) and post["at"] >= since
+                   for post in self.get_control("main_posts", []))
 
     def review_complete(self, source_id, candidate, review):
         _id(source_id)

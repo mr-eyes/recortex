@@ -58,8 +58,10 @@ def lint(path, text, kind, repo, config, offline, labels=None, profiles=None, lo
 def observer_comment(args, draft, repo, config):
     """Use the same frozen event and receipt as the automatic publisher.
 
-    None selects the legacy path. Opted-in memory comments cannot become a
-    second, uncoordinated write when their source is already queued.
+    None selects the legacy path; "register" selects it too, for a memory the
+    main session writes itself while this machine's observer is approved for
+    this folder: once verified, the post is registered in the observer's queue,
+    so that the observer does not post the same memory a second time.
     """
     import observer_publisher
     import observer_runtime
@@ -84,10 +86,13 @@ def observer_comment(args, draft, repo, config):
             if not args.eventkey:
                 if not approved:
                     return None
-                print("not posted: observer memory comments require --eventkey KEY from the shared reviewed queue. "
-                      "Use observer.py pending; retry a queued source with observer.py record --source SOURCE_ID. "
-                      "Preview the reviewed draft with observer.py pending --eventkey KEY --show-body.")
-                return 1
+                held = observer_publisher.queued_decision(store, draft)
+                if held is not None:
+                    print("not posted: the observer's queue already holds this decision (event %s, %s). Post that "
+                          "event with --eventkey %s, or discard it with observer.py discard %s, so that it is not "
+                          "recorded twice." % (held["eventkey"], held["state"], held["eventkey"], held["eventkey"]))
+                    return 1
+                return "register"
             event = store.event(args.eventkey)
             if (event is None or not memory or args.issue != event["candidate"]["issue"] or
                     args.kind != event["candidate"]["kind"] or
@@ -119,6 +124,25 @@ def observer_comment(args, draft, repo, config):
     print("not verified: observer event %s remains %s; use observer.py reconcile %s. "
           "Do not post another copy." % (args.eventkey, result["state"], args.eventkey))
     return 1
+
+
+def register_with_observer(repo, config, issue, kind, comment_id):
+    """After a verified post of the main session's own memory: tell the observer's queue, or say plainly that it could
+    not be told. The post itself stands either way."""
+    import observer_publisher
+    import observer_runtime
+    import observer_store
+    import storage
+    try:
+        waiting = observer_publisher.register_main(repo, observer_runtime.local_config(config), issue, kind, comment_id)
+    except (observer_store.StoreError, storage.StorageError, OSError, ValueError):
+        print("note: the comment is verified, but the observer's queue could not record it; run observer.py status. "
+              "Before the observer posts a %s on #%d, check observer.py pending." % (kind, issue))
+        return
+    print("observer: registered; the observer leaves this %s on #%d to you" % (kind, issue))
+    for key in waiting:
+        print("observer: event %s, a %s it had queued for #%d, now waits for you (observer.py pending --eventkey %s "
+              "--show-body; post it with --eventkey, or observer.py discard)" % (key, kind, issue, key))
 
 
 def main(argv=None):
@@ -156,9 +180,11 @@ def main(argv=None):
     if not os.path.isfile(args.body_file):
         sys.exit("error: not a file: %s" % args.body_file)
     draft = recortex.read_text(args.body_file)
+    register = False
     if args.command == "comment":
         queued = observer_comment(args, draft, repo, config)
-        if queued is not None:
+        register = queued == "register"
+        if queued is not None and not register:
             return queued
     expected = None
     if args.command == "body" and args.expected_body_file:
@@ -216,6 +242,9 @@ def main(argv=None):
         ok = recortex.verify_body(draft, recortex.read_comment_body(repo, match.group(1)), "comment %s" % url)
         if ok and args.kind in record_format.MEMORY_TYPES:
             print("memory id: %s" % match.group(1))
+        if ok and register:
+            register_with_observer(repo, config, args.issue, args.kind if args.kind in record_format.MEMORY_TYPES
+                                   else marker.get("type"), int(match.group(1)))
         return 0 if ok else 1
 
     command = ["issue", "edit", str(args.issue), "--repo", repo, "--body-file", args.body_file]

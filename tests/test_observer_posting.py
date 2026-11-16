@@ -49,13 +49,41 @@ class ObserverPostingTests(unittest.TestCase):
             self.assertEqual("verified", db.event(self.key)["state"])
             self.assertEqual([], db.pending())
 
-    def test_approved_memory_cannot_bypass_queue_by_omitting_key_or_kind(self):
+    def own_idea(self):
+        return (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text().replace("open quote", "quote state")
+
+    def test_main_session_posts_its_own_memory_and_the_queue_registers_it(self):
+        outputs = []
         for kind in ("idea", "generic"):
             with self.subTest(kind=kind):
-                result, output = self.post(eventkey=False, kind=kind)
-                self.assertEqual(1, result, output)
-                self.assertIn("require --eventkey", output)
-                self.assertEqual([], self.calls())
+                text = self.own_idea().replace("quote state", "quote state for " + kind)
+                result, output = self.post(False, 3, kind, text)
+                self.assertEqual(0, result, output)
+                self.assertIn("observer: registered", output)
+                outputs.append(output)
+        self.assertEqual(2, len([args for args in self.calls() if args[:2] == ["issue", "comment"]]))
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            posts = db.get_control("main_posts")
+            self.assertEqual([(3, "idea"), (3, "idea")], [(post["issue"], post["kind"]) for post in posts])
+            self.assertTrue(db.get_control("sync_needed"))
+            # the observer's own idea for #3, queued before, now waits for the main session
+            self.assertEqual(("deferred", "main_session"), (db.event(self.key)["state"], db.event(self.key)["reason"]))
+        self.assertIn("event %s, a idea it had queued for #3, now waits for you" % self.key, outputs[0])
+        self.assertNotIn("now waits for you", outputs[1])
+
+    def test_a_decision_the_queue_already_holds_is_not_posted_twice(self):
+        decision = (fixtures.ROOT / "examples/octo-repo/chain/3-decision.md").read_text()
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.capture([self.metadata("source9")])
+            candidate = {"kind": "decision", "issue": 3, "body": decision, "sources": ["source9"]}
+            ident = db.reserve_invocation("reviewer")
+            db.complete_invocation(ident, True, output_hash=store.candidate_hash(candidate))
+            held = db.review_complete("source9", candidate, {"reservation_id": ident, "accepted": True,
+                                                              "candidate_hash": store.candidate_hash(candidate)})
+        result, output = self.post(False, 3, "decision", decision.replace("2026-03", "2026-04"))
+        self.assertEqual(1, result, output)
+        self.assertIn("already holds this decision (event %s" % held, output)
+        self.assertEqual([], self.calls())
 
     def test_exact_reviewed_body_target_and_kind_are_required_before_network(self):
         for changes in ({"issue": 2}, {"kind": "decision"}, {"text": "Altered private draft"}):
@@ -98,30 +126,34 @@ class ObserverPostingTests(unittest.TestCase):
         self.assertEqual(0, result, output)
         self.assertEqual(1, len([args for args in self.calls() if args[:2] == ["issue", "comment"]]))
 
-    def test_shadow_approval_does_not_allow_either_publication_path(self):
+    def test_shadow_approval_keeps_the_main_sessions_own_path(self):
         self.config["observer"]["mode"] = "shadow"
         observer_runtime.approve(fixtures.REPO, self.config)
-        self.assertEqual(1, self.post(eventkey=False)[0])
         result, output = self.post()
         self.assertEqual(1, result, output)
         self.assertIn("Shadow mode", output)
         self.assertEqual([], self.calls())
+        result, output = self.post(False, 3, "idea", self.own_idea())
+        self.assertEqual(0, result, output)
+        self.assertIn("observer: registered", output)
+        self.assertEqual(1, len([args for args in self.calls() if args[:2] == ["issue", "comment"]]))
 
-    def test_manifest_memory_refuses_every_write_before_creating_its_issues(self):
+    def test_manifest_memories_are_posted_and_registered(self):
         drafts = self.base / "drafts"
         shutil.copytree(fixtures.ROOT / "examples/octo-repo", drafts)
         manifest = drafts / "manifest.json"
-        before, stamp = self.db_path.read_bytes(), self.db_path.stat().st_mtime_ns
-        for extra in ([], ["--dry-run"]):
-            out = io.StringIO()
-            with mock.patch.object(create_issues.recortex, "load_config", return_value=self.config), contextlib.redirect_stdout(out):
-                result = create_issues.main(["--manifest", str(manifest)] + extra)
-            self.assertEqual(1, result, out.getvalue())
-            self.assertIn("shared reviewed queue", out.getvalue())
-            self.assertEqual([], self.calls())
-            self.assertFalse((drafts / "manifest.json.state.json").exists())
-            self.assertEqual(before, self.db_path.read_bytes())
-            self.assertEqual(stamp, self.db_path.stat().st_mtime_ns)
+        full = json.loads(manifest.read_text())
+        memories = [comment for comment in full["comments"] if comment["kind"] not in ("resume", "generic")]
+        out = io.StringIO()
+        import setup_labels
+        with mock.patch.object(create_issues.recortex, "load_config", return_value=dict(self.config, repo=fixtures.REPO)), \
+                mock.patch.dict(os.environ, {"RECORTEX_LINK_PAUSE": "0"}), contextlib.redirect_stdout(out):
+            self.assertEqual(0, setup_labels.main(["--repo", fixtures.REPO, "--profile", "software,research",
+                                                   "--topic", "reader", "--topic", "speed"]))
+            result = create_issues.main(["--manifest", str(manifest)])
+        self.assertEqual(0, result, out.getvalue())
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            self.assertEqual(len(memories), len(db.get_control("main_posts")))
 
     def test_manifest_nonmemory_and_unapproved_projects_keep_legacy_preview(self):
         drafts = self.base / "drafts"

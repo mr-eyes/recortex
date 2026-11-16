@@ -157,6 +157,18 @@ class WorkerTests(unittest.TestCase):
         correction = self.status_case('correction', CORRECTION, [self.capture('This is fine, go ahead with it.')],
                                       ['This is fine, go ahead with it.'])
         self.assertEqual('', correction['review']['status_authority'])
+    def test_a_memory_the_main_session_posted_is_not_posted_again(self):
+        before = self.capture()
+        with store.Store(REPO, config=self.config) as db:
+            self.assertEqual([], db.register_main(2, 'decision', 9200))
+        report = self.run_worker(self.invoke(self.candidate(before)))
+        self.assertEqual(['extract'], [x[0] for x in self.calls])
+        self.assertEqual((1, []), (report['ignored'], report['ready']))
+        with store.Store(REPO, config=self.config) as db:
+            self.assertEqual(('ignored', 'main_session'), (db.observation(before)['state'], db.observation(before)['reason']))
+        self.calls = []
+        later = self.capture(QUOTE + ' Later.')  # what happens after the main session's post is the observer's again
+        self.assertEqual(1, len(self.run_worker(self.invoke(self.candidate(later)))['ready']))
     def test_never_write_down_reaches_both_model_calls(self):
         sheet = {'state': 'approved', 'entry': {'brief': {'never': 'names of client sites'}}, 'marks': []}
         sid = self.capture()

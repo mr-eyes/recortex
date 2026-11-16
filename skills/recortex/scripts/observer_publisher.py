@@ -64,6 +64,31 @@ def off_repository(target, repo):
             or not (path.lower() + "/").startswith("/%s/" % repo.lower()))
 
 
+def exact_words(body):
+    """The text of a decision's "Exact words" field: its quoted lines, joined."""
+    fields = dict(record_format.fields(body))
+    return "\n".join(line.lstrip()[1:].lstrip() for line in fields.get("Exact words", "").splitlines()
+                     if line.lstrip().startswith(">"))
+
+
+def queued_decision(store, draft):
+    """An observer event that already holds the decision in `draft` (the same exact words), or None."""
+    quoted = exact_words(draft).strip()
+    if not quoted:
+        return None
+    for event in store.events(states=["ready", "deferred", "sending", "uncertain", "verified"], limit=10000):
+        if event["candidate"]["kind"] == "decision" and exact_words(event["candidate"]["body"]).strip() == quoted:
+            return event
+    return None
+
+
+def register_main(repo, config, issue, kind, comment_id):
+    """Record a memory the main session posted itself in the observer's queue; the keys of the events it sets
+    aside are returned."""
+    with Store(repo, config=config, create=False) as store:
+        return store.register_main(issue, kind, comment_id)
+
+
 def status_change(body):
     """True for a memory that overturns or sets aside an earlier one: a correction, or a replaces= or instead= key."""
     marker = record_format.parse_marker(record_format.first_lines(body)[0]) or {}

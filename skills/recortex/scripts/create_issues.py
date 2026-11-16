@@ -133,8 +133,11 @@ def lint_all(manifest, config):
     return errors
 
 
-def observer_comments_allowed(manifest, config, repo):
-    """Refuse uncoordinated memory comments before creating any manifest issue."""
+def observer_registrar(config, repo):
+    """For a folder whose observer this machine approved: a function that registers each verified memory comment of
+    the manifest in the observer's queue, so that the observer does not post it a second time. None when the observer
+    is off here; False (with a line) when this machine's settings cannot be read."""
+    import observer_publisher
     import observer_runtime
     import observer_store
     import storage
@@ -144,32 +147,20 @@ def observer_comments_allowed(manifest, config, repo):
     except (storage.StorageError, ValueError):
         print("nothing posted: this machine's observer settings could not be read; run observer.py status.")
         return False
-    raw = config.get("observer", {})
-    if not isinstance(raw, dict) or raw.get("enabled") is not True:
-        return True
+    if not observer_runtime.approval_valid(repo, config):
+        return None
 
-    repositories = set()
-    for item in manifest["comments"]:
-        marker = record_format.parse_marker(record_format.first_lines(recortex.read_text(item["_path"]))[0]) or {}
-        if item["kind"] in record_format.MEMORY_TYPES or marker.get("type") in record_format.MEMORY_TYPES:
-            repositories.add(item.get("repo", repo))
-    for target in sorted(repositories):
+    def register(target, number, kind, comment_id):
+        if target.lower() != repo.lower():
+            return  # the approval names one repository
         try:
-            with observer_store.Store(target, config=config, create=False, readonly=True) as store:
-                if observer_runtime.approval_valid(target, config):
-                    print("nothing posted: this manifest contains memory comments for a locally approved observer. "
-                          "Create the issues without those comments, then use the shared reviewed queue and "
-                          "post_verified.py comment --eventkey KEY after their destination issues exist.")
-                    return False
-        except observer_store.StoreError as error:
-            if error.reason == "missing":
-                continue
-            print("nothing posted: the observer queue could not be validated; run observer.py status.")
-            return False
-        except (storage.StorageError, OSError, ValueError, KeyError, TypeError):
-            print("nothing posted: the observer queue could not be validated; run observer.py status.")
-            return False
-    return True
+            for key in observer_publisher.register_main(repo, config, number, kind, comment_id):
+                print("observer: event %s, a %s it had queued for #%d, now waits for you (observer.py pending)"
+                      % (key, kind, number))
+        except (observer_store.StoreError, storage.StorageError, OSError, ValueError):
+            print("note: comment %d is verified, but the observer's queue could not record it; run observer.py "
+                  "status" % comment_id)
+    return register
 
 
 def final_lint(text, item, repo, numbers, config, checked, number=None):
@@ -234,7 +225,8 @@ def main(argv=None):
     if lint_all(manifest, config):
         print("nothing posted: fix the lint errors above")
         return 1
-    if not observer_comments_allowed(manifest, config, repo):
+    registrar = observer_registrar(config, repo)
+    if registrar is False:
         return 1
     print("lint: all %d drafts pass" % (len(manifest["issues"]) + len(manifest["comments"])))
 
@@ -395,6 +387,10 @@ def main(argv=None):
         if recortex.verify_body(body, returned, label):
             entry["verified"] = digest(body)
             save_state(state_path, state)
+            marker = record_format.parse_marker(record_format.first_lines(body)[0]) or {}
+            kind = item["kind"] if item["kind"] in record_format.MEMORY_TYPES else marker.get("type")
+            if registrar and kind in record_format.MEMORY_TYPES:
+                registrar(target_repo, number, kind, int(comment_id_from_url(entry["url"])))
         else:
             failures += 1
 
