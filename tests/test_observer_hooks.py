@@ -633,6 +633,13 @@ class ObserverHookTests(unittest.TestCase):
                 self.assertEqual(0, observer.hook("pre-tool"))
             self.assertEqual("deny", json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"], failing)
 
+    def test_the_worker_starts_at_the_edges_of_a_turn_not_at_every_prompt(self):
+        with mock.patch("observer_hooks.observer_runtime.gate_valid", return_value=True):
+            hooks.handle("prompt-submit", dict(self.data, prompt="Run the tests."), self.config, REPO)
+            self.worker.assert_not_called()
+            self.run_hook(event="stop")
+            self.worker.assert_called_once_with(str(self.project))
+
     def test_the_denial_says_the_user_asked_and_invites_no_release(self):
         # The first live test's denial ("release that hold explicitly before this action") led the session to try a
         # release. The denial now says only that the user has asked that this action not be taken.

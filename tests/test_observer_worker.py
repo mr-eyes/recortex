@@ -84,6 +84,7 @@ class WorkerTests(unittest.TestCase):
         p=patch.object(runtime,'gate_valid',return_value=True);p.start();self.addCleanup(p.stop)
         p=patch.object(worker,'record_context',return_value=CONTEXT);p.start();self.addCleanup(p.stop)
         p=patch.object(worker,'refresh_record',return_value=True);p.start();self.addCleanup(p.stop)
+        p=patch.object(worker,'ENOUGH',1);p.start();self.addCleanup(p.stop)  # the wait for a stretch has its own test
         self.calls=[]
     def capture(self,text=QUOTE,role='user'):
         with self.path.open('a') as f:f.write(json.dumps({'type':role,'userType':'external','message':{'role':role,'content':text},'timestamp':'2026-03-01T12:00:00Z'})+'\n')
@@ -375,6 +376,47 @@ class WorkerTests(unittest.TestCase):
         self.run_worker(call)
         self.assertTrue(shown[0].startswith('START '));self.assertTrue(shown[0].endswith(' END'))
         self.assertLessEqual(len(shown[0]),worker.SOURCE_TEXT+100);self.assertIn('characters left out',shown[0])
+    def age(self, seconds, column='updated'):
+        with store.Store(REPO,config=self.config) as db:
+            db.db.execute("UPDATE observations SET %s=%s-?" % (column, column), (seconds,))
+    def test_a_source_the_model_cannot_answer_for_is_found_in_halves_and_stops(self):
+        # One source that makes every selection call fail once held the whole queue for good: a failed batch is now
+        # offered again in halves, a source failing alone is counted, and it stops after three attempts.
+        poison=self.capture('POISON message the model cannot answer for.',role='assistant')
+        calls=[]
+        def call(payload,schema,purpose,config):
+            ids=[item['id'] for item in payload['sources']];calls.append(ids)
+            if poison in ids:return {'ok':False,'code':'invalid-output','structured':None}
+            return {'ok':True,'structured':{'candidates':[],'ignored':ids}}
+        ordinary=[]
+        for n in range(24):
+            ordinary+=[self.capture('Ordinary note %d one.'%n,role='assistant'),self.capture('Ordinary note %d two.'%n,role='assistant')]
+            self.run_worker(call);self.age(301)
+        for _ in range(4):
+            self.run_worker(call);self.age(301)
+        with store.Store(REPO,config=self.config) as db:
+            states=[db.observation(sid)['state'] for sid in ordinary]
+            self.assertEqual(('deferred','extract_failed_3'),(db.observation(poison)['state'],db.observation(poison)['reason']))
+        self.assertGreaterEqual(states.count('ignored'),40)
+        self.assertLessEqual(len(calls),40)
+        self.assertEqual(2,sum(ids==[poison] for ids in calls))  # three attempts: in its batch, then twice alone
+    def test_a_pass_waits_for_a_stretch_of_the_session(self):
+        # A pass at every turn edge spent the day's 60 calls in 30 turns at two sources a call: a pass now waits for
+        # ENOUGH sources, or for one that has waited PATIENCE seconds.
+        calls=[]
+        def call(payload,schema,purpose,config):
+            calls.append(len(payload['sources']))
+            return {'ok':True,'structured':{'candidates':[],'ignored':[item['id'] for item in payload['sources']]}}
+        with patch.object(worker,'ENOUGH',8):
+            for turn in range(40):
+                self.capture('Turn %d: please run the tests.'%turn)
+                self.capture('Turn %d: all tests pass.'%turn,role='assistant')
+                self.run_worker(call)
+            self.assertEqual(10,len(calls));self.assertGreaterEqual(min(calls),8)
+            lone=self.capture('One more question.')
+            self.run_worker(call);self.assertEqual(10,len(calls))
+            self.age(worker.PATIENCE+1,'created')
+            self.run_worker(call);self.assertEqual([1],calls[10:])
     def test_ready_events_do_not_starve_new_work(self):
         sid=self.capture();self.run_worker(self.invoke(self.candidate(sid)))
         for n in range(10):

@@ -415,7 +415,8 @@ def _handle(event, data, config, repo, decision):
             # Local retention remains available while models are unavailable or
             # capture is paused. The worker checks its model/network gates itself.
             # Tool events fire on every call; the worker starts from the edges of a turn only.
-            if event in ("SessionStart", "UserPromptSubmit", "Stop", "SubagentStop", "PreCompact") and (
+            # Not at every prompt: the worker waits for a stretch of the session anyway (observer_worker.ENOUGH).
+            if event in ("SessionStart", "Stop", "SubagentStop", "PreCompact") and (
                     runtime_ready or (maintenance_due and has_handled)):
                 try:
                     launch_worker(project_root)

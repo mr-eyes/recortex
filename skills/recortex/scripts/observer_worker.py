@@ -195,12 +195,20 @@ RETRY_SOON = {"input_limit": 6, "candidate_limit": 6, "uncertain": 3, "candidate
 WAITING = ("uncertain",)
 # Deferrals tried again after five minutes: a failed call, the budget, the record.
 RETRY_LATER = ("budget", "extract_failed", "review_failed", "worker_budget", "record_unavailable")
+# Failed calls are tried again after five minutes, at most this many times for a source shown alone; a failed batch is
+# offered again in halves, so that a source the model cannot answer for is found in a few calls and stops there.
+RETRY_COUNTED = dict(RETRY_SOON, extract_failed=3, review_failed=3)
+# Failures of a call that say nothing about its input: the batch is kept whole and tried again after five minutes.
+TRANSIENT = frozenset(("timeout", "runtime-unavailable", "runtime-gate", "recursion", "model-changed", "isolation"))
+# A pass waits for at least this many sources, or for one that has waited ten minutes, so that a call sees a stretch
+# of the session and the day's calls last a working day.
+ENOUGH, PATIENCE = 8, 600
 
 
 def _attempts(reason):
     """(kind, attempts so far) of a deferral reason: "uncertain_2" is the second uncertain pass of a source."""
     kind, _, count = (reason or "").rpartition("_")
-    if kind in RETRY_SOON and count.isdigit():
+    if kind in RETRY_COUNTED and count.isdigit():
         return kind, int(count)
     return reason or "", 1
 
@@ -208,7 +216,7 @@ def _attempts(reason):
 def _again(kind, previous=""):
     """The reason for one more deferral as `kind`, counting the automatic attempts the source has had."""
     base, count = _attempts(previous)
-    count = count + 1 if base in RETRY_SOON else 1
+    count = count + 1 if base in RETRY_COUNTED else 1
     return kind if count == 1 else "%s_%d" % (kind, count)
 
 
@@ -218,8 +226,19 @@ def _order(item):
 
 
 def _queued(store):
-    """The observations offered to one pass, oldest first: deferrals due again soon, new ones and older failures,
-    with places kept for each so that none starves the others."""
+    """(items, half): the observations offered to one pass, oldest first: deferrals due again soon, new ones and older
+    failures, with places kept for each so that none starves the others. The halves of a failed batch come first, one
+    half a pass and alone (half True), so that a source the model cannot answer for is found in a few calls."""
+    batches = store.get_control("retry_halves", [])
+    while isinstance(batches, list) and batches:
+        batch = batches.pop(0)
+        items = [store.observation(sid) for sid in batch if isinstance(sid, str)] if isinstance(batch, list) else []
+        items = [item for item in items if item and item["state"] == "deferred"]
+        if items:
+            store.set_control("retry_halves", batches)
+            return sorted(items, key=_order), True
+    if batches != []:
+        store.set_control("retry_halves", [])
     now = time.time()
     fresh = sorted((store.observation(row[0]) for row in store.db.execute(
         "SELECT source_id FROM observations WHERE state='observed' ORDER BY created,source_id LIMIT 64")), key=_order)
@@ -228,20 +247,21 @@ def _queued(store):
     rows = store.db.execute(
         "SELECT source_id,reason,updated FROM observations WHERE state='deferred' AND (reason IN (%s) OR %s) "
         "ORDER BY created,source_id LIMIT 256" % (",".join("?" * len(RETRY_LATER)),
-                                                  " OR ".join("reason LIKE ?" for _ in RETRY_SOON)),
-        RETRY_LATER + tuple(kind + "%" for kind in RETRY_SOON)).fetchall()
+                                                  " OR ".join("reason LIKE ?" for _ in RETRY_COUNTED)),
+        RETRY_LATER + tuple(kind + "%" for kind in RETRY_COUNTED)).fetchall()
     for sid, reason, updated in rows:
         kind, count = _attempts(reason)
         if kind in RETRY_SOON and count < RETRY_SOON[kind]:
             item = store.observation(sid)
             if kind not in WAITING or item["metadata"].get("session_id") in going_on or updated < now - 300:
                 soon.append(item)
-        elif reason in RETRY_LATER and updated < now - 300:
+        elif (kind in RETRY_LATER and (kind not in RETRY_COUNTED or count < RETRY_COUNTED[kind])
+              and updated < now - 300):
             later.append(store.observation(sid))
     soon.sort(key=_order)
     chosen = soon[:6] + fresh[:7] + later[:3]
     chosen += [item for item in fresh[7:] + soon[6:] + later[3:] if item not in chosen][:MAX_SOURCES - len(chosen)]
-    return chosen[:MAX_SOURCES]
+    return chosen[:MAX_SOURCES], False
 
 
 def _view(source):
@@ -264,7 +284,8 @@ def _account(repo):
 def _process(repo, config, project_root=None, invoke_fn=None):
     """One pass: up to MAX_SOURCES queued observations of the conversation (the user's typed prompts and the agent's
     messages to the user), in the order they happened, to one selection call within the call's input limit, then a
-    fresh review of each of at most four candidates."""
+    fresh review of each of at most four candidates. A pass waits for ENOUGH sources or for one older than
+    PATIENCE."""
     invoke = invoke_fn or runtime.invoke
     options = runtime.settings(config)
     report = {"code": "disabled", "selected": 0, "reviewed": 0, "ready": [], "deferred": 0, "ignored": 0}
@@ -286,7 +307,10 @@ def _process(repo, config, project_root=None, invoke_fn=None):
         room = (options["max_input_chars"] - len(runtime.PROMPTS["extract"]) - len(runtime.canonical(EXTRACTION))
                 - len(runtime.canonical(templates)) - RECORD_ROOM - 1000)
         supplied, offered, length = {}, [], 0
-        for item in _queued(store):
+        queued, half = _queued(store)
+        if not half and len(queued) < ENOUGH and all(time.time() - item["created"] < PATIENCE for item in queued):
+            return dict(report, code="no-sources")  # wait for a stretch of the session
+        for item in queued:
             sid, previous = item["source_id"], item["reason"] if item["state"] == "deferred" else ""
             meta = item["metadata"]
             if meta.get("event_type") == "source_gap":
@@ -340,7 +364,18 @@ def _process(repo, config, project_root=None, invoke_fn=None):
         valid = result.get("ok") is True and runtime.validate(result.get("structured"), EXTRACTION)
         store.complete_invocation(reservation, valid, runtime.candidate_hash(result["structured"]) if valid else "")
         if not valid:
-            for item in offered: store.defer(item["source_id"], "extract_failed")
+            # Counted only for a source shown alone; a larger batch is offered again in halves, so that a source the
+            # model cannot answer for is found in a few calls (RETRY_COUNTED). A transient failure keeps it whole.
+            alone = len(offered) == 1
+            for item in offered:
+                previous = item["reason"] if item["state"] == "deferred" else ""
+                kept = previous if _attempts(previous)[0] == "extract_failed" else "extract_failed"
+                store.defer(item["source_id"], _again("extract_failed", previous) if alone else kept)
+            if not alone and result.get("code") not in TRANSIENT:
+                ids, middle = [item["source_id"] for item in offered], len(offered) // 2
+                batches = store.get_control("retry_halves", [])
+                store.set_control("retry_halves", ([ids[:middle], ids[middle:]] + (batches if isinstance(batches, list)
+                                                                                   else []))[:32])
             return dict(report, code="extract-failed")
         extracted = result["structured"]
         candidates = extracted["candidates"][:options["max_candidates"]]
@@ -388,7 +423,9 @@ def _process(repo, config, project_root=None, invoke_fn=None):
             store.complete_invocation(review_id, valid, digest if valid else "")
             report["reviewed"] += 1
             if not valid:
-                store.defer(primary, "review_failed"); report["deferred"] += 1
+                before = store.observation(primary)
+                store.defer(primary, _again("review_failed", before["reason"] if before["state"] == "deferred" else ""))
+                report["deferred"] += 1
                 handled.add(primary)
                 continue
             if not answer["accepted"] or answer["reason"] != "supported":

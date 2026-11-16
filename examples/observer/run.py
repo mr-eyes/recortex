@@ -116,6 +116,8 @@ class Replay:
         self.stack.enter_context(mock.patch.object(observer_worker, "record_context", side_effect=self.context))
         self.stack.enter_context(mock.patch.object(observer_worker, "refresh_record", return_value=True))
         self.stack.enter_context(mock.patch.object(time, "time", side_effect=lambda: self.now))
+        # Mechanics, not batching: each pass takes what is queued, without waiting for a stretch of the session.
+        self.stack.enter_context(mock.patch.object(observer_worker, "ENOUGH", 1))
         return self
 
     def __exit__(self, *args):
