@@ -106,11 +106,16 @@ def template_context():
 MIN_WORDS = 6  # a shorter typed message ("go ahead", "this is fine") cannot back a change of status
 
 
+def _main_agent(source):
+    """The main session's agent writing to the user: an assistant record of the main transcript, not a subagent's or a
+    sidechain's (observer_sources drops meta, compaction and transcript-only records before this)."""
+    return source.get("role") == "assistant" and source.get("subagent") is False and source.get("sidechain") is False
+
+
 def _said(source):
     """The conversation the observer takes notes of: a prompt the user typed, or the main session's agent writing to
     the user. Nothing else reaches the selector or the reviewer."""
-    return (source.get("role") == "user" and source.get("direct_user") is True
-            or source.get("role") == "assistant" and not source.get("subagent"))
+    return source.get("role") == "user" and source.get("direct_user") is True or _main_agent(source)
 
 
 def _users(candidate, supplied):
@@ -120,25 +125,28 @@ def _users(candidate, supplied):
 
 def _agent(candidate, supplied):
     """True when the candidate cites the agent's own message to the user."""
-    return any(supplied[source]["role"] == "assistant" and not supplied[source].get("subagent")
-               for source in candidate["sources"])
+    return any(_main_agent(supplied[source]) for source in candidate["sources"])
+
+
+def _quoted(candidate):
+    """The user's words the memory quotes for itself: a decision's Exact words, or the quoted lines of another kind."""
+    if candidate["kind"] == "decision":
+        return observer_publisher.exact_words(candidate["body"]).strip()
+    return "\n".join(line.lstrip()[1:].strip() for line in candidate["body"].splitlines()
+                     if line.lstrip().startswith(">")).strip()
 
 
 def status_authority(candidate, supplied):
     """What a memory that changes an earlier one's status rests on, all of it said in the conversation. "user": the
-    user's typed words, a decision whose own Exact words quote at least MIN_WORDS words and at least half of one typed
-    message, or another kind that cites a typed message of at least MIN_WORDS words. "agent": the agent's message to
-    the user, cited. "" otherwise (a short phrase such as "go ahead" on its own): the memory then waits for the main
-    session."""
+    memory quotes, in its own field (a decision's Exact words, another kind's quoted lines), at least MIN_WORDS words
+    and at least half of one typed message it cites, so that the user's words back this very change. "agent": the
+    agent's message to the user, cited. "" otherwise (a short phrase such as "go ahead" on its own, or a long message
+    the memory does not quote): it then waits for the main session."""
     if not all(_said(supplied[source]) for source in candidate["sources"]):
         return ""
-    users = _users(candidate, supplied)
-    if candidate["kind"] == "decision":
-        quoted = observer_publisher.exact_words(candidate["body"]).strip()
-        if len(quoted.split()) >= MIN_WORDS and any(quoted in text and 2 * len(quoted) >= len(text.strip())
-                                                   for text in users):
-            return "user"
-    elif any(len(text.split()) >= MIN_WORDS for text in users):
+    quoted = _quoted(candidate)
+    if len(quoted.split()) >= MIN_WORDS and any(quoted in text and 2 * len(quoted) >= len(text.strip())
+                                               for text in _users(candidate, supplied)):
         return "user"
     return "agent" if _agent(candidate, supplied) else ""
 

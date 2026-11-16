@@ -266,8 +266,8 @@ def _content(record):
     if not isinstance(message, dict) or record.get("type") not in ("user", "assistant"):
         return "unknown", "", False, False
     role = message.get("role")
-    if role != record["type"] or any(record.get(key) for key in HIDDEN):
-        return "unknown", "", False, False
+    if role != record["type"] or any(record.get(key) for key in HIDDEN) or record.get("isSidechain"):
+        return "unknown", "", False, False  # a sidechain (a subagent's turn) is not the conversation with the user
     content = message.get("content")
     if isinstance(content, list) and any(isinstance(block, dict) and block.get("type") == "tool_result"
                                          for block in content):
@@ -481,4 +481,5 @@ def resolve(descriptor, project_root):
             "text": text, "direct_user": bool(typed and not subagent), "control_user": bool(control and not subagent),
             "session_id": descriptor["session_id"],
             "at": record.get("timestamp") if isinstance(record.get("timestamp"), str) else datetime.datetime.fromtimestamp(descriptor["observed_at"], datetime.timezone.utc).isoformat(),
-            "sha256": descriptor["sha256"], "message_id": record.get("uuid"), "subagent": subagent}
+            "sha256": descriptor["sha256"], "message_id": record.get("uuid"), "subagent": subagent,
+            "sidechain": bool(record.get("isSidechain"))}

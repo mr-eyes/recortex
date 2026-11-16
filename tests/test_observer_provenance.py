@@ -84,6 +84,25 @@ class ObserverProvenanceTests(unittest.TestCase):
         self.assertEqual(1, len(shown))
         self.assertNotIn("RECORD KEEPERS", shown[0])
 
+    def test_a_subagents_or_a_sidechains_text_is_not_the_agents_message(self):
+        # Text the user never saw (a subagent's report, a sidechain turn in the main transcript) never reaches the
+        # selector as the agent's message, and so never backs a memory.
+        self.path.write_text(json.dumps({"type": "assistant", "isSidechain": True, "message": {
+            "role": "assistant", "content": [{"type": "text", "text": "SIDECHAIN: all 12 checks pass."}]}}) + "\n")
+        rows, _ = sources.scan(self.hook, self.project)
+        self.assertEqual([], rows)
+        sub = self.path.parent / "session-1" / "subagents"
+        sub.mkdir(parents=True, mode=0o700)
+        report = sub / "agent-a1.jsonl"
+        report.write_text(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": "SUBAGENT: done."}}) + "\n")
+        report.chmod(0o600)
+        rows, _ = sources.scan(dict(self.hook, hook_event_name="SubagentStop", agent_transcript_path=str(report)),
+                               self.project)
+        self.assertEqual([], rows)
+        self.assertFalse(worker._said({"role": "assistant", "subagent": False, "sidechain": True, "text": "x"}))
+        self.assertFalse(worker._said({"role": "assistant", "subagent": True, "sidechain": False, "text": "x"}))
+        self.assertTrue(worker._said({"role": "assistant", "subagent": False, "sidechain": False, "text": "x"}))
+
     def test_a_command_wrapper_sets_a_hold_and_reaches_no_model(self):
         # The form Claude Code stores a typed /recortex command in is captured for the holds only: the worker sets it
         # aside without showing it to the selector.

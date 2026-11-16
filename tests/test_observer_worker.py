@@ -103,18 +103,26 @@ class WorkerTests(unittest.TestCase):
         # The observer takes notes of the conversation: a change of an earlier memory's status rests on the user's
         # typed words or on the agent's message to the user, and on nothing else.
         said = 'No, the earlier note was wrong: strict quoting stays the default.'
-        supplied = {'agent': {'role': 'assistant', 'text': 'I reran the parser tests: strict quoting passes 12 of 12.'},
+        main = {'subagent': False, 'sidechain': False}
+        supplied = {'agent': dict(main, role='assistant', text='I reran the parser tests: strict quoting passes 12 of 12.'),
                     'user': {'role': 'user', 'direct_user': True, 'text': QUOTE},
                     'said': {'role': 'user', 'direct_user': True, 'text': said},
                     'short': {'role': 'user', 'direct_user': True, 'text': 'Go ahead, this is fine.'},
                     'wrapper': {'role': 'user', 'direct_user': False, 'text': said},
-                    'subagent': {'role': 'assistant', 'subagent': True, 'text': 'Strict quoting passes.'},
+                    'subagent': {'role': 'assistant', 'subagent': True, 'sidechain': False, 'text': 'Strict quoting passes.'},
+                    'sidechain': {'role': 'assistant', 'subagent': False, 'sidechain': True, 'text': 'Strict quoting passes.'},
+                    'unmarked': {'role': 'assistant', 'text': 'Strict quoting passes.'},
                     'tool': {'role': 'tool', 'text': 'strict: 12 of 12 files pass'}}
         correction = {'kind': 'correction', 'body': ''}
+        quoting = {'kind': 'correction', 'body': CORRECTION.replace('**Why:** the earlier note misread the session',
+                                                                    '**Why:** the user said so:\n\n> ' + said)}
         decision = {'kind': 'decision', 'body': BODY}
         short = BODY.replace('> For the parser, use strict quoting and keep the warning.', '> Go ahead, this is fine.')
-        cases = [(correction, ['agent'], 'agent'), (correction, ['said'], 'user'), (correction, ['short'], ''),
-                 (correction, ['wrapper'], ''), (correction, ['subagent'], ''), (correction, ['tool'], ''),
+        # The user's words back a change only when the memory quotes them, at least MIN_WORDS words and half the message.
+        cases = [(correction, ['agent'], 'agent'), (quoting, ['said'], 'user'), (correction, ['said'], ''),
+                 (quoting, ['user'], ''), (correction, ['short'], ''),
+                 (correction, ['wrapper'], ''), (correction, ['subagent'], ''), (correction, ['sidechain'], ''),
+                 (correction, ['unmarked'], ''), (correction, ['tool'], ''),
                  (correction, ['agent', 'tool'], ''), (decision, ['user'], 'user'),
                  (dict(decision, body=short), ['short'], ''), (dict(decision, body=short), ['short', 'agent'], 'agent')]
         for candidate, cited, authority in cases:
@@ -155,8 +163,12 @@ class WorkerTests(unittest.TestCase):
         said = 'No, the earlier note was wrong: strict quoting stays the default.'
         reported = 'I reran the parser tests after the change: strict quoting passes 12 of 12 files.'
         cases = [('idea', idea.replace('-08:00 -->', '-08:00 replaces=123 -->'), lambda: [self.capture('Reader idea.', role='assistant')], [], 'agent'),
-                 # the user's own typed correction
-                 ('correction', CORRECTION, lambda: [self.capture(said)], [said], 'user'),
+                 # the user's own typed correction, which the memory quotes
+                 ('correction', CORRECTION.replace('**Why:** the earlier note misread the session',
+                                                   '**Why:** the user said so:\n\n> ' + said),
+                  lambda: [self.capture(said)], [said], 'user'),
+                 # a long typed message the memory does not quote backs nothing on its own
+                 ('correction', CORRECTION, lambda: [self.capture(said + ' Really.')], [], ''),
                  # what the agent told the user it found
                  ('correction', CORRECTION, lambda: [self.capture(reported, role='assistant')], [reported], 'agent'),
                  # a short phrase on its own backs nothing

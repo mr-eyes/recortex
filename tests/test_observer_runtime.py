@@ -198,7 +198,7 @@ class SourceTests(unittest.TestCase):
         native='12345678-1234-1234-1234-123456789abc'
         rows,_=self.write('Do not push.',uuid=native);original=rows[0]['source_id']
         rows,_=self.write('Do not push.',uuid=native,isSidechain=True)
-        self.assertNotEqual(original,rows[0]['source_id'])
+        self.assertEqual([],rows)  # a sidechain is not the conversation: it is not captured at all
     def test_preflight_explains_permissions_without_changing_them(self):
         self.path.parent.parent.chmod(0o775)
         with patch.object(sources,'private_group',return_value=False):  # a group shared with another account
@@ -240,7 +240,9 @@ class SourceTests(unittest.TestCase):
         typed=dict(promptSource='sdk',turnOrigin='sdk',isSidechain=False,entrypoint='sdk-cli')
         rows,_=self.write('We will keep the reader in pure Python.',**typed)
         found=sources.resolve(rows[0],self.project);self.assertTrue(found['direct_user']);self.assertTrue(found['control_user'])
-        refused={'isSidechain':dict(typed,isSidechain=True),'userType':dict(typed,userType='internal'),
+        rows,_=self.write('We will keep the reader in pure Python.',**dict(typed,isSidechain=True))
+        self.assertEqual([],rows)  # a sidechain record is not captured
+        refused={'userType':dict(typed,userType='internal'),
                  'no userType':dict(typed,userType=None),'toolUseResult':dict(typed,toolUseResult={'stdout':'x'}),
                  'sourceToolUseID':dict(typed,sourceToolUseID='toolu_1'),
                  'sourceToolAssistantUUID':dict(typed,sourceToolAssistantUUID='12345678-1234-1234-1234-123456789abc')}
