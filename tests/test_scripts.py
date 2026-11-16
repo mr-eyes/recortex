@@ -4125,6 +4125,19 @@ class SetupTests(Sandbox):
                           ""), (ready.returncode, ready.stdout, ready.stderr))
         unnamed = self.setup_script("preflight", gh=FAKE, env={"FAKE_GH_NOT_TEXT": "api user"})
         self.assertEqual((1, "", self.UNNAMED), (unnamed.returncode, unnamed.stdout, unnamed.stderr))
+
+    def test_a_failed_or_slow_account_read_gets_a_fixed_line(self):
+        failed = self.setup_script("preflight", gh=FAKE, env={"FAKE_GH_FAIL_ON": "api user"})
+        self.assertEqual((1, "", self.UNNAMED), (failed.returncode, failed.stdout, failed.stderr))  # no gh words
+        with mock.patch.object(recortex, "gh", side_effect=["", recortex.GhTimeout("gh timed out")]):
+            self.assertEqual(("slow", None), recortex.gh_account())
+
+    def test_importing_setup_runs_no_check(self):
+        code = ("import sys; sys.version_info = (3, 7, 9, 'final', 0); sys.path.insert(0, %r); import setup; "
+                "print('imported')" % SCRIPTS)
+        env = environment_for(os.environ, {"RECORTEX_GH": "false", "PYTHONDONTWRITEBYTECODE": "1"})
+        result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=self.dir, env=env)
+        self.assertEqual((0, "imported\n", ""), (result.returncode, result.stdout, result.stderr))
         sys.path.insert(0, SCRIPTS)
         import setup
         self.assertEqual("not ready: gh did not answer within 10 seconds. Check the network, or run `gh auth status` "
