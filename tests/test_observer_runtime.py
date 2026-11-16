@@ -63,6 +63,13 @@ class RuntimeTests(unittest.TestCase):
         self.assertIsNone(runtime.folder_problem(str(self.base / 'a')))
     def test_tool_and_schema_violations(self):
         self.assertEqual(self.fake(tools=['Bash'])['code'],'isolation')
+        # A claude that fails or never starts is a failed check, not an isolation finding.
+        for script in ('import sys; sys.exit(1)', 'print("not json at all")'):
+            with patch.object(runtime,'command',return_value=[sys.executable,'-c',script]), \
+                    patch.object(runtime.shutil,'which',return_value=sys.executable):
+                self.assertEqual('runtime-failed', runtime.invoke({'fictional':True},SCHEMA,'smoke',{})['code'], script)
+        with patch.object(runtime.shutil,'which',return_value=None):
+            self.assertEqual('runtime-unavailable', runtime.invoke({'fictional':True},SCHEMA,'smoke',{})['code'])
         self.assertEqual(self.fake(output={'ok':True,'secret':'reject'})['code'],'invalid-output')
         self.assertFalse(runtime.validate(True,{'type':'integer'}))
     def test_gate_and_guard_prevent_launch(self):

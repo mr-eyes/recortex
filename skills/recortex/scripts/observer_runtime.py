@@ -313,8 +313,10 @@ def invoke(payload, schema, purpose, config):
                        else None)
         if failure:
             return dict(summary, code=failure)
-        if status != 0 or result.get("is_error") or not isolated:
-            return dict(summary, code="isolation" if not isolated else "runtime-failed")
+        if status != 0 or not initial or result.get("is_error"):
+            return dict(summary, code="runtime-failed")  # claude failed or never started: no finding on isolation
+        if not isolated:
+            return dict(summary, code="isolation")
         if purpose != "smoke" and initial.get("model") != config["runtime_gate"].get("actual_model"):
             return dict(summary, code="model-changed")
         structured = result.get("structured_output")

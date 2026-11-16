@@ -8,7 +8,7 @@ GitHub remains the shared record. A private local queue holds work that is pendi
 
 ## Enable and inspect
 
-Run from the project root, using the installed skill's `scripts/` directory, in this order: enable in shadow mode, check the runtime, then switch to automatic mode if you want it. The setup wizard runs all three when the user answers its observer question ([setup.md](setup.md)).
+Run from the project root, using the installed skill's `scripts/` directory, in this order: enable in shadow mode, check the runtime, then switch to automatic mode if you want it. The setup wizard runs steps 1 and 2 for either answer to its observer question, and step 3 for automatic mode ([setup.md](setup.md)); without step 2 the observer takes notes but reviews nothing.
 
 ```bash
 python3 scripts/observer.py status

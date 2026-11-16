@@ -1187,18 +1187,29 @@ def board_step(board, root, python, dry):
         print("board: not filled yet; run `board.py apply` when the reason above is dealt with.")
 
 
+OBSERVER_REASONS = {"runtime-unavailable": "claude was not found", "runtime-failed": "the check failed",
+                    "isolation": "the check found tools, servers or skills loaded", "terminal-required":
+                    "the holds of another repository apply here", "budget": "the day's call budget is used"}
+
+
+def observer_reason(code):
+    """The plain reason a step of the observer's setup did not pass, from its code."""
+    return OBSERVER_REASONS.get(code, "the check failed" if code == "failed" else "the check failed: %s" % code)
+
+
 def observer_step(answers, root, python, dry):
-    """Turn on the observer as the user answered in the wizard: shadow mode for this folder, and for automatic mode
-    the runtime check and then automatic mode. The answer is the approval, recorded here as the field sheet's is;
-    nothing asks on a terminal. A step that does not pass leaves what is on, and one line says what to run."""
+    """Turn on the observer as the user answered in the wizard: shadow mode for this folder and the runtime check,
+    without which it reviews nothing, and for automatic mode then automatic mode. The answer is the approval, recorded
+    here as the field sheet's is; nothing asks on a terminal. A step that does not pass leaves what is on, and one
+    line says what to run."""
     script = os.path.join(HERE, "observer.py")
     repo, mode, model = answers["repo"], answers["observer"]["mode"], answers["observer"]["model"]
     steps = [([python, script, "--repo", repo, "enable", "--mode", "shadow", "--model", model, "--yes"],
-              "turn on the observer for this folder in shadow mode: it reviews memories and posts none")]
+              "turn on the observer for this folder in shadow mode: it takes notes and posts none"),
+             ([python, script, "--repo", repo, "runtime-check"],
+              "check that its background calls run isolated, with %s (one call); it reviews nothing before" % model)]
     if mode == "automatic":
-        steps += [([python, script, "--repo", repo, "runtime-check"],
-                   "check that its background calls run isolated, with %s (one call)" % model),
-                  ([python, script, "--repo", repo, "enable", "--mode", "automatic", "--model", model, "--yes"],
+        steps += [([python, script, "--repo", repo, "enable", "--mode", "automatic", "--model", model, "--yes"],
                    "let it post reviewed memories on its own")]
     if dry:
         for command, what in steps:
@@ -1209,24 +1220,34 @@ def observer_step(answers, root, python, dry):
               % repo)
         return
     environment = dict(os.environ, CLAUDE_PROJECT_DIR=root)  # the folder its entry is for
+    then = (" then observer.py enable --mode automatic --model %s --yes" % model) if mode == "automatic" else ""
     for number, (command, what) in enumerate(steps):
         print("run: %s   # %s" % (" ".join(command), what))
         try:
             done = subprocess.run(command, capture_output=True, text=True, cwd=root, env=environment, timeout=240)
             lines = done.stdout.strip().splitlines()
-            code = json.loads(lines[-1]).get("code", "") if done.returncode and lines else ""
+            value = json.loads(lines[-1]) if lines else {}
+            code = value.get("code", "") if done.returncode else ""
         except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
-            done, code = None, ""
+            done, value, code = None, {}, ""
         if done is None or done.returncode:
             code = code if isinstance(code, str) and re.fullmatch(r"[a-z][a-z_-]{0,39}", code) else "failed"
             if number == 0:
                 print("observer: not turned on (%s); run observer.py status, then observer.py enable --model %s --yes"
-                      % (code, model))
+                      % (observer_reason(code), model))
+            elif number == 1:
+                print("observer: taking notes in shadow mode, but reviewing and posting nothing yet (%s). Run "
+                      "observer.py runtime-check%s." % (observer_reason(code), ";" + then if then else ""))
             else:
-                print("observer: on in shadow mode, but it does not post on its own yet (%s). Run observer.py "
-                      "runtime-check, then observer.py enable --mode automatic --model %s --yes" % (code, model))
+                print("observer: reviewing in shadow mode, but not posting on its own yet (%s). Run observer.py enable "
+                      "--mode automatic --model %s --yes." % (observer_reason(code), model))
             return
-    print("observer: on in %s mode, with %s" % (mode, model))
+        billing = value.get("billing") if number == 0 and isinstance(value, dict) else None
+        if isinstance(billing, str) and billing.startswith("These variables are set: ") and len(billing) <= 600:
+            print("observer: " + billing)  # what enable and status say: the calls are not counted as usage
+    print("observer: on in %s mode, with %s: it %s" % (mode, model, "posts reviewed memories on its own"
+                                                      if mode == "automatic" else "reviews memories and keeps them on "
+                                                      "this machine"))
 
 
 def apply(answers, root, dry, drafts):
