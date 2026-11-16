@@ -80,7 +80,7 @@ Bulk drafting and review use the plugin's agents; the main session stays the onl
 2. Review: the `record-reviewer` agent, which has not seen the drafter's reasoning, audits the batch, read-only by instruction: dropped limitations first, then statements firmer than their source, numbers and denominators, the rules of the body and the source paths. It returns findings with exact replacement text.
 3. Fix: the main session applies the findings to the drafts, or records why it does not.
 4. Cross-issue review: when all batches are drafted, `record-reviewer` in its cross-issue mode checks all bodies together for shared numbers, terms, `#N` pointers and contradictions.
-5. Post: the main session posts each body with `convert_body.py` or `post_verified.py body`, with read-back.
+5. Post: the main session posts each body with `convert_body.py --expected <base>` or `post_verified.py body --expected-body-file <base>`, with read-back. The base is each issue's live body saved as `<N>.base.md` when the batch starts, before the drafter reads it; a body that changed since then stops the post, and that issue is redrafted from the new text.
 6. Owner questions: collected, without duplicates, in one `active` issue, the decision list.
 
 None of the agents starts another agent. Each preloads this skill and uses the user's default model; to give an agent another model, copy its file from the plugin's `agents/` folder into the project's `.claude/agents/` and set `model:` in its frontmatter.
@@ -115,5 +115,5 @@ A tracker whose topic bodies hold a full record (a dated "Current state", folded
 
    If the live body changes after the record comment is posted, the script stops without replacing the body, and the record comment then says something that did not happen. Post a correction comment that links to it (the script prints its address), then save the live body again, redraft and rerun. GitHub has no conditional edit of an issue body, so an edit in the moment between the second check and the replacement cannot be detected; the read-back and the issue's edit history show it.
 
-   The record comment repeats the former body, so every `@name` in it notifies that account again; the script lists them before posting. A former body too long to fit in one comment with its heading and note is kept by hand: post it in two comments headed "Record: former issue body, kept as history (not deliverable text), part 1 of 2" and "part 2 of 2" with `post_verified.py comment --kind generic`, then replace the body with `post_verified.py body`.
+   The record comment repeats the former body, so every `@name` in it notifies that account again; the script lists them before posting. A former body too long to fit in one comment with its heading and note is kept by hand: post it in two comments headed "Record: former issue body, kept as history (not deliverable text), part 1 of 2" and "part 2 of 2" with `post_verified.py comment --kind generic`, then replace the body with `post_verified.py body --expected-body-file <saved live body>`.
 8. Update the hub: the deliverable-text rule at the top, the issues per section, the active issues, and no numbers from the bodies.

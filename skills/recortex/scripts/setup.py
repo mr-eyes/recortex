@@ -1274,8 +1274,8 @@ def apply(answers, root, dry, drafts):
             config["hub"] = int(match.group(1))
             write_text(config_path, json.dumps(config, indent=2) + "\n", dry, "the hub number", root)
     else:
-        print("hub: #%d exists; add rows for new sections to its deliverable tables with post_verified.py body" %
-              existing["hub"])
+        print("hub: #%d exists; save its body, add rows for new sections to a copy, and post the copy with "
+              "post_verified.py body --expected-body-file <saved body>" % existing["hub"])
         for title, entry in deliverable_titles(answers):
             for label, heading in recortex.section_labels([entry]):
                 print("  | %s | none yet | `%s` |   (%s)" % (heading, label, title))

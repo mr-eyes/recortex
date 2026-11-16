@@ -166,7 +166,7 @@ Why each rule exists, with the Mermaid and GitHub limits: [references/pitfalls.m
 | `setup_labels.py` | Create the labels of the chosen profiles; idempotent | yes, `--dry-run` available |
 | `lint_drafts.py` | Check drafts: sections, placeholders, bare `#N`, length, Mermaid, secrets; history in a final record; section headings against labels; a memory's plain line, links, Evidence and folds, against the record with `--index` or `--online --issue N` | no |
 | `create_issues.py` | Create interlinked issues and comments from a manifest, replace placeholders, read back | yes, `--dry-run` available |
-| `post_verified.py` | Post one comment or replace one issue body, with lint, backup and read-back; a final record's section labels follow its headings | yes, `--dry-run` available |
+| `post_verified.py` | Post one comment, or replace one issue body from a base saved before drafting (`--expected-body-file`), with lint, backup and read-back; a final record's section labels follow its headings | yes, `--dry-run` available |
 | `convert_body.py` | Replace a record body of an older form with deliverable text: live-body check, the former body kept as a comment, body and labels replaced and read back | yes, `--dry-run` available |
 | `resume_block.py` | `show` prints the newest resume comment by an allowed account, for trusted repositories only; `update` posts a new resume comment and reads it back | `update` only, `--dry-run` available |
 | `snapshot.py` | Save all issues and comments as local Markdown with an index | no |

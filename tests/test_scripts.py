@@ -7,6 +7,7 @@ makes no gh call at all.
 Run from the repository root:  python3 -m unittest discover -s tests -v
 """
 
+import glob
 import json
 import os
 import re
@@ -4338,7 +4339,8 @@ class SetupTests(Sandbox):
         self.assertEqual(0, again.returncode, again.stdout + again.stderr)
         self.assertIn("kept from the existing setup: software", again.stdout)
         self.assertIn("added: manuscript", again.stdout)
-        self.assertIn("hub: #%d exists; add rows" % hub, again.stdout)
+        self.assertIn("hub: #%d exists; save its body, add rows" % hub, again.stdout)
+        self.assertIn("post_verified.py body --expected-body-file <saved body>", again.stdout)
         config = json.loads(recortex.read_text(os.path.join(root, recortex.CONFIG_NAME)))
         self.assertEqual(["software", "manuscript"], recortex.profile_names(config["profiles"]))
         self.assertEqual(hub, config["hub"])
@@ -9910,6 +9912,20 @@ class DocsTests(unittest.TestCase):
     """The README and the five pages in docs/: size, links, pictures, names and the files they bring."""
 
     PAGES = ("how-it-works.md", "install.md", "existing-work.md", "security.md", "reference.md")
+
+    def test_every_body_replacement_the_skill_names_carries_its_saved_base(self):
+        """post_verified.py body refuses a real replacement without --expected-body-file; the skill never says less."""
+        missing = []
+        for path in [os.path.join(SKILL, "SKILL.md")] + sorted(glob.glob(os.path.join(SKILL, "references", "*.md"))):
+            for block in re.split(r"\n\s*\n", recortex.read_text(path)):
+                if "post_verified.py body" not in block:
+                    continue
+                for command in re.findall(r"`([^`]*post_verified\.py body --[^`]*)`", block):
+                    if "--expected-body-file" not in command:
+                        missing.append((os.path.basename(path), command))
+                if "expected-body-file" not in block and "--expected" not in block:
+                    missing.append((os.path.basename(path), block[:80]))
+        self.assertEqual([], missing)
 
     def files(self):
         return ["README.md"] + [os.path.join("docs", name) for name in self.PAGES]
