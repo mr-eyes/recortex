@@ -246,10 +246,12 @@ class WorkerTests(unittest.TestCase):
     def test_a_marked_projects_reviewer_answers_the_confidentiality_question(self):
         # In a marked project the reviewer is asked, with the marks in fixed words; its answer is kept with the
         # review, and no answer counts as a doubt. Both model calls get the restricted patterns, names and patterns
-        # without their examples. An unmarked project's reviewer is not asked.
+        # without their examples, from an approved sheet only. An unmarked project's reviewer is not asked.
         self.config['restricted_patterns'] = [{'name': 'site code', 'pattern': '\\bST-[0-9]{3}\\b', 'example': 'ST-204'}]
         marked = {'state': 'approved', 'entry': {'brief': {'never': 'names of client sites'}}, 'marks': ['people']}
+        changed = dict(marked, state='changed')
         for sheet, answer, kept in ((marked, 'clear', 'clear'), (marked, None, 'doubt'), (marked, 'doubt', 'doubt'),
+                                    (changed, 'clear', 'clear'), (dict(marked, state='new'), None, 'doubt'),
                                     ({'state': 'none', 'entry': None, 'marks': []}, 'clear', None)):
             self.calls = []
             sid = self.capture(QUOTE + ' Case %s %s.' % (sheet['state'], answer))
@@ -262,9 +264,11 @@ class WorkerTests(unittest.TestCase):
             with patch.object(worker.field_sheet, 'state', return_value=sheet):
                 ready = self.run_worker(call)['ready']
             payloads = dict(self.calls)
+            forms = [{'name': 'site code', 'pattern': '\\bST-[0-9]{3}\\b'}] if sheet['state'] == 'approved' else []
             for purpose in ('extract', 'review'):
-                self.assertEqual([{'name': 'site code', 'pattern': '\\bST-[0-9]{3}\\b'}],
-                                 payloads[purpose]['restricted_patterns'], purpose)
+                self.assertEqual(forms, payloads[purpose]['restricted_patterns'], (purpose, sheet['state']))
+                if not forms:
+                    self.assertNotIn('ST-', json.dumps(payloads[purpose]), sheet['state'])
             self.assertNotIn('ST-204', json.dumps(payloads))
             self.assertNotIn('confidentiality', payloads['extract'])
             with store.Store(REPO, config=self.config) as db:

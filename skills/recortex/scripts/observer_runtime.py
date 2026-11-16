@@ -517,9 +517,13 @@ def _approvals_writer():
                            json.dumps(data, indent=1, sort_keys=True, ensure_ascii=False) + "\n")
 
 
-def approve(repo, config, root=None):
-    """Record this machine's approval of `config`'s observer settings for this folder; other folders are kept."""
-    record = dict(approval_record(repo, config, root), approved_at=time.time())
+def approve(repo, config, root=None, given="terminal"):
+    """Record this machine's approval of `config`'s observer settings for this folder; other folders are kept.
+    `given` says where: "terminal", the user's own, or "session", a Claude Code session such as the setup wizard's,
+    after which the next session start says once that automatic mode was switched on from a session."""
+    if given not in ("terminal", "session"):
+        raise ValueError("observer_settings")
+    record = dict(approval_record(repo, config, root), approved_at=time.time(), given=given)
     if folder_problem(record["root"]):
         raise ValueError("folder_name")
     with _approvals_writer() as data:

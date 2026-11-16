@@ -203,11 +203,8 @@ class ObserverPublisherTests(unittest.TestCase):
         run = self._second(body.replace("again", "after a run"), source="source9", review={"status_authority": "command"})
         with self.assertRaisesRegex(publisher.PublishError, "status_change"):
             publisher.publish(fixtures.REPO, run, self.config)
-        # The main session posts the held-back event only after the user typed the confirmation on their terminal.
-        with self.assertRaisesRegex(publisher.PublishError, "confirmation_required"):
-            publisher.publish(fixtures.REPO, key, self.config, main_session=True)
-        self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config, main_session=True,
-                                                       confirmed=True)["state"])
+        # The main session posts the held-back event on the user's answer to its question: no terminal step.
+        self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config, main_session=True)["state"])
 
     def test_daily_cap_counts_automatic_comments_only(self):
         self.config["observer"]["max_posts"] = 1
@@ -250,7 +247,7 @@ class ObserverPublisherTests(unittest.TestCase):
         self.withhold()
         for main_session in (False, True):
             with self.assertRaisesRegex(publisher.PublishError, "withheld"):
-                publisher.publish(fixtures.REPO, key, self.config, main_session=main_session, confirmed=main_session)
+                publisher.publish(fixtures.REPO, key, self.config, main_session=main_session)
         self.assertEqual(1, len([a for a in self.calls() if a[:2] == ["issue", "comment"]]))
         with store.Store(fixtures.REPO, config=self.config) as db:
             held = [hold["id"] for hold in db.holds() if hold["scope"].get("session_id") == "session1"]
@@ -259,26 +256,36 @@ class ObserverPublisherTests(unittest.TestCase):
         self.assertIn("withheld", publisher.EVENT_PROBLEMS)
 
     def test_a_marked_project_posts_what_its_reviewer_found_clear(self):
-        # The reviewer answers the confidentiality question on top of the mechanical filters: a memory it found clear
-        # posts on its own; one it doubted, or did not answer, waits (deferred and marked held by the worker).
-        self.config["fields"] = {"sensitive": ["people"]}
-        with self.assertRaisesRegex(publisher.PublishError, "confidentiality"):
-            self.publish()
-        self.assertIn("confidentiality", publisher.EVENT_PROBLEMS)
-        with self.assertRaisesRegex(publisher.PublishError, "confirmation_required"):
-            self.publish(main_session=True)
-        with store.Store(fixtures.REPO, config=self.config, readonly=True) as db:
-            self.assertEqual(["confidentiality"], publisher.held_back(db, db.event(self.key), self.config))
-        body = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text().replace("open quote", "open quote again")
-        doubted = self._second(body.replace("again", "once more"), source="source3", review={"confidential": "doubt"})
-        with self.assertRaisesRegex(publisher.PublishError, "confidentiality"):
-            publisher.publish(fixtures.REPO, doubted, self.config)
-        self.assertEqual([], [a for a in self.calls() if a[:2] == ["issue", "comment"]])
-        clear = self._second(body, review={"confidential": "clear"})
-        self.assertEqual("verified", publisher.publish(fixtures.REPO, clear, self.config)["state"])
-        del self.config["fields"]
-        with store.Store(fixtures.REPO, config=self.config, readonly=True) as db:
-            self.assertEqual([], publisher.held_back(db, db.event(self.key), self.config))  # not asked, not held
+        # The reviewer answers the confidentiality question on top of the mechanical filters. In a marked project
+        # whose sheet the user approved, a memory it found clear posts on its own, and one it doubted, or did not
+        # answer about, waits. Where the sheet is not approved as it stands, or the marks are in no sheet, every
+        # memory waits, "clear" or not. Each such reason is a held one, for the user's answer.
+        import observer_holds
+        sheet = lambda state, marks: {"state": state, "marks": marks, "entry": None}
+        body = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text()
+        cases = [(sheet("approved", ["people"]), "clear", None), (sheet("approved", ["people"]), "doubt", "confidentiality"),
+                 (sheet("approved", ["people"]), None, "confidentiality"),
+                 (sheet("changed", ["people"]), "clear", "sheet_not_approved"),
+                 (sheet("new", ["confidential"]), "clear", "sheet_not_approved"),
+                 (sheet("malformed", []), "clear", "sheet_not_approved"),
+                 (sheet("unreadable", []), "clear", "sheet_not_approved"),
+                 (sheet("mark", ["people"]), "clear", "sheet_not_approved"),
+                 (sheet("approved", []), None, None), (sheet("none", []), None, None)]
+        for n, (state, answer, reason) in enumerate(cases):
+            key = self._second(body.replace("open quote", "open quote case %d" % n), source="source-case-%d" % n,
+                               review={"confidential": answer} if answer else {})
+            with mock.patch.object(publisher.field_sheet, "state", return_value=state):
+                if reason is None:
+                    self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config)["state"], n)
+                    continue
+                with self.assertRaisesRegex(publisher.PublishError, reason):
+                    publisher.publish(fixtures.REPO, key, self.config)
+                with store.Store(fixtures.REPO, config=self.config) as db:
+                    db.transition(key, "deferred", reason=reason)  # as the worker does
+                    self.assertIn(key, [event["eventkey"] for event in db.waiting_for_answer()], n)
+            self.assertEqual("answer", observer_holds.HELD_REASONS[reason])
+            self.assertIn(reason, publisher.EVENT_PROBLEMS)
+        self.assertEqual(3, len([a for a in self.calls() if a[:2] == ["issue", "comment"]]))
 
     def test_untrusted_repository_posts_nothing(self):
         with mock.patch.object(publisher.recortex, "trusted_repos", return_value={}):

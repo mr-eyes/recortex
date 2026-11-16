@@ -5,6 +5,7 @@ source role. Collection and controls are separate from the disposable index.
 """
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -37,7 +38,18 @@ NOTICES = {
     "control-refused": "recortex observer: an explicit control could not be stored safely; that control is not active. Run observer.py status.",
     "cap": "recortex observer: today's limit of automatic comments is reached; reviewed memories wait in the queue. Run observer.py pending.",
     "release-refused": "recortex observer: nothing in a session releases a hold; run observer.py release HOLD_ID in a separate terminal, outside Claude Code. Run observer.py holds.",
+    "held": "recortex observer: reviewed memories wait for your answer; the session asks you about each. observer.py pending --held lists them.",
 }
+# At session start, for the main session, while reviewed memories wait for the user's answer (the number is the only
+# value in it).
+WAITING = ("recortex observer: %d reviewed memories wait for the user's answer. Each changes the status of an earlier "
+           "memory without the user's words or your message to the user, or its reviewer was not sure it is clear of "
+           "confidential material, or the project's field sheet is not approved on this machine. Run observer.py pending --held, show the user each one's plain line, and ask with "
+           "the multiple-choice question tool, one question per memory: post it, or drop it. Post each one kept with "
+           "post_verified.py comment --eventkey KEY, and drop the others with observer.py discard KEY.")
+# Once, at the next session start after a session switched automatic mode on (the date is the only value in it).
+SWITCHED = ("recortex observer: automatic mode was switched on for this folder on %s from a session; run observer.py "
+            "disable in your own terminal to turn it off.")
 TOOL_EVENTS = ("PreToolUse",)
 SCAN_ROUNDS = 16  # bounded scans one hook makes to catch up with its transcript, at the edges of a turn
 SCAN_SECONDS = 1.0  # and the time they may take; before a Bash call one scan only, so that the hold check is never late
@@ -49,12 +61,13 @@ UNCHECKED = {"reason": "recortex observer: this machine's holds could not be che
 ANSWERS = frozenset(("control", "control-refused", "release-refused"))
 
 
-def _output(event, context="", notices=(), denial=None):
+def _output(event, context="", notices=(), denial=None, lines=()):
+    """The hook's JSON. `lines` are notices built here from fixed words and a checked value (SWITCHED)."""
     if event == "PreCompact":
         return {}  # Claude Code discards a PreCompact hook's systemMessage; its capture has run
     out = {}
-    if notices:
-        out["systemMessage"] = "\n".join(dict.fromkeys(NOTICES[code] for code in notices))
+    if notices or lines:
+        out["systemMessage"] = "\n".join(dict.fromkeys([NOTICES[code] for code in notices] + list(lines)))
     if context or denial:
         specific = {"hookEventName": event}
         if context and event not in ("Stop", "PreCompact"):
@@ -187,6 +200,25 @@ def _notices(store, notices, data, event):
     previous = dict(sorted(previous.items(), key=lambda pair: pair[1].get("at", 0))[-50:])
     store.set_control("hook_notices", previous)
     return fresh
+
+
+def _switched(store):
+    """SWITCHED with its date, once, after a session switched automatic mode on for this folder; else "". The date is
+    the approval's own time, checked and formatted here; nothing else of the entry is shown."""
+    try:
+        entry = observer_runtime.stored_approval()
+    except (ValueError, storage.StorageError, OSError):
+        return ""
+    settings = entry.get("settings") if isinstance(entry, dict) else None
+    if not isinstance(settings, dict) or entry.get("given") != "session" or settings.get("mode") != "automatic":
+        return ""
+    at = entry.get("approved_at")
+    if type(at) not in (int, float) or not math.isfinite(at) or not 0 < at < 4102444800:
+        return ""
+    if store.get_control("switch_told") == at:
+        return ""
+    store.set_control("switch_told", at)
+    return SWITCHED % time.strftime("%Y-%m-%d", time.gmtime(at))
 
 
 def _entry_repo():
@@ -359,7 +391,7 @@ def _handle(event, data, config, repo, decision):
     raw = config.get("observer", {})
     if not isinstance(raw, dict) or raw.get("enabled") is not True:
         return _output(event, denial=held) if held else {}
-    notices, context, denial = [], "", held
+    notices, context, denial, lines = [], "", held, []
     try:
         settings = observer_runtime.settings(config)
         project_root = recortex.project_root()
@@ -422,6 +454,14 @@ def _handle(event, data, config, repo, decision):
                 raise
             except Exception:
                 notices.append("context")
+            if event == "SessionStart":
+                waiting = len(store.waiting_for_answer())
+                if waiting:
+                    notices.append("held")
+                    context = WAITING % waiting  # every session start, compaction included: the context is new
+                switched = _switched(store)
+                if switched:
+                    lines.append(switched)
             runtime_ready = observer_runtime.gate_valid(store.get_control("runtime_gate"), settings)
             if not runtime_ready:
                 notices.append("runtime")
@@ -461,4 +501,4 @@ def _handle(event, data, config, repo, decision):
         # cannot record a suppression when the queue is what failed, so the notice waits for the prompt or stop.
         if event not in TOOL_EVENTS:
             notices.append("capture")
-    return _output(event, context=context, notices=notices, denial=denial)
+    return _output(event, context=context, notices=notices, denial=denial, lines=lines)

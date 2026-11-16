@@ -176,6 +176,60 @@ class ObserverHookTests(unittest.TestCase):
         with Store(REPO) as store:
             self.assertEqual(["active"], [hold["state"] for hold in store.holds()])
 
+    def test_a_switch_to_automatic_mode_from_a_session_is_said_once_at_the_next_session_start(self):
+        # Automatic mode needs no terminal step, so a switch-on the user did not make is never silent: the approval
+        # says where it was given, and after a session's the next session start says so once, with its date only.
+        import contextlib, datetime, io, observer
+        self.assertEqual(0, self.cli("enable", "--model", "haiku", "--yes")[0])
+        self.assertEqual("session", self.folder_entry()["given"])
+        start = lambda: hooks.handle("session-start", self.data, self.config, REPO).get("systemMessage", "")
+        self.assertNotIn("switched on", start())  # shadow mode posts nothing: nothing to say
+        with mock.patch("observer_hooks.observer_runtime.gate_valid", return_value=True):
+            result, value, _ = self.cli("enable", "--mode", "automatic", "--model", "haiku", "--yes")
+        self.assertEqual((0, True), (result, value["approved"]), value)
+        day = datetime.datetime.fromtimestamp(self.folder_entry()["approved_at"], datetime.timezone.utc).strftime("%Y-%m-%d")
+        line = hooks.SWITCHED % day
+        self.assertIn(line, start().split("\n"))
+        self.assertNotIn("switched on", start())  # once
+        self.data = dict(self.data, session_id="session2")
+        self.assertNotIn("switched on", start())  # once for the folder, not once per session
+
+        class Terminal(io.StringIO):
+            def isatty(self):
+                return True
+        out = Terminal()
+        with mock.patch.object(observer.recortex, "load_config", return_value={"repo": REPO, "hub": 1}), \
+                mock.patch.object(observer.sys, "stdin", Terminal()), contextlib.redirect_stdout(out), \
+                mock.patch("observer_hooks.observer_runtime.gate_valid", return_value=True):
+            self.assertEqual(0, observer.main(["enable", "--mode", "automatic", "--model", "sonnet", "--yes"]))
+        self.assertEqual("terminal", self.folder_entry()["given"])
+        self.assertNotIn("switched on", start())  # the user's own terminal: nothing to say
+
+    def test_memories_that_wait_for_the_users_answer_are_listed_at_session_start(self):
+        # The main session asks the user about each; the line for the session holds fixed words and the number only,
+        # at every session start, and the user's notice shows once per session.
+        start = lambda: hooks.handle("session-start", self.data, self.config, REPO)
+        self.assertNotIn("additionalContext", json.dumps(start()))
+        with Store(REPO) as store:
+            with store.transaction():
+                for n, (state, reason, held) in enumerate((("deferred", "status_change", 1),
+                                                           ("deferred", "confidentiality", 1),
+                                                           ("deferred", "main_session", 0),
+                                                           ("rejected", "discarded", 1),
+                                                           ("deferred", "withheld", 1))):
+                    candidate = json.dumps({"kind": "correction", "issue": 3, "body": "x", "sources": ["s%d" % n]})
+                    store.db.execute("INSERT INTO events(eventkey,source_id,candidate,review,body,payload_hash,state,"
+                                     "reason,created,updated,held) VALUES (?,?,?,'{}','x',?,?,?,?,?,?)",
+                                     ("%032x" % n, "s%d" % n, candidate, "0" * 64, state, reason, n, n, held))
+            self.assertEqual(["%032x" % 0, "%032x" % 1], [event["eventkey"] for event in store.waiting_for_answer()])
+        first = start()
+        self.assertEqual(hooks.WAITING % 2, first["hookSpecificOutput"]["additionalContext"])
+        self.assertIn(hooks.NOTICES["held"], first["systemMessage"])
+        again = start()
+        self.assertEqual(hooks.WAITING % 2, again["hookSpecificOutput"]["additionalContext"])  # after a compaction too
+        self.assertNotIn(hooks.NOTICES["held"], again.get("systemMessage", ""))
+        self.assertNotIn("additionalContext", json.dumps(hooks.handle("stop", self.data, self.config, REPO)))
+
     def test_resume_is_asked_on_the_users_terminal(self):
         import observer_runtime
         observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",

@@ -415,7 +415,8 @@ def _process(repo, config, project_root=None, invoke_fn=None):
         # In the order they happened: a turn reads as it ran.
         order = {item["source_id"]: _order(item) for item in offered}
         views = [_view(supplied[key]) for key in sorted(supplied, key=lambda key: order[key])]
-        forms = restricted_forms(config)
+        # Only from a sheet the user approved, as never_write_down; the mechanical refusal on the body stays.
+        forms = restricted_forms(config) if sheet["state"] == "approved" else []
         question = confidentiality_question(config, repo)
         payload = {"sources": views, "record": context, "templates": templates,
                    "max_candidates": options["max_candidates"], "never_write_down": never,

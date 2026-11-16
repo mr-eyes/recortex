@@ -32,6 +32,8 @@ def parser():
     pending = sub.add_parser("pending")
     pending.add_argument("--eventkey")
     pending.add_argument("--show-body", action="store_true", help="explicitly display the reviewed comment for this event key")
+    pending.add_argument("--held", action="store_true",
+                         help="list the reviewed memories that wait for the user's answer: post each, or drop it")
     enable = sub.add_parser("enable", help="preview this machine's settings for this folder; --yes approves and saves them")
     enable.add_argument("--mode", choices=("shadow", "automatic"), default="shadow")
     enable.add_argument("--model", help="required: the Claude model alias or ID for the background calls")
@@ -71,7 +73,7 @@ NOTES = {
 }
 
 
-def enable(repo, config, mode, yes=False, model=None, root=None, confirm=None):
+def enable(repo, config, mode, yes=False, model=None, root=None, confirm=None, given="terminal"):
     """Preview, or with yes=True record, this machine's settings for this project folder. Nothing is written to the
     project's shared configuration file, and nothing is created before every check has passed. `confirm`, when given,
     is asked last, before anything is written; a code it returns stops the write."""
@@ -117,10 +119,13 @@ def enable(repo, config, mode, yes=False, model=None, root=None, confirm=None):
     with observer_store.Store(repo, config=dict(config, observer=options), max_bytes=options["max_pending_bytes"],
                               max_pending=options["max_pending_observations"]):
         pass  # the queue, so that status and the hooks find it
-    runtime.approve(repo, {"observer": options}, root)
+    runtime.approve(repo, {"observer": options}, root, given=given)
     return dict(preview, settings=options, approved=True)
 
 
+HELD_NOTE = ("Ask the user about each with the multiple-choice question tool: post it, or drop it. Post each one kept "
+             "with post_verified.py comment --issue N --kind KIND --body-file <its body, from pending --eventkey KEY "
+             "--show-body> --eventkey KEY, and drop the others with observer.py discard KEY.")
 TERMINAL = ("Run observer.py release HOLD_ID yourself in a separate terminal, outside Claude Code: it asks you to "
             "confirm there. Nothing in a session releases a hold.")
 
@@ -337,7 +342,9 @@ def main(argv=None):
             confirm = None
             if entry_holds(keep=repo):
                 confirm = lambda: confirmed("enable", "This replaces this folder's settings while holds apply.")
-            result = enable(repo, loaded, args.mode, args.yes, args.model, confirm=confirm)
+            # Where the approval is given: the user's own terminal, or a session (Claude Code's Bash tool has none).
+            given = "terminal" if sys.stdin.isatty() and sys.stdout.isatty() else "session"
+            result = enable(repo, loaded, args.mode, args.yes, args.model, confirm=confirm, given=given)
             if result.get("code") == "terminal-required":
                 result["note"] = ("Run this enable yourself in a separate terminal, outside Claude Code: it asks you to "
                                   "confirm there.")
@@ -377,6 +384,13 @@ def main(argv=None):
             if args.command == "status":
                 emit(_status(repo, config, loaded, store, options, args.source_details)); return 0
             if args.command == "pending":
+                if args.held:
+                    import record_format
+                    emit({"held": [{"eventkey": event["eventkey"], "kind": event["candidate"]["kind"],
+                                    "issue": event["candidate"]["issue"], "reason": event["reason"],
+                                    "line": record_format.plain(event["body"], event["candidate"]["kind"])}
+                                   for event in store.waiting_for_answer()],
+                          "note": HELD_NOTE}); return 0
                 if args.show_body:
                     if not args.eventkey:
                         emit({"code": "eventkey-required"}); return 1

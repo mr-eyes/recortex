@@ -267,40 +267,37 @@ class ObserverPostingTests(unittest.TestCase):
         self.assertIn("already holds this memory (event %s" % held, output)
         self.assertEqual([], self.calls())
 
-    def terminal(self, answer):
-        tty = mock.MagicMock()
-        tty.__enter__.return_value = tty
-        tty.ask.return_value = answer
-        return tty
-
-    def test_a_held_back_event_posts_only_after_the_user_confirms_on_their_terminal(self):
-        # post_verified.py --eventkey is the main session's post: a deferred event and a full day of automatic
-        # comments do not stop it, but an event the automatic gate held back (here a marked project) is posted only
-        # after the user types the confirmation on their own terminal, as for observer.py release.
+    def test_a_held_back_event_posts_through_its_eventkey_on_the_users_answer(self):
+        # Held back by the automatic gate (here: its reviewer doubted a marked project's memory), it is listed for the
+        # session's question with pending --held, and --eventkey posts it with no terminal step. The daily cap of
+        # automatic comments is not the session's; a pause still stops it, and a copy without --eventkey is refused.
         import observer
-        self.config["fields"] = {"sensitive": ["people"]}
         self.config["observer"]["max_posts"] = 1
         observer_runtime.approve(fixtures.REPO, self.config)
         with store.Store(fixtures.REPO, config=self.config) as db:
             db.transition(self.key, "deferred", reason="confidentiality")
             db.set_control("automatic_posts", [__import__("time").time()])
-        for tty, said in ((None, "held back (confidentiality)"), (self.terminal("no"), "not typed")):
-            with mock.patch.object(observer, "terminal", return_value=tty):
-                result, output = self.post()
-            self.assertEqual(1, result, output)
-            self.assertIn(said, output)
-        self.assertEqual([], self.calls())
+            body = db.event(self.key)["body"]
+        out = io.StringIO()
+        with mock.patch.object(observer.recortex, "load_config", return_value=self.config), contextlib.redirect_stdout(out):
+            self.assertEqual(0, observer.main(["--repo", fixtures.REPO, "pending", "--held"]))
+        listed = json.loads(out.getvalue())
+        self.assertEqual([(self.key, "idea", 3, "confidentiality")],
+                         [(item["eventkey"], item["kind"], item["issue"], item["reason"]) for item in listed["held"]])
+        self.assertTrue(listed["held"][0]["line"])
+        self.assertIn("multiple-choice question", listed["note"])
+        result, output = self.post(False, 3, "idea", re.sub(r" eventkey=[0-9a-f]{32}", "", body, count=1))
+        self.assertEqual(1, result, output)
+        self.assertIn("--eventkey %s" % self.key, output)
         with store.Store(fixtures.REPO, config=self.config) as db:
             db.set_control("publication_paused", True)
-        with mock.patch.object(observer, "terminal", return_value=self.terminal("post")):
-            result, output = self.post()
+        result, output = self.post()
         self.assertIn("refused this event (publication_paused)", output)  # a refusal names its real reason
         with store.Store(fixtures.REPO, config=self.config) as db:
             db.set_control("publication_paused", False)
-        with mock.patch.object(observer, "terminal", return_value=self.terminal("post")) as asked:
+        with mock.patch.object(observer, "terminal", side_effect=AssertionError("no terminal step")):
             result, output = self.post()
         self.assertEqual(0, result, output)
-        self.assertIn("Type post to confirm", asked.return_value.ask.call_args.args[0])
         self.assertIn("memory id: 9100", output)
         self.assertEqual(1, len([args for args in self.calls() if args[:2] == ["issue", "comment"]]))
 

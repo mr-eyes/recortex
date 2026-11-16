@@ -13,6 +13,7 @@ A compacted context keeps a summary written by a model under space pressure. Tre
 3. **Hub and topics in play.** Read the hub body (`gh issue view <hub>`), then for each topic the current focus touches, its body (what the deliverable says now) and its newest comments (what happened since).
 4. **Reality check.** Compare with what exists: `git status`, `git log`, running jobs, output files named in the newest checkpoint. A checkpoint may say "running" about something that finished or died hours ago.
 5. **Act.** Say in one line what was read ("Read hub #1, active #14, topics #5 and #7; last checkpoint 2026-03-04 16:40 PST"), then continue from the resume block's next actions.
+6. **Memories that wait.** With the observer on, run `python3 scripts/observer.py pending --held`. It lists the reviewed memories that wait for the user's answer: a change of an earlier memory's status that rests on neither the user's words nor your message to the user, a memory whose reviewer was not sure it is clear of confidential material, and, in a project whose field sheet is not approved on this machine, every memory. Ask the user about each with the multiple-choice question tool (post it, or drop it), then post each one kept with `post_verified.py comment --eventkey KEY` and drop the others with `observer.py discard KEY`. The SessionStart hook says how many wait.
 
 If the record and reality disagree, do not quietly follow either. Post a correction or checkpoint comment that states what was found, then continue.
 
@@ -42,7 +43,8 @@ Do this before stopping, before handing over, and when the context is close to f
    - Holds: anything that must not be done or restarted without the owner's word.
 3. `python3 scripts/resume_block.py update --file <draft> --dry-run`, read the comment it would post, then run it without `--dry-run`. The script posts the block as a new comment on the hub, with the heading `### Resume block: <date time zone>` and the markers, and reads it back. The hub body and earlier resume comments are not touched.
 
-4. With a board (the script prints a reminder after posting): `python3 scripts/board.py apply --dry-run`, then `board.py apply`. If the brief reported cards moved by hand, ask the user first (see [board.md](board.md)).
+4. With the observer on, the memories that wait for the user's answer, as at session start (step 6 above).
+5. With a board (the script prints a reminder after posting): `python3 scripts/board.py apply --dry-run`, then `board.py apply`. If the brief reported cards moved by hand, ask the user first (see [board.md](board.md)).
 
 Keep the block under 4,000 characters. It is an index into the record, not the record. Never edit a resume comment after posting, not even to fix a typo; post a new one. A resume comment that was edited at all, by anyone, is ignored by `show` and the hook. `update` warns when the login it posts as is not in the allowed accounts, because such a comment would be ignored too.
 

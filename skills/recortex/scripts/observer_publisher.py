@@ -186,22 +186,30 @@ def outbound_problem(body, repo, status_ok=False):
     return None
 
 
+UNAPPROVED = ("malformed", "unreadable", "new", "changed")  # field sheet states the user has not approved as they are
+
+
 def confidential_project(config, repo):
     """True when the reviewer answers the confidentiality question: a project marked as handling sensitive material,
     or one whose field sheet is not approved on this machine, whose marks are then not known for sure."""
     sheet = field_sheet.state(config, repo)
-    return bool(sheet["marks"]) or sheet["state"] in ("malformed", "unreadable", "new", "changed")
+    return bool(sheet["marks"]) or sheet["state"] in UNAPPROVED
 
 
 def held_back(store, event, config):
-    """Why the automatic gate holds this event back, as reasons of observer_holds.ANSWER_REASONS that the main
-    session may pass only with the user's confirmation: a change of an earlier memory's status that rests neither on
-    the user's typed words nor on the agent's message to the user, and, where the reviewer answers the
-    confidentiality question (confidential_project), a memory it did not find clear."""
+    """Why the automatic gate holds this event back, as reasons of observer_holds.ANSWER_REASONS, which the main
+    session passes on the user's answer to its question: a change of an earlier memory's status that rests neither on
+    the user's typed words nor on the agent's message to the user; in a project whose field sheet the user has not
+    approved as it stands, or whose marks are in no sheet, every memory, whatever its reviewer found; and in an
+    approved, marked project a memory its reviewer did not find clear. The reviewer's "clear" counts only there: the
+    owner's decision covers the marks the user approved."""
     reasons = []
     if status_change(event["body"]) and event["review"].get("status_authority") not in STATUS_AUTHORITY:
         reasons.append("status_change")
-    if confidential_project(config, store.repo) and event["review"].get("confidential") != "clear":
+    sheet = field_sheet.state(config, store.repo)
+    if sheet["state"] in UNAPPROVED or (sheet["marks"] and sheet["state"] != "approved"):
+        reasons.append("sheet_not_approved")
+    elif sheet["marks"] and event["review"].get("confidential") != "clear":
         reasons.append("confidentiality")
     return reasons
 
@@ -360,11 +368,11 @@ def _reconcile_locked(store, event):
         return _uncertain(store, event["eventkey"], getattr(error, "reason", "remote_unavailable"))
 
 
-def publish(repo, eventkey, config, dry_run=False, main_session=False, confirmed=False):
+def publish(repo, eventkey, config, dry_run=False, main_session=False):
     """Append one frozen reviewed event. A dry run returns the exact command without network or writes.
-    main_session=True is post_verified.py, run by the main session after its own review: it may post a deferred
-    event, and with confirmed=True, which post_verified.py sets only after the user typed the confirmation on their
-    own terminal, one the automatic gate held back (held_back)."""
+    main_session=True is post_verified.py --eventkey, run by the main session after its own review: it may post a
+    deferred event, one the automatic gate held back (held_back) included, which it posts on the user's answer to its
+    question. The user's own holds (hold_reason) bind it as they bind the automatic publisher."""
     settings = observer_runtime.settings(config)
     with Store(repo, config=config, create=False, readonly=dry_run, max_bytes=settings["max_pending_bytes"],
                max_pending=settings["max_pending_observations"]) as store:
@@ -388,11 +396,9 @@ def publish(repo, eventkey, config, dry_run=False, main_session=False, confirmed
                 raise PublishError("not_ready")
             waiting = held_back(store, event, config)
             if waiting and not main_session:
-                raise PublishError(waiting[0])  # the event is deferred and marked held
-            if main_session and not confirmed and waiting:
-                raise PublishError("confirmation_required")
+                raise PublishError(waiting[0])  # deferred and marked held: it waits for the user's answer
             _bound(event, store)
-            problem = outbound_problem(event["body"], repo, status_ok=main_session and confirmed or
+            problem = outbound_problem(event["body"], repo, status_ok=main_session or
                                        event["review"].get("status_authority") in STATUS_AUTHORITY)
             if problem:
                 raise PublishError(problem)

@@ -66,15 +66,9 @@ REFUSALS = {
     "lint_failed": "The reviewed body does not pass the record's rules.",
     "withheld": "The user asked in that session that its moments not be posted. Only the user lifts that, with "
                 "observer.py release HOLD_ID in their own terminal (observer.py holds lists it).",
-    "confirmation_required": "The observer held this event back; post it from your own terminal, which asks you to "
-                             "confirm.",
     "outbound_local": "The body names something of this machine (a local path, the home folder, a user name or an "
                       "email address); discard the event and post your own memory instead.",
 }
-
-
-CONFIRM = {"terminal-required": "the user posts it in a separate terminal, outside Claude Code, which asks to confirm.",
-           "not-confirmed": "the confirmation was not typed."}
 
 
 def observer_comment(args, draft, repo, config):
@@ -108,8 +102,8 @@ def observer_comment(args, draft, repo, config):
             if not args.eventkey:
                 if not approved:
                     return None
-                # A copy of a queued event goes through that event, so that its confirmation on the user's terminal
-                # and the session's withhold apply; a memory the session writes itself still posts.
+                # A copy of a queued event goes through that event, so that its holds, the session's withhold and
+                # the user's answer to a held-back one apply; a memory the session writes itself still posts.
                 held = observer_publisher.queued_copy(store, draft) or observer_publisher.queued_decision(store, draft)
                 if held is not None and held["state"] == "rejected":
                     print("not posted: this copies a memory of the observer's that was discarded (event %s). A copy "
@@ -132,21 +126,11 @@ def observer_comment(args, draft, repo, config):
                 observer_publisher._payload_bound(event)
             else:
                 observer_publisher._bound(event, store)
-            held = ([] if args.dry_run or event["state"] in ("verified", "sending", "uncertain")
-                    else observer_publisher.held_back(store, event, config))
         # The main session, after its own review: it may post a deferred event, and the daily cap of automatic
         # comments is not its. An event the automatic gate held back (a change of status that rests on neither the
-        # user's words nor the agent's message, a project marked sensitive) is posted only after the user types the
-        # confirmation on their own terminal, as for observer.py release.
-        if held:
-            import observer
-            refused = observer.confirmed("post", "The observer held back this %s for #%d (%s). Post it to %s?" % (
-                args.kind, args.issue, ", ".join(held), repo))
-            if refused:
-                print("not posted: this event was held back (%s); %s" % (", ".join(held), CONFIRM[refused]))
-                return 1
-        result = observer_publisher.publish(repo, args.eventkey, config, dry_run=args.dry_run, main_session=True,
-                                            confirmed=bool(held))
+        # user's words nor the agent's message, a confidentiality doubt) it posts on the user's answer to its
+        # question at a session start or a pause (observer.py pending --held); the user's own holds still bind.
+        result = observer_publisher.publish(repo, args.eventkey, config, dry_run=args.dry_run, main_session=True)
     except observer_store.StoreError as error:
         if not args.eventkey and error.reason == "missing":
             return None
