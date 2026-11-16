@@ -30,7 +30,7 @@ class ObserverHookTests(unittest.TestCase):
         self.addCleanup(metadata.__exit__, None, None, None)
         self.project = self.base / "project"
         self.project.mkdir(mode=0o700)
-        patch = mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(self.base / "state"),
+        patch = mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(self.base / "state"), "HOME": str(self.base / "home"),
                                "XDG_CACHE_HOME": str(self.base / "cache"), "XDG_CONFIG_HOME": str(self.base / "config"),
                                "CLAUDE_CONFIG_DIR": str(self.base / "claude"), "CLAUDE_PROJECT_DIR": str(self.project)}, clear=True)
         patch.start()
@@ -144,9 +144,19 @@ class ObserverHookTests(unittest.TestCase):
             self.worker.assert_called_once_with(str(self.project))
         self.worker.reset_mock()
         with mock.patch("observer_hooks.observer_runtime.approval_valid", return_value=False):
-            result = self.run_hook(event="stop")
+            self.assertEqual({}, self.run_hook(event="stop"))
+            result = hooks.handle("session-start", self.data, self.config, REPO)
             self.assertIn("approval", result["systemMessage"])
             self.worker.assert_not_called()
+
+    def test_invalid_approval_gets_one_line_per_session_and_creates_no_state(self):
+        with mock.patch("observer_hooks.observer_runtime.approval_valid", return_value=False), \
+                mock.patch("observer_hooks.observer_store.Store", side_effect=AssertionError("no store")) as opened:
+            outputs = [self.run_hook(event=e) for e in ("pre-tool", "post-tool", "stop", "prompt-submit")]
+            start = hooks.handle("session-start", self.data, self.config, REPO)
+        self.assertEqual([{}, {}, {}, {}], outputs)
+        self.assertIn("approval is missing", start["systemMessage"])
+        opened.assert_not_called()
 
     def test_capture_pause_keeps_established_hold_active(self):
         self.append("/recortex hold git-push")
@@ -232,6 +242,41 @@ class ObserverHookTests(unittest.TestCase):
         with mock.patch.object(Store, "status", return_value=status):
             self.run_hook(event="stop")
         self.worker.assert_not_called()
+
+
+class SharedProjectFileTests(unittest.TestCase):
+    """A shared project file cannot switch the observer on for another machine (no approval patch here)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="observer-shared-", dir="/tmp")
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(tmp.name)
+        self.project = self.base / "project"
+        self.project.mkdir(mode=0o700)
+        trusted = self.base / "trusted"
+        trusted.write_text(REPO + " octocat\n")
+        patch = mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(self.base / "state"), "HOME": str(self.base / "home"),
+                                             "XDG_CACHE_HOME": str(self.base / "cache"),
+                                             "XDG_CONFIG_HOME": str(self.base / "config"),
+                                             "RECORTEX_TRUSTED_FILE": str(trusted),
+                                             "CLAUDE_CONFIG_DIR": str(self.base / "claude"),
+                                             "CLAUDE_PROJECT_DIR": str(self.project)}, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_enabled_project_file_does_nothing_on_a_machine_without_its_own_approval(self):
+        import observer_runtime
+        shared = {"repo": REPO, "hub": 1, "observer": {"enabled": True, "mode": "automatic", "model": "sonnet",
+                                                       "publisher_id": "a" * 32}}
+        config = observer_runtime.local_config(shared)
+        self.assertNotIn("observer", config)
+        data = {"session_id": "session1", "transcript_path": str(self.base / "none.jsonl"), "cwd": str(self.project),
+                "tool_name": "Bash", "tool_input": {"command": "git push"}}
+        for event in ("session-start", "pre-tool", "post-tool", "stop"):
+            self.assertEqual({}, hooks.handle(event, data, config, REPO), event)
+            # Even the project file's own entry, were it ever passed unchecked, finds no approval and creates nothing.
+            self.assertNotIn("hookSpecificOutput", hooks.handle(event, data, shared, REPO), event)
+        self.assertFalse((self.base / "state").exists())
 
 
 if __name__ == "__main__":

@@ -150,7 +150,7 @@ def _process(repo, config, project_root=None, invoke_fn=None):
         return report
     root = project_root or recortex.project_root()
     with observer_store.Store(repo, max_bytes=options["max_pending_bytes"], max_pending=options["max_pending_observations"], config=config) as store:
-        if not runtime.approval_valid(repo, config, store.get_control("observer_approval")):
+        if not runtime.approval_valid(repo, config):
             return dict(report, code="approval")
         if store.get_control("capture_paused", False):
             return dict(report, code="paused")
@@ -309,9 +309,12 @@ def run_once(repo, config, project_root=None, invoke_fn=None):
     with observer_store.Store(repo, config=config, max_bytes=options["max_pending_bytes"], max_pending=options["max_pending_observations"]) as store:
         try:
             with observer_store._exclusive_lock(store.folder, "worker.lock"):
-                if not runtime.approval_valid(repo, config, store.get_control("observer_approval")):
+                if not runtime.approval_valid(repo, config):
                     store.set_control("worker_degraded", "approval")
                     return {"code": "approval", "ready": []}
+                billing = runtime.billing_variables()
+                if store.get_control("call_environment", []) != billing:
+                    store.set_control("call_environment", billing)  # names only, for status
                 if time.time() - store.get_control("retention_last", 0) > 86400:
                     store.expire_handled(options["retention_days"])
                     store.set_control("retention_last", time.time())
@@ -324,7 +327,7 @@ def run_once(repo, config, project_root=None, invoke_fn=None):
                 report = _process(repo, config, project_root, invoke_fn)
                 store.set_control("worker_degraded", "" if report["code"] in ("ok", "no-sources", "paused")
                                   else report["code"].replace("-", "_"))
-                approved = runtime.approval_valid(repo, config, store.get_control("observer_approval"))
+                approved = runtime.approval_valid(repo, config)
                 if (approved and runtime.gate_valid(store.get_control("runtime_gate"), options)
                         and options["mode"] == "automatic" and not store.get_control("publication_paused", False)):
                     import observer_publisher

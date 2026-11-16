@@ -42,9 +42,8 @@ class ObserverPublisherTests(unittest.TestCase):
             self.key = db.review_complete("source1", candidate, {"reservation_id": ident, "accepted": True,
                                           "candidate_hash": store.candidate_hash(candidate)})
             self.db_path = Path(db.path)
-            db.set_control("observer_approval", {"repo": fixtures.REPO, "settings": runtime.settings(self.config),
-                                                 "publisher_id": self.config["observer"]["publisher_id"]})
             db.set_control("runtime_gate", {"test": True})
+        runtime.approve(fixtures.REPO, self.config)
         self.gate = mock.patch.object(runtime, "gate_valid", return_value=True)
         self.gate.start()
         self.addCleanup(self.gate.stop)

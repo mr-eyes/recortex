@@ -32,6 +32,35 @@ class RuntimeTests(unittest.TestCase):
         result=self.fake()
         self.assertTrue(result['ok'])
         self.assertEqual(result['usage'],{'input_tokens':4})
+    def test_calls_use_the_environment_as_claude_code_does_and_carry_no_dollar_cap(self):
+        child = ('import os,json; print(json.dumps(sorted(k for k in os.environ '
+                 'if k.startswith("ANTHROPIC_") or k.startswith("CLAUDE_CODE_USE_") or k == "RECORTEX_OBSERVER")))')
+        with patch.dict(os.environ, {'ANTHROPIC_API_KEY': 'sk-ant-example', 'CLAUDE_CODE_USE_BEDROCK': '1'}):
+            code, output, why = runtime._run([sys.executable, '-c', child], '{}', str(self.base), 5)
+            self.assertEqual(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_USE_BEDROCK'], runtime.billing_variables())
+        self.assertEqual(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_USE_BEDROCK', 'RECORTEX_OBSERVER'], json.loads(output))
+        self.assertNotIn('--max-budget-usd', runtime.command(SCHEMA, {}))
+        self.assertEqual([], runtime.billing_variables({'ANTHROPIC_API_KEY': ''}))
+    def test_approval_belongs_to_one_machine_and_one_project_folder(self):
+        (self.base / 'a').mkdir(); (self.base / 'b').mkdir()
+        config = {'observer': {'enabled': True, 'publisher_id': runtime.publisher_id(create=True)}}
+        approval = runtime.approval_record('octo-org/octo-repo', config, str(self.base / 'a'))
+        self.assertTrue(runtime.approval_valid('octo-org/octo-repo', config, approval, str(self.base / 'a')))
+        self.assertFalse(runtime.approval_valid('octo-org/octo-repo', config, approval, str(self.base / 'b')))
+        self.assertFalse(runtime.approval_valid('octo-org/other', config, approval, str(self.base / 'a')))
+        other = {'observer': dict(config['observer'], publisher_id='0' * 32)}
+        self.assertFalse(runtime.approval_valid('octo-org/octo-repo', other,
+                                                runtime.approval_record('octo-org/octo-repo', other, str(self.base / 'a')),
+                                                str(self.base / 'a')))
+        runtime.approve('octo-org/octo-repo', config, str(self.base / 'a'))
+        local = runtime.local_config({'repo': 'octo-org/octo-repo', 'observer': {'enabled': True, 'mode': 'automatic'}},
+                                     str(self.base / 'a'))
+        self.assertTrue(runtime.approval_valid('octo-org/octo-repo', local, root=str(self.base / 'a')))
+        self.assertEqual('shadow', local['observer']['mode'])  # the project file cannot widen the settings
+        self.assertNotIn('observer', runtime.local_config({'repo': 'octo-org/octo-repo'}, str(self.base / 'b')))
+        self.assertNotIn('observer', runtime.local_config({'observer': False}, str(self.base / 'a')))
+        self.assertEqual('folder_name', runtime.folder_problem('/tmp/quote"d'))
+        self.assertIsNone(runtime.folder_problem(str(self.base / 'a')))
     def test_tool_and_schema_violations(self):
         self.assertEqual(self.fake(tools=['Bash'])['code'],'isolation')
         self.assertEqual(self.fake(output={'ok':True,'secret':'reject'})['code'],'invalid-output')

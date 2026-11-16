@@ -4,9 +4,7 @@ import argparse
 import json
 import os
 import signal
-import stat
 import sys
-import tempfile
 import time
 
 import index
@@ -36,10 +34,11 @@ def parser():
     pending = sub.add_parser("pending")
     pending.add_argument("--eventkey")
     pending.add_argument("--show-body", action="store_true", help="explicitly display the reviewed comment for this event key")
-    enable = sub.add_parser("enable", help="preview exact local opt-in; --yes approves and saves it")
+    enable = sub.add_parser("enable", help="preview this machine's settings for this folder; --yes approves and saves them")
     enable.add_argument("--mode", choices=("shadow", "automatic"), default="shadow")
-    enable.add_argument("--model", help="explicit Claude model alias or ID; an empty value selects the isolated CLI default")
+    enable.add_argument("--model", help="required: the Claude model alias or ID for the background calls")
     enable.add_argument("--yes", action="store_true")
+    sub.add_parser("disable", help="remove this machine's settings and approval for this folder")
     for name in ("pause", "resume"):
         command = sub.add_parser(name)
         command.add_argument("scope", choices=("capture", "publication", "all"), default="all", nargs="?")
@@ -58,59 +57,60 @@ def parser():
     return root
 
 
-def _save_config(config, options):
-    """Replace the explicitly selected existing project config; never follow its symlink."""
-    path = config.get("_path")
-    if not path:
-        raise ValueError("configuration_required")
-    before = os.lstat(path)
-    if (not stat.S_ISREG(before.st_mode) or before.st_mode & 0o022
-            or hasattr(os, "getuid") and before.st_uid != os.getuid()):
-        raise ValueError("configuration_permissions")
-    updated = {key: value for key, value in config.items() if key != "_path"}
-    updated["observer"] = options
-    fd, temporary = tempfile.mkstemp(prefix=".recortex-observer-", dir=os.path.dirname(os.path.abspath(path)))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(updated, handle, indent=2, ensure_ascii=False)
-            handle.write("\n"); handle.flush(); os.fsync(handle.fileno())
-        after = os.lstat(path)
-        if (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_size) != (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_size):
-            raise ValueError("configuration_changed")
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+REASONS = frozenset(("model_required", "folder_name", "observer_settings", "observer_mode", "observer_publisher",
+                     "observer_model", "observer_limit", "observer_approvals"))
+NOTES = {
+    "model_required": "Choose the model for the background calls with --model (a Claude alias or model ID).",
+    "folder_name": "The project folder's path holds a quote, a backslash or a control character; the observer cannot "
+                   "be enabled there.",
+    "observer_approvals": "This machine's private observer approvals file is too large, not JSON or not of the "
+                          "expected form; it is not replaced on its own. Move it aside, then enable again.",
+}
 
 
-def enable(repo, config, mode, yes=False, model=None):
-    options = runtime.settings(config)
-    options.update(enabled=True, mode=mode)
-    if model is not None:
-        options["model"] = model
-        options = runtime.settings({"observer": options})
+def enable(repo, config, mode, yes=False, model=None, root=None):
+    """Preview, or with yes=True record, this machine's settings for this project folder. Nothing is written to the
+    project's shared configuration file, and nothing is created before every check has passed."""
+    root = runtime.folder_key(root)
+    problem = runtime.folder_problem(root)
+    if problem:
+        raise ValueError(problem)
+    if not model:
+        raise ValueError("model_required")
+    options = runtime.settings({"observer": {"enabled": True, "mode": mode, "model": model}})
     try:
         identity = runtime.publisher_id(create=False)
     except (storage.StorageError, OSError):
         identity = None
     options["publisher_id"] = identity or "allocated_on_explicit_approval"
-    preview = {"action": "enable", "repo": repo, "settings": options, "approved": False,
-               "model_selection": {"source": "explicit" if options["model"] else "isolated_cli_default",
-                                   "requested_model": options["model"]},
-               "note": "An isolated runtime check must succeed before semantic capture or automatic publication."}
-    if not options["model"]:
-        preview["model_selection"]["note"] = "User and project Claude model settings are not loaded; the isolated CLI chooses its default."
+    preview = {"action": "enable", "repo": repo, "folder": root, "settings": options, "approved": False,
+               "usage": runtime.USAGE_NOTE % (options["max_invocations"], options["max_input_chars"]),
+               "note": "Settings stay on this machine for this folder; the project file can only switch the observer "
+                       "off. An isolated runtime check must succeed before independent checks or automatic posting."}
+    billing = runtime.billing_variables()
+    if billing:
+        preview["billing"] = runtime.BILLING_NOTE % ", ".join(billing)
+    if runtime.project_off(config):
+        preview["project_switch"] = "off"
     if not yes:
         return preview
-    options["publisher_id"] = runtime.publisher_id(create=True)
-    proposed = dict(config, observer=options)
-    with observer_store.Store(repo, config=proposed, max_bytes=options["max_pending_bytes"],
-                              max_pending=options["max_pending_observations"]) as store:
-        if mode == "automatic" and not runtime.gate_valid(store.get_control("runtime_gate"), options):
+    if runtime.project_off(config):
+        return dict(preview, code="project-off")
+    if mode == "automatic":
+        try:
+            with observer_store.Store(repo, create=False, readonly=True, config=config) as store:
+                gate = store.get_control("runtime_gate")
+        except observer_store.StoreError as error:
+            if error.reason != "missing":
+                raise
+            gate = None
+        if not runtime.gate_valid(gate, options):
             return dict(preview, code="runtime-gate")
-        _save_config(config, options)
-        store.set_control("observer_approval", {"repo": repo.lower(), "settings": options,
-                          "publisher_id": options["publisher_id"], "approved_at": time.time()})
+    options["publisher_id"] = runtime.publisher_id(create=True)
+    with observer_store.Store(repo, config=dict(config, observer=options), max_bytes=options["max_pending_bytes"],
+                              max_pending=options["max_pending_observations"]):
+        pass  # the queue, so that status and the hooks find it
+    runtime.approve(repo, {"observer": options}, root)
     return dict(preview, settings=options, approved=True)
 
 
@@ -118,17 +118,35 @@ def _alarm(signum, frame):
     raise TimeoutError("deadline")
 
 
+TOOL_EVENTS = ("pre-tool", "post-tool", "tool-failure")
+
+
 def hook(event, config=None, repo=None):
+    """One hook event. Without `config`, the project file and this machine's settings for this folder are read. A
+    failure prints one fixed line, except on tool events, which fire on every call and stay silent."""
     previous = signal.signal(signal.SIGALRM, _alarm)
     signal.setitimer(signal.ITIMER_REAL, 3.5)
+    trusted = unreadable = False
     try:
-        config = recortex.load_config() if config is None else config
+        if config is None:
+            loaded = recortex.load_config()
+            repo = repo or loaded.get("repo")
+            if not recortex.valid_repo(repo):
+                return 0
+            trusted = bool(recortex.allowed_users(repo))
+            try:
+                config = runtime.local_config(loaded)
+            except (ValueError, storage.StorageError):
+                unreadable = True  # this machine's approvals exist but cannot be read
+                raise
         repo = repo or config.get("repo")
         if not recortex.valid_repo(repo):
             return 0
-        raw = sys.stdin.read(262145)
-        if len(raw) > 262144:
+        raw = sys.stdin.read(8388609)
+        if len(raw) > 8388608:
             raise ValueError("hook_input_limit")
+        if len(raw) > 262144 and event != "pre-tool":
+            return 0  # a large Write, Edit or tool result; the next hook scans its transcript lines
         data = json.loads(raw)
         if not isinstance(data, dict):
             raise ValueError("hook_input")
@@ -139,7 +157,9 @@ def hook(event, config=None, repo=None):
         return 0
     except (TimeoutError, OSError, ValueError, observer_store.StoreError, storage.StorageError):
         raw_settings = (config or {}).get("observer", {})
-        if isinstance(raw_settings, dict) and raw_settings.get("enabled") is True and recortex.valid_repo(repo) and recortex.allowed_users(repo):
+        enabled = unreadable or isinstance(raw_settings, dict) and raw_settings.get("enabled") is True
+        if (event not in TOOL_EVENTS and enabled and recortex.valid_repo(repo)
+                and (trusted or recortex.allowed_users(repo))):
             message = "recortex observer unavailable: hook deadline or local state failure; run observer.py status."
             emit({"systemMessage": message})
         return 0
@@ -148,18 +168,41 @@ def hook(event, config=None, repo=None):
         signal.signal(signal.SIGALRM, previous)
 
 
+def _status(repo, config, loaded, store, options, details):
+    variables = runtime.billing_variables()
+    last = store.get_control("runtime_last") if store else None
+    seen = store.get_control("call_environment", []) if store else []
+    called = sorted(set(variables) | {name for name in seen if name in runtime.BILLING})
+    out = {"settings": options, "approved": runtime.approval_valid(repo, config), "folder": runtime.folder_key(),
+           "usage": runtime.USAGE_NOTE % (options["max_invocations"], options["max_input_chars"]),
+           "capture_preflight": observer_sources.preflight(recortex.project_root(), details=details)}
+    if called:
+        out["billing"] = runtime.BILLING_NOTE % ", ".join(called)
+    if runtime.project_off(loaded):
+        out["project_switch"] = "off"
+    if store is None:
+        return dict(out, code="empty", action="status", dry_run=False, queue={})
+    return dict(out, runtime_ready=runtime.gate_valid(store.get_control("runtime_gate"), options),
+                runtime_last=last, capture_paused=store.get_control("capture_paused", False),
+                publication_paused=store.get_control("publication_paused", False),
+                worker_degraded=store.get_control("worker_degraded", ""), queue=store.status())
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
         if args.command == "hook":
             return hook(args.event, repo=args.repo)
-        config = recortex.load_config()
+        loaded = recortex.load_config()
+        if args.command == "disable":
+            emit({"action": "disable", "folder": runtime.folder_key(), "was_enabled": runtime.forget()}); return 0
+        config = runtime.local_config(loaded)
         repo = recortex.resolve_repo(args.repo, config)
         if not recortex.allowed_users(repo):
             emit({"code": "repository-not-trusted"}); return 1
         options = runtime.settings(config)
         if args.command == "enable":
-            result = enable(repo, config, args.mode, args.yes, args.model); emit(result)
+            result = enable(repo, loaded, args.mode, args.yes, args.model); emit(result)
             return int(args.yes and not result["approved"])
         if args.command == "context":
             db = index.connect(repo, create=False)
@@ -173,22 +216,22 @@ def main(argv=None):
             return 0
         if args.command == "reconcile":
             emit(observer_publisher.reconcile(repo, args.eventkey, config, dry_run=args.dry_run)); return 0
+        if args.command == "runtime-check" and not runtime.approval_valid(repo, config):
+            emit({"code": "approval", "note": "Run observer.py enable --model MODEL --yes first; the check is bound "
+                                              "to the model chosen there."}); return 1
         readonly = args.command in ("status", "pending", "holds") or getattr(args, "dry_run", False)
         try:
             opened = observer_store.Store(repo, create=not readonly, readonly=readonly,
                          max_bytes=options["max_pending_bytes"], max_pending=options["max_pending_observations"], config=config)
         except observer_store.StoreError as error:
             if readonly and error.reason == "missing":
+                if args.command == "status":
+                    emit(_status(repo, config, loaded, None, options, args.source_details)); return 0
                 emit({"code": "empty", "action": args.command, "dry_run": getattr(args, "dry_run", False), "queue": {}, "capture_preflight": observer_sources.preflight(recortex.project_root(), details=getattr(args, "source_details", False))}); return 0
             raise
         with opened as store:
             if args.command == "status":
-                emit({"settings": options, "approved": runtime.approval_valid(repo, config, store.get_control("observer_approval")),
-                      "runtime_ready": runtime.gate_valid(store.get_control("runtime_gate"), options),
-                      "capture_preflight": observer_sources.preflight(recortex.project_root(), details=args.source_details),
-                      "runtime_last": store.get_control("runtime_last"), "capture_paused": store.get_control("capture_paused", False),
-                      "publication_paused": store.get_control("publication_paused", False), "worker_degraded": store.get_control("worker_degraded", ""),
-                      "queue": store.status()}); return 0
+                emit(_status(repo, config, loaded, store, options, args.source_details)); return 0
             if args.command == "pending":
                 if args.show_body:
                     if not args.eventkey:
@@ -222,7 +265,7 @@ def main(argv=None):
                 ok = runtime.gate_valid(proof, options)
                 store.complete_invocation(reservation, ok, runtime.candidate_hash(proof))
                 store.set_control("runtime_gate", proof if ok else None)
-                safe = {key: proof.get(key) for key in ("ok", "code", "version", "elapsed", "usage", "isolation_checked", "canary_absent", "structured_exact", "requested_model", "actual_model")}
+                safe = {key: proof.get(key) for key in ("ok", "code", "version", "elapsed", "usage", "isolation_checked", "canary_absent", "structured_exact", "requested_model", "actual_model", "api_key_source", "billing_variables")}
                 store.set_control("runtime_last", safe); emit(safe); return int(not ok)
             if args.command in ("run-worker", "record") and args.dry_run:
                 emit({"action": args.command, "dry_run": True, "queue": store.status(),
@@ -231,7 +274,7 @@ def main(argv=None):
                 item = store.observation(args.source)
                 if item is None or item["state"] not in ("observed", "deferred"):
                     emit({"code": "source-not-retryable"}); return 1
-                if not runtime.approval_valid(repo, config, store.get_control("observer_approval")):
+                if not runtime.approval_valid(repo, config):
                     emit({"code": "approval"}); return 1
                 with store.transaction():
                     store.db.execute("UPDATE observations SET state='observed',reason='',updated=? WHERE source_id=? AND state IN ('observed','deferred')", (time.time(), args.source))
@@ -244,8 +287,13 @@ def main(argv=None):
             finally:
                 signal.setitimer(signal.ITIMER_REAL, 0); signal.signal(signal.SIGALRM, previous)
             return 0
-    except (OSError, ValueError, TimeoutError, storage.StorageError, observer_store.StoreError, observer_publisher.PublishError):
-        emit({"code": "observer-unavailable", "note": "Configuration, private state or runtime could not be validated."})
+    except (OSError, ValueError, TimeoutError, storage.StorageError, observer_store.StoreError, observer_publisher.PublishError) as error:
+        out = {"code": "observer-unavailable", "note": "Configuration, private state or runtime could not be validated."}
+        reason = str(error) if isinstance(error, ValueError) else ""
+        if reason in REASONS:
+            out.update(reason=reason, note=NOTES.get(reason, "The observer settings did not validate; nothing was "
+                                                                "recorded."))
+        emit(out)
         return 1
     return 0
 

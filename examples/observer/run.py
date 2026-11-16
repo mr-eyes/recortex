@@ -107,9 +107,8 @@ class Replay:
         self.source_ancestry = dict(self.source_ancestry, actual_preflight=self.source_preflight,
                                    native_ownership_established=self.source_preflight["ready"])
         self.config["observer"]["publisher_id"] = observer_runtime.publisher_id(create=True)
+        observer_runtime.approve(REPO, self.config, str(self.project))
         with self.store() as store:
-            store.set_control("observer_approval", {"repo": REPO, "settings": observer_runtime.settings(self.config),
-                              "publisher_id": self.config["observer"]["publisher_id"]})
             store.set_control("runtime_gate", {"offline_simulation": True})
             store.set_control("publication_paused", True)
         # A patched gate is expressly not evidence that the actual runtime passed.
@@ -516,10 +515,10 @@ def full_hook_latency(fixture, samples=30):
                         "invocations": 0, "gh_calls": 0, "measurements": [],
                         "limitation": "Actual native-source ownership or permissions could not be established; no hook benchmark ran."}
             replay.config["observer"]["mode"] = "shadow"
-            (replay.project / ".recortex.json").write_text(json.dumps(replay.config), encoding="utf-8")
+            # The project file names the repository only; the settings are this machine's, for this folder.
+            (replay.project / ".recortex.json").write_text(json.dumps({"repo": REPO}), encoding="utf-8")
+            observer_runtime.approve(REPO, replay.config, str(replay.project))
             with replay.store() as store:
-                store.set_control("observer_approval", {"repo": REPO, "settings": observer_runtime.settings(replay.config),
-                                  "publisher_id": replay.config["observer"]["publisher_id"]})
                 # The child is a fresh interpreter: no mock, runtime proof,
                 # terminal events or maintenance trigger can start a worker.
                 store.set_control("runtime_gate", None)

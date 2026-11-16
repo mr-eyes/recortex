@@ -28,8 +28,7 @@ def _gate(store, config):
     settings = observer_runtime.settings(config)
     if store.repo not in recortex.trusted_repos():
         raise PublishError("not_trusted")
-    if settings["mode"] != "automatic" or not observer_runtime.approval_valid(
-            store.repo, config, store.get_control("observer_approval")):
+    if settings["mode"] != "automatic" or not observer_runtime.approval_valid(store.repo, config):
         raise PublishError("not_approved")
     if not observer_runtime.gate_valid(store.get_control("runtime_gate"), settings):
         raise PublishError("runtime_unavailable")
@@ -230,6 +229,6 @@ def reconcile(repo, eventkey, config, dry_run=False):
             # A pause stops new writes, not read-only receipt reconciliation.
             if repo.lower() not in recortex.trusted_repos():
                 raise PublishError("not_trusted")
-            if not observer_runtime.approval_valid(repo, config, store.get_control("observer_approval")):
+            if not observer_runtime.approval_valid(repo, config):
                 raise PublishError("not_approved")
             return _reconcile_locked(store, event)

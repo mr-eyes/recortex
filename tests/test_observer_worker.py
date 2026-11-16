@@ -53,6 +53,7 @@ class WorkerTests(unittest.TestCase):
         metadata=fixture_trusted_ancestors(self.base);metadata.__enter__();self.addCleanup(metadata.__exit__,None,None,None)
         self.project=str(self.base/'project')
         env=patch.dict(os.environ,{'XDG_STATE_HOME':str(self.base/'state'),'XDG_CACHE_HOME':str(self.base/'cache'),
+                                  'XDG_CONFIG_HOME':str(self.base/'config'),'HOME':str(self.base/'home'),
                                   'CLAUDE_CONFIG_DIR':str(self.base/'claude'),'CLAUDE_PROJECT_DIR':self.project},clear=True)
         env.start();self.addCleanup(env.stop)
         self.config={'repo':REPO,'observer':{'enabled':True,'publisher_id':runtime.publisher_id(create=True)}}
@@ -61,8 +62,8 @@ class WorkerTests(unittest.TestCase):
         self.path=self.folder/'session-1.jsonl';self.path.write_text('');self.path.chmod(0o600)
         self.hook={'session_id':'session-1','transcript_path':str(self.path),'hook_event_name':'Stop'}
         with store.Store(REPO,config=self.config) as db:
-            db.set_control('observer_approval',{'repo':REPO,'settings':runtime.settings(self.config),'publisher_id':self.config['observer']['publisher_id']})
             db.set_control('runtime_gate',{'fake_test_only':True})
+        runtime.approve(REPO,self.config)
         for target,value in ((worker.recortex,'allowed_users'),):
             p=patch.object(target,value,return_value={'octocat'});p.start();self.addCleanup(p.stop)
         p=patch.object(runtime,'gate_valid',return_value=True);p.start();self.addCleanup(p.stop)
@@ -121,7 +122,7 @@ class WorkerTests(unittest.TestCase):
         with store.Store(REPO,config=self.config) as db:self.assertEqual('privacy',db.observation(sid)['reason'])
     def test_budget_counts_failed_extractor_and_queued_data_survives(self):
         sid=self.capture();self.config['observer']['max_invocations']=1
-        with store.Store(REPO,config=self.config) as db:db.set_control('observer_approval',{'repo':REPO,'settings':runtime.settings(self.config),'publisher_id':self.config['observer']['publisher_id']})
+        runtime.approve(REPO,self.config)
         def failed(*args):return {'ok':False,'structured':None}
         self.assertEqual('extract-failed',self.run_worker(failed)['code'])
         with store.Store(REPO,config=self.config) as db:
@@ -145,7 +146,7 @@ class WorkerTests(unittest.TestCase):
         self.config['observer']['mode']='automatic'
         with store.Store(REPO,config=self.config) as db:
             db.set_control('capture_paused',True)
-            db.set_control('observer_approval',{'repo':REPO,'settings':runtime.settings(self.config),'publisher_id':self.config['observer']['publisher_id']})
+        runtime.approve(REPO,self.config)
         with patch('observer_publisher.publish') as publish:
             self.run_worker(self.invoke(self.candidate(sid)))
             publish.assert_called_once_with(REPO,report['ready'][0],self.config)
@@ -246,49 +247,76 @@ class ObserverCliTests(unittest.TestCase):
         for args in (('run-worker','--dry-run'),('status',),('pending',)):
             result,value=self.cli(*args);self.assertEqual(0,result.returncode);self.assertEqual('empty',value['code'])
             self.assertFalse((self.base/'state').exists())
-    def test_enable_requires_explicit_confirmation_and_exact_local_settings(self):
-        result,preview=self.cli('enable');self.assertFalse(preview['approved']);self.assertNotIn('observer',json.loads(self.config.read_text()))
-        self.assertFalse((self.base/'state').exists())
-        result,approved=self.cli('enable','--yes');self.assertTrue(approved['approved']);self.assertEqual(0,result.returncode)
-        _,status=self.cli('status');self.assertTrue(status['approved']);self.assertFalse(status['runtime_ready'])
-        config=json.loads(self.config.read_text());config['observer']['max_candidates']=2;self.config.write_text(json.dumps(config))
-        _,status=self.cli('status');self.assertFalse(status['approved'])
-    def test_model_preview_is_explicit_and_approval_binds_the_choice(self):
+    def approvals(self):
+        path=self.base/'state'/'recortex'/'private'/'observer-approvals.json'
+        return json.loads(path.read_text())['folders'] if path.exists() else {}
+    def test_enable_requires_a_model_and_names_the_usage_limits(self):
         before=self.config.read_bytes()
-        result,preview=self.cli('enable','--model','opus')
+        result,value=self.cli('enable')
+        self.assertEqual(1,result.returncode);self.assertEqual('model_required',value['reason'])
+        self.assertFalse((self.base/'state').exists())
+        result,preview=self.cli('enable','--model','sonnet')
         self.assertEqual(0,result.returncode);self.assertFalse(preview['approved'])
-        self.assertEqual('opus',preview['settings']['model'])
-        self.assertEqual({'source':'explicit','requested_model':'opus'},preview['model_selection'])
-        self.assertEqual(before,self.config.read_bytes());self.assertFalse((self.base/'state').exists())
-        result,approved=self.cli('enable','--model','opus','--yes')
+        self.assertEqual('sonnet',preview['settings']['model']);self.assertIn('usage limits',preview['usage'])
+        self.assertNotIn('$',json.dumps(preview));self.assertNotIn('billing',preview)
+        self.assertFalse((self.base/'state').exists())
+        result,approved=self.cli('enable','--model','sonnet','--yes')
         self.assertEqual(0,result.returncode);self.assertTrue(approved['approved'])
+        self.assertEqual(before,self.config.read_bytes())  # the shared project file is never written
+        self.assertEqual([os.path.realpath(self.project)],list(self.approvals()))
+        _,status=self.cli('status');self.assertTrue(status['approved']);self.assertFalse(status['runtime_ready'])
+        self.assertEqual('sonnet',status['settings']['model'])
+    def test_settings_belong_to_this_machine_and_folder_and_the_project_file_only_switches_off(self):
+        self.cli('enable','--model','sonnet','--yes')
+        other=self.base/'other';other.mkdir(mode=0o700)
+        shared=json.loads(self.config.read_text());shared['observer']={'enabled':True,'mode':'automatic','model':'sonnet'}
+        (other/'.recortex.json').write_text(json.dumps(shared));(other/'.recortex.json').chmod(0o600)
+        moved=dict(self.env,CLAUDE_PROJECT_DIR=str(other))
+        result=subprocess.run([sys.executable,str(ROOT/'skills/recortex/scripts/observer.py'),'status'],cwd=other,
+                              env=moved,capture_output=True,text=True,timeout=10)
+        status=json.loads(result.stdout);self.assertFalse(status['approved']);self.assertFalse(status['settings']['enabled'])
+        self.config.write_text(json.dumps({'repo':REPO,'observer':False}))
+        _,status=self.cli('status');self.assertFalse(status['approved']);self.assertEqual('off',status['project_switch'])
+        result,value=self.cli('enable','--model','sonnet','--yes')
+        self.assertEqual(1,result.returncode);self.assertEqual('project-off',value['code'])
+        self.config.write_text(json.dumps({'repo':REPO}))
         _,status=self.cli('status');self.assertTrue(status['approved'])
-        self.assertEqual('opus',status['settings']['model']);self.assertFalse(status['runtime_ready'])
-        _,preview=self.cli('enable');self.assertEqual('opus',preview['settings']['model'])
-        config=json.loads(self.config.read_text());config['observer']['model']='sonnet';self.config.write_text(json.dumps(config))
+    def test_disable_removes_only_this_folder(self):
+        self.cli('enable','--model','sonnet','--yes')
+        other=self.base/'other';other.mkdir(mode=0o700)
+        (other/'.recortex.json').write_text(self.config.read_text());(other/'.recortex.json').chmod(0o600)
+        moved=dict(self.env,CLAUDE_PROJECT_DIR=str(other))
+        run=lambda *args:json.loads(subprocess.run([sys.executable,str(ROOT/'skills/recortex/scripts/observer.py')]+list(args),
+                                    cwd=other,env=moved,capture_output=True,text=True,timeout=10).stdout)
+        self.assertTrue(run('enable','--model','sonnet','--yes')['approved'])
+        result,value=self.cli('disable');self.assertEqual(0,result.returncode);self.assertTrue(value['was_enabled'])
         _,status=self.cli('status');self.assertFalse(status['approved'])
-    def test_isolated_default_is_named_and_can_be_selected_explicitly(self):
-        _,preview=self.cli('enable')
-        self.assertEqual('isolated_cli_default',preview['model_selection']['source'])
-        self.assertIn('not loaded',preview['model_selection']['note'])
-        self.cli('enable','--model','opus','--yes')
-        _,preview=self.cli('enable','--model','')
-        self.assertEqual('',preview['settings']['model'])
-        self.assertEqual('isolated_cli_default',preview['model_selection']['source'])
-        self.assertEqual('opus',json.loads(self.config.read_text())['observer']['model'])
+        self.assertTrue(run('status')['approved'])
+        self.assertEqual([os.path.realpath(other)],list(self.approvals()))
+    def test_billing_variables_are_named_and_never_their_values(self):
+        self.env['ANTHROPIC_API_KEY']='sk-ant-example-value'
+        _,preview=self.cli('enable','--model','sonnet')
+        self.assertIn('ANTHROPIC_API_KEY',preview['billing']);self.assertIn('billed',preview['billing'])
+        self.cli('enable','--model','sonnet','--yes')
+        result,status=self.cli('status')
+        self.assertIn('ANTHROPIC_API_KEY',status['billing']);self.assertNotIn('sk-ant-example-value',result.stdout)
     def test_invalid_model_choice_is_rejected_before_any_write(self):
         before=self.config.read_bytes()
         result,value=self.cli('enable','--model','model with spaces','--yes')
         self.assertEqual(1,result.returncode);self.assertEqual('observer-unavailable',value['code'])
+        self.assertEqual('observer_model',value['reason'])
         self.assertEqual(before,self.config.read_bytes());self.assertFalse((self.base/'state').exists())
     def test_publication_pause_survives_process_restart(self):
-        self.cli('enable','--yes');self.cli('pause','publication')
+        self.cli('enable','--model','sonnet','--yes');self.cli('pause','publication')
         _,status=self.cli('status');self.assertTrue(status['publication_paused']);self.assertFalse(status['capture_paused'])
         self.cli('resume','publication');_,status=self.cli('status');self.assertFalse(status['publication_paused'])
     def test_automatic_enable_refused_without_runtime_proof(self):
-        result,value=self.cli('enable','--mode','automatic','--yes')
+        result,value=self.cli('enable','--mode','automatic','--model','sonnet','--yes')
         self.assertEqual(1,result.returncode);self.assertFalse(value['approved']);self.assertEqual('runtime-gate',value['code'])
-        self.assertNotIn('observer',json.loads(self.config.read_text()))
-
+        self.assertEqual({},self.approvals());self.assertFalse((self.base/'state'/'recortex'/'private'/'octo-org__octo-repo').exists())
+    def test_runtime_check_needs_this_folders_approval(self):
+        result,value=self.cli('runtime-check')
+        self.assertEqual(1,result.returncode);self.assertEqual('approval',value['code'])
+        self.assertFalse((self.base/'state').exists())
 
 if __name__=='__main__':unittest.main()

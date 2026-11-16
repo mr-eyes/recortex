@@ -195,10 +195,12 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
     try:
         settings = observer_runtime.settings(config)
         project_root = recortex.project_root()
+        if not observer_runtime.approval_valid(repo, config):
+            # This machine's entry for the folder does not hold (another repository or machine key, or settings
+            # that no longer validate). Nothing is created, and the line shows at session start only.
+            return _output(event, notices=["approval"]) if event == "SessionStart" else {}
         with observer_store.Store(repo, max_bytes=settings["max_pending_bytes"],
                                   max_pending=settings["max_pending_observations"], config=config) as store:
-            if not observer_runtime.approval_valid(repo, config, store.get_control("observer_approval")):
-                return _output(event, notices=["approval"])
             if event == "PreToolUse":
                 result = observer_holds.check_action(store.holds(), repo, data.get("tool_name"),
                                                      data.get("tool_input"), session_id=data.get("session_id"))

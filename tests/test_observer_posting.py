@@ -11,6 +11,7 @@ from unittest import mock
 from tests import test_observer_publisher as publisher_fixtures
 from tests import test_observer_store as fixtures
 
+import observer_runtime
 import observer_store as store
 import post_verified
 import create_issues
@@ -90,8 +91,8 @@ class ObserverPostingTests(unittest.TestCase):
         self.assertEqual(1, len([args for args in self.calls() if args[:2] == ["issue", "comment"]]))
 
     def test_missing_local_approval_preserves_legacy_comment_workflow(self):
+        self.assertTrue(observer_runtime.forget())
         with store.Store(fixtures.REPO, config=self.config) as db:
-            db.set_control("observer_approval", None)
             draft = db.event(self.key)["candidate"]["body"]
         result, output = self.post(eventkey=False, text=draft)
         self.assertEqual(0, result, output)
@@ -99,11 +100,7 @@ class ObserverPostingTests(unittest.TestCase):
 
     def test_shadow_approval_does_not_allow_either_publication_path(self):
         self.config["observer"]["mode"] = "shadow"
-        import observer_runtime
-        with store.Store(fixtures.REPO, config=self.config) as db:
-            approval = db.get_control("observer_approval")
-            approval["settings"] = observer_runtime.settings(self.config)
-            db.set_control("observer_approval", approval)
+        observer_runtime.approve(fixtures.REPO, self.config)
         self.assertEqual(1, self.post(eventkey=False)[0])
         result, output = self.post()
         self.assertEqual(1, result, output)
@@ -136,8 +133,7 @@ class ObserverPostingTests(unittest.TestCase):
         for approved, comments in cases:
             manifest.write_text(json.dumps(dict(full, comments=comments)))
             if not approved:
-                with store.Store(fixtures.REPO, config=self.config) as db:
-                    db.set_control("observer_approval", None)
+                observer_runtime.forget()
             out = io.StringIO()
             with mock.patch.object(create_issues.recortex, "load_config", return_value=self.config), contextlib.redirect_stdout(out):
                 result = create_issues.main(["--manifest", str(manifest), "--dry-run"])

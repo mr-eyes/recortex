@@ -135,12 +135,18 @@ def lint_all(manifest, config):
 
 def observer_comments_allowed(manifest, config, repo):
     """Refuse uncoordinated memory comments before creating any manifest issue."""
-    raw = config.get("observer", {})
-    if not isinstance(raw, dict) or raw.get("enabled") is not True:
-        return True
     import observer_runtime
     import observer_store
     import storage
+
+    try:
+        config = observer_runtime.local_config(config)  # this machine's settings for this folder
+    except (storage.StorageError, ValueError):
+        print("nothing posted: this machine's observer settings could not be read; run observer.py status.")
+        return False
+    raw = config.get("observer", {})
+    if not isinstance(raw, dict) or raw.get("enabled") is not True:
+        return True
 
     repositories = set()
     for item in manifest["comments"]:
@@ -150,7 +156,7 @@ def observer_comments_allowed(manifest, config, repo):
     for target in sorted(repositories):
         try:
             with observer_store.Store(target, config=config, create=False, readonly=True) as store:
-                if observer_runtime.approval_valid(target, config, store.get_control("observer_approval")):
+                if observer_runtime.approval_valid(target, config):
                     print("nothing posted: this manifest contains memory comments for a locally approved observer. "
                           "Create the issues without those comments, then use the shared reviewed queue and "
                           "post_verified.py comment --eventkey KEY after their destination issues exist.")

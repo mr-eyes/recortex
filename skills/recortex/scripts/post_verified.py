@@ -70,12 +70,17 @@ def observer_comment(args, draft, repo, config):
     memory = args.kind in record_format.MEMORY_TYPES or marker.get("type") in record_format.MEMORY_TYPES
     if not args.eventkey and not memory:
         return None
+    try:
+        config = observer_runtime.local_config(config)  # this machine's settings for this folder
+    except (storage.StorageError, ValueError):
+        print("not posted: this machine's observer settings could not be read; run observer.py status.")
+        return 1
     raw = config.get("observer", {})
     if not args.eventkey and (not isinstance(raw, dict) or raw.get("enabled") is not True):
         return None
     try:
         with observer_store.Store(repo, config=config, create=False, readonly=True) as store:
-            approved = observer_runtime.approval_valid(repo, config, store.get_control("observer_approval"))
+            approved = observer_runtime.approval_valid(repo, config)
             if not args.eventkey:
                 if not approved:
                     return None
