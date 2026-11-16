@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import time
 
 import index
@@ -90,6 +91,30 @@ def record_context(repo, config, query=""):
                 "context": packet["text"], "recall_incomplete": packet["incomplete"],
                 "omitted_targets": omitted, "synced_at": packet["freshness"]["synced_at"],
                 "incomplete": not packet["freshness"]["sync_complete"]}
+    finally:
+        db.close()
+
+
+RECENT_ON_ISSUE = 8  # the newest memories on a candidate's issue the reviewer sees, to reject a repeat
+
+
+def recent_on_issue(repo, issues):
+    """{issue: the newest memories on it by allowed accounts (id, date, kind, plain line or title), at most
+    RECENT_ON_ISSUE, checkpoints aside}, for the reviewer to reject a repeat. {} when the index cannot be read: the
+    reviewer then judges without it."""
+    db = index.connect(repo, create=False)
+    if db is None:
+        return {}
+    try:
+        allowed = {name.lower() for name in recortex.allowed_users(repo)}
+        found = list(index.memories(db, allowed)["items"].values()) if allowed else []
+        out = {}
+        for issue in issues:
+            mine = sorted((m for m in found if m["issue"] == issue and m["kind"] != "checkpoint"),
+                          key=lambda m: (m["time"], m["id"]), reverse=True)[:RECENT_ON_ISSUE]
+            out[issue] = [{"id": m["id"], "at": (m["at"] or "")[:16], "kind": m["kind"],
+                           "said": m["plain"] or m["title"]} for m in mine]
+        return out
     finally:
         db.close()
 
@@ -423,6 +448,10 @@ def _process(repo, config, project_root=None, invoke_fn=None):
             if store.observation(sid)["state"] in ("observed", "deferred"):
                 store.mark_handled(sid); report["ignored"] += 1
         used = set()  # the sources of this pass's events
+        try:
+            recent = recent_on_issue(repo, {candidate["issue"] for candidate in candidates})
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, sqlite3.Error):
+            recent = {}  # the reviewer judges without it; the record is read again next pass
         for candidate in candidates:
             # One agent message often tells several moments (a result and the idea it raised). A source backs one
             # event: a candidate whose other sources remain drops the ones an event already holds.
@@ -462,7 +491,8 @@ def _process(repo, config, project_root=None, invoke_fn=None):
             reviewed = invoke({"candidate": candidate, "candidate_hash": digest,
                                "sources": [_view(supplied[sid]) for sid in candidate["sources"]],
                                "context": _stretch(candidate, supplied, order), "record": context,
-                               "account": account}, REVIEW, "review", options)
+                               "recent_on_issue": recent.get(candidate["issue"], []), "account": account},
+                              REVIEW, "review", options)
             answer = reviewed.get("structured")
             valid = reviewed.get("ok") is True and runtime.validate(answer, REVIEW) and answer["candidate_hash"] == digest
             store.complete_invocation(review_id, valid, digest if valid else "")

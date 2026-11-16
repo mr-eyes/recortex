@@ -317,6 +317,36 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(('deferred', 'withheld'), (db.event(ready[0])['state'], db.event(ready[0])['reason']))
             self.assertFalse(db.get_control('worker_degraded'))
 
+    def test_the_reviewer_sees_the_newest_memories_on_the_issue(self):
+        # To reject a repeat (a result told again after a rerun, with nothing new), the reviewer gets the newest
+        # memories by allowed accounts on the candidate's issue, checkpoints aside; the selector does not need them.
+        items = {n: {"id": n, "issue": 2 if n < 12 else 3, "kind": "checkpoint" if n == 5 else "result",
+                     "at": "2026-03-01T12:%02d:00Z" % n, "time": n, "title": "Title %d" % n,
+                     "plain": None if n == 7 else "strict quoting passes %d of 12" % n} for n in range(1, 14)}
+        class Index:
+            def close(self):
+                pass
+        with patch.object(worker.index, 'connect', return_value=Index()), \
+                patch.object(worker.index, 'memories', return_value={'items': items}) as read:
+            recent = worker.recent_on_issue(REPO, {2})
+        self.assertEqual({'octocat'}, read.call_args.args[1])
+        self.assertEqual([11, 10, 9, 8, 7, 6, 4, 3], [m['id'] for m in recent[2]])
+        self.assertEqual('Title 7', recent[2][4]['said'])
+        self.assertEqual({'id': 11, 'at': '2026-03-01T12:11', 'kind': 'result', 'said': 'strict quoting passes 11 of 12'},
+                         recent[2][0])
+        sid = self.capture()
+        with patch.object(worker, 'recent_on_issue', return_value=recent):
+            self.run_worker(self.invoke(self.candidate(sid)))
+        payloads = dict(self.calls)
+        self.assertEqual(recent[2], payloads['review']['recent_on_issue'])
+        self.assertNotIn('recent_on_issue', payloads['extract'])
+        self.assertIn('recent_on_issue lists the newest memories', runtime.PROMPTS['review'])
+        self.calls = []
+        sid = self.capture(QUOTE + ' Once more.')
+        with patch.object(worker, 'recent_on_issue', side_effect=sqlite3.OperationalError('locked')):
+            self.run_worker(self.invoke(self.candidate(sid)))
+        self.assertEqual([], dict(self.calls)['review']['recent_on_issue'])  # judged without it
+
     def test_unbound_candidates_never_reach_the_reviewer(self):
         cases = {'excerpt_binding': dict(excerpts=['words that are not in the source']),
                  'destination': dict(issue=99),
