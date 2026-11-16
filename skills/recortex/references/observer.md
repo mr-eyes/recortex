@@ -6,22 +6,25 @@ GitHub remains the shared record. A private local queue holds work that is pendi
 
 ## Enable and inspect
 
-Run from the project root, using the installed skill's `scripts/` directory:
+Run from the project root, using the installed skill's `scripts/` directory, in this order: enable in shadow mode, check the runtime, then switch to automatic mode if you want it.
 
 ```bash
 python3 scripts/observer.py status
-python3 scripts/observer.py enable --model sonnet
-python3 scripts/observer.py enable --model sonnet --yes
-python3 scripts/observer.py runtime-check
+python3 scripts/observer.py enable --model sonnet                    # preview
+python3 scripts/observer.py enable --model sonnet --yes              # 1. shadow mode
+python3 scripts/observer.py runtime-check                            # 2. needs step 1
+python3 scripts/observer.py enable --mode automatic --model sonnet --yes   # 3. optional; asks on your terminal
 python3 scripts/observer.py pending
 python3 scripts/observer.py disable
 ```
+
+`runtime-check` refuses until step 1 has recorded this folder's approval, because the check is bound to the model chosen there. Step 3 asks you to type `enable` on your own terminal; run it outside Claude Code.
 
 `enable` requires `--model`, a Claude alias or model ID for the background calls. Without `--yes` it previews the settings and says how the calls are counted: they run with `claude -p` under your Claude Code sign-in and count against your account's usage limits, at most 60 calls a day for the project, each with up to 48,000 characters of input. No dollar figure applies. The calls use the environment as Claude Code does. When `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, a `CLAUDE_CODE_USE_*` provider variable or `AWS_BEARER_TOKEN_BEDROCK` is set, `enable` and `status` name it (never its value) and say that the calls are billed to that key or provider instead.
 
 `--yes` records the settings for this project folder on this machine, in `observer-approvals.json` in the private state folder beside the user key. The entry binds the repository, the folder's real path, the exact settings and this machine's key-derived identity. Nothing is written to `.recortex.json`. A second checkout or worktree of the same repository needs its own `enable`, and a copied state folder does not carry an approval to another machine. The project file can only switch the observer off, with `"observer": false` (or an observer entry whose `"enabled"` is false); `status` then reports `project_switch: off`. That stops capture and posting, but not the holds, which stay in force while this folder has an entry on this machine. `disable` removes this folder's entry and leaves the queue and its holds; while a hold applies, it asks you to type `disable` on your own terminal, as `release` does.
 
-Shadow mode, the default, reviews candidates without posting. Automatic posting requires `enable --mode automatic --model M --yes` after a successful `runtime-check`, which needs this folder's approval first and is bound to the installed Claude executable and the chosen model. Changing the model needs a new `enable` and a new runtime check. The runtime check reports `requested_model`, the model Claude announced, the credential source Claude Code named (`api_key_source`) and any billing variables, and `status` keeps them under `runtime_last`. These controls do not edit your Claude account or global settings. See the [Claude CLI model and settings flags](https://code.claude.com/docs/en/cli-reference).
+Shadow mode, the default, reviews candidates without posting. Automatic posting requires `enable --mode automatic --model M --yes` after a successful `runtime-check`, which needs this folder's approval in shadow mode first and is bound to the installed Claude executable and the chosen model. Changing the model needs a new `enable` and a new runtime check. The runtime check reports `requested_model`, the model Claude announced, the credential source Claude Code named (`api_key_source`) and any billing variables, and `status` keeps them under `runtime_last`. These controls do not edit your Claude account or global settings. See the [Claude CLI model and settings flags](https://code.claude.com/docs/en/cli-reference).
 
 The runtime check must establish structured output, disabled tools and MCP, isolated settings, and absence of hook recursion. It requires that no tool, MCP server or skill is loaded; it records, but does not limit, the plugins Claude reports. If that proof is unavailable, captures remain queued and independent model checks do not run. Merely finding `claude` or passing a unit test does not establish runtime compatibility. Verify `status`; do not describe automatic operation as active when the gate is unavailable.
 
@@ -40,7 +43,7 @@ python3 scripts/observer.py resume publication
 python3 scripts/observer.py discard EVENTKEY
 ```
 
-Pause and resume accept `capture`, `publication`, or `all`. A capture pause keeps established holds active. `record --source SOURCE_ID` retries an existing queued observation through the same review path; it does not accept arbitrary model-provided file paths. `reconcile EVENTKEY --dry-run` previews receipt reconciliation. `discard EVENTKEY` drops a ready or deferred event that will not be posted; its excerpts then expire with the retention. Status and pending output distinguish local backlog, deferred evidence, budget exhaustion, uncertain publication and verified receipts.
+Pause and resume accept `capture`, `publication`, or `all`. A capture pause keeps established holds active. A pause is yours to lift: `resume` asks you to type `resume` on your own terminal. `record --source SOURCE_ID` retries an existing queued observation through the same review path; it does not accept arbitrary model-provided file paths. `reconcile EVENTKEY --dry-run` previews receipt reconciliation. `discard EVENTKEY` drops a ready or deferred event that will not be posted; its excerpts then expire with the retention. Status and pending output distinguish local backlog, deferred evidence, budget exhaustion, uncertain publication and verified receipts.
 
 ## Capture, review and publication
 
