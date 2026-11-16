@@ -82,7 +82,7 @@ class ObserverPublisherTests(unittest.TestCase):
                     "x/@hubot", "\\@hubot"]
         for text in mentions:
             self.assertEqual("outbound_mention", publisher.outbound_problem("Plain text " + text, repo), text)
-        self.assertIsNone(publisher.outbound_problem("Mail octocat@example.test about it.", repo))
+        self.assertEqual("outbound_local", publisher.outbound_problem("Mail octocat@example.test about it.", repo))
         addresses = ["[status][1]\n\n[1]: https://collector.example.test/p.png",
                      "[status][1]\n\n[1]:\n  //collector.example.test/p",
                      "[x](//collector.example.test/x)", "[x](\\\\collector.example.test/x)",
@@ -111,10 +111,45 @@ class ObserverPublisherTests(unittest.TestCase):
             for text in texts:
                 self.assertEqual(reason, publisher.outbound_problem("Plain text " + text + ".", repo), text)
         same = ["As in #3.", "As in GH-3.", "As in Octo-Org/Octo-Repo#3.", "At octo-org@abc1234.",
-                "Mail octocat@example.test.", "**Effect:** none", "Took 12:30 minutes.",
+                "**Effect:** none", "Took 12:30 minutes.",
                 "See https://github.com/%s/issues/3#issuecomment-9003 for it." % repo]
         for text in same:
             self.assertIsNone(publisher.outbound_problem("Plain text " + text, repo), text)
+
+    def test_an_automatic_body_names_nothing_of_this_machine(self):
+        # The first live test's checkpoint published an absolute local path: an automatic body refuses absolute local
+        # paths, the home folder, the local user name and email addresses, written plainly or as entities.
+        repo, home = fixtures.REPO, os.path.expanduser("~")
+        with mock.patch.object(publisher, "local_names", return_value=({home, "/home/octo-dev"}, {"octo-dev"})):
+            for text in ("Ran in /home/octo-dev/work/tinycsv.", "Ran `/usr/bin/python3 -m unittest`.", "See ~/notes/run.txt.",
+                         "Ran in " + home + ".", "Ran by octo-dev on the laptop.", "Ran by Octo-Dev.",
+                         "Mail octo.dev+ci@example.test.", "Mail octo&#46;dev&#64;example&#46;test.",
+                         "Output in (/tmp/run/out.txt).", "Read \"/var/log/bench/x.log\"."):
+                self.assertEqual("outbound_local", publisher.outbound_problem("Plain text " + text, repo), text)
+            for text in ("Ran `python3 -m unittest discover -s tests` in the project.", "Read tests/test_reader.py.",
+                         "20,000 rows/s, 1/4 of runs, on 2026/11/15.", "See ./bench/run.py and ../shared/notes.",
+                         "[x](https://github.com/%s/blob/main/a/b.py)" % repo, "Typed /recortex hold git-push.",
+                         "Owner octo-devs and the octo-dev-team.", "At octo-org@abc1234."):
+                self.assertIsNone(publisher.outbound_problem("Plain text " + text, repo), text)
+        body = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text().replace(
+            "**What it would take:**", "**What it would take:** a run in /home/octo-dev/work.\n\n**What it would take:**")
+        key = self._second(body)
+        for main_session in (False, True):
+            with self.assertRaisesRegex(publisher.PublishError, "outbound_local"):
+                publisher.publish(fixtures.REPO, key, self.config, main_session=main_session)
+        self.assertEqual([], [a for a in self.calls() if a[:2] == ["issue", "comment"]])
+
+    def test_the_local_names_come_from_the_account_and_the_environment(self):
+        import pwd
+        account = pwd.getpwuid(os.getuid())
+        with mock.patch.dict(os.environ, {"USER": "octo-dev", "LOGNAME": "root", "HOME": "/home/octo-dev"}):
+            homes, users = publisher.local_names()
+        self.assertIn("/home/octo-dev", homes)
+        self.assertIn(account.pw_dir.rstrip("/"), homes)
+        self.assertIn("octo-dev", users)
+        self.assertNotIn("root", users)  # a generic name would refuse ordinary text
+        if len(account.pw_name) >= 3 and account.pw_name.lower() not in publisher.GENERIC_USERS:
+            self.assertIn(account.pw_name, users)
 
     def test_a_mention_written_as_an_entity_waits(self):
         idea = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text()

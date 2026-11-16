@@ -8,6 +8,7 @@ does not promise exactly-once physical comments across machines.
 import hashlib
 import html
 import json
+import os
 import posixpath
 import re
 import time
@@ -48,12 +49,19 @@ FORK = re.compile(r"(?<![A-Za-z0-9_.-])([A-Za-z0-9-]+)@[0-9a-fA-F]{7,40}\b")
 # Checked on the body without its first-line event marker: any other HTML comment, a second marker included, can
 # carry text that GitHub does not show.
 MARKUP = re.compile(r"!\[|<(?!/?(?:details|summary)>)[A-Za-z!/?]")
+# This machine's own details never go out in an automatic body: an email address, an absolute local path (two or more
+# components after a leading / or ~/, not part of an address), the home folder and the local user name.
+EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+LOCAL_PATH = re.compile(r"(?<![A-Za-z0-9_.~:/%-])(?:~?/(?:[A-Za-z0-9_.@+%-]+/)+[A-Za-z0-9_.@+%-]*|~/)")
+# A user name that is also an ordinary word would refuse ordinary text; such a name is left to the reviewer.
+GENERIC_USERS = frozenset(("user", "users", "admin", "root", "ubuntu", "dev", "test", "guest", "runner", "node",
+                           "owner", "home", "data", "work", "code", "app"))
 STATUS_LINKS = ("replaces", "instead", "checks")  # checks= answers a question or marks an idea tried
 STATUS_AUTHORITY = ("user", "command")
 # A problem of the event itself: the event is deferred with this reason and the next one is tried.
 EVENT_PROBLEMS = frozenset(("lint_failed", "invalid_target", "explicit_hold", "status_change", "outbound_markup",
-                            "outbound_mention", "outbound_address", "outbound_reference", "payload_changed",
-                            "review_changed"))
+                            "outbound_mention", "outbound_address", "outbound_reference", "outbound_local",
+                            "payload_changed", "review_changed"))
 
 
 def off_repository(target, repo):
@@ -118,11 +126,36 @@ def status_change(body):
     return marker.get("type") == "correction" or any(key in marker for key in STATUS_LINKS)
 
 
+def local_names():
+    """This machine's home folders and user names, as the account database and the environment give them."""
+    homes, users = {os.path.expanduser("~")}, {os.environ.get("USER", ""), os.environ.get("LOGNAME", "")}
+    try:
+        import pwd
+        account = pwd.getpwuid(os.getuid())
+        homes.add(account.pw_dir)
+        users.add(account.pw_name)
+    except (ImportError, KeyError, AttributeError, OSError):
+        pass
+    return ({home.rstrip("/") for home in homes if len(home.rstrip("/")) > 1},
+            {user for user in users if len(user) >= 3 and user.lower() not in GENERIC_USERS})
+
+
+def local_problem(body):
+    """True when the body holds an email address, an absolute local path, the home folder or the local user name."""
+    texts = (body, html.unescape(body))
+    homes, users = local_names()
+    if any(EMAIL.search(text) or LOCAL_PATH.search(ADDRESS.sub(" ", text)) for text in texts):
+        return True
+    return any(home in text for home in homes for text in texts) or any(
+        re.search(r"(?<![A-Za-z0-9_.-])" + re.escape(user) + r"(?![A-Za-z0-9_-])", text, re.IGNORECASE)
+        for user in users for text in texts)
+
+
 def outbound_problem(body, repo, status_ok=False):
     """What a model wrote stays inside the record. A memory that changes what an earlier one means posts on its own
     only when it rests on the user's own words or on a command that ran (status_ok); otherwise it waits for the main
     session. No image and no HTML beyond the event marker and folds; no @mention; no address other than this
-    repository on github.com. None when the body passes."""
+    repository on github.com; nothing of this machine (local_problem). None when the body passes."""
     if status_change(body) and not status_ok:
         return "status_change"
     if MARKUP.search(_without_marker(body)):
@@ -142,6 +175,8 @@ def outbound_problem(body, repo, status_ok=False):
     if any(any((first + "/" + second).lower() != repo.lower() for first, second in CROSS.findall(rest))
            or any(user.lower() != owner for user in FORK.findall(rest)) for rest in rests):
         return "outbound_reference"
+    if local_problem(body):
+        return "outbound_local"
     return None
 
 
