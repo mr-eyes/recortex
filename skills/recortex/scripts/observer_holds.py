@@ -14,7 +14,7 @@ import shlex
 import recortex
 
 
-ACTIONS = frozenset(("git-tag", "git-push", "gh-release", "command"))
+ACTIONS = frozenset(("git-tag", "git-push", "gh-release", "command", "publish"))
 SOURCE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,200}")
 HOLD_ID = re.compile(r"[a-f0-9]{24}")
 PHRASES = {
@@ -22,6 +22,23 @@ PHRASES = {
     "do not create tags": "git-tag", "do not tag": "git-tag", "don't tag": "git-tag", "never tag": "git-tag",
     "do not create a release": "gh-release", "do not release": "gh-release", "don't release": "gh-release",
 }
+# The user withholding a session's moments from the record: "don't post this", "keep this off the record". Found
+# anywhere in a user's message, each holds the automatic publication of that session's moments (action "publish");
+# the hold keeps only the phrase, never the message. The publisher enforces it; the main session posts only on the
+# user's later, explicit request.
+WITHHOLD = {"do not post": "publish", "don't post": "publish", "dont post": "publish", "never post": "publish",
+            "do not record": "publish", "don't record": "publish", "dont record": "publish", "never record": "publish",
+            "do not publish": "publish", "don't publish": "publish", "dont publish": "publish",
+            "off the record": "publish"}
+PHRASES.update(WITHHOLD)
+WITHHELD = re.compile(r"(?<![A-Za-z0-9])(?:(?:do not|don't|dont|never)[ \t]+(?:post|record|publish)|off the record)"
+                      r"(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def withheld(text):
+    """The phrase by which a message withholds its session's moments from the record, as a key of WITHHOLD, or None."""
+    match = WITHHELD.search(text.replace("\u2019", "'")) if isinstance(text, str) else None
+    return re.sub(r"[ \t]+", " ", match.group(0).lower()) if match else None
 
 
 def _source(source):
@@ -102,7 +119,12 @@ repository-wide hold. Narrower scope is an explicit make_hold argument instead.
         return None
     parsed = _control(original)
     if not parsed:
-        return None
+        phrase = withheld(original)
+        if not phrase:
+            return None
+        # Within a longer message: a hold of this session's publication, quoting the phrase only.
+        return {"operation": "hold", "hold": make_hold(dict(source, text=phrase), repo, "publish",
+                                                       scope={"session_id": source.get("session_id")})}
     if parsed["operation"] == "release":
         return parsed
     # A plain phrase ("Don't push.") holds this session; /recortex hold holds the repository until released.
@@ -245,6 +267,15 @@ def check_action(holds, repo, tool_name, tool_input, session_id=None, issue=None
     return {"decision": "deny" if blocking else "allow", "hold_ids": sorted(set(blocking)),
             "reason": "The user has asked that this action not be taken." if blocking else "",
             "supported": classified["supported"] or bool(blocking)}
+
+
+def publication_withheld(holds, repo, session_ids):
+    """True when an active hold the user set ("don't post", "keep this off the record") withholds the automatic
+    publication of a moment from any of these sessions."""
+    sessions = set(session_ids)
+    return any(_valid(hold) and hold.get("state") == "active" and hold["repo"] == repo.lower()
+               and hold["action"] == "publish" and hold["scope"].get("session_id", None) in sessions | {None}
+               for hold in holds)
 
 
 def advisory_key(repo, source_ids, topic):

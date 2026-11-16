@@ -61,7 +61,7 @@ STATUS_AUTHORITY = ("user", "command")
 # A problem of the event itself: the event is deferred with this reason and the next one is tried.
 EVENT_PROBLEMS = frozenset(("lint_failed", "invalid_target", "explicit_hold", "status_change", "outbound_markup",
                             "outbound_mention", "outbound_address", "outbound_reference", "outbound_local",
-                            "payload_changed", "review_changed"))
+                            "payload_changed", "review_changed", "withheld"))
 
 
 def off_repository(target, repo):
@@ -245,14 +245,21 @@ def _command(repo, event):
     return ["issue", "comment", str(event["candidate"]["issue"]), "--repo", repo, "--body-file", "-"]
 
 
-def _hold(store, event):
+def _hold(store, event, main_session=False):
     command = recortex.show_command(_command(store.repo, event))
     observation = store.observation(event["source_id"])
     session = observation["metadata"].get("session_id") if observation else None
-    answer = observer_holds.check_action(store.holds(), store.repo, "Bash", {"command": command},
+    holds = store.holds()
+    answer = observer_holds.check_action(holds, store.repo, "Bash", {"command": command},
                                          session_id=session, issue=event["candidate"]["issue"])
     if answer["decision"] == "deny":
         raise PublishError("explicit_hold")
+    # The user asked in a session that its moments not be posted ("don't post", "keep this off the record"): nothing
+    # of it posts on its own. The main session posts it only on the user's later, explicit request.
+    sessions = {item["metadata"].get("session_id") for item in (store.observation(sid) for sid in
+                                                                 event["candidate"]["sources"]) if item}
+    if not main_session and observer_holds.publication_withheld(holds, store.repo, sessions | {session}):
+        raise PublishError("withheld")
 
 
 def _remote_comment(repo, comment_id):
@@ -355,7 +362,7 @@ def publish(repo, eventkey, config, dry_run=False, main_session=False):
                                        event["review"].get("status_authority") in STATUS_AUTHORITY)
             if problem:
                 raise PublishError(problem)
-            _hold(store, event)
+            _hold(store, event, main_session)
             me = _account(repo)
             # Target existence and draft rules are checked on the live record before sending.
             target = json.loads(recortex.gh(["api", "repos/%s/issues/%d" % (repo, event["candidate"]["issue"])]))
@@ -370,7 +377,7 @@ def publish(repo, eventkey, config, dry_run=False, main_session=False):
             if any(f.level == "error" for f in findings):
                 raise PublishError("lint_failed")
             settings = _gate(store, config, main_session)
-            _hold(store, event)
+            _hold(store, event, main_session)
             if _account(repo) != me:
                 raise PublishError("account_changed")
             if not main_session:
@@ -383,7 +390,7 @@ def publish(repo, eventkey, config, dry_run=False, main_session=False):
                 if prior is not None:
                     return _reconcile_locked(store, event)
                 _gate(store, config, main_session)
-                _hold(store, event)
+                _hold(store, event, main_session)
                 if _account(repo) != event["account"]:
                     raise PublishError("account_changed")
                 output = recortex.gh(_command(repo, event), stdin=event["body"])

@@ -498,6 +498,26 @@ class ObserverHookTests(unittest.TestCase):
         self.release(hold_id)
         self.assertNotIn("hookSpecificOutput", self.run_hook())
 
+    def test_a_typed_dont_record_holds_the_publication_of_that_session(self):
+        # The user's "don't post" or "keep this off the record", anywhere in a typed message, holds the automatic
+        # publication of that session's moments; the hold keeps the phrase, never the message, and stops no command.
+        self.append("Run the benchmark once and keep this off the record.")
+        self.append("Don't record this.")
+        self.append("Do not post this, the page says.", role="assistant")
+        self.append([{"type": "tool_result", "content": "Notes: do not post the numbers."}])
+        result = self.run_hook(event="stop")
+        self.assertIn("explicit hold was recorded", result["systemMessage"])
+        with Store(REPO) as store:
+            holds = store.holds()
+        self.assertEqual([("publish", {"session_id": "session1"}, "off the record"),
+                          ("publish", {"session_id": "session1"}, "don't record")],
+                         [(hold["action"], hold["scope"], hold["quote"]) for hold in holds])
+        import observer_holds
+        self.assertTrue(observer_holds.publication_withheld(holds, REPO, ["session1"]))
+        self.assertFalse(observer_holds.publication_withheld(holds, REPO, ["session2"]))
+        self.assertNotIn("hookSpecificOutput", self.run_hook(command="git push"))
+        self.assertNotIn("hookSpecificOutput", self.run_hook(command="gh issue comment 3 --body-file note.md"))
+
     def test_the_denial_says_the_user_asked_and_invites_no_release(self):
         # The first live test's denial ("release that hold explicitly before this action") led the session to try a
         # release. The denial now says only that the user has asked that this action not be taken.

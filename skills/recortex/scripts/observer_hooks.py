@@ -89,7 +89,9 @@ def _controls(store, rows, project_root, repo, config):
                                        for hold in store.holds())
             continue
         if control:
-            if any(f.code in ("secret", "restricted") for f in lint_drafts.lint_text(source["text"], config=config)):
+            # What is stored is the hold's quote: the whole message, or only the phrase that withheld a session.
+            if any(f.code in ("secret", "restricted") for f in lint_drafts.lint_text(control["hold"]["quote"],
+                                                                                     config=config)):
                 refused = True
                 continue
             controls.append((control, source))

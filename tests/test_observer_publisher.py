@@ -222,6 +222,28 @@ class ObserverPublisherTests(unittest.TestCase):
         self.assertEqual([], self.calls())
         self.assertEqual("verified", self.publish(main_session=True)["state"])
 
+    def withhold(self, session="session1"):
+        import observer_holds
+        source = {"source_id": "typed1", "role": "user", "direct_user": True, "session_id": session,
+                  "text": "Run it once, and keep this off the record."}
+        hold = observer_holds.compile_prompt_control(source["text"], source, fixtures.REPO)["hold"]
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.update_holds(lambda holds: holds + [hold])
+
+    def test_a_session_the_user_withheld_posts_nothing_on_its_own(self):
+        # "Don't post", "keep this off the record": nothing of that session posts on its own. The main session posts
+        # it on the user's later, explicit request.
+        self.withhold("another-session")
+        self.assertEqual("verified", self.publish()["state"])  # another session's hold does not apply
+        body = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text().replace("open quote", "open quote again")
+        key = self._second(body)
+        self.withhold()
+        with self.assertRaisesRegex(publisher.PublishError, "withheld"):
+            publisher.publish(fixtures.REPO, key, self.config)
+        self.assertEqual(1, len([a for a in self.calls() if a[:2] == ["issue", "comment"]]))
+        self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config, main_session=True)["state"])
+        self.assertIn("withheld", publisher.EVENT_PROBLEMS)
+
     def test_marked_project_waits_for_the_main_session(self):
         self.config["fields"] = {"sensitive": ["people"]}
         with self.assertRaisesRegex(publisher.PublishError, "sensitive_project"):

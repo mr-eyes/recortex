@@ -32,7 +32,8 @@ EXTRACTION = {"type": "object", "properties": {
     "required": ["candidates", "ignored"], "additionalProperties": False}
 REVIEW = {"type": "object", "properties": {
     "candidate_hash": ID, "accepted": {"type": "boolean"},
-    "reason": {"type": "string", "enum": ["supported", "unsupported", "attribution", "privacy", "duplicate", "uncertain"]}},
+    "reason": {"type": "string", "enum": ["supported", "unsupported", "attribution", "privacy", "duplicate", "uncertain",
+                                          "withheld"]}},
     "required": ["candidate_hash", "accepted", "reason"], "additionalProperties": False}
 
 
@@ -451,7 +452,9 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 handled.add(primary)
                 continue
             if not answer["accepted"] or answer["reason"] != "supported":
-                store.defer(primary, "review_rejected"); report["deferred"] += 1
+                # "withheld": the user asked that this not be posted or recorded; it is never offered again.
+                store.defer(primary, "withheld" if answer["reason"] == "withheld" else "review_rejected")
+                report["deferred"] += 1
                 handled.add(primary)
                 continue
             review = {"accepted": True, "candidate_hash": digest, "reservation_id": review_id}

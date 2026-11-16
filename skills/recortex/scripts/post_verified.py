@@ -64,6 +64,8 @@ REFUSALS = {
     "explicit_hold": "The user has asked that this action not be taken.",
     "not_ready": "Only a reviewed event that is ready or deferred can be posted.",
     "lint_failed": "The reviewed body does not pass the record's rules.",
+    "withheld": "The user asked in that session that its moments not be posted; post it only on the user's explicit "
+                "request.",
     "outbound_local": "The body names something of this machine (a local path, the home folder, a user name or an "
                       "email address); discard the event and post your own memory instead.",
 }

@@ -192,6 +192,23 @@ class WorkerTests(unittest.TestCase):
         self.calls = []
         later = self.capture(QUOTE + ' Later.')  # what happens after the main session's post is the observer's again
         self.assertEqual(1, len(self.run_worker(self.invoke(self.candidate(later)))['ready']))
+    def test_a_moment_the_user_withheld_is_rejected_and_never_offered_again(self):
+        # The reviewer has a reason of its own for a moment the user asked not to post or record, and the selector is
+        # told to skip such a moment.
+        self.assertIn('withheld',worker.REVIEW['properties']['reason']['enum'])
+        self.assertIn('asked not to post or record',runtime.PROMPTS['extract'])
+        self.assertIn('reason withheld',runtime.PROMPTS['review'])
+        self.assertNotIn('even when the user asked',runtime.PROMPTS['extract'])
+        sid=self.capture()
+        def call(payload,schema,purpose,config):
+            self.calls.append((purpose,payload))
+            if purpose=='extract':return {'ok':True,'structured':{'candidates':[self.candidate(sid)],'ignored':[]}}
+            return {'ok':True,'structured':{'candidate_hash':payload['candidate_hash'],'accepted':False,'reason':'withheld'}}
+        self.assertEqual([],self.run_worker(call)['ready'])
+        with store.Store(REPO,config=self.config) as db:
+            self.assertEqual(('deferred','withheld'),(db.observation(sid)['state'],db.observation(sid)['reason']))
+            self.assertEqual([],db.events())
+        self.calls=[];self.run_worker(call);self.assertEqual([],self.calls)
     def test_never_write_down_reaches_both_model_calls(self):
         sheet = {'state': 'approved', 'entry': {'brief': {'never': 'names of client sites'}}, 'marks': []}
         sid = self.capture()
