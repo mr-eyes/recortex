@@ -414,6 +414,14 @@ class ObserverHookTests(unittest.TestCase):
         self.release(hold_id)
         self.assertNotIn("hookSpecificOutput", self.run_hook())
 
+    def test_the_denial_says_the_user_asked_and_invites_no_release(self):
+        # The first live test's denial ("release that hold explicitly before this action") led the session to try a
+        # release. The denial now says only that the user has asked that this action not be taken.
+        self.append("/recortex hold git-push")
+        reason = self.run_hook()["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertEqual("The user has asked that this action not be taken.", reason)
+        self.assertNotIn("release", reason.lower())
+
     def test_a_hold_typed_while_capture_is_paused_takes_effect(self):
         # While capture is paused the transcript is still scanned for holds, under a cursor of its own
         # ("controls_" and the capture stream's name, which observer_store.SOURCE_ID accepts).

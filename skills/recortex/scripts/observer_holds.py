@@ -243,7 +243,7 @@ def check_action(holds, repo, tool_name, tool_input, session_id=None, issue=None
         if exact or (target_matches and hold["action"] in classified["actions"]):
             blocking.append(hold["id"])
     return {"decision": "deny" if blocking else "allow", "hold_ids": sorted(set(blocking)),
-            "reason": "An explicit user hold applies; release that hold explicitly before this action." if blocking else "",
+            "reason": "The user has asked that this action not be taken." if blocking else "",
             "supported": classified["supported"] or bool(blocking)}
 
 
