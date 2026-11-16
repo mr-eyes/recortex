@@ -105,6 +105,20 @@ class ObserverHookTests(unittest.TestCase):
                 self.assertEqual(0, observer.hook("pre-tool"))
             self.assertEqual("deny", json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"], loaded)
 
+    def test_the_project_files_repository_holds_apply_when_the_approval_does_not(self):
+        # The entry names another repository, so this folder's approval does not hold for the project file's; the
+        # holds of both repositories still apply before a Bash call.
+        import observer_runtime
+        self.append("/recortex hold git-push")
+        self.run_hook()
+        observer_runtime.approve("octo-org/other", {"observer": {"enabled": True, "model": "haiku",
+                                                                 "publisher_id": observer_runtime.publisher_id(create=True)}},
+                                 str(self.project))
+        with mock.patch("observer_hooks.observer_runtime.approval_valid", return_value=False):
+            result = self.run_hook()
+            self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"])
+            self.assertNotIn("hookSpecificOutput", self.run_hook(command="git status"))
+
     def test_disable_checks_the_entrys_holds_whatever_the_project_file_names(self):
         import contextlib, io, observer, observer_runtime
         self.entry_and_hold()

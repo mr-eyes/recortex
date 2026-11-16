@@ -265,12 +265,15 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
     if event not in EVENTS.values() or not isinstance(data, dict) or not isinstance(config, dict):
         return {}
     # A hold stays in force while this folder has an entry on this machine, whatever the project file says (its
-    # repository, its trust, or "observer": false): one edit of a shared file must not lift what the user held.
+    # repository, its trust, or "observer": false): one edit of a shared file must not lift what the user held. The
+    # holds of the repository the project file names apply too, whether or not this folder's approval holds.
     held, checked = None, False
     if event == "PreToolUse":
         held_repo = _entry_repo()
         if held_repo is not None:
             held, checked = (_held(held_repo, data) if held_repo else _unchecked(data)), True
+            if not held and recortex.valid_repo(repo) and repo.lower() != held_repo:
+                held = _held(repo.lower(), data)
     if not recortex.valid_repo(repo) or repo.lower() not in recortex.trusted_repos():
         return _output(event, denial=held) if held else {}
     raw = config.get("observer", {})
