@@ -196,7 +196,8 @@ class WorkerTests(unittest.TestCase):
         # The reviewer has a reason of its own for a moment the user asked not to post or record, and the selector is
         # told to skip such a moment.
         self.assertIn('withheld',worker.REVIEW['properties']['reason']['enum'])
-        self.assertIn('asked not to post or record',runtime.PROMPTS['extract'])
+        self.assertIn('not to post or record',runtime.PROMPTS['extract'])
+        self.assertIn('withholds nothing',runtime.PROMPTS['extract'])
         self.assertIn('reason withheld',runtime.PROMPTS['review'])
         self.assertNotIn('even when the user asked',runtime.PROMPTS['extract'])
         sid=self.capture()
