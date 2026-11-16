@@ -17,7 +17,7 @@ MAX_READ = 262144
 MAX_ROWS = 512
 SESSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 AGENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
-EVENTS = {"UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SubagentStop", "PreCompact"}
+EVENTS = {"UserPromptSubmit", "PreToolUse", "Stop", "PreCompact"}  # the capture events hooks/hooks.json registers
 
 
 class SourceError(ValueError):
@@ -308,8 +308,7 @@ def scan(data, project_root, cursor=0, max_bytes=MAX_READ):
     event = data.get("hook_event_name", "Stop")
     if event not in EVENTS:
         return [], cursor
-    path = data.get("agent_transcript_path") if event == "SubagentStop" else data.get("transcript_path")
-    path = approved_path(path, project_root, session)
+    path = approved_path(data.get("transcript_path"), project_root, session)
     subagent = os.sep + "subagents" + os.sep in path
     info = os.stat(path, follow_symlinks=False)
     if cursor > info.st_size:
@@ -368,9 +367,7 @@ def first_cursor(data, project_root):
     """Where capture of a transcript seen for the first time begins: 0, or for a transcript longer than TAIL_BYTES
     (the observer enabled in a long session, or one resumed later) the start of the first whole line in its last
     TAIL_BYTES. Older text is not captured, and a hold typed there predates this check."""
-    event = data.get("hook_event_name", "Stop")
-    path = approved_path(data.get("agent_transcript_path") if event == "SubagentStop" else data.get("transcript_path"),
-                         project_root, data.get("session_id"))
+    path = approved_path(data.get("transcript_path"), project_root, data.get("session_id"))
     size = os.stat(path, follow_symlinks=False).st_size
     if size <= TAIL_BYTES:
         return 0
@@ -390,8 +387,7 @@ def skipped(data, start):
     """The one source_gap descriptor for the start of a transcript that first_cursor left out, so that status shows
     it. Its digest names the range; the text was never read."""
     session = data.get("session_id")
-    event = data.get("hook_event_name", "Stop")
-    path = data.get("agent_transcript_path") if event == "SubagentStop" else data.get("transcript_path")
+    path = data.get("transcript_path")
     digest = hashlib.sha256(("skipped:0:%d" % start).encode()).hexdigest()
     return {"source_id": hashlib.sha256((session + "\nsource_gap\n0\n" + digest).encode()).hexdigest(),
             "session_id": session, "role": "unknown", "event_type": "source_gap", "path": path, "offset": 0,
@@ -405,8 +401,7 @@ def control_tail(data, project_root, start, max_bytes=None, seconds=None):
     was not reached within `max_bytes` and `seconds`; a line longer than one read (MAX_READ) is passed over."""
     session = data.get("session_id")
     event = data.get("hook_event_name", "PreToolUse")
-    path = approved_path(data.get("agent_transcript_path") if event == "SubagentStop" else data.get("transcript_path"),
-                         project_root, session)
+    path = approved_path(data.get("transcript_path"), project_root, session)
     subagent = os.sep + "subagents" + os.sep in path
     size = os.stat(path, follow_symlinks=False).st_size
     if size - start > (TAIL_BYTES if max_bytes is None else max_bytes):

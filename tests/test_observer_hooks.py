@@ -511,9 +511,9 @@ class ObserverHookTests(unittest.TestCase):
     def test_invalid_approval_gets_one_line_per_session_and_creates_no_state(self):
         with mock.patch("observer_hooks.observer_runtime.approval_valid", return_value=False), \
                 mock.patch("observer_hooks.observer_store.Store", side_effect=AssertionError("no store")) as opened:
-            outputs = [self.run_hook(event=e) for e in ("pre-tool", "post-tool", "stop", "prompt-submit")]
+            outputs = [self.run_hook(event=e) for e in ("pre-tool", "stop", "prompt-submit")]
             start = hooks.handle("session-start", self.data, self.config, REPO)
-        self.assertEqual([{}, {}, {}, {}], outputs)
+        self.assertEqual([{}, {}, {}], outputs)
         self.assertIn("approval is missing", start["systemMessage"])
         opened.assert_not_called()
 
@@ -730,7 +730,7 @@ class ObserverHookTests(unittest.TestCase):
         lines = []
         for turn in range(5):
             self.append("Turn %d result." % turn, role="assistant")
-            for event in ("prompt-submit", "pre-tool", "post-tool", "stop"):
+            for event in ("prompt-submit", "pre-tool", "stop"):
                 lines += self.run_hook(event=event).get("systemMessage", "").splitlines()
         self.assertEqual(1, sum("independent checks are unavailable" in line for line in lines))
         self.assertEqual(1, sum("not yet verified in GitHub" in line for line in lines))
@@ -769,7 +769,7 @@ class ObserverHookTests(unittest.TestCase):
 
     def test_the_worker_starts_from_the_edges_of_a_turn_only(self):
         with mock.patch("observer_hooks.observer_runtime.gate_valid", return_value=True):
-            for event in ("pre-tool", "post-tool", "tool-failure"):
+            for event in ("pre-tool", "pre-tool", "prompt-submit"):
                 self.run_hook(event=event)
             self.worker.assert_not_called()
             self.run_hook(event="stop")
@@ -786,9 +786,9 @@ class ObserverHookTests(unittest.TestCase):
 
     def test_hook_entry_bounds_its_input(self):
         large = json.dumps({"tool_input": {"content": "x" * 300000}})
-        output, called = self.entry("post-tool", large)
+        output, called = self.entry("stop", large)
         self.assertEqual("", output)
-        called.assert_not_called()  # a large tool result: the next hook scans its transcript lines
+        called.assert_not_called()  # a large input other than a Bash call's: the next hook scans the transcript
         output, called = self.entry("pre-tool", large)
         self.assertEqual("", output)
         called.assert_called_once()  # before an action the input is read, holds are checked
@@ -806,6 +806,16 @@ class ObserverHookTests(unittest.TestCase):
         self.assertEqual({"systemMessage": "recortex observer unavailable: hook deadline or local state failure; "
                                            "run observer.py status."}, json.loads(output))
 
+    def test_the_hook_events_are_the_ones_hooks_json_registers(self):
+        # The after-tool and subagent-stop handlers were removed: no event list in the code names them any more.
+        registered = json.loads((ROOT / "hooks" / "hooks.json").read_text())["hooks"]
+        observed = {hook["command"].rsplit(" ", 1)[1] for entries in registered.values() for entry in entries
+                    for hook in entry["hooks"] if "run_observer_hook.sh" in hook["command"]}
+        self.assertEqual(observed, set(hooks.EVENTS))
+        self.assertEqual(set(sources.EVENTS), {"UserPromptSubmit", "PreToolUse", "Stop", "PreCompact"})
+        self.assertEqual(("PreToolUse",), hooks.TOOL_EVENTS)
+        self.assertEqual({}, hooks.handle("post-tool", dict(self.data, tool_name="Bash"), self.config, REPO))
+
     def test_stop_and_compaction_never_carry_context(self):
         class Empty:
             def execute(self, *args):
@@ -817,11 +827,11 @@ class ObserverHookTests(unittest.TestCase):
         packet = {"text": "CONTEXT", "selected": [1], "resume_id": None}
         with mock.patch("index.connect", return_value=Empty()), \
                 mock.patch("observer_context.build_packet", return_value=packet):
-            for event in ("stop", "subagent-stop", "pre-compact"):
+            for event in ("stop", "pre-compact"):
                 self.assertNotIn("hookSpecificOutput", self.run_hook(event=event), event)
             prompt = hooks.handle("prompt-submit", dict(self.data, prompt="the parser"), self.config, REPO)
             self.assertIn("CONTEXT", prompt["hookSpecificOutput"]["additionalContext"])
-        for event in ("Stop", "SubagentStop", "PreCompact"):  # the second filter, on whatever context reaches it
+        for event in ("Stop", "PreCompact"):  # the second filter, on whatever context reaches it
             self.assertNotIn("hookSpecificOutput", hooks._output(event, context="CONTEXT"), event)
 
     def test_tool_calls_get_context_only_before_a_holdable_action_and_once_per_selection(self):
@@ -936,7 +946,7 @@ class SharedProjectFileTests(unittest.TestCase):
         self.assertNotIn("observer", config)
         data = {"session_id": "session1", "transcript_path": str(self.base / "none.jsonl"), "cwd": str(self.project),
                 "tool_name": "Bash", "tool_input": {"command": "git push"}}
-        for event in ("session-start", "pre-tool", "post-tool", "stop"):
+        for event in ("session-start", "pre-tool", "stop"):
             self.assertEqual({}, hooks.handle(event, data, config, REPO), event)
             # Even the project file's own entry, were it ever passed unchecked, finds no approval and creates nothing.
             self.assertNotIn("hookSpecificOutput", hooks.handle(event, data, shared, REPO), event)
@@ -944,8 +954,7 @@ class SharedProjectFileTests(unittest.TestCase):
 
 
 SCRIPT = ROOT / "skills" / "recortex" / "scripts" / "run_observer_hook.sh"
-EVENT_NAMES = ("session-start", "subagent-start", "prompt-submit", "pre-compact", "pre-tool", "post-tool",
-               "tool-failure", "stop", "subagent-stop")
+EVENT_NAMES = ("session-start", "subagent-start", "prompt-submit", "pre-compact", "pre-tool", "stop")  # hooks.json
 
 
 class FastPathTests(unittest.TestCase):
@@ -1045,7 +1054,7 @@ class FastPathTests(unittest.TestCase):
             if done.stdout:
                 out = json.loads(done.stdout)
                 self.assertTrue(set(out) <= {"systemMessage", "hookSpecificOutput"}, (event, out))
-                if event in ("stop", "subagent-stop", "pre-compact"):
+                if event in ("stop", "pre-compact"):
                     self.assertNotIn("hookSpecificOutput", out, event)
 
     def test_without_a_place_for_the_state_python_decides(self):

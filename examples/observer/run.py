@@ -173,7 +173,9 @@ class Replay:
         return data, identity
 
     def capture(self, data, hooks=False):
-        path = data.get("agent_transcript_path") or data["transcript_path"]
+        if data.get("agent_transcript_path"):
+            return  # no hook reads a subagent's transcript: it is not the conversation with the user
+        path = data["transcript_path"]
         stream = hashlib.sha256(path.encode()).hexdigest()
         # Includes opening/validating/closing the durable store as well as scan
         # and synchronous capture transaction. Transcript creation is excluded.

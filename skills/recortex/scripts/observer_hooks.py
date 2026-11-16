@@ -22,8 +22,7 @@ import storage
 
 EVENTS = {"session-start": "SessionStart", "subagent-start": "SubagentStart",
           "prompt-submit": "UserPromptSubmit", "pre-compact": "PreCompact",
-          "pre-tool": "PreToolUse", "post-tool": "PostToolUse", "tool-failure": "PostToolUseFailure",
-          "stop": "Stop", "subagent-stop": "SubagentStop"}
+          "pre-tool": "PreToolUse", "stop": "Stop"}  # what hooks/hooks.json registers
 NOTICES = {
     "approval": "recortex observer: local approval is missing or settings changed; observation is inactive.",
     "capture": "recortex observer: capture is incomplete; pending work remains local. Run observer.py status.",
@@ -39,7 +38,7 @@ NOTICES = {
     "cap": "recortex observer: today's limit of automatic comments is reached; reviewed memories wait in the queue. Run observer.py pending.",
     "release-refused": "recortex observer: nothing in a session releases a hold; run observer.py release HOLD_ID in a separate terminal, outside Claude Code. Run observer.py holds.",
 }
-TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure")
+TOOL_EVENTS = ("PreToolUse",)
 SCAN_ROUNDS = 16  # bounded scans one hook makes to catch up with its transcript, at the edges of a turn
 SCAN_SECONDS = 1.0  # and the time they may take; before a Bash call one scan only, so that the hold check is never late
 STALE = 900  # seconds after which new captured work that no worker has taken up is worth a notice
@@ -58,7 +57,7 @@ def _output(event, context="", notices=(), denial=None):
         out["systemMessage"] = "\n".join(dict.fromkeys(NOTICES[code] for code in notices))
     if context or denial:
         specific = {"hookEventName": event}
-        if context and event not in ("Stop", "SubagentStop", "PreCompact"):
+        if context and event not in ("Stop", "PreCompact"):
             specific["additionalContext"] = context
         if denial:
             specific.update(permissionDecision="deny", permissionDecisionReason=denial["reason"])
@@ -119,7 +118,7 @@ def _capture(store, event, data, project_root, repo, config, capture=True, round
     # PreToolUse rescans the persisted transcript synchronously: never wait for a
     # model/worker to compile a recognized original-user hold before an action.
     scan_data = dict(data, hook_event_name=event)
-    path = scan_data.get("agent_transcript_path") if event == "SubagentStop" else scan_data.get("transcript_path")
+    path = scan_data.get("transcript_path")
     if not isinstance(path, str):
         raise observer_sources.SourceError("source-path")
     stream = hashlib.sha256(path.encode("utf-8")).hexdigest()
@@ -434,7 +433,7 @@ def _handle(event, data, config, repo, decision):
             # capture is paused. The worker checks its model/network gates itself.
             # Tool events fire on every call; the worker starts from the edges of a turn only.
             # Not at every prompt: the worker waits for a stretch of the session anyway (observer_worker.ENOUGH).
-            if event in ("SessionStart", "Stop", "SubagentStop", "PreCompact") and (
+            if event in ("SessionStart", "Stop", "PreCompact") and (
                     runtime_ready or (maintenance_due and has_handled)):
                 try:
                     launch_worker(project_root)
@@ -449,7 +448,7 @@ def _handle(event, data, config, repo, decision):
             degraded = store.get_control("worker_degraded")
             if degraded:
                 notices.append("cap" if degraded == "publish_daily_cap" else "pending")
-            elif event in ("Stop", "SubagentStop", "PreCompact"):
+            elif event in ("Stop", "PreCompact"):
                 oldest = store.db.execute("SELECT MIN(created) FROM observations WHERE state='observed'").fetchone()[0]
                 if oldest is not None and time.time() - oldest > STALE:
                     notices.append("pending")

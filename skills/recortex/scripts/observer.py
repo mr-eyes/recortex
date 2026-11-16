@@ -204,7 +204,7 @@ def _alarm(signum, frame):
     raise TimeoutError("deadline")
 
 
-TOOL_EVENTS = ("pre-tool", "post-tool", "tool-failure")
+TOOL_EVENTS = ("pre-tool",)
 
 
 def hook(event, config=None, repo=None):
