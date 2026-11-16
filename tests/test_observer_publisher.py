@@ -121,7 +121,7 @@ class ObserverPublisherTests(unittest.TestCase):
         # paths, the home folder, the local user name and email addresses, written plainly or as entities.
         repo, home = fixtures.REPO, os.path.expanduser("~")
         with mock.patch.object(publisher, "local_names", return_value=({home, "/home/octo-dev"}, {"octo-dev"})):
-            for text in ("Ran in /home/octo-dev/work/tinycsv.", "Ran `/usr/bin/python3 -m unittest`.", "See ~/notes/run.txt.",
+            for text in ("Ran in /home/octo-dev/work/octo-repo.", "Ran `/usr/bin/python3 -m unittest`.", "See ~/notes/run.txt.",
                          "Ran in " + home + ".", "Ran by octo-dev on the laptop.", "Ran by Octo-Dev.",
                          "Mail octo.dev+ci@example.test.", "Mail octo&#46;dev&#64;example&#46;test.",
                          "Output in (/tmp/run/out.txt).", "Read \"/var/log/bench/x.log\"."):
