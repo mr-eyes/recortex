@@ -123,7 +123,13 @@ def _capture(store, event, data, project_root, repo, config, capture=True, round
     if not isinstance(path, str):
         raise observer_sources.SourceError("source-path")
     stream = hashlib.sha256(path.encode("utf-8")).hexdigest()
-    start = store.cursor(stream) or 0
+    start = store.cursor(stream)
+    if start is None:
+        # A transcript seen for the first time is read from its last observer_sources.TAIL_BYTES; the part left out
+        # is one source_gap, which status shows.
+        start = observer_sources.first_cursor(scan_data, project_root)
+        if start and capture:
+            store.capture([observer_sources.skipped(scan_data, start)], stream=stream, cursor=start, expected_cursor=None)
     if not capture:
         stream = "controls_" + stream
     controlled = refused = unproven = False
@@ -190,12 +196,16 @@ def _entry_repo():
     return repo if recortex.valid_repo(repo) else False
 
 
-def _unchecked(data):
+BEHIND = {"reason": "recortex observer: the transcript is too far ahead of the check for holds; it catches up at the end "
+                    "of each turn. Every command but pwd, ls and cat waits until then."}
+
+
+def _unchecked(data, denial=UNCHECKED):
     """The decision when the holds cannot be known: every Bash command but the plainest reads is denied."""
     tool_name, tool_input = data.get("tool_name"), data.get("tool_input")
     if observer_holds.classify_action(tool_name, tool_input)["command"] is None:
         return None
-    return None if observer_holds.read_only(tool_name, tool_input) else UNCHECKED
+    return None if observer_holds.read_only(tool_name, tool_input) else denial
 
 
 SELF_RELEASE = {"reason": "recortex observer: only the user releases a hold, switches the observer off, resumes it or "
@@ -396,7 +406,7 @@ def _handle(event, data, config, repo, decision):
                                                      data.get("tool_input"), session_id=data.get("session_id"))
                 denial = result if result["decision"] == "deny" else denial  # nothing in a session releases a hold
                 if not denial and stale:
-                    denial = _unchecked(data)  # holds typed in the part not read may apply: as when unreadable
+                    denial = _unchecked(data, BEHIND)  # holds typed in the part not read may apply
                 decision["held"] = denial
             try:
                 context = _context(store, event, data, repo, recortex.allowed_users(repo))

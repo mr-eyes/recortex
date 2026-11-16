@@ -362,6 +362,38 @@ TAIL_SECONDS = 1.0  # and for how long
 CONTROL_WORDS = (b"recortex", b"push", b"tag", b"release", b"post", b"record", b"publish")
 
 
+def first_cursor(data, project_root):
+    """Where capture of a transcript seen for the first time begins: 0, or for a transcript longer than TAIL_BYTES
+    (the observer enabled in a long session, or one resumed later) the start of the first whole line in its last
+    TAIL_BYTES. Older text is not captured, and a hold typed there predates this check."""
+    event = data.get("hook_event_name", "Stop")
+    path = approved_path(data.get("agent_transcript_path") if event == "SubagentStop" else data.get("transcript_path"),
+                         project_root, data.get("session_id"))
+    size = os.stat(path, follow_symlinks=False).st_size
+    if size <= TAIL_BYTES:
+        return 0
+    position = size - TAIL_BYTES
+    while position < size:
+        chunk = _read(path, position, min(MAX_READ, size - position))
+        newline = chunk.find(b"\n")
+        if newline >= 0:
+            return position + newline + 1
+        position += len(chunk)
+    return size
+
+
+def skipped(data, start):
+    """The one source_gap descriptor for the start of a transcript that first_cursor left out, so that status shows
+    it. Its digest names the range; the text was never read."""
+    session = data.get("session_id")
+    event = data.get("hook_event_name", "Stop")
+    path = data.get("agent_transcript_path") if event == "SubagentStop" else data.get("transcript_path")
+    digest = hashlib.sha256(("skipped:0:%d" % start).encode()).hexdigest()
+    return {"source_id": hashlib.sha256((session + "\nsource_gap\n0\n" + digest).encode()).hexdigest(),
+            "session_id": session, "role": "unknown", "event_type": "source_gap", "path": path, "offset": 0,
+            "end": start, "sha256": digest, "observed_at": time.time()}
+
+
 def control_tail(data, project_root, start, max_bytes=None, seconds=None):
     """(rows, complete): metadata rows for the user messages past `start` that may hold a control, read without being
     captured, so that the check before a Bash call sees a hold typed in a part of the transcript capture has not

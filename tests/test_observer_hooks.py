@@ -640,6 +640,35 @@ class ObserverHookTests(unittest.TestCase):
             self.run_hook(event="stop")
             self.worker.assert_called_once_with(str(self.project))
 
+    def test_a_long_transcript_seen_for_the_first_time_is_read_from_its_end(self):
+        # A session that ran before the observer was enabled, or one resumed later: its first hook reads the last
+        # observer_sources.TAIL_BYTES, records the part left out as one source_gap, and stops no command for it.
+        import observer_runtime
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+                                                     "publisher_id": observer_runtime.publisher_id(create=True)}},
+                                 str(self.project))
+        line = json.dumps({"type": "assistant", "message": {"role": "assistant", "content": "x" * 4000}}) + "\n"
+        with mock.patch.object(sources, "TAIL_BYTES", 2 * 1024 * 1024):
+            with self.path.open("a") as handle:
+                handle.write(line * 1500)  # about 6 MB, three times the (lowered) bound
+            result = self.run_hook(command="npm test")
+            self.assertNotIn("hookSpecificOutput", result)
+            self.append("/recortex hold git-push")
+            self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
+            with Store(REPO) as store:
+                gaps = [row for row in store.pending() if row["metadata"]["event_type"] == "source_gap"]
+            self.assertEqual(1, len(gaps))
+            self.assertEqual(0, gaps[0]["metadata"]["offset"])
+            self.assertGreater(gaps[0]["metadata"]["end"], 3 * 1024 * 1024)
+
+    def test_a_stream_far_behind_says_what_is_true(self):
+        self.run_hook(event="stop")
+        self.big_turn()
+        with mock.patch.object(sources, "TAIL_BYTES", 1000):
+            result = self.run_hook(command="npm test")
+        self.assertEqual(hooks.BEHIND["reason"], result["hookSpecificOutput"]["permissionDecisionReason"])
+        self.assertIn("catches up at the end of each turn", hooks.BEHIND["reason"])
+
     def test_the_denial_says_the_user_asked_and_invites_no_release(self):
         # The first live test's denial ("release that hold explicitly before this action") led the session to try a
         # release. The denial now says only that the user has asked that this action not be taken.
