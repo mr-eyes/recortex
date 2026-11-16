@@ -9824,6 +9824,10 @@ class DocsTests(unittest.TestCase):
         self.assertIn("Setup checks `gh` first and says what to run if it is missing or signed out.", start)
         self.assertIn("whether to trust the repository", start)
         self.assertIn("trusted-repos", self.text(os.path.join("docs", "install.md")))
+        page = self.text(os.path.join("docs", "existing-work.md"))
+        steps = page.split("\n## A new project\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("1. Check that `gh` runs and is signed in to github.com", steps)
+        self.assertEqual(["1", "2", "3", "4"], re.findall(r"^([0-9]+)\. ", steps, re.M))
 
     def test_every_relative_link_and_picture_resolves(self):
         found = 0

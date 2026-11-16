@@ -6,9 +6,10 @@ How a project gets its record: from nothing, from months of work, or from an old
 
 In a project without a record, the first session prints one line saying the plugin is installed and the project has no record yet. Say something like "set up the record for this project". Claude will:
 
-1. Look at the project's file names (`setup.py detect`) only to pre-select answers, then ask a few questions with multiple-choice answers: what the project will produce (paper, thesis, software, dataset, report, prototype, proposal, documentation, other), the sections of each, where the record lives, who decides, the time zone, whether there is earlier work to catch up on, and the optional parts.
-2. Show a summary for your confirmation; nothing is written before it.
-3. Apply it (`setup.py apply`, dry run first): the configuration, the labels, the hub with its first resume comment, your trusted-list entry if you agree, the optional triage workflow and CLAUDE.md snippet, and the first sync of the local index.
+1. Check that `gh` runs and is signed in to github.com, and that Python is 3.8 or newer (`setup.py preflight`). When a check fails, it shows one line that says what to run, such as `gh auth login`, and stops before the first question.
+2. Look at the project's file names (`setup.py detect`) only to pre-select answers, then ask a few questions with multiple-choice answers: what the project will produce (paper, thesis, software, dataset, report, prototype, proposal, documentation, other), the sections of each, where the record lives, who decides, the time zone, whether there is earlier work to catch up on, and the optional parts.
+3. Show a summary for your confirmation; nothing is written before it.
+4. Apply it (`setup.py apply`, dry run first): the configuration, the labels, the hub with its first resume comment, your trusted-list entry if you agree, the optional triage workflow and CLAUDE.md snippet, and the first sync of the local index.
 
 ## A project with months of work behind it
 
