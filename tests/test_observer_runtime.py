@@ -204,6 +204,22 @@ class SourceTests(unittest.TestCase):
         with patch.object(sources,'private_group',return_value=False):  # a group shared with another account
             self.assertEqual('source-permissions',sources.preflight(self.project)['code'])
         self.assertEqual(0o775,self.path.parent.parent.stat().st_mode & 0o777)
+    def test_a_transcript_truncated_while_its_start_is_found_stops_the_search(self):
+        # A transcript truncated or rotated between the size check and the read once made the search for the first
+        # whole line loop until the hook's deadline.
+        self.path.write_text('x'*5000+'\n');self.path.chmod(0o600)
+        original=sources._read;reads=[]
+        def shrinking(path,offset,size):
+            reads.append(offset)
+            if len(reads)>5:raise AssertionError('the search loops on a truncated file')
+            with open(path,'r+b') as handle:handle.truncate(10)
+            return original(path,offset,size)
+        with patch.object(sources,'TAIL_BYTES',1000),patch.object(sources,'_read',side_effect=shrinking):
+            with self.assertRaisesRegex(sources.SourceError,'source-truncated'):
+                sources.first_cursor(self.hook,self.project)
+        self.path.write_text('a'*3000+'\n'+'b'*100+'\n');self.path.chmod(0o600)
+        with patch.object(sources,'TAIL_BYTES',1000):
+            self.assertEqual(3001,sources.first_cursor(self.hook,self.project))
     def test_a_call_and_its_result_give_no_source_and_no_match(self):
         invoke={'type':'assistant','message':{'role':'assistant','content':[{'type':'tool_use','id':'call1','name':'Read','input':{'file_path':'notes.txt'}}]}}
         result={'type':'user','message':{'role':'user','content':[{'type':'tool_result','tool_use_id':'call1','content':'Tests passed in a fictional example.','is_error':False}]}}

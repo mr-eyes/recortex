@@ -375,6 +375,8 @@ def first_cursor(data, project_root):
     position = size - TAIL_BYTES
     while position < size:
         chunk = _read(path, position, min(MAX_READ, size - position))
+        if not chunk or os.stat(path, follow_symlinks=False).st_size < size:
+            raise SourceError("source-truncated")  # the file shrank while it was read: never loop on it
         newline = chunk.find(b"\n")
         if newline >= 0:
             return position + newline + 1
