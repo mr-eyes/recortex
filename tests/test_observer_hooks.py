@@ -66,6 +66,34 @@ class ObserverHookTests(unittest.TestCase):
         data = dict(self.data, tool_name="Bash", tool_input={"command": command})
         return hooks.handle(event, data, self.config, REPO)
 
+    def test_a_hold_outlasts_the_project_files_switch_and_session_release_routes(self):
+        import observer_runtime
+        self.append("/recortex hold git-push")
+        self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+                                                     "publisher_id": observer_runtime.publisher_id(create=True)}},
+                                 str(self.project))
+        on, self.config = self.config, {"repo": REPO, "hub": 1}  # local_config once the project file says false
+        self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
+        self.config = on
+        with Store(REPO) as store:
+            hold_id = store.holds()[0]["id"]
+        for command in ('script -qec "python3 observer.py release %s" /dev/null' % hold_id,
+                        "python3 skills/recortex/scripts/observer.py disable"):
+            self.assertEqual("deny", self.run_hook(command=command)["hookSpecificOutput"]["permissionDecision"], command)
+
+    def test_disable_from_the_session_keeps_the_holds(self):
+        import contextlib, io, observer, observer_runtime
+        self.append("/recortex hold git-push")
+        self.run_hook()
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+                                                     "publisher_id": observer_runtime.publisher_id(create=True)}},
+                                 str(self.project))
+        with mock.patch.object(observer.recortex, "load_config", return_value={"repo": REPO, "hub": 1}), \
+                mock.patch.object(observer, "terminal", return_value=None), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(1, observer.main(["disable"]))
+        self.assertIsNotNone(observer_runtime.stored_approval(str(self.project)))
+
     def test_plain_phrase_holds_only_this_session(self):
         self.append("Don't push.")
         self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])

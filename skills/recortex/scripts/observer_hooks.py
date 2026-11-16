@@ -6,6 +6,7 @@ source role. Collection and controls are separate from the disposable index.
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -42,8 +43,8 @@ NOTICES = {
 }
 TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure")
 UNCHECKED = {"reason": "recortex observer: this machine's holds could not be checked, so every command but pwd, ls and "
-                       "cat is stopped. In a separate terminal, observer.py status says why and observer.py disable "
-                       "switches the observer off for this folder; \"observer\": false in the project file does too."}
+                       "cat is stopped. The user can see why with observer.py status, in a separate terminal outside "
+                       "Claude Code."}
 # Lines that answer something the user just did (a hold, a release); each arises once, so it is never held back.
 ANSWERS = frozenset(("control", "control-refused", "release-refused"))
 
@@ -154,6 +155,21 @@ def _notices(store, notices, data, event):
     return fresh
 
 
+def _folder_entry(repo):
+    """True when this folder has an entry for `repo` in this machine's approvals, enabled or not; unreadable approvals
+    count as one, so that _held decides (it fails closed)."""
+    try:
+        entry = observer_runtime.stored_approval()
+    except (ValueError, storage.StorageError, OSError):
+        return True
+    return isinstance(entry, dict) and entry.get("repo") == repo.lower()
+
+
+SELF_RELEASE = {"reason": "recortex observer: only the user releases a hold or switches the observer off, in a separate "
+                          "terminal outside Claude Code."}
+UNDO = re.compile(r"observer(?:\.py)?\b.*\b(?:release|disable)\b")
+
+
 def _held(repo, data):
     """The decision before a tool call, from holds read without any lock (observer_store.read_holds). When they cannot
     be read, every Bash command is denied with one fixed reason, except pwd, ls and cat with plain path arguments
@@ -172,6 +188,10 @@ def _held(repo, data):
             return UNCHECKED if observer_store._command_digest(command) in observer_store.held_commands(repo) else None
         except observer_store.StoreError:
             return None  # the plainest reads go on even when the held commands are unknown
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if (isinstance(command, str) and UNDO.search(command)
+            and any(isinstance(hold, dict) and hold.get("state") == "active" for hold in holds)):
+        return SELF_RELEASE  # a release or disable run from the session, also through a terminal of its own (script)
     result = observer_holds.check_action(holds, repo, tool_name, tool_input, session_id=data.get("session_id"))
     return result if result["decision"] == "deny" else None
 
@@ -232,20 +252,23 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
     event = EVENTS.get(event, event)
     if event not in EVENTS.values() or not isinstance(data, dict) or not isinstance(config, dict):
         return {}
-    raw = config.get("observer", {})
-    if not isinstance(raw, dict) or raw.get("enabled") is not True:
-        return {}
     if not recortex.valid_repo(repo) or repo.lower() not in recortex.trusted_repos():
         return {}
-    notices, context, denial = [], "", None
+    # A hold stays in force while this folder has an entry on this machine, whatever the project file says: one edit
+    # of a shared file must not lift what the user held.
+    held = _held(repo, data) if event == "PreToolUse" and _folder_entry(repo) else None
+    raw = config.get("observer", {})
+    if not isinstance(raw, dict) or raw.get("enabled") is not True:
+        return _output(event, denial=held) if held else {}
+    notices, context, denial = [], "", held
     try:
         settings = observer_runtime.settings(config)
         project_root = recortex.project_root()
         if not observer_runtime.approval_valid(repo, config):
             # This machine's entry for the folder does not hold (another repository or machine key, or settings
             # that no longer validate). Nothing is created, and the line shows at session start only.
-            return _output(event, notices=["approval"]) if event == "SessionStart" else {}
-        if event == "PreToolUse":
+            return _output(event, notices=["approval"] if event == "SessionStart" else [], denial=held)
+        if event == "PreToolUse" and held is None:
             denial = _held(repo, data)
         with observer_store.Store(repo, max_bytes=settings["max_pending_bytes"], wait=0.1,
                                   max_pending=settings["max_pending_observations"], config=config) as store:
@@ -286,7 +309,7 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
             if event == "PreToolUse":
                 result = observer_holds.check_action(store.holds(), repo, data.get("tool_name"),
                                                      data.get("tool_input"), session_id=data.get("session_id"))
-                denial = result if result["decision"] == "deny" else None
+                denial = result if result["decision"] == "deny" else denial  # nothing in a session releases a hold
             try:
                 context = _context(store, event, data, repo, recortex.allowed_users(repo))
             except TimeoutError:

@@ -252,6 +252,20 @@ def main(argv=None):
             return hook(args.event, repo=args.repo)
         loaded = recortex.load_config()
         if args.command == "disable":
+            name = loaded.get("repo")
+            try:
+                active = [h for h in observer_store.read_holds(name) if h.get("state") == "active"] \
+                    if recortex.valid_repo(name) else []
+            except (observer_store.StoreError, storage.StorageError, OSError, ValueError, KeyError, TypeError):
+                active = [None]  # holds that cannot be read may be active
+            if active:
+                tty = terminal()
+                if tty is None:
+                    emit({"code": "terminal-required", "note": "Holds apply here. " + TERMINAL.replace(
+                        "release HOLD_ID", "disable").replace("releases a hold", "switches the observer off")}); return 1
+                with tty:
+                    if tty.ask("Holds of %s stop applying in this folder. Type disable to confirm: " % name) != "disable":
+                        emit({"code": "not-confirmed"}); return 1
             emit({"action": "disable", "folder": runtime.folder_key(), "was_enabled": runtime.forget()}); return 0
         config = runtime.local_config(loaded)
         repo = recortex.resolve_repo(args.repo, config)

@@ -536,6 +536,36 @@ class ObserverCliTests(unittest.TestCase):
         self.assertNotEqual(0,status);self.assertIn(b'not-confirmed',seen);self.assertEqual(['active'],self.held())
         status,seen=run(b'release\n')
         self.assertEqual(0,status,seen);self.assertIn(b'"released": true',seen);self.assertEqual(['released'],self.held())
+    def test_disable_asks_on_the_users_terminal_while_a_hold_applies(self):
+        import pty
+        self.cli('enable','--model','sonnet','--yes')
+        self.hold()
+        result,value=self.cli('disable')  # pipes: refused, and the folder stays enabled
+        self.assertEqual(1,result.returncode);self.assertEqual('terminal-required',value['code'])
+        self.assertEqual([os.path.realpath(self.project)],list(self.approvals()))
+        pid,fd=pty.fork()
+        if pid==0:
+            try:
+                os.chdir(self.project)
+                os.execve(sys.executable,[sys.executable,str(ROOT/'skills/recortex/scripts/observer.py'),'disable'],self.env)
+            finally:
+                os._exit(127)
+        seen=b''
+        try:
+            while b'Type disable to confirm' not in seen:
+                seen+=os.read(fd,4096)
+            os.write(fd,b'disable\n')
+            while True:
+                try:
+                    chunk=os.read(fd,4096)
+                except OSError:
+                    break
+                if not chunk:break
+                seen+=chunk
+        finally:
+            os.close(fd)
+        self.assertEqual(0,os.waitpid(pid,0)[1],seen);self.assertEqual({},self.approvals())
+        self.assertEqual(['active'],self.held())  # the queue and its holds stay
     def test_runtime_check_needs_this_folders_approval(self):
         result,value=self.cli('runtime-check')
         self.assertEqual(1,result.returncode);self.assertEqual('approval',value['code'])
