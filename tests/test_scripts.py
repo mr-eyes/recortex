@@ -10186,6 +10186,22 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("python -m unittest discover -s tests -v", workflow)
         self.assertIn("timeout-minutes: 45", workflow)
 
+    def test_the_settings_snippet_registers_what_the_plugin_registers(self):
+        """A plain-skill install merges the snippet: it registers the same events, matchers, scripts, arguments and
+        timeouts as hooks/hooks.json, so that both installs pay the same per-call cost."""
+        import shlex
+        plugin = self.read_json("hooks", "hooks.json")["hooks"]
+        snippet = json.loads(recortex.read_text(os.path.join(TEMPLATES, "settings-hook-snippet.json")))["hooks"]
+
+        def shape(hooks):
+            out = {}
+            for event, entries in hooks.items():
+                out[event] = [(entry.get("matcher") or "",
+                               [(shlex.split(h["command"])[0].rsplit("/scripts/", 1)[1], shlex.split(h["command"])[1:],
+                                 h["timeout"]) for h in entry["hooks"]]) for entry in entries]
+            return out
+        self.assertEqual(shape(plugin), shape(snippet))
+
     def test_each_hook_is_stopped_before_its_timeout(self):
         hooks = self.read_json("hooks", "hooks.json")["hooks"]
         timeouts = {event: entries[0]["hooks"][0]["timeout"] for event, entries in hooks.items()}

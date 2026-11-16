@@ -79,45 +79,12 @@
         ]
       }
     ],
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$HOME/.claude/skills/recortex/scripts/run_observer_hook.sh\" post-tool",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PostToolUseFailure": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$HOME/.claude/skills/recortex/scripts/run_observer_hook.sh\" tool-failure",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "\"$HOME/.claude/skills/recortex/scripts/run_observer_hook.sh\" stop",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$HOME/.claude/skills/recortex/scripts/run_observer_hook.sh\" subagent-stop",
             "timeout": 5
           }
         ]
