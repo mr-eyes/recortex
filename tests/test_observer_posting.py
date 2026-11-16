@@ -329,6 +329,16 @@ class ObserverPostingTests(unittest.TestCase):
         self.assertEqual(0, self.post()[0])  # the verified receipt: no second comment
         self.assertEqual(1, len([args for args in self.calls() if args[:2] == ["issue", "comment"]]))
 
+    def test_one_question_call_grants_each_memory_it_answered_once(self):
+        # AskUserQuestion takes up to four questions: the user's Post to two memories in one call posts both.
+        other = "b" * 32
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            self.assertTrue(db.grant_answer(self.key, "toolu_01two"))
+            self.assertTrue(db.take_grant(self.key))
+            self.assertTrue(db.grant_answer(other, "toolu_01two"))
+            self.assertTrue(db.take_grant(other))
+            self.assertFalse(db.grant_answer(self.key, "toolu_01two"))  # the same answer never grants a memory twice
+
     def test_a_grant_is_consumed_once_and_only_by_the_post(self):
         # The grant is taken at the last step before the send: a refusal before it (here a pause) leaves it, and a
         # second held event's post needs its own.
