@@ -258,17 +258,27 @@ class ObserverPublisherTests(unittest.TestCase):
         self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config, main_session=True)["state"])
         self.assertIn("withheld", publisher.EVENT_PROBLEMS)
 
-    def test_marked_project_waits_for_the_users_confirmation(self):
+    def test_a_marked_project_posts_what_its_reviewer_found_clear(self):
+        # The reviewer answers the confidentiality question on top of the mechanical filters: a memory it found clear
+        # posts on its own; one it doubted, or did not answer, waits (deferred and marked held by the worker).
         self.config["fields"] = {"sensitive": ["people"]}
-        with self.assertRaisesRegex(publisher.PublishError, "sensitive_project"):
+        with self.assertRaisesRegex(publisher.PublishError, "confidentiality"):
             self.publish()
+        self.assertIn("confidentiality", publisher.EVENT_PROBLEMS)
         with self.assertRaisesRegex(publisher.PublishError, "confirmation_required"):
             self.publish(main_session=True)
-        self.assertEqual([], [a for a in self.calls() if a[:2] == ["issue", "comment"]])
         with store.Store(fixtures.REPO, config=self.config, readonly=True) as db:
-            self.assertEqual(["sensitive_project"], publisher.held_back(db, db.event(self.key), self.config))
-        self.assertEqual("verified", publisher.publish(fixtures.REPO, self.key, self.config, main_session=True,
-                                                       confirmed=True)["state"])
+            self.assertEqual(["confidentiality"], publisher.held_back(db, db.event(self.key), self.config))
+        body = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text().replace("open quote", "open quote again")
+        doubted = self._second(body.replace("again", "once more"), source="source3", review={"confidential": "doubt"})
+        with self.assertRaisesRegex(publisher.PublishError, "confidentiality"):
+            publisher.publish(fixtures.REPO, doubted, self.config)
+        self.assertEqual([], [a for a in self.calls() if a[:2] == ["issue", "comment"]])
+        clear = self._second(body, review={"confidential": "clear"})
+        self.assertEqual("verified", publisher.publish(fixtures.REPO, clear, self.config)["state"])
+        del self.config["fields"]
+        with store.Store(fixtures.REPO, config=self.config, readonly=True) as db:
+            self.assertEqual([], publisher.held_back(db, db.event(self.key), self.config))  # not asked, not held
 
     def test_untrusted_repository_posts_nothing(self):
         with mock.patch.object(publisher.recortex, "trusted_repos", return_value={}):

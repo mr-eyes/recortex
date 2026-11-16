@@ -33,8 +33,38 @@ EXTRACTION = {"type": "object", "properties": {
 REVIEW = {"type": "object", "properties": {
     "candidate_hash": ID, "accepted": {"type": "boolean"},
     "reason": {"type": "string", "enum": ["supported", "unsupported", "attribution", "privacy", "duplicate", "uncertain",
-                                          "withheld"]}},
+                                          "withheld"]},
+    "confidential": {"type": "string", "enum": ["clear", "doubt"]}},
     "required": ["candidate_hash", "accepted", "reason"], "additionalProperties": False}
+# Asked of the reviewer in a project marked as handling sensitive material (observer_publisher.confidential_project):
+# a memory it does not find clear waits for the user's answer instead of posting.
+CONFIDENTIALITY = ("This project is marked as handling %s. Answer confidential: clear only when no line of the candidate "
+                   "holds what never_write_down names, a match of restricted_patterns, the name or the contact of a "
+                   "private person, an identifier of a person or a partner, or a count small enough to point at one "
+                   "person; answer doubt when a line may, or when you are not sure.")
+UNKNOWN_MARKS = "sensitive material whose kind is not known on this machine (its field sheet is not approved here)"
+
+
+def restricted_forms(config):
+    """The project's restricted patterns as both model calls are told them: each name and pattern, never its example,
+    which matches its own pattern. At most 20; an entry not of the form is left out (the mechanical check still has
+    it)."""
+    entries = config.get("restricted_patterns") if isinstance(config, dict) else None
+    out = []
+    for entry in entries if isinstance(entries, list) else []:
+        if (isinstance(entry, dict) and isinstance(entry.get("name"), str) and isinstance(entry.get("pattern"), str)
+                and 0 < len(entry["name"]) <= 80 and 0 < len(entry["pattern"]) <= 200):
+            out.append({"name": entry["name"], "pattern": entry["pattern"]})
+    return out[:20]
+
+
+def confidentiality_question(config, repo):
+    """The question for the reviewer, in fixed words with the project's marks, or None where it is not asked."""
+    if not observer_publisher.confidential_project(config, repo):
+        return None
+    marks = field_sheet.state(config, repo)["marks"]
+    words = [field_sheet.MARK_WORDS[mark] for mark in marks if mark in field_sheet.MARK_WORDS]
+    return CONFIDENTIALITY % (" and ".join(words) if words else UNKNOWN_MARKS)
 
 
 def privacy_problem(text, config):
@@ -385,8 +415,11 @@ def _process(repo, config, project_root=None, invoke_fn=None):
         # In the order they happened: a turn reads as it ran.
         order = {item["source_id"]: _order(item) for item in offered}
         views = [_view(supplied[key]) for key in sorted(supplied, key=lambda key: order[key])]
+        forms = restricted_forms(config)
+        question = confidentiality_question(config, repo)
         payload = {"sources": views, "record": context, "templates": templates,
-                   "max_candidates": options["max_candidates"], "never_write_down": never, "account": account}
+                   "max_candidates": options["max_candidates"], "never_write_down": never,
+                   "restricted_patterns": forms, "account": account}
         result = invoke(payload, EXTRACTION, "extract", options)
         valid = result.get("ok") is True and runtime.validate(result.get("structured"), EXTRACTION)
         store.complete_invocation(reservation, valid, runtime.candidate_hash(result["structured"]) if valid else "")
@@ -449,10 +482,12 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 handled.add(primary)
                 continue
             digest = runtime.candidate_hash(candidate)
-            reviewed = invoke({"candidate": candidate, "candidate_hash": digest,
-                               "sources": [_view(supplied[sid]) for sid in candidate["sources"]],
-                               "context": _stretch(candidate, supplied, order), "record": context,
-                               "never_write_down": never, "account": account}, REVIEW, "review", options)
+            asked = {"confidentiality": question} if question else {}
+            reviewed = invoke(dict({"candidate": candidate, "candidate_hash": digest,
+                                    "sources": [_view(supplied[sid]) for sid in candidate["sources"]],
+                                    "context": _stretch(candidate, supplied, order), "record": context,
+                                    "never_write_down": never, "restricted_patterns": forms, "account": account},
+                                   **asked), REVIEW, "review", options)
             answer = reviewed.get("structured")
             valid = reviewed.get("ok") is True and runtime.validate(answer, REVIEW) and answer["candidate_hash"] == digest
             store.complete_invocation(review_id, valid, digest if valid else "")
@@ -470,6 +505,9 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 handled.add(primary)
                 continue
             review = {"accepted": True, "candidate_hash": digest, "reservation_id": review_id}
+            if question:
+                # Anything the reviewer doubts, or does not answer, waits for the user's answer (held_back).
+                review["confidential"] = "clear" if answer.get("confidential") == "clear" else "doubt"
             if observer_publisher.status_change(candidate["body"]):
                 review["status_authority"] = status_authority(candidate, supplied)
             eventkey = store.review_complete(primary, candidate, review)

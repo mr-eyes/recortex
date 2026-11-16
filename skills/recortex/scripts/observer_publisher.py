@@ -186,17 +186,23 @@ def outbound_problem(body, repo, status_ok=False):
     return None
 
 
+def confidential_project(config, repo):
+    """True when the reviewer answers the confidentiality question: a project marked as handling sensitive material,
+    or one whose field sheet is not approved on this machine, whose marks are then not known for sure."""
+    sheet = field_sheet.state(config, repo)
+    return bool(sheet["marks"]) or sheet["state"] in ("malformed", "unreadable", "new", "changed")
+
+
 def held_back(store, event, config):
-    """Why the automatic gate holds this event back, as reasons the main session may pass only with the user's
-    confirmation on their own terminal: a change of an earlier memory's status that rests neither on the user's typed
-    words nor on the agent's message to the user, and a project marked sensitive (or whose field sheet is not
-    approved on this machine)."""
+    """Why the automatic gate holds this event back, as reasons of observer_holds.ANSWER_REASONS that the main
+    session may pass only with the user's confirmation: a change of an earlier memory's status that rests neither on
+    the user's typed words nor on the agent's message to the user, and, where the reviewer answers the
+    confidentiality question (confidential_project), a memory it did not find clear."""
     reasons = []
     if status_change(event["body"]) and event["review"].get("status_authority") not in STATUS_AUTHORITY:
         reasons.append("status_change")
-    sheet = field_sheet.state(config, store.repo)
-    if sheet["marks"] or sheet["state"] in ("malformed", "unreadable", "new", "changed"):
-        reasons.append("sensitive_project")
+    if confidential_project(config, store.repo) and event["review"].get("confidential") != "clear":
+        reasons.append("confidentiality")
     return reasons
 
 
@@ -210,12 +216,6 @@ def _gate(store, config, main_session=False):
         raise PublishError("runtime_unavailable")
     if store.get_control("publication_paused", False):
         raise PublishError("publication_paused")
-    if not main_session:
-        sheet = field_sheet.state(config, store.repo)
-        if sheet["marks"] or sheet["state"] in ("malformed", "unreadable", "new", "changed"):
-            # 0.8.0: before anything cited is posted in a marked project, the step-7 reviewer answers the
-            # confidentiality question and the user is told. Only the main session can do that.
-            raise PublishError("sensitive_project")
     return settings
 
 
@@ -386,7 +386,10 @@ def publish(repo, eventkey, config, dry_run=False, main_session=False, confirmed
             # A deferred event waits for the main session, which may post it after its own review.
             if event["state"] != "ready" and not (main_session and event["state"] == "deferred"):
                 raise PublishError("not_ready")
-            if main_session and not confirmed and held_back(store, event, config):
+            waiting = held_back(store, event, config)
+            if waiting and not main_session:
+                raise PublishError(waiting[0])  # the event is deferred and marked held
+            if main_session and not confirmed and waiting:
                 raise PublishError("confirmation_required")
             _bound(event, store)
             problem = outbound_problem(event["body"], repo, status_ok=main_session and confirmed or

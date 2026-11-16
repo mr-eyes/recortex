@@ -282,9 +282,9 @@ class ObserverPostingTests(unittest.TestCase):
         self.config["observer"]["max_posts"] = 1
         observer_runtime.approve(fixtures.REPO, self.config)
         with store.Store(fixtures.REPO, config=self.config) as db:
-            db.transition(self.key, "deferred", reason="sensitive_project")
+            db.transition(self.key, "deferred", reason="confidentiality")
             db.set_control("automatic_posts", [__import__("time").time()])
-        for tty, said in ((None, "held back (sensitive_project)"), (self.terminal("no"), "not typed")):
+        for tty, said in ((None, "held back (confidentiality)"), (self.terminal("no"), "not typed")):
             with mock.patch.object(observer, "terminal", return_value=tty):
                 result, output = self.post()
             self.assertEqual(1, result, output)

@@ -243,6 +243,40 @@ class WorkerTests(unittest.TestCase):
             self.run_worker(self.invoke(self.candidate(sid)))
         self.assertEqual([('extract', 'names of client sites'), ('review', 'names of client sites')],
                          [(purpose, payload['never_write_down']) for purpose, payload in self.calls])
+    def test_a_marked_projects_reviewer_answers_the_confidentiality_question(self):
+        # In a marked project the reviewer is asked, with the marks in fixed words; its answer is kept with the
+        # review, and no answer counts as a doubt. Both model calls get the restricted patterns, names and patterns
+        # without their examples. An unmarked project's reviewer is not asked.
+        self.config['restricted_patterns'] = [{'name': 'site code', 'pattern': '\\bST-[0-9]{3}\\b', 'example': 'ST-204'}]
+        marked = {'state': 'approved', 'entry': {'brief': {'never': 'names of client sites'}}, 'marks': ['people']}
+        for sheet, answer, kept in ((marked, 'clear', 'clear'), (marked, None, 'doubt'), (marked, 'doubt', 'doubt'),
+                                    ({'state': 'none', 'entry': None, 'marks': []}, 'clear', None)):
+            self.calls = []
+            sid = self.capture(QUOTE + ' Case %s %s.' % (sheet['state'], answer))
+            def call(payload, schema, purpose, config, candidate=self.candidate(sid)):
+                self.calls.append((purpose, payload))
+                if purpose == 'extract':
+                    return {'ok': True, 'structured': {'candidates': [candidate], 'ignored': []}}
+                result = {'candidate_hash': payload['candidate_hash'], 'accepted': True, 'reason': 'supported'}
+                return {'ok': True, 'structured': dict(result, **({'confidential': answer} if answer else {}))}
+            with patch.object(worker.field_sheet, 'state', return_value=sheet):
+                ready = self.run_worker(call)['ready']
+            payloads = dict(self.calls)
+            for purpose in ('extract', 'review'):
+                self.assertEqual([{'name': 'site code', 'pattern': '\\bST-[0-9]{3}\\b'}],
+                                 payloads[purpose]['restricted_patterns'], purpose)
+            self.assertNotIn('ST-204', json.dumps(payloads))
+            self.assertNotIn('confidentiality', payloads['extract'])
+            with store.Store(REPO, config=self.config) as db:
+                review = db.event(ready[0])['review']
+            if kept is None:
+                self.assertNotIn('confidentiality', payloads['review'])
+                self.assertNotIn('confidential', review)
+            else:
+                self.assertIn('marked as handling data about people', payloads['review']['confidentiality'])
+                self.assertEqual(kept, review['confidential'], answer)
+        self.assertIn('confidentiality question', runtime.PROMPTS['review'])
+        self.assertIn('restricted_patterns', runtime.PROMPTS['extract'])
     def test_unbound_candidates_never_reach_the_reviewer(self):
         cases = {'excerpt_binding': dict(excerpts=['words that are not in the source']),
                  'destination': dict(issue=99),
