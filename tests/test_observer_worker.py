@@ -449,6 +449,70 @@ class ObserverCliTests(unittest.TestCase):
         result,value=self.cli('enable','--mode','automatic','--model','sonnet','--yes')
         self.assertEqual(1,result.returncode);self.assertFalse(value['approved']);self.assertEqual('runtime-gate',value['code'])
         self.assertEqual({},self.approvals());self.assertFalse((self.base/'state'/'recortex'/'private'/'octo-org__octo-repo').exists())
+    def hold(self):
+        import observer_holds
+        with patch.dict(os.environ,self.env,clear=True):
+            with store.Store(REPO,config={}) as db:
+                source={'source_id':'s1','role':'user','direct_user':True,'text':'/recortex hold git-push'}
+                hold=observer_holds.make_hold(source,REPO,'git-push')
+                db.update_holds(lambda holds:holds+[hold])
+        return hold['id']
+    def held(self):
+        with patch.dict(os.environ,self.env,clear=True):
+            with store.Store(REPO,config={}) as db:return [hold['state'] for hold in db.holds()]
+    def test_release_refuses_without_a_terminal_of_the_users_own(self):
+        hold_id=self.hold()
+        command=[sys.executable,str(ROOT/'skills/recortex/scripts/observer.py'),'release',hold_id]
+        # Pipes and no controlling terminal: what Claude Code's Bash tool gives a command.
+        done=subprocess.run(command,cwd=self.project,env=self.env,input='release\n',capture_output=True,text=True,
+                            timeout=10,start_new_session=True)
+        self.assertEqual(1,done.returncode);self.assertEqual('terminal-required',json.loads(done.stdout)['code'])
+        # A terminal on stdin and stdout, but no controlling terminal: /dev/tty cannot be opened.
+        import pty
+        main,child=pty.openpty()
+        try:
+            done=subprocess.run(command,cwd=self.project,env=self.env,stdin=child,stdout=child,stderr=subprocess.PIPE,
+                                timeout=10,start_new_session=True)
+            os.close(child);child=None
+            self.assertEqual(1,done.returncode)
+            self.assertIn(b'terminal-required',os.read(main,4096))
+        finally:
+            os.close(main)
+            if child is not None:os.close(child)
+        self.assertEqual(['active'],self.held())
+    def test_release_succeeds_in_a_terminal_after_the_user_confirms(self):
+        import pty
+        hold_id=self.hold()
+        def run(answer):
+            pid,fd=pty.fork()
+            if pid==0:
+                try:
+                    os.chdir(self.project)
+                    os.execve(sys.executable,[sys.executable,str(ROOT/'skills/recortex/scripts/observer.py'),'release',hold_id],self.env)
+                finally:
+                    os._exit(127)
+            seen=b''
+            try:
+                while b'Type release to confirm' not in seen:
+                    try:
+                        seen+=os.read(fd,4096)
+                    except OSError:
+                        self.fail(seen)
+                os.write(fd,answer)
+                while True:
+                    try:
+                        chunk=os.read(fd,4096)
+                    except OSError:
+                        break
+                    if not chunk:break
+                    seen+=chunk
+            finally:
+                os.close(fd)
+            return os.waitpid(pid,0)[1],seen
+        status,seen=run(b'no\n')
+        self.assertNotEqual(0,status);self.assertIn(b'not-confirmed',seen);self.assertEqual(['active'],self.held())
+        status,seen=run(b'release\n')
+        self.assertEqual(0,status,seen);self.assertIn(b'"released": true',seen);self.assertEqual(['released'],self.held())
     def test_runtime_check_needs_this_folders_approval(self):
         result,value=self.cli('runtime-check')
         self.assertEqual(1,result.returncode);self.assertEqual('approval',value['code'])

@@ -10,6 +10,7 @@ import time
 import index
 import names
 import observer_context
+import observer_holds
 import observer_runtime as runtime
 import observer_store
 import observer_sources
@@ -49,6 +50,9 @@ def parser():
             command.add_argument("--source", required=True, help="retry a known deferred source through independent review")
         if name == "reconcile":
             command.add_argument("eventkey")
+    release = sub.add_parser("release", help="release a hold; run it yourself in a separate terminal, which asks you "
+                                             "to confirm there")
+    release.add_argument("hold_id")
     discard = sub.add_parser("discard", help="drop a reviewed event that will not be posted; its excerpts then expire")
     discard.add_argument("eventkey")
     context = sub.add_parser("context")
@@ -114,6 +118,57 @@ def enable(repo, config, mode, yes=False, model=None, root=None):
         pass  # the queue, so that status and the hooks find it
     runtime.approve(repo, {"observer": options}, root)
     return dict(preview, settings=options, approved=True)
+
+
+TERMINAL = ("Run observer.py release HOLD_ID yourself in a separate terminal, outside Claude Code: it asks you to "
+            "confirm there. Nothing in a session releases a hold.")
+
+
+class Terminal:
+    """The controlling terminal, read and written directly, never through stdin or stdout."""
+
+    def __init__(self, descriptor):
+        self.descriptor = descriptor
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        os.close(self.descriptor)
+
+    def ask(self, question):
+        os.write(self.descriptor, question.encode("utf-8"))
+        answer = b""
+        while not answer.endswith(b"\n") and len(answer) < 256:
+            chunk = os.read(self.descriptor, 256)
+            if not chunk:
+                break
+            answer += chunk
+        return answer.decode("utf-8", "replace").strip()
+
+
+def terminal():
+    """The user's own terminal, opened for the confirmation, or None. A command run by Claude Code's Bash tool has no
+    controlling terminal and pipes for stdin and stdout, so a model cannot release a hold."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return None
+    try:
+        return Terminal(os.open("/dev/tty", os.O_RDWR | getattr(os, "O_NOCTTY", 0)))
+    except OSError:
+        return None
+
+
+def release(store, hold_id, tty):
+    """Release one active hold after the user typed the confirmation word on their terminal."""
+    hold = next((item for item in store.holds() if item.get("id") == hold_id and item.get("state") == "active"), None)
+    if hold is None:
+        return {"code": "hold-unavailable"}
+    question = "Release hold %s (%s%s) of %s? Type release to confirm: " % (
+        hold_id, hold.get("action"), " " + json.dumps(hold["command"]) if hold.get("command") else "", store.repo)
+    if tty.ask(question) != "release":
+        return {"code": "not-confirmed", "hold_id": hold_id}
+    store.update_holds(lambda holds: observer_holds.release(holds, hold_id))
+    return {"action": "release", "hold_id": hold_id, "released": True}
 
 
 def _alarm(signum, frame):
@@ -218,6 +273,11 @@ def main(argv=None):
             return 0
         if args.command == "reconcile":
             emit(observer_publisher.reconcile(repo, args.eventkey, config, dry_run=args.dry_run)); return 0
+        tty = None
+        if args.command == "release":
+            tty = terminal()
+            if tty is None:
+                emit({"code": "terminal-required", "note": TERMINAL}); return 1
         if args.command == "runtime-check" and not runtime.approval_valid(repo, config):
             emit({"code": "approval", "note": "Run observer.py enable --model MODEL --yes first; the check is bound "
                                               "to the model chosen there."}); return 1
@@ -252,6 +312,10 @@ def main(argv=None):
                 emit({"sources": [{key: row[key] for key in ("source_id", "state", "reason", "created", "updated")}
                                   for row in store.pending(limit=100)],
                       "events": [{key: row[key] for key in ("eventkey", "state", "reason")} for row in store.events(limit=100)]}); return 0
+            if args.command == "release":
+                with tty:
+                    result = release(store, args.hold_id, tty)
+                emit(result); return int(not result.get("released"))
             if args.command == "discard":
                 event = store.event(args.eventkey)
                 if event is None or event["state"] not in ("ready", "deferred"):

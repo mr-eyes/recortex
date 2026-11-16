@@ -31,18 +31,17 @@ NOTICES = {
     "runtime": "recortex observer: independent checks are unavailable; captured work remains queued. Run observer.py status.",
     "context": "recortex observer: task context is unavailable; read the current record before relying on it.",
     "paused": "recortex observer: capture is paused; earlier holds remain active. Run observer.py status.",
-    "control": "recortex observer: a supported explicit hold or release was recorded.",
+    "control": "recortex observer: an explicit hold was recorded. Run observer.py holds.",
     "worker": "recortex observer: the worker could not start; captured work remains queued. Run observer.py status.",
     "pending": "recortex observer: captured work is still pending; it is not yet verified in GitHub. Run observer.py status.",
     "budget": "recortex observer: the model budget is exhausted; captured work remains queued. Run observer.py status.",
     "control-refused": "recortex observer: an explicit control could not be stored safely; that control is not active. Run observer.py status.",
     "cap": "recortex observer: today's limit of automatic comments is reached; reviewed memories wait in the queue. Run observer.py pending.",
-    "release-refused": "recortex observer: a hold is released only when you type /recortex release HOLD_ID as your own whole message; nothing was released. Run observer.py holds.",
+    "release-refused": "recortex observer: nothing in a session releases a hold; run observer.py release HOLD_ID in a separate terminal, outside Claude Code. Run observer.py holds.",
 }
 TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure")
 # Lines that answer something the user just did (a hold, a release); each arises once, so it is never held back.
 ANSWERS = frozenset(("control", "control-refused", "release-refused"))
-TAIL = 262144  # bytes of the transcript searched for a model's command call before a typed release is accepted
 
 
 def _output(event, context="", notices=(), denial=None):
@@ -71,8 +70,9 @@ def launch_worker(project_root):
 
 
 def _controls(store, rows, project_root, repo, config):
-    """Holds from the user's messages in the transcript. A release found there is never applied (see _prompt_release);
-    when it names a hold that is still active, the third value says so."""
+    """Holds from the user's messages in the transcript. A release found there is never applied: only observer.py
+    release, run by the user in a terminal, releases a hold. When it names a hold that is still active, the third value
+    says so, and the session is told how to release it."""
     controls, refused, unproven = [], False, False
     for row in rows:
         if row.get("role") != "user":
@@ -101,47 +101,6 @@ def _controls(store, rows, project_root, repo, config):
 
     store.update_holds(change)
     return True, refused, unproven
-
-
-def _model_invoked(data, project_root, hold_id):
-    """True when the end of this session's transcript holds a model's SlashCommand or Skill call that names the hold;
-    raises SourceError when the transcript cannot be read, so that an unproven release does not happen."""
-    path = observer_sources.approved_path(data.get("transcript_path"), project_root, data.get("session_id"))
-    size = os.stat(path, follow_symlinks=False).st_size
-    start = max(0, size - TAIL)
-    for line in observer_sources._read(path, start, size - start).decode("utf-8", "replace").splitlines():
-        if hold_id not in line:
-            continue
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        content = (record.get("message") or {}).get("content") if isinstance(record, dict) else None
-        for block in content if isinstance(content, list) else []:
-            if (isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") in ("SlashCommand", "Skill")
-                    and hold_id in json.dumps(block.get("input"))):
-                return True
-    return False
-
-
-def _prompt_release(store, data, project_root, repo):
-    """A release the user typed: the prompt of UserPromptSubmit is exactly /recortex release HOLD_ID, read from the
-    hook's own input, not from the transcript, and no model command call in the transcript names the hold. None when
-    the prompt is no release; True when the hold was released; False when it was not (the session is told)."""
-    hold_id = observer_holds.release_from_prompt(data.get("prompt"))
-    if hold_id is None:
-        return None
-    session = data.get("session_id")
-    try:
-        if not isinstance(session, str) or not observer_sources.SESSION.fullmatch(session):
-            return False
-        if _model_invoked(data, project_root, hold_id):
-            return False
-        source = {"source_id": "prompt:" + session, "role": "user", "direct_user": True, "text": data["prompt"].strip()}
-        store.update_holds(lambda holds: observer_holds.apply_release(holds, source, hold_id))
-        return True
-    except (ValueError, OSError, observer_sources.SourceError):
-        return False
 
 
 def _capture(store, event, data, project_root, repo, config, capture=True):
@@ -263,10 +222,6 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
                 result = observer_holds.check_action(store.holds(), repo, data.get("tool_name"),
                                                      data.get("tool_input"), session_id=data.get("session_id"))
                 denial = result if result["decision"] == "deny" else None
-            if event == "UserPromptSubmit":
-                released = _prompt_release(store, data, project_root, repo)
-                if released is not None:
-                    notices.append("control" if released else "release-refused")
             paused = store.get_control("capture_paused", False)
             if paused:
                 notices.append("paused")
@@ -277,9 +232,9 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
                     if controlled:
                         notices.append("control")
                     if event == "UserPromptSubmit" and not controlled and isinstance(data.get("prompt"), str):
-                        if (observer_holds._control(data["prompt"].strip())
-                                and not observer_holds.release_from_prompt(data["prompt"])):
-                            incomplete = True
+                        typed = observer_holds._control(data["prompt"].strip())
+                        if typed and typed["operation"] == "hold":
+                            incomplete = True  # a hold typed now that the transcript does not show yet
                     if unproven:
                         notices.append("release-refused")
                     if incomplete:

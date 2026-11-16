@@ -280,13 +280,14 @@ class Replay:
         return identity
 
     def release(self, hold_id, session="owner-controls"):
-        """A release the user typed: the hook's own prompt, then its transcript line, as Claude Code writes them."""
-        text = "/recortex release " + hold_id
-        data, identity = self.append(session, text, "control", role="user")
-        with self.store() as store:
-            require(observer_hooks._prompt_release(store, dict(data, prompt=text), str(self.project), REPO) is True,
-                    "a release typed as the user's own prompt must release the hold")
+        """A release typed into the session releases nothing; observer.py release, which the user confirms in a
+        terminal of their own, does."""
+        data, identity = self.append(session, "/recortex release " + hold_id, "control", role="user")
         self.capture(data, hooks=True)
+        with self.store() as store:
+            require(any(hold["id"] == hold_id and hold["state"] == "active" for hold in store.holds()),
+                    "a release typed into the session must not release the hold")
+            store.update_holds(lambda holds: observer_holds.release(holds, hold_id))
         return identity
 
     def hold_checks(self, released=False):

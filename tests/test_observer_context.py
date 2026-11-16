@@ -178,10 +178,12 @@ class ObserverHoldTests(unittest.TestCase):
         self.assertIsNone(holds.compile_prompt_control("continue", self.source("continue"), REPO))
         self.assertEqual("deny", self.check(hold, "git push origin main")["decision"])
         with self.assertRaises(ValueError):
-            holds.apply_release([hold], self.source("continue"), hold["id"])
-        released = holds.apply_release([hold], self.source("/recortex release " + hold["id"]), hold["id"])
+            holds.release([hold], "f" * 24)
+        released = holds.release([hold], hold["id"])
         self.assertEqual("allow", self.check(released[0], "git push origin main")["decision"])
         self.assertEqual("active", hold["state"])
+        with self.assertRaises(ValueError):
+            holds.release(released, hold["id"])  # only an active hold
 
     def test_scope_applies_without_blocking_other_sessions_or_repositories(self):
         hold = self.hold(scope={"session_id": "session-1", "issue": 7})

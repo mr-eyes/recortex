@@ -38,26 +38,12 @@ NATIVE = re.compile(r"<command-message>[^<\n]*</command-message>\n<command-name>
                     r"<command-args>([^<\n]*)</command-args>")
 
 
-RELEASE = re.compile(r"/(?:recortex:)?recortex release ([a-f0-9]{24})")
-
-
-def release_from_prompt(prompt):
-    """The hold id when the prompt of UserPromptSubmit, the text the user submitted, is exactly a release; else None.
-    This is the only way a hold is released: text in the transcript, and the slash-command wrapper that a model's
-    tool call can also produce, never release one."""
-    match = RELEASE.fullmatch(prompt.strip()) if isinstance(prompt, str) else None
-    return match.group(1) if match else None
-
-
 def _control(text):
     native = NATIVE.fullmatch(text)
     if native:
-        # How Claude Code stores a typed /recortex command. A model's tool call can produce the same wrapper, so it
-        # may only add a hold (which only denies), never release one.
+        # How Claude Code stores a typed /recortex command. A model's tool call can produce the same wrapper, which
+        # can only add a hold (a hold only denies); no text in a session ever releases one (see release).
         text = ("/recortex " + native.group(1).strip()).strip()
-        if text.startswith("/recortex release"):
-            match = re.fullmatch(r"/recortex release ([a-f0-9]{24})", text)
-            return {"operation": "release", "hold_id": match.group(1), "native": True} if match else None
     if "\n" in text or "\r" in text:
         return None
     if text.lower().rstrip(".! ") in PHRASES:
@@ -122,16 +108,17 @@ repository-wide hold. Narrower scope is an explicit make_hold argument instead.
     return {"operation": "hold", "hold": make_hold(source, repo, parsed["action"], scope=scope, command=parsed["command"])}
 
 
-def apply_release(holds, source, hold_id):
-    """Return a new list; only an explicit user release of the exact id clears it."""
-    sid, text = _source(source)
-    if not HOLD_ID.fullmatch(hold_id or "") or _control(text) != {"operation": "release", "hold_id": hold_id}:
-        raise ValueError("an explicit original user release of this hold is required")
+def release(holds, hold_id, by="terminal"):
+    """Return a new list with the named active hold released. Only observer.py release calls it, after the user
+    confirmed in a terminal of their own: nothing in a session (a prompt, a transcript line, a model's tool call or
+    a hook's input) releases a hold."""
+    if not HOLD_ID.fullmatch(hold_id or ""):
+        raise ValueError("the named hold does not exist")
     result, seen = [], False
     for old in holds:
         hold = dict(old)
-        if hold.get("id") == hold_id:
-            hold.update(state="released", released_by=sid, release_quote=text)
+        if hold.get("id") == hold_id and hold.get("state") == "active":
+            hold.update(state="released", released_by=by)
             seen = True
         result.append(hold)
     if not seen:

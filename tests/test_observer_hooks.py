@@ -76,9 +76,11 @@ class ObserverHookTests(unittest.TestCase):
                     tool_input={"command": "git push"})
         self.assertNotIn("hookSpecificOutput", hooks.handle("pre-tool", data, self.config, REPO))
 
-    def release(self, hold_id, prompt=None):
-        text = "/recortex release " + hold_id
-        return hooks.handle("prompt-submit", dict(self.data, prompt=prompt or text), self.config, REPO)
+    def release(self, hold_id):
+        """What observer.py release does once the user confirmed in a terminal of their own."""
+        import observer_holds
+        with Store(REPO) as store:
+            store.update_holds(lambda holds: observer_holds.release(holds, hold_id))
 
     def test_typed_recortex_command_in_its_stored_form_holds_for_the_repository(self):
         stored = ("<command-message>recortex</command-message>\n<command-name>/recortex</command-name>\n"
@@ -92,43 +94,31 @@ class ObserverHookTests(unittest.TestCase):
                     tool_input={"command": "git push"})
         self.assertEqual("deny", hooks.handle("pre-tool", data, self.config, REPO)["hookSpecificOutput"]["permissionDecision"])
 
-    def test_release_never_comes_from_the_transcript_or_a_model_command_call(self):
+    def test_nothing_in_a_session_releases_a_hold(self):
+        import contextlib, io, observer
         stored = ("<command-message>recortex</command-message>\n<command-name>/recortex</command-name>\n"
                   "<command-args>%s</command-args>")
         self.append("/recortex hold git-push")
         self.run_hook()
         with Store(REPO) as store:
             hold_id = store.holds()[0]["id"]
+        typed = "/recortex release " + hold_id
         # The wrapper a model's SlashCommand call can produce, and plain transcript text, release nothing.
-        for text in (stored % ("release " + hold_id), "/recortex release " + hold_id):
+        for text in (stored % ("release " + hold_id), typed):
             self.append(text)
             result = self.run_hook()
             self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"], text)
-            if "command-name" in text:  # the session is told once; the same set of lines is not repeated
-                self.assertIn("released only when you type", result["systemMessage"])
-        # A typed release whose id a model's Skill or SlashCommand call named in this session is refused too.
-        self.append([{"type": "tool_use", "id": "t1", "name": "Skill",
-                      "input": {"skill": "recortex", "args": "release " + hold_id}}], role="assistant")
-        self.assertIn("nothing was released", self.release(hold_id)["systemMessage"])
+            if "command-name" in text:  # the session is told how, once; the same set of lines is not repeated
+                self.assertIn("run observer.py release HOLD_ID in a separate terminal", result["systemMessage"])
+        # Neither does a hook's own prompt field, which a model can craft by running the hook itself.
+        hooks.handle("prompt-submit", dict(self.data, prompt=typed), self.config, REPO)
+        with mock.patch.object(observer.sys, "stdin", io.StringIO(json.dumps(dict(self.data, prompt=typed)))), \
+                mock.patch.object(observer.recortex, "allowed_users", return_value={"octocat"}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            observer.hook("prompt-submit", config=self.config, repo=REPO)
         self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
-
-    def test_release_typed_by_the_user_works(self):
-        self.append("/recortex hold git-push")
-        self.run_hook()
         with Store(REPO) as store:
-            hold_id = store.holds()[0]["id"]
-        said = self.release(hold_id, prompt="please /recortex release " + hold_id).get("systemMessage", "")
-        self.assertNotIn("recorded", said)
-        self.assertNotIn("nothing was released", said)  # ordinary conversation, not a release attempt
-        self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])  # not the whole message
-        self.assertIn("nothing was released", self.release("a" * 24)["systemMessage"])  # no such hold
-        self.assertIn("hold or release was recorded", self.release(hold_id)["systemMessage"])
-        self.append("/recortex release " + hold_id)  # its own transcript line, written after the hook
-        result = self.run_hook()
-        self.assertNotIn("hookSpecificOutput", result)
-        self.assertNotIn("nothing was released", result.get("systemMessage", ""))
-        with Store(REPO) as store:
-            self.assertEqual(("released", "prompt:session1"), (store.holds()[0]["state"], store.holds()[0]["released_by"]))
+            self.assertEqual(["active"], [hold["state"] for hold in store.holds()])
 
     def test_original_hold_is_enforced_before_worker_or_inference(self):
         self.append("/recortex hold git-push")
@@ -161,7 +151,7 @@ class ObserverHookTests(unittest.TestCase):
         self.release(hold_id)
         self.assertNotIn("hookSpecificOutput", self.run_hook())
         with Store(REPO) as store:
-            self.assertEqual("released", store.holds()[0]["state"])
+            self.assertEqual(("released", "terminal"), (store.holds()[0]["state"], store.holds()[0]["released_by"]))
 
     def test_other_project_command_does_not_inherit_current_hold(self):
         self.append("/recortex hold gh-release")
