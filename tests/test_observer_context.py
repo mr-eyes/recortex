@@ -268,9 +268,9 @@ class ObserverHoldTests(unittest.TestCase):
         # starts it, for each kind of hold. Its known read-only form, and the words inside one quoted argument, run.
         for action, held, running in (
                 ("git-push", ("foo git push", "parallel git push ::: a", "retry git push", "ionice -c3 git push",
-                              "flock /tmp/l git push", "caffeinate git push --force"),
-                 ("timeout 5 git push --dry-run", "retry git push --dry-run", "echo 'git push'",
-                  "git commit -m 'push the parser fix'", "git status", "git log -1")),
+                              "flock /tmp/l git push", "caffeinate git push --force", "retry git push --dry-run"),
+                 ("git push --dry-run", "echo 'git push'", "git commit -m 'push the parser fix'", "git status",
+                  "git log -1")),
                 ("git-tag", ("retry git tag v1.2", "foo git tag -a v2 -m 'release two'", "timeout 9 git tag v1"),
                  ("git tag", "git tag -l", "git describe --tags", "echo 'git tag'")),
                 ("gh-release", ("retry gh release create v1", "foo gh release delete v1 --yes",
@@ -283,6 +283,23 @@ class ObserverHoldTests(unittest.TestCase):
         # gh --repo naming another repository stays that repository's, whatever starts it.
         self.assertEqual("allow", self.check(self.hold("gh-release"), "retry gh release create v1 --repo octo-org/another")
                          ["decision"])
+
+    def test_the_security_checks_bypasses_are_held(self):
+        # ANSI-C and locale quoting are not decoded: their words cannot be known, so every held action counts. A
+        # read-only form is exempt only as the part's own program, its flag an option before any --. Every find -exec
+        # group is read, watch runs its arguments as a shell line, and xargs feeds git its arguments from stdin.
+        for command in ("git $'pu\\x73h'", 'git $"push"', "env git push --dry-run", "timeout 5 git push --dry-run",
+                        "find . -exec true \; -exec git push \;", "watch -n 1 'git push'", "printf push | xargs git",
+                        "git push -o -n origin main", "git push origin -- -n", "sudo git push -n"):
+            self.assertEqual("deny", self.check(self.hold(), command)["decision"], command)
+        for action, command in (("git-tag", "git $'tag' v1"), ("gh-release", "gh $'release' create v1"),
+                                ("git-tag", "printf v1 | xargs git tag"), ("gh-release", "echo v1 | xargs gh release create"),
+                                ("git-tag", "git tag -m -l v1"), ("git-tag", "env git tag -l")):
+            self.assertEqual("deny", self.check(self.hold(action), command)["decision"], (action, command))
+        for command in ("git push --dry-run", "git push -n origin main", "git -C . push --dry-run",
+                        "watch -n 5 git status", "xargs echo < list.txt"):
+            self.assertEqual("allow", self.check(self.hold(), command)["decision"], command)
+        self.assertEqual("allow", self.check(self.hold("git-tag"), "git tag -l 'v1*'")["decision"])
 
     def test_exact_command_hold_can_cover_an_opaque_command_without_guessing(self):
         source = self.source("/recortex hold command python publish.py --release")

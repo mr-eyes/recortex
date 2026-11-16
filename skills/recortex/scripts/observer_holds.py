@@ -186,7 +186,11 @@ def read_only(tool_name, tool_input):
 
 class Unparsed(ValueError):
     """A shell line this module does not take apart: an unbalanced quote, a command or process substitution, a
-    here-document, a subshell."""
+    here-document, a subshell, ANSI-C or locale quoting ("quoting": its words cannot be known, so every held action
+    counts as present)."""
+
+
+SEP = "\x00;"  # a command separator among the words, never a word itself (a literal ; is a word)
 
 
 OPERATORS = (";;", "&&", "||", "|&", ";", "&", "|")
@@ -194,7 +198,7 @@ REDIRECT = re.compile(r"(?:[0-9]*|&)(?:>>|>&|>\||<<<|<<-?|<>|<&|>|<)")
 
 
 def _shell_tokens(command):
-    """The words of a shell line, with ";" for every command separator (; && || | & and newlines), redirections and
+    """The words of a shell line, with SEP for every command separator (; && || | & and newlines), redirections and
     comments dropped. Raises Unparsed for what is not taken apart here."""
     out, word, quoted, i, n = [], [], False, 0, len(command)
 
@@ -211,7 +215,7 @@ def _shell_tokens(command):
             i += 1
         elif char in "\r\n":
             end()
-            out.append(";")
+            out.append(SEP)
             i += 1
         elif char == "\\":
             if i + 1 < n and command[i + 1] == "\n":
@@ -219,8 +223,8 @@ def _shell_tokens(command):
             else:
                 word.append(command[i + 1] if i + 1 < n else "")
                 i += 2
-        elif command.startswith("$'", i):
-            i += 1  # ANSI-C quoting: the quoted text follows as a single-quoted word
+        elif command.startswith("$'", i) or command.startswith('$"', i):
+            raise Unparsed("quoting")  # ANSI-C or locale quoting: not decoded here, so its words are not known
         elif char == "'":
             close = command.find("'", i + 1)
             if close < 0:
@@ -267,7 +271,7 @@ def _shell_tokens(command):
             operator = next((op for op in OPERATORS if command.startswith(op, i)), None)
             if operator:
                 end()
-                out.append(";")
+                out.append(SEP)
                 i += len(operator)
             else:
                 word.append(char)
@@ -304,8 +308,13 @@ def _shell_tokens_word(command, i):
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.S)
 PREFIXES = {"command": (), "nohup": (), "exec": (), "nice": ("-n",), "time": (), "env": ("-u", "-C", "-S"),
             "sudo": ("-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"),
-            "timeout": ("-s", "-k", "--signal", "--kill-after"), "stdbuf": ("-i", "-o", "-e"),
-            "xargs": ("-I", "-L", "-n", "-P", "-d", "-E", "-a", "-s"), "doas": ("-u",), "watch": ("-n", "-d")}
+            "timeout": ("-s", "-k", "--signal", "--kill-after"), "stdbuf": ("-i", "-o", "-e"), "doas": ("-u",)}
+XARGS = ("-I", "-L", "-n", "-P", "-d", "-E", "-a", "-s", "--max-args", "--max-procs", "--delimiter", "--arg-file")
+WATCH = ("-n", "--interval", "-q", "--equexit")
+# Options of git push and git tag that take the next word as their value: a -n or -l there is no flag.
+PUSH_VALUES = ("-o", "--push-option", "--receive-pack", "--exec", "--repo")
+TAG_VALUES = ("-m", "-F", "-u", "--message", "--file", "--local-user", "--sort", "--format", "--contains",
+              "--no-contains", "--points-at", "--merged", "--no-merged", "--cleanup", "--column")
 KEYWORDS = ("if", "then", "else", "elif", "do", "while", "until")  # what a compound command's part starts with
 DURATION = re.compile(r"[0-9]+(?:\.[0-9]+)?[smhd]?")  # timeout's first argument
 SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
@@ -314,49 +323,66 @@ SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
 ACTION_WORDS = {"git-push": ("git", "push"), "git-tag": ("git", "tag"), "gh-release": ("gh", "release")}
 
 
-def _simple(words):
-    """The words of one simple command without its leading assignments and wrapper prefixes (env, sudo, command,
-    nohup, exec, nice, time, a { group), each prefix's own options included."""
+def _own(words):
+    """The words of one simple command without what is shell syntax around its program: leading assignments, a
+    compound command's keyword (if, then, do...), { } and !."""
     words = list(words)
-    while words:
-        head = words[0].rsplit("/", 1)[-1] if words[0] not in ("{", "}") else words[0]
-        if ASSIGNMENT.fullmatch(words[0]) or words[0] in ("{", "}", "!") or words[0] in KEYWORDS:
-            words.pop(0)
-        elif head in PREFIXES:
-            takes = PREFIXES[head]
-            words.pop(0)
-            while words and (words[0].startswith("-") or head == "env" and ASSIGNMENT.fullmatch(words[0])):
-                option = words.pop(0)
-                if option in takes and words:
-                    words.pop(0)
-            if head == "timeout" and words and DURATION.fullmatch(words[0]):
-                words.pop(0)  # its duration
-        else:
-            break
+    while words and (ASSIGNMENT.fullmatch(words[0]) or words[0] in ("{", "}", "!") or words[0] in KEYWORDS):
+        words.pop(0)
     return words
+
+
+def _simple(words):
+    """_own, then without the wrapper prefixes it starts with (env, sudo, command, nohup, exec, nice, time, timeout,
+    stdbuf, doas), each prefix's own options included."""
+    words = _own(words)
+    while words:
+        head = words[0].rsplit("/", 1)[-1]
+        if head not in PREFIXES:
+            break
+        takes = PREFIXES[head]
+        words.pop(0)
+        while words and (words[0].startswith("-") or head == "env" and ASSIGNMENT.fullmatch(words[0])):
+            option = words.pop(0)
+            if option in takes and words:
+                words.pop(0)
+        if head == "timeout" and words and DURATION.fullmatch(words[0]):
+            words.pop(0)  # its duration
+        words = _own(words)
+    return words
+
+
+def _fallback(text, error):
+    """The held actions a line not taken apart is taken to hold: all of them when its words cannot be known (ANSI-C
+    or locale quoting); else those whose words are all in it."""
+    if str(error) == "quoting":
+        return sorted(ACTION_WORDS)
+    return _worded(text)
 
 
 def _hits(command, depth=0):
     """[(action, target repository or None)] of the held actions in a shell line, part by part; raises Unparsed. A
-    part is read for its program (git, gh, find -exec, eval, a shell's -c string), and then by the general rule: a
-    part whose own words include all of a held action's words is that action, whatever program starts it, unless it
-    is that action's known read-only form (_safe). The words inside one quoted argument are one word, so an echo or a
-    commit message that quotes them is not held."""
+    part is read for its program (git, gh, find -exec, eval, watch, xargs, a shell's -c string), and then by the
+    general rule: a part whose own words include all of a held action's words is that action, whatever program starts
+    it, unless it is that action's known read-only form run as the part's own program (_safe). The words inside one
+    quoted argument are one word, so an echo or a commit message that quotes them is not held."""
     words, hits, parts = _shell_tokens(command), [], [[]]
     for word in words:
-        if word == ";":
+        if word == SEP:
             parts.append([])
         else:
             parts[-1].append(word)
     for part in parts:
-        part = _simple(part)
+        own = _own(part)
+        part = _simple(own)
         if not part:
             continue
+        wrapped = part != own  # a wrapper started it: no read-only form is taken on trust
         found = _dispatch(part, depth)
         hits += found
         named = {action for action, _ in found}
         hits += [(action, _target(part, action)) for action in _token_actions(part)
-                 if action not in named and not _safe(part, action)]
+                 if action not in named and (wrapped or not _safe(part, action))]
     return hits
 
 
@@ -366,27 +392,47 @@ def _target(part, action):
     return _gh_command(part[names.index("gh") + 1:])[0] if action == "gh-release" and "gh" in names else None
 
 
+def _again(text, depth):
+    """The held actions of `text` parsed again as a shell line (eval, a shell's -c string, watch)."""
+    if depth >= 3:
+        raise Unparsed("depth")
+    try:
+        return _hits(text, depth + 1)
+    except Unparsed as error:
+        return [(action, None) for action in _fallback(text, error)]
+
+
 def _dispatch(part, depth):
-    program = part[0].rsplit("/", 1)[-1]
+    program, args = part[0].rsplit("/", 1)[-1], part[1:]
     if program == "eval":
-        if depth >= 3:
-            raise Unparsed("depth")
-        try:
-            return _hits(" ".join(part[1:]), depth + 1)
-        except Unparsed:
-            return [(action, None) for action in _worded(" ".join(part[1:]))]
+        return _again(" ".join(args), depth)
     if program in SHELLS:
-        script = next((part[n + 1] for n, word in enumerate(part[1:-1], 1)
-                       if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", word)), None)
-        if script is None:
+        script = next((args[n + 1] for n, word in enumerate(args[:-1]) if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", word)),
+                      None)
+        return [] if script is None else _again(script, depth)
+    if program == "watch":
+        # watch runs its arguments, joined, as a shell line.
+        args = list(args)
+        while args and args[0].startswith("-"):
+            if args.pop(0) in WATCH and args:
+                args.pop(0)
+        return _again(" ".join(args), depth) if args else []
+    if program == "xargs":
+        args = list(args)
+        while args and args[0].startswith("-"):
+            if args.pop(0) in XARGS and args:
+                args.pop(0)
+        inner = _simple(args)
+        if not inner:
             return []
-        if depth >= 3:
-            raise Unparsed("depth")
-        try:
-            return _hits(script, depth + 1)
-        except Unparsed:
-            return [(action, None) for action in _worded(script)]
-    return _part_hits(program, part[1:])
+        name = inner[0].rsplit("/", 1)[-1]
+        # Its arguments come from stdin: every held action of git or gh is taken as present.
+        if name == "git":
+            return [("git-push", None), ("git-tag", None)]
+        if name == "gh":
+            return [("gh-release", None)]
+        return _dispatch(inner, depth)
+    return _part_hits(program, args)
 
 
 def _token_actions(part):
@@ -423,21 +469,40 @@ def _gh_command(args):
     return (target if target is None or recortex.valid_repo(target) else None), remaining
 
 
+def _has_flag(rest, flags, values):
+    """True when one of `flags` is an option of this command: before any --, and not the value of an option in
+    `values`."""
+    rest = list(rest)
+    while rest:
+        word = rest.pop(0)
+        if word == "--":
+            return False
+        if word in flags:
+            return True
+        if word in values and rest:
+            rest.pop(0)
+    return False
+
+
+def _read_only_git(sub, rest):
+    """The read-only forms of git push and git tag: push --dry-run (or -n); tag with no argument, or listing or
+    verifying."""
+    if sub == "push":
+        return _has_flag(rest, ("--dry-run", "-n"), PUSH_VALUES)
+    if sub == "tag":
+        return not rest or _has_flag(rest, ("-l", "--list", "-v", "--verify"), TAG_VALUES)
+    return False
+
+
 def _safe(part, action):
-    """True for the held action's own read-only form: git push --dry-run (or -n), git tag with no argument or a
-    listing or verifying option, gh release with no subcommand or view, list, download or verify. The form is read
-    from the action's program on, whatever starts the part."""
-    names = [word.rsplit("/", 1)[-1] for word in part]
-    program = "git" if action in ("git-push", "git-tag") else "gh"
-    if program not in names:
-        return False
-    args = part[names.index(program) + 1:]
-    if program == "git":
+    """True for the held action's own read-only form, run as the part's own program: git push --dry-run (or -n), git
+    tag with no argument or a listing or verifying option, gh release with no subcommand or view, list, download or
+    verify. A git or gh that another program starts gets no exemption."""
+    program, args = part[0].rsplit("/", 1)[-1], part[1:]
+    if program == "git" and action in ("git-push", "git-tag"):
         sub, rest = _git_command(args)
-        if action == "git-push":
-            return sub == "push" and bool({"--dry-run", "-n"} & set(rest))
-        return sub == "tag" and (not rest or bool({"-l", "--list", "-v", "--verify"} & set(rest)))
-    if action == "gh-release":
+        return sub == ("push" if action == "git-push" else "tag") and _read_only_git(sub, rest)
+    if program == "gh" and action == "gh-release":
         remaining = _gh_command(args)[1]
         return bool(remaining) and remaining[0] == "release" and (len(remaining) < 2 or remaining[1] in READ_RELEASE)
     return False
@@ -446,17 +511,23 @@ def _safe(part, action):
 def _part_hits(program, args):
     args = list(args)
     if program == "find":
+        hits, groups = [], []
         for n, word in enumerate(args):
-            if word in ("-exec", "-execdir", "-ok", "-okdir") and n + 1 < len(args):
-                inner = _simple(args[n + 1:])
-                if inner:
-                    return _part_hits(inner[0].rsplit("/", 1)[-1], inner[1:])
-        return []
+            if word in ("-exec", "-execdir", "-ok", "-okdir"):
+                end = next((m for m in range(n + 1, len(args)) if args[m] in (";", "+")), len(args))
+                groups.append(args[n + 1:end])
+        for group in groups:  # every group, not only the first
+            inner = _simple(group)
+            if inner:
+                found = _part_hits(inner[0].rsplit("/", 1)[-1], inner[1:])
+                hits += found + [(action, None) for action in _token_actions(inner)
+                                 if action not in {a for a, _ in found}]
+        return hits
     if program == "git":
         action, rest = _git_command(args)
-        if action == "push" and not ({"--dry-run", "-n"} & set(rest)):
+        if action == "push" and not _read_only_git(action, rest):
             return [("git-push", None)]
-        if action == "tag" and rest and not ({"-l", "--list", "-v", "--verify"} & set(rest)):
+        if action == "tag" and not _read_only_git(action, rest):
             return [("git-tag", None)]
         return []
     if program == "gh":
@@ -490,8 +561,8 @@ def classify_action(tool_name, tool_input):
             raise Unparsed("length")
         hits = _hits(command)
         supported = True
-    except Unparsed:
-        hits, supported = [(action, None) for action in _worded(command)], False
+    except Unparsed as error:
+        hits, supported = [(action, None) for action in _fallback(command, error)], False
     return {"supported": supported, "actions": sorted({action for action, _ in hits}), "hits": hits,
             "command": command}
 
