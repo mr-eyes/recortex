@@ -257,8 +257,11 @@ def typed_prompt(record, content, text):
 
 
 def _content(record):
-    """(role, text, typed, control). typed: the user's own words (typed_prompt); control: a user message that may set
-    a hold, by the looser earlier rule, since a hold only denies. Text in system reminders never reaches a model."""
+    """(role, text, typed, control) of one transcript record. The observer is a note-taker of the conversation: it reads
+    the user's prompts and the text the agent writes to the user, nothing else. A tool result has role "tool" and no
+    text; an assistant record gives its text blocks only, not its thinking or its tool calls. typed: the user's own
+    words (typed_prompt); control: a user message that may set a hold, by the looser earlier rule, since a hold only
+    denies. Text in system reminders never reaches a model."""
     message = record.get("message")
     if not isinstance(message, dict) or record.get("type") not in ("user", "assistant"):
         return "unknown", "", False, False
@@ -266,32 +269,14 @@ def _content(record):
     if role != record["type"] or any(record.get(key) for key in HIDDEN):
         return "unknown", "", False, False
     content = message.get("content")
+    if isinstance(content, list) and any(isinstance(block, dict) and block.get("type") == "tool_result"
+                                         for block in content):
+        return "tool", "", False, False  # tool output, file contents, pages and command results are not read
     if isinstance(content, str):
         text = content
     elif isinstance(content, list):
-        parts = []
-        if any(isinstance(block, dict) and block.get("type") == "tool_result" for block in content):
-            role = "tool"
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") == "text" and isinstance(block.get("text"), str):
-                parts.append(block["text"])
-            elif block.get("type") == "tool_use" and block.get("name") == "SubagentHandback":
-                message = (block.get("input") or {}).get("message")
-                if isinstance(message, str):
-                    parts.append(message)
-            elif block.get("type") == "tool_use":
-                parts.append("Assistant tool invocation (request, not completion): " + json.dumps(
-                    {key: block.get(key) for key in ("id", "name", "input")}, sort_keys=True, ensure_ascii=False))
-            elif block.get("type") == "tool_result":
-                result = block.get("content")
-                if isinstance(result, str):
-                    parts.append(result)
-                elif isinstance(result, list):
-                    parts.extend(item["text"] for item in result if isinstance(item, dict)
-                                 and item.get("type") == "text" and isinstance(item.get("text"), str))
-        text = "\n".join(parts)
+        text = "\n".join(block["text"] for block in content if isinstance(block, dict)
+                         and block.get("type") == "text" and isinstance(block.get("text"), str))
     else:
         text = ""
     control = role == "user" and not record.get("isMeta") and not record.get("isSidechain")
@@ -358,7 +343,7 @@ def scan(data, project_root, cursor=0, max_bytes=MAX_READ):
         except (ValueError, UnicodeError):
             raise SourceError("source-format")
         role, text, _, _ = _content(record) if isinstance(record, dict) else ("unknown", "", False, False)
-        if text:
+        if text and not subagent:  # a subagent's transcript is not the conversation with the user
             digest = hashlib.sha256(line).hexdigest()
             rows.append({"source_id": _identity(session, role, line, record, subagent), "session_id": session, "role": role,
                          "event_type": event, "path": path, "offset": position, "end": end,
@@ -437,65 +422,6 @@ def capture_descriptors(data, project_root, event_type=None):
     return scan(selected, project_root)[0]
 
 
-def _tool_provenance(path, start, record, session, observed_at):
-    """Match output to an earlier native invocation within a bounded local window.
-
-No name inferred from output text; absent/duplicate IDs remain unmatched. The
-matching descriptor is metadata only and its input is read transiently.
-"""
-    content = (record.get("message") or {}).get("content")
-    results = [block for block in content if isinstance(block, dict) and block.get("type") == "tool_result"] if isinstance(content, list) else []
-    wanted = {block.get("tool_use_id") for block in results if isinstance(block.get("tool_use_id"), str)
-              and re.fullmatch(r"[A-Za-z0-9_-]{1,160}", block["tool_use_id"])}
-    if not wanted:
-        return [], []
-    low = max(0, start - MAX_READ)
-    previous = _read(path, low, start - low)
-    if low and _read(path, low - 1, 1) != b"\n":
-        cut = previous.find(b"\n")
-        if cut < 0:
-            return [], []
-        low += cut + 1; previous = previous[cut + 1:]
-    matches = {}
-    subagent = os.sep + "subagents" + os.sep in path
-    offset = low
-    for line in previous.splitlines(keepends=True):
-        end = offset + len(line)
-        try:
-            prior = json.loads(line)
-        except (ValueError, UnicodeError):
-            offset = end
-            continue
-        message = prior.get("message") if isinstance(prior, dict) else None
-        # Only the conversation's own assistant records: a copy sent to the API repeats the call under the same id.
-        if (isinstance(message, dict) and prior.get("type") == "assistant" and message.get("role") == "assistant"
-                and isinstance(message.get("content"), list)):
-            for block in message["content"]:
-                if (isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(block.get("id"), str) and block["id"] in wanted
-                        and isinstance(block.get("name"), str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", block["name"])
-                        and isinstance(block.get("input"), dict)):
-                    metadata = {"source_id": _identity(session, "assistant", line, prior, subagent), "session_id": session,
-                                "role": "assistant", "event_type": "PostToolUse", "path": path, "offset": offset, "end": end,
-                                "sha256": hashlib.sha256(line).hexdigest(), "content_sha256": _content_hash(prior, "assistant", subagent),
-                                "observed_at": observed_at}
-                    matches.setdefault(block["id"], []).append((block, metadata))
-        offset = end
-    provenance, invocations = [], []
-    for result in results:
-        ident = result.get("tool_use_id")
-        item = {"tool_use_id": ident if isinstance(ident, str) else "", "matched": False,
-                "is_error": result.get("is_error") if type(result.get("is_error")) is bool else None,
-                "output": result.get("content")}
-        found = matches.get(ident, []) if isinstance(ident, str) else []
-        if len(found) == 1:
-            block, metadata = found[0]
-            item.update(matched=True, tool_name=block["name"], input=block["input"], invocation_source_id=metadata["source_id"])
-            if not any(m["source_id"] == metadata["source_id"] for m in invocations):
-                invocations.append(metadata)
-        provenance.append(item)
-    return provenance, invocations
-
-
 def resolve(descriptor, project_root):
     """Resolve one frozen byte range and its digest. A model never supplies a source path."""
     if descriptor.get("event_type") == "source_gap":
@@ -519,14 +445,8 @@ def resolve(descriptor, project_root):
         raise SourceError("source-identity")
     if not text:
         raise SourceError("source-empty")
-    subagent = os.sep + "subagents" + os.sep in path
-    provenance, invocations = _tool_provenance(path, start, record, descriptor["session_id"], descriptor["observed_at"]) if role == "tool" else ([], [])
-    out = {"id": descriptor["source_id"], "source_id": descriptor["source_id"], "role": role, "origin": role,
+    return {"id": descriptor["source_id"], "source_id": descriptor["source_id"], "role": role, "origin": role,
             "text": text, "direct_user": bool(typed and not subagent), "control_user": bool(control and not subagent),
             "session_id": descriptor["session_id"],
             "at": record.get("timestamp") if isinstance(record.get("timestamp"), str) else datetime.datetime.fromtimestamp(descriptor["observed_at"], datetime.timezone.utc).isoformat(),
-            "sha256": descriptor["sha256"], "message_id": record.get("uuid"), "subagent": subagent,
-            "tool_results": provenance, "invocation_descriptors": invocations}
-    if len(provenance) == 1 and provenance[0].get("matched"):
-        out["invocation_source_id"] = provenance[0]["invocation_source_id"]
-    return out
+            "sha256": descriptor["sha256"], "message_id": record.get("uuid"), "subagent": subagent}

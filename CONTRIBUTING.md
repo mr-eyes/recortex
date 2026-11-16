@@ -26,7 +26,7 @@ Check the packaging with `claude plugin validate .`.
 
 ```text
 .claude-plugin/           plugin.json and marketplace.json
-hooks/hooks.json          four brief events and optional observer handlers on seven events
+hooks/hooks.json          four brief events and optional observer handlers on six events
 agents/                   record-drafter, record-reviewer, record-auditor
 skills/recortex/
   SKILL.md                the skill

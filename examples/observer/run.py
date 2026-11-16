@@ -324,7 +324,8 @@ class Replay:
                     label = "unsupported"
                 elif self.day % schedule["checkpoint_interval"] == 0:
                     label = "checkpoint"
-                role = "user" if label in ("decision", "replacement") else "tool" if label == "failure" else "assistant"
+                # The observer takes notes of the conversation: a failure is what the agent told the user it found.
+                role = "user" if label in ("decision", "replacement") else "assistant"
                 data, identity = self.append(session, corpus[label], label, domain, role,
                                              subagent=domain == "research" and self.day == 35)
                 self.append(session, corpus["routine"], domain=domain)

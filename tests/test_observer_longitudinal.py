@@ -143,7 +143,9 @@ class ObserverLongSessionStressTests(unittest.TestCase):
                              "The four-candidate cap must defer excess meaningful sources for a later finite pass")
             self.assertTrue(all(row["state"] == "ready" for row in replay.observations()))
 
-    def test_fork_dedup_does_not_merge_main_and_subagent_user_authority(self):
+    def test_fork_dedup_keeps_one_identity_and_a_subagent_is_not_the_conversation(self):
+        # A fork repeats a native message under the same identity; a subagent's transcript is not the conversation
+        # with the user, so nothing of it is captured.
         replay = self.replay
         text = replay.fixture["domains"]["coding"]["decision"]
         main, identity = replay.append("main-session", text, "decision", role="user")
@@ -152,14 +154,12 @@ class ObserverLongSessionStressTests(unittest.TestCase):
         all_rows = []
         for data in (main, subagent, fork):
             rows, _ = evaluation.observer_sources.scan(data, str(replay.project))
-            all_rows.append(rows[0])
+            all_rows.append(rows)
             replay.capture(data)
-        self.assertEqual(all_rows[0]["source_id"], all_rows[2]["source_id"])
-        self.assertNotEqual(all_rows[0]["source_id"], all_rows[1]["source_id"])
-        resolved = [evaluation.observer_sources.resolve(row, str(replay.project)) for row in all_rows]
-        self.assertTrue(resolved[0]["direct_user"])
-        self.assertFalse(resolved[1]["direct_user"])
-        self.assertEqual(2, len(replay.observations()))
+        self.assertEqual([], all_rows[1])
+        self.assertEqual(all_rows[0][0]["source_id"], all_rows[2][0]["source_id"])
+        self.assertTrue(evaluation.observer_sources.resolve(all_rows[0][0], str(replay.project))["direct_user"])
+        self.assertEqual(1, len(replay.observations()))
 
     def test_capacity_failure_cannot_advance_the_native_scan_cursor(self):
         replay = self.replay
@@ -177,17 +177,21 @@ class ObserverLongSessionStressTests(unittest.TestCase):
             self.assertEqual(cursor, store.cursor("capacity-stream"))
             self.assertEqual(3, len(store.pending()))
 
-    def test_reading_a_claim_from_a_file_is_not_an_observed_execution_result(self):
+    def test_a_tool_result_is_never_read_and_a_failure_rests_on_the_agents_message(self):
+        # A claim in a file the agent read, or in a command's output, reaches no model; the failure the agent tells
+        # the user about is what the observer records.
         replay = self.replay
         text = "The validation command failed on four of six input cases."
-        data, _ = replay.append("read-claim", text, "failure", role="tool", tool_name="Read")
+        for name in ("Read", "Bash"):
+            data, _ = replay.append("read-claim", text, "failure", role="tool", tool_name=name)
+            replay.capture(data)
+        self.assertEqual([], replay.observations())
+        self.assertEqual([], replay.work()[0]["ready"])
+        self.assertEqual([], replay.model_calls)
+        data, _ = replay.append("read-claim", text, "failure", role="assistant")
         replay.capture(data)
-        report = replay.work()[0]
-        self.assertEqual([], report["ready"])
-        self.assertEqual(["extract"], [call["purpose"] for call in replay.model_calls])
-        self.assertTrue(any(row["reason"] == "observed_evidence" for row in replay.observations()))
-        with replay.store() as store:
-            self.assertEqual([], store.events())
+        self.assertEqual(1, len(replay.work()[0]["ready"]))
+        self.assertEqual(["extract", "review"], [call["purpose"] for call in replay.model_calls])
 
     def test_untrusted_real_ancestry_prevents_the_full_hook_benchmark(self):
         denied = {"ready": False, "code": "source-owner", "boundary": "ancestor"}

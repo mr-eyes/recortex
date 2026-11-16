@@ -57,7 +57,7 @@ LOCAL_PATH = re.compile(r"(?<![A-Za-z0-9_.~:/%-])(?:~?/(?:[A-Za-z0-9_.@+%-]+/)+[
 GENERIC_USERS = frozenset(("user", "users", "admin", "root", "ubuntu", "dev", "test", "guest", "runner", "node",
                            "owner", "home", "data", "work", "code", "app"))
 STATUS_LINKS = ("replaces", "instead", "checks")  # checks= answers a question or marks an idea tried
-STATUS_AUTHORITY = ("user", "command")
+STATUS_AUTHORITY = ("user", "agent")  # the user's typed words, or the agent's message to the user
 # A problem of the event itself: the event is deferred with this reason and the next one is tried.
 EVENT_PROBLEMS = frozenset(("lint_failed", "invalid_target", "explicit_hold", "status_change", "outbound_markup",
                             "outbound_mention", "outbound_address", "outbound_reference", "outbound_local",

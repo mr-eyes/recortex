@@ -103,44 +103,14 @@ def template_context():
     return templates
 
 
-MIN_WORDS = 6  # a shorter quote ("go ahead", "this is fine") cannot back a change of status
+MIN_WORDS = 6  # a shorter typed message ("go ahead", "this is fine") cannot back a change of status
 
 
-# Runs that only show a file, a page or their own arguments: their output is not an observed result.
-READERS = frozenset(("cat", "head", "tail", "less", "more", "curl", "wget", "echo", "printf"))
-
-
-def _ran(item):
-    """True for a tool result of a Bash call that ran, found by matching its id to the call in the transcript, other
-    than a call that only shows a file, fetches a page or prints its arguments."""
-    command = ((item.get("input") or {}).get("command") or "") if isinstance(item.get("input"), dict) else ""
-    return (item.get("matched") is True and item.get("tool_name") == "Bash"
-            and os.path.basename((command.split() or [""])[0]) not in READERS)
-
-
-def _executed(candidate, supplied):
-    """True when the candidate cites the result of a Bash call that ran (_ran); the call itself is found by matching,
-    so the candidate need not cite it too."""
-    return any(_ran(item) for source in candidate["sources"] if supplied[source]["role"] == "tool"
-               for item in supplied[source].get("tool_results", []))
-
-
-def _own_sources(candidate, supplied):
-    """True when every source the candidate cites is a direct user message, a Bash call, or that call's matched result
-    (other than a call that only shows a file or fetches a page): no page, file or other tool output stands behind
-    it, whatever else the selector read."""
-    calls = {item.get("invocation_source_id") for sid in candidate["sources"]
-             for item in supplied[sid].get("tool_results") or []
-             if item.get("matched") is True and item.get("tool_name") == "Bash"}
-    for sid in candidate["sources"]:
-        source = supplied[sid]
-        if sid in calls or source.get("role") == "user" and source.get("direct_user") is True:
-            continue
-        results = source.get("tool_results") or []
-        if source.get("role") == "tool" and results and all(_ran(item) for item in results):
-            continue
-        return False
-    return True
+def _said(source):
+    """The conversation the observer takes notes of: a prompt the user typed, or the main session's agent writing to
+    the user. Nothing else reaches the selector or the reviewer."""
+    return (source.get("role") == "user" and source.get("direct_user") is True
+            or source.get("role") == "assistant" and not source.get("subagent"))
 
 
 def _users(candidate, supplied):
@@ -148,20 +118,29 @@ def _users(candidate, supplied):
             if supplied[source].get("direct_user") is True and supplied[source]["role"] == "user"]
 
 
+def _agent(candidate, supplied):
+    """True when the candidate cites the agent's own message to the user."""
+    return any(supplied[source]["role"] == "assistant" and not supplied[source].get("subagent")
+               for source in candidate["sources"])
+
+
 def status_authority(candidate, supplied):
-    """What a memory that overturns or sets aside an earlier one rests on. "user": a decision whose own "Exact words"
-    field quotes at least MIN_WORDS words of one direct user message, and at least half of that message, so that a
-    short or generic phrase cannot back it. "command": a Bash call that ran, among its own sources. "" otherwise,
-    including every other kind that cites the user, since no field of theirs carries the user's words: it then
-    waits for the main session. Every source it cites must be the user's own message or such a run (_own_sources)."""
-    if not _own_sources(candidate, supplied):
+    """What a memory that changes an earlier one's status rests on, all of it said in the conversation. "user": the
+    user's typed words, a decision whose own Exact words quote at least MIN_WORDS words and at least half of one typed
+    message, or another kind that cites a typed message of at least MIN_WORDS words. "agent": the agent's message to
+    the user, cited. "" otherwise (a short phrase such as "go ahead" on its own): the memory then waits for the main
+    session."""
+    if not all(_said(supplied[source]) for source in candidate["sources"]):
         return ""
+    users = _users(candidate, supplied)
     if candidate["kind"] == "decision":
         quoted = observer_publisher.exact_words(candidate["body"]).strip()
         if len(quoted.split()) >= MIN_WORDS and any(quoted in text and 2 * len(quoted) >= len(text.strip())
-                                                   for text in _users(candidate, supplied)):
+                                                   for text in users):
             return "user"
-    return "command" if _executed(candidate, supplied) else ""
+    elif any(len(text.split()) >= MIN_WORDS for text in users):
+        return "user"
+    return "agent" if _agent(candidate, supplied) else ""
 
 
 def candidate_problem(candidate, supplied, context, config, repo=None):
@@ -188,8 +167,8 @@ def candidate_problem(candidate, supplied, context, config, repo=None):
         quoted = observer_publisher.exact_words(candidate["body"])
         if not quoted or not any(quoted in text for text in _users(candidate, supplied)):
             return "decision-authority"
-    if candidate["kind"] in ("result", "failure") and not _executed(candidate, supplied):
-        return "observed-evidence"
+    if candidate["kind"] in ("result", "failure") and not _agent(candidate, supplied):
+        return "agent-account"  # a result or a failure is what the agent told the user it found
     marker = record_format.parse_marker(record_format.first_lines(candidate["body"])[0])
     known = {m["id"] for m in context["memories"]}
     if any(target not in known for _, target in record_format.links(marker)):
@@ -209,7 +188,7 @@ RECORD_ROOM = 18000  # what the record context may take of a call (destinations,
 # had not happened yet; or the selector's draft failed a mechanical check. Each attempt is counted in the reason
 # ("uncertain_2"); a source that has had its attempts stays deferred, in `pending`, for `record --source`.
 RETRY_SOON = {"input_limit": 6, "candidate_limit": 6, "uncertain": 3, "candidate_lint": 2, "excerpt_binding": 2,
-              "observed_evidence": 2, "decision_authority": 2, "outbound_local": 2, "outbound_address": 2,
+              "agent_account": 2, "decision_authority": 2, "outbound_local": 2, "outbound_address": 2,
               "link_binding": 2, "candidate_event": 2}
 # An uncertain source is offered again once its session has gone on (new sources of that session are in the pass), or
 # after five minutes; the others in RETRY_SOON at the next pass.
@@ -265,38 +244,14 @@ def _queued(store):
     return chosen[:MAX_SOURCES]
 
 
-def _brief(value):
-    """A tool call's input as a model sees it: each long string cut to its start, nested values left out."""
-    if not isinstance(value, dict):
-        return None
-    return {key: (item[:500] + " [...]" if isinstance(item, str) and len(item) > 500 else
-                  "[...]" if isinstance(item, (dict, list)) else item) for key, item in value.items()}
-
-
 def _view(source):
-    """What a model is shown of one source: its role and text (a long text keeps its start and its end, marked) and,
-    for a tool result, which call it answers and whether that call failed. The worker's checks use the whole source."""
+    """What a model is shown of one source: who said it, when, and its text (a long text keeps its start and its end,
+    marked). The worker's checks use the whole source."""
     text = source["text"]
     if len(text) > SOURCE_TEXT:
         text = text[:4000] + "\n[... %d characters left out ...]\n" % (len(text) - 5500) + text[-1500:]
-    view = {"id": source["id"], "message_id": source.get("message_id"), "role": source["role"], "at": source.get("at"),
-            "direct_user": source.get("direct_user"), "subagent": source.get("subagent"), "text": text}
-    results = [{"tool_use_id": item.get("tool_use_id"), "tool_name": item.get("tool_name"),
-                "input": _brief(item.get("input")), "is_error": item.get("is_error"), "matched": item.get("matched"),
-                "invocation_source_id": item.get("invocation_source_id")} for item in source.get("tool_results") or []]
-    if results:
-        view["tool_results"] = results
-    if source.get("invocation_source_id"):
-        view["invocation_source_id"] = source["invocation_source_id"]
-    return view
-
-
-def _calls(candidate, supplied):
-    """The tool calls the candidate's cited results answer, found by matching, for the reviewer to see."""
-    return [item["invocation_source_id"] for sid in candidate["sources"]
-            for item in supplied[sid].get("tool_results") or []
-            if item.get("matched") is True and item.get("invocation_source_id") in supplied
-            and item["invocation_source_id"] not in candidate["sources"]]
+    return {"id": source["id"], "message_id": source.get("message_id"), "role": source["role"], "at": source.get("at"),
+            "direct_user": source.get("direct_user"), "text": text}
 
 
 def _account(repo):
@@ -307,8 +262,9 @@ def _account(repo):
 
 
 def _process(repo, config, project_root=None, invoke_fn=None):
-    """One pass: up to MAX_SOURCES queued observations, in the order they happened, with the tool calls they answer,
-    to one selection call within the call's input limit, then a fresh review of each of at most four candidates."""
+    """One pass: up to MAX_SOURCES queued observations of the conversation (the user's typed prompts and the agent's
+    messages to the user), in the order they happened, to one selection call within the call's input limit, then a
+    fresh review of each of at most four candidates."""
     invoke = invoke_fn or runtime.invoke
     options = runtime.settings(config)
     report = {"code": "disabled", "selected": 0, "reviewed": 0, "ready": [], "deferred": 0, "ignored": 0}
@@ -332,43 +288,29 @@ def _process(repo, config, project_root=None, invoke_fn=None):
         supplied, offered, length = {}, [], 0
         for item in _queued(store):
             sid, previous = item["source_id"], item["reason"] if item["state"] == "deferred" else ""
-            if item["metadata"].get("event_type") == "source_gap":
+            meta = item["metadata"]
+            if meta.get("event_type") == "source_gap":
                 store.defer(sid, "source_gap"); report["deferred"] += 1
                 continue
+            if meta.get("role") not in ("user", "assistant") or os.sep + "subagents" + os.sep in meta.get("path", ""):
+                # Tool output and subagents' transcripts are not the conversation (a queue from before 1.1.0).
+                store.mark_handled(sid, reason="not_conversation"); report["ignored"] += 1
+                continue
             try:
-                source = sources.resolve(item["metadata"], root)
+                source = sources.resolve(meta, root)
             except (sources.SourceError, OSError, ValueError):
                 store.defer(sid, "source_unavailable"); report["deferred"] += 1
+                continue
+            if not _said(source):
+                # A user record that is not a typed prompt (a command's wrapper): it may set a hold, nothing else.
+                store.mark_handled(sid, reason="not_typed"); report["ignored"] += 1
                 continue
             if source_privacy_problem(source, config):
                 store.defer(sid, "privacy"); report["deferred"] += 1
                 continue
-            related = {}
-            related_error = "privacy"
-            for descriptor in source.pop("invocation_descriptors", []):
-                try:
-                    invocation = sources.resolve(descriptor, root)
-                except (sources.SourceError, OSError, ValueError):
-                    related = None; related_error = "source_unavailable"
-                    break
-                if source_privacy_problem(invocation, config):
-                    related = None
-                    break
-                invocation.pop("invocation_descriptors", None)
-                related[descriptor["source_id"]] = (descriptor, invocation)
-            if related is None:
-                store.defer(sid, related_error); report["deferred"] += 1
-                continue
-            extra = sum(len(runtime.canonical(_view(pair[1]))) for key, pair in related.items() if key not in supplied)
-            if length + len(runtime.canonical(_view(source))) + extra > room:
+            if length + len(runtime.canonical(_view(source))) > room:
                 store.defer(sid, _again("input_limit", previous)); report["deferred"] += 1
                 continue
-            if related:
-                store.capture([pair[0] for pair in related.values()])
-                for key, pair in related.items():
-                    if key not in supplied:
-                        supplied[key] = pair[1]
-                        length += len(runtime.canonical(_view(pair[1])))
             supplied[sid] = source
             offered.append(item)
             length += len(runtime.canonical(_view(source)))
@@ -391,8 +333,7 @@ def _process(repo, config, project_root=None, invoke_fn=None):
         account = _account(repo)
         # In the order they happened: a turn reads as it ran.
         order = {item["source_id"]: _order(item) for item in offered}
-        views = [_view(supplied[key]) for key in sorted(supplied, key=lambda key: order.get(key) or _order(
-            {"source_id": key, "metadata": store.observation(key)["metadata"]}))]
+        views = [_view(supplied[key]) for key in sorted(supplied, key=lambda key: order[key])]
         payload = {"sources": views, "record": context, "templates": templates,
                    "max_candidates": options["max_candidates"], "never_write_down": never, "account": account}
         result = invoke(payload, EXTRACTION, "extract", options)
@@ -439,9 +380,8 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 handled.add(primary)
                 continue
             digest = runtime.candidate_hash(candidate)
-            shown = candidate["sources"] + [sid for sid in dict.fromkeys(_calls(candidate, supplied))]
             reviewed = invoke({"candidate": candidate, "candidate_hash": digest,
-                               "sources": [_view(supplied[sid]) for sid in shown], "record": context,
+                               "sources": [_view(supplied[sid]) for sid in candidate["sources"]], "record": context,
                                "never_write_down": never, "account": account}, REVIEW, "review", options)
             answer = reviewed.get("structured")
             valid = reviewed.get("ok") is True and runtime.validate(answer, REVIEW) and answer["candidate_hash"] == digest

@@ -185,7 +185,7 @@ class ObserverPublisherTests(unittest.TestCase):
         for case, body in hidden.items():
             self.assertEqual("outbound_markup", publisher.outbound_problem(body, fixtures.REPO), case)
 
-    def test_change_of_status_without_the_users_words_or_a_command_waits_for_the_main_session(self):
+    def test_change_of_status_without_what_was_said_waits_for_the_user(self):
         idea = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text()
         data = self.state()
         data["comments"]["9050"] = {"issue": 3, "user": "octocat", "body": idea, "created_at": "2026-03-05T18:00:00Z"}
@@ -195,9 +195,14 @@ class ObserverPublisherTests(unittest.TestCase):
         with self.assertRaisesRegex(publisher.PublishError, "status_change"):
             publisher.publish(fixtures.REPO, key, self.config)
         self.assertEqual([], self.calls())
-        command = self._second(body.replace("again", "once more"), source="source3",
-                               review={"status_authority": "command"})
-        self.assertEqual("verified", publisher.publish(fixtures.REPO, command, self.config)["state"])
+        # What was said backs it: the user's typed words or the agent's message to the user. A run backs nothing.
+        for n, authority in enumerate(("agent", "user")):
+            said = self._second(body.replace("again", "once more %d" % n), source="source%d" % (3 + n),
+                                review={"status_authority": authority})
+            self.assertEqual("verified", publisher.publish(fixtures.REPO, said, self.config)["state"])
+        run = self._second(body.replace("again", "after a run"), source="source9", review={"status_authority": "command"})
+        with self.assertRaisesRegex(publisher.PublishError, "status_change"):
+            publisher.publish(fixtures.REPO, run, self.config)
         self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config, main_session=True)["state"])
 
     def test_daily_cap_counts_automatic_comments_only(self):
