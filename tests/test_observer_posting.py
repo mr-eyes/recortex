@@ -179,6 +179,7 @@ class ObserverPostingTests(unittest.TestCase):
         connection = sqlite3.connect(path)
         for statement in store.INDEXES:
             connection.execute("DROP INDEX %s" % statement.split()[5])
+        connection.execute("DROP TABLE event_targets")
         for name, _ in reversed(store.ADDED):
             connection.execute("ALTER TABLE events DROP COLUMN %s" % name)
         connection.execute("UPDATE meta SET value='1' WHERE key='format'")
@@ -355,6 +356,56 @@ class ObserverPostingTests(unittest.TestCase):
         self.assertEqual(1, result, output)
         self.assertIn("--eventkey %s" % key, output)
         self.assertEqual([], [args for args in self.calls() if args[:2] == ["issue", "comment"]])
+
+    def test_a_held_change_is_found_among_more_than_a_thousand_held_events(self):
+        # The memories a held event changes are looked up by target in an indexed table, with no cap: the held change
+        # is the oldest of 1,201 held events. A format 2 queue gets the table, back-filled, on its next writable open.
+        import sqlite3
+        import time
+        body = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text()
+        held = body.replace("-08:00 -->", "-08:00 replaces=9001 -->")
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.capture([self.metadata("source3")])
+            candidate = {"kind": "idea", "issue": 3, "body": held, "sources": ["source3"]}
+            ident = db.reserve_invocation("reviewer")
+            db.complete_invocation(ident, True, output_hash=store.candidate_hash(candidate))
+            key = db.review_complete("source3", candidate, {"reservation_id": ident, "accepted": True,
+                                                            "candidate_hash": store.candidate_hash(candidate)})
+            db.transition(key, "deferred", reason="status_change")
+            self.assertEqual(["9001"], [row[0] for row in db.db.execute(
+                "SELECT target FROM event_targets WHERE eventkey=?", (key,))])
+            path = db.path
+        later = time.time() + 1
+        filler = []
+        for n in range(1200):
+            other = body.replace("-08:00 -->", "-08:00 replaces=%d -->" % (20000 + n))
+            filler.append(("%032x" % (n + 1), "filler%d" % n, json.dumps({"kind": "idea", "issue": 3, "body": other,
+                                                                           "sources": ["filler%d" % n]}),
+                           "{}", other, "0" * 64, "deferred", "status_change", later + n, later + n,
+                           store.copy_digests("idea", other)[0], 1))
+        connection = sqlite3.connect(path)
+        connection.execute("DROP INDEX event_targets_target")
+        connection.execute("DROP TABLE event_targets")
+        connection.executemany("INSERT INTO events(eventkey,source_id,candidate,review,body,payload_hash,state,reason,"
+                               "created,updated,body_hash,held) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", filler)
+        connection.execute("UPDATE meta SET value='2' WHERE key='format'")
+        connection.commit()
+        connection.close()
+        with store.Store(fixtures.REPO, config=self.config, readonly=True) as db:
+            self.assertEqual("2", db.format)
+            with self.assertRaisesRegex(store.StoreError, "lookup_unavailable"):
+                db.held_change_of(held)
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            self.assertEqual(store.FORMAT, db.format)
+            self.assertEqual(1201, db.db.execute("SELECT COUNT(DISTINCT eventkey) FROM event_targets").fetchone()[0])
+        rewrite = held.replace("It is a small patch", "It is a very small patch")
+        result, output = self.post(False, 3, "idea", rewrite)
+        self.assertEqual(1, result, output)
+        self.assertIn("--eventkey %s" % key, output)
+        self.assertEqual([], [args for args in self.calls() if args[:2] == ["issue", "comment"]])
+        with mock.patch.object(store.Store, "held_change_of", side_effect=store.StoreError("lookup_unavailable")):
+            result, output = self.post(False, 3, "idea", rewrite)
+        self.assertIn("could not be validated", output)  # a lookup that cannot complete refuses the post
 
     def test_a_grant_is_consumed_once_and_only_by_the_post(self):
         # The grant is taken at the last step before the send: a refusal before it (here a pause) leaves it, and a

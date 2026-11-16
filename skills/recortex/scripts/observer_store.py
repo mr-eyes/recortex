@@ -55,15 +55,22 @@ CREATE TABLE IF NOT EXISTS events(eventkey TEXT PRIMARY KEY, source_id TEXT NOT 
  held INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS event_sources(source_id TEXT PRIMARY KEY, eventkey TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS transitions(eventkey TEXT NOT NULL, state TEXT NOT NULL, at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS event_targets(eventkey TEXT NOT NULL, target TEXT NOT NULL, PRIMARY KEY(eventkey, target));
 """
-# Format 2 added to each event the digests its copies are looked up by and the held mark (copy_of, decision_of).
-FORMAT = "2"
+# Format 2 added to each event the digests its copies are looked up by and the held mark (copy_of, decision_of);
+# format 3, the memories each event changes the status of (event_targets, held_change_of).
+FORMAT = "3"
 ADDED = (("body_hash", "TEXT NOT NULL DEFAULT ''"), ("words_hash", "TEXT NOT NULL DEFAULT ''"),
          ("held", "INTEGER NOT NULL DEFAULT 0"))
-SCHEMA_1 = SCHEMA.replace(", body_hash TEXT NOT NULL DEFAULT '', words_hash TEXT NOT NULL DEFAULT '',\n held INTEGER NOT "
-                          "NULL DEFAULT 0)", ")")
-INDEXES = ("CREATE INDEX IF NOT EXISTS events_body ON events(body_hash)",
-           "CREATE INDEX IF NOT EXISTS events_words ON events(words_hash)")
+TARGETS = ("CREATE TABLE IF NOT EXISTS event_targets(eventkey TEXT NOT NULL, target TEXT NOT NULL, PRIMARY KEY(eventkey, "
+           "target));\n")
+SCHEMA_2 = SCHEMA.replace(TARGETS, "")
+SCHEMA_1 = SCHEMA_2.replace(", body_hash TEXT NOT NULL DEFAULT '', words_hash TEXT NOT NULL DEFAULT '',\n held INTEGER "
+                            "NOT NULL DEFAULT 0)", ")")
+INDEXES_2 = ("CREATE INDEX IF NOT EXISTS events_body ON events(body_hash)",
+             "CREATE INDEX IF NOT EXISTS events_words ON events(words_hash)")
+INDEXES = INDEXES_2 + ("CREATE INDEX IF NOT EXISTS event_targets_target ON event_targets(target)",)
+STATUS_KEYS = ("replaces", "instead", "checks")  # the links that change an earlier memory's status
 # Reasons an earlier queue kept an event for that are no longer given: back-filled as held.
 EARLIER_HELD = ("sensitive_project", "confidentiality", "sheet_not_approved")
 
@@ -209,6 +216,12 @@ def copy_digests(kind, body):
     return _digest(plain), _digest(words) if words else ""
 
 
+def status_targets(body):
+    """The comment ids whose status `body` changes, by the replaces=, instead= and checks= links of its marker."""
+    marker = record_format.parse_marker(record_format.first_lines(body or "")[0]) or {}
+    return sorted({str(target) for key, target in record_format.links(marker) if key in STATUS_KEYS})
+
+
 def _held_before(reason):
     """True for a reason an event was deferred or discarded with that kept it from posting (HELD_REASONS, earlier
     ones, and a format 1 discard's "discarded_<reason>")."""
@@ -329,7 +342,7 @@ class Store:
                                          ("mark", storage.mark(self.path, self.repo))])
                     self._write_held([])  # a new queue holds no command; a missing file later means unknown
                 self.format = FORMAT
-            if self.format == "1":
+            if self.format != FORMAT:
                 self._migrate()
             if not initialized:
                 descriptor = os.open(self.folder, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
@@ -353,17 +366,17 @@ class Store:
         if "meta" not in actual:
             raise StoreError("corrupt")
         meta = dict(self.db.execute("SELECT key,value FROM meta"))
-        version = meta.get("format") if meta.get("format") in ("1", FORMAT) else FORMAT
-        for statement in (SCHEMA_1 if version == "1" else SCHEMA).split(";"):
+        version = meta.get("format") if meta.get("format") in ("1", "2", FORMAT) else FORMAT
+        for statement in {"1": SCHEMA_1, "2": SCHEMA_2}.get(version, SCHEMA).split(";"):
             if not statement.strip():
                 continue
             expected = re.sub(r"\s+", " ", statement.replace(" IF NOT EXISTS", "")).strip()
             name = expected.split("(", 1)[0].split()[-1]
             if name not in actual or re.sub(r"\s+", " ", actual[name] or "").strip() != expected:
                 raise StoreError("corrupt")
-        if version == FORMAT:
+        if version != "1":
             indexes = dict(self.db.execute("SELECT name,sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"))
-            for statement in INDEXES:
+            for statement in INDEXES if version == FORMAT else INDEXES_2:
                 expected = statement.replace(" IF NOT EXISTS", "")
                 if re.sub(r"\s+", " ", indexes.get(expected.split()[2]) or "").strip() != expected:
                     raise StoreError("corrupt")
@@ -373,20 +386,32 @@ class Store:
         self.format = version
 
     def _migrate(self):
-        """Format 1 to 2 in one transaction: the columns and indexes are added and every event's digests and held
-        mark are back-filled, so that a copy of an earlier event is found as a copy of a new one is."""
+        """An earlier format to the current one in one transaction. From format 1, the columns and indexes are added
+        and every event's digests and held mark are back-filled, so that a copy of an earlier event is found as a copy
+        of a new one is; from format 1 or 2, the table of the memories each event changes is made and back-filled."""
         with self.transaction():
-            for name, kind in ADDED:
-                self.db.execute("ALTER TABLE events ADD COLUMN %s %s" % (name, kind))
-            for statement in INDEXES:
-                self.db.execute(statement)
-            for row in self.db.execute("SELECT eventkey,candidate,reason FROM events").fetchall():
-                candidate = json.loads(row["candidate"])
-                body_hash, words_hash = copy_digests(candidate.get("kind"), candidate.get("body"))
-                self.db.execute("UPDATE events SET body_hash=?,words_hash=?,held=? WHERE eventkey=?",
-                                (body_hash, words_hash, int(_held_before(row["reason"])), row["eventkey"]))
+            if self.format == "1":
+                for name, kind in ADDED:
+                    self.db.execute("ALTER TABLE events ADD COLUMN %s %s" % (name, kind))
+                for statement in INDEXES_2:
+                    self.db.execute(statement)
+            rows = self.db.execute("SELECT eventkey,candidate,reason FROM events").fetchall()
+            if self.format == "1":
+                for row in rows:
+                    candidate = json.loads(row["candidate"])
+                    body_hash, words_hash = copy_digests(candidate.get("kind"), candidate.get("body"))
+                    self.db.execute("UPDATE events SET body_hash=?,words_hash=?,held=? WHERE eventkey=?",
+                                    (body_hash, words_hash, int(_held_before(row["reason"])), row["eventkey"]))
+            self.db.execute(TARGETS)
+            self.db.execute(INDEXES[-1])
+            for row in rows:
+                self._store_targets(row["eventkey"], json.loads(row["candidate"]).get("body"))
             self.db.execute("UPDATE meta SET value=? WHERE key='format'", (FORMAT,))
         self.format = FORMAT
+
+    def _store_targets(self, key, body):
+        self.db.executemany("INSERT OR IGNORE INTO event_targets VALUES (?,?)",
+                            [(key, target) for target in status_targets(body)])
 
     def __enter__(self):
         return self
@@ -639,6 +664,7 @@ class Store:
                             (key, source_id, canonical(candidate), canonical(review), posted_body,
                              hashlib.sha256(posted_body.encode("utf-8")).hexdigest(), now, now, body_hash, words_hash))
             self.db.executemany("INSERT INTO event_sources VALUES (?,?)", [(source, key) for source in sources])
+            self._store_targets(key, body)
             for state in ("candidate", "reviewed", "ready"):
                 self.db.execute("INSERT INTO transitions VALUES (?,?,?)", (key, state, now))
             for source in sources:
@@ -686,24 +712,20 @@ class Store:
     def held_change_of(self, draft):
         """A held event still waiting (ready or deferred) that changes the status of a memory `draft` changes too (the
         same replaces=, instead= or checks= target), or None: a rewrite of it goes through that event's question, as
-        a copy does. Raises StoreError as copy_of."""
-        marker = record_format.parse_marker(record_format.first_lines(draft or "")[0]) or {}
-        targets = {target for key, target in record_format.links(marker) if key in ("replaces", "instead", "checks")}
+        a copy does. Looked up by target in an indexed table, across the whole queue. Raises StoreError as copy_of."""
+        targets = status_targets(draft)
         if not targets:
             return None
         if self.format != FORMAT:
             raise StoreError("lookup_unavailable")
         try:
-            rows = self.db.execute("SELECT eventkey,body FROM events WHERE state IN ('ready','deferred') AND held=1 "
-                                   "ORDER BY created DESC,eventkey LIMIT 1000").fetchall()
-        except sqlite3.Error as error:
+            row = self.db.execute("SELECT e.eventkey FROM event_targets t JOIN events e ON e.eventkey=t.eventkey "
+                                  "WHERE t.target IN (%s) AND e.held=1 AND e.state IN ('ready','deferred') "
+                                  "ORDER BY e.created DESC,e.eventkey LIMIT 1" % ",".join("?" * len(targets)),
+                                  targets).fetchone()
+            return self.event(row[0]) if row else None
+        except (sqlite3.Error, ValueError, TypeError) as error:
             raise StoreError("lookup_unavailable") from error
-        for row in rows:
-            theirs = record_format.parse_marker(record_format.first_lines(row["body"])[0]) or {}
-            if targets & {target for key, target in record_format.links(theirs)
-                          if key in ("replaces", "instead", "checks")}:
-                return self.event(row["eventkey"])
-        return None
 
     def _lookup(self, where, digest):
         if self.format != FORMAT:
