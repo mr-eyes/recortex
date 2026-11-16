@@ -43,6 +43,8 @@ NOTICES = {
     "release-refused": "recortex observer: nothing in a session releases a hold; run observer.py release HOLD_ID in a separate terminal, outside Claude Code. Run observer.py holds.",
 }
 TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure")
+SCAN_ROUNDS = 16  # bounded scans one hook makes to catch up with its transcript
+STALE = 900  # seconds after which new captured work that no worker has taken up is worth a notice
 UNCHECKED = {"reason": "recortex observer: this machine's holds could not be checked, so every command but pwd, ls and "
                        "cat is stopped. The user can see why with observer.py status, in a separate terminal outside "
                        "Claude Code."}
@@ -122,16 +124,21 @@ def _capture(store, event, data, project_root, repo, config, capture=True):
     start = store.cursor(stream) or 0
     if not capture:
         stream = "controls_" + stream
-    old = store.cursor(stream)
-    rows, cursor = observer_sources.scan(scan_data, project_root, cursor=old if old is not None else start)
-    # Holds are saved first; a crash can repeat an idempotent control, but must
-    # never advance a cursor past a hold that has not been compiled.
-    controlled, refused, unproven = _controls(store, rows, project_root, repo, config)
-    store.capture(rows if capture else [], stream=stream, cursor=cursor, expected_cursor=old)
-    # Bounded scans may lag or end on a partially written line. Do not claim
-    # complete capture or complete enforcement of newly submitted controls.
-    incomplete = any(row.get("event_type") == "source_gap" for row in rows) or os.stat(path, follow_symlinks=False).st_size > cursor
-    return controlled, incomplete, refused, unproven
+    controlled = refused = unproven = False
+    # Each scan is bounded; a few in a row catch up with a transcript that grew by a large turn (attachments alone
+    # can pass a scan's 256 KiB), so that lag is not reported as a problem.
+    for _ in range(SCAN_ROUNDS):
+        old = store.cursor(stream)
+        rows, cursor = observer_sources.scan(scan_data, project_root, cursor=old if old is not None else start)
+        # Holds are saved first; a crash can repeat an idempotent control, but must
+        # never advance a cursor past a hold that has not been compiled.
+        found = _controls(store, rows, project_root, repo, config)
+        controlled, refused, unproven = controlled or found[0], refused or found[1], unproven or found[2]
+        store.capture(rows if capture else [], stream=stream, cursor=cursor, expected_cursor=old)
+        if cursor == (old if old is not None else start) or os.stat(path, follow_symlinks=False).st_size <= cursor:
+            break
+    # What is left is a line Claude Code is still writing, or a backlog the next hook goes on with.
+    return controlled, os.stat(path, follow_symlinks=False).st_size > cursor, refused, unproven
 
 
 def _notices(store, notices, data, event):
@@ -316,13 +323,15 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
                                                                          config, capture=not paused)
                     if controlled:
                         notices.append("control")
+                    # A transcript still being written, or a backlog the next hook goes on with, is not worth a line;
+                    # a hold typed now that the transcript does not show yet is: it may not be active.
+                    waiting = False
                     if event == "UserPromptSubmit" and not controlled and isinstance(data.get("prompt"), str):
                         typed = observer_holds._control(data["prompt"].strip())
-                        if typed and typed["operation"] == "hold":
-                            incomplete = True  # a hold typed now that the transcript does not show yet
+                        waiting = bool(typed and typed["operation"] == "hold")
                     if unproven:
                         notices.append("release-refused")
-                    if incomplete:
+                    if waiting:
                         notices.append("source")
                         _degraded(store, "source-incomplete")
                     elif refused:
@@ -372,12 +381,15 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
                 notices.append("capture")
             if status["invocations_24h"] >= settings["max_invocations"]:
                 notices.append("budget")
+            # Pending work is worth a line only when the worker cannot take it up (a degraded worker), or when new
+            # captured work has waited longer than STALE; ordinary backlog at a stop is not. Once per session.
             degraded = store.get_control("worker_degraded")
             if degraded:
                 notices.append("cap" if degraded == "publish_daily_cap" else "pending")
-            if event in ("Stop", "SubagentStop", "PreCompact") and any(
-                    count for state, count in status["observations"].items() if state not in observer_store.TERMINAL):
-                notices.append("pending")
+            elif event in ("Stop", "SubagentStop", "PreCompact"):
+                oldest = store.db.execute("SELECT MIN(created) FROM observations WHERE state='observed'").fetchone()[0]
+                if oldest is not None and time.time() - oldest > STALE:
+                    notices.append("pending")
             notices = _notices(store, notices, data, event)
     except Exception:
         # Fixed text only: exception strings can contain source text or paths. Tool events fire on every call and

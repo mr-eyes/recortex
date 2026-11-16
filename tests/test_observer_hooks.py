@@ -342,11 +342,11 @@ class ObserverHookTests(unittest.TestCase):
         with Store(REPO) as store:
             self.assertEqual([], store.holds())
         with self.path.open("a") as handle:
-            handle.write('{"message":')
+            handle.write('{"message":')  # a line Claude Code is still writing: not a problem worth a line
         result = self.run_hook()
         self.assertNotIn("hookSpecificOutput", result)
         with Store(REPO) as store:
-            self.assertEqual("source-incomplete", store.get_control("hook_degraded"))
+            self.assertEqual("", store.get_control("hook_degraded"))
 
     def test_recursion_optout_and_untrusted_are_silent_without_store(self):
         with mock.patch("observer_hooks.observer_store.Store") as store:
@@ -366,6 +366,10 @@ class ObserverHookTests(unittest.TestCase):
             store.reserve_invocation("reviewer", limit=1)
         result = self.run_hook(event="stop")
         self.assertIn("budget is exhausted", result["systemMessage"])
+        self.assertNotIn("not yet verified in GitHub", result["systemMessage"])  # fresh backlog: no line
+        with Store(REPO) as store:  # captured work no worker took up for longer than STALE
+            store.db.execute("UPDATE observations SET created=created-?", (hooks.STALE + 1,))
+        result = hooks.handle("stop", dict(self.data, session_id="session2"), self.config, REPO)
         self.assertIn("not yet verified in GitHub", result["systemMessage"])
         with mock.patch("observer_hooks.observer_store.Store", side_effect=ValueError("SECRET SOURCE")):
             self.assertEqual({}, self.run_hook())  # a tool call stays silent
@@ -580,6 +584,8 @@ class ObserverHookTests(unittest.TestCase):
         self.assertEqual({}, self.run_hook(event="pre-compact"))
 
     def test_each_notice_shows_once_per_session_across_turns(self):
+        with Store(REPO) as store:
+            store.set_control("worker_degraded", "record_unavailable")
         lines = []
         for turn in range(5):
             self.append("Turn %d result." % turn, role="assistant")
@@ -587,6 +593,24 @@ class ObserverHookTests(unittest.TestCase):
                 lines += self.run_hook(event=event).get("systemMessage", "").splitlines()
         self.assertEqual(1, sum("independent checks are unavailable" in line for line in lines))
         self.assertEqual(1, sum("not yet verified in GitHub" in line for line in lines))
+
+    def test_ordinary_backlog_and_a_long_transcript_show_no_line(self):
+        # The first live test showed "transcript sources are unavailable or incomplete" at every first prompt (the
+        # session's attachments passed one scan's bound) and "captured work is still pending" at most stops.
+        with self.path.open("a") as handle:
+            for n in range(40):
+                handle.write(json.dumps({"type": "attachment", "attachment": {"content": "x" * 20000}}) + "\n")
+        self.append("Run the tests.")
+        self.append("All 4 pass.", role="assistant")
+        lines = self.run_hook(event="prompt-submit").get("systemMessage", "").splitlines()
+        with Store(REPO) as store:
+            self.assertEqual(2, len(store.pending()))  # one hook caught up with the whole transcript
+        for event in ("pre-tool", "stop", "prompt-submit", "stop"):
+            lines += self.run_hook(event=event).get("systemMessage", "").splitlines()
+        self.assertEqual([], [line for line in lines if "transcript sources" in line or "still pending" in line])
+        with Store(REPO) as store:
+            self.assertEqual(2, len(store.pending()))
+            self.assertEqual("", store.get_control("hook_degraded"))
 
     def test_a_failing_queue_is_silent_on_tool_calls_and_shown_at_the_turns_edge(self):
         import fcntl
