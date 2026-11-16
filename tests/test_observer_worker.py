@@ -503,6 +503,33 @@ class ObserverCliTests(unittest.TestCase):
             os.close(main)
             if child is not None:os.close(child)
         self.assertEqual(['active'],self.held())
+    def test_release_refuses_pipes_even_when_a_controlling_terminal_exists(self):
+        # Claude Code runs in the user's terminal, so a command it starts may have that controlling terminal while
+        # its stdin and stdout are pipes: /dev/tty would then reach the user's real terminal.
+        import pty, select
+        hold_id=self.hold()
+        pid,fd=pty.fork()
+        if pid==0:
+            try:
+                os.chdir(self.project)
+                read,_=os.pipe();os.dup2(read,0);os.dup2(os.open(os.devnull,os.O_WRONLY),1)
+                os.execve(sys.executable,[sys.executable,str(ROOT/'skills/recortex/scripts/observer.py'),'release',hold_id],self.env)
+            finally:
+                os._exit(127)
+        seen=b''
+        try:
+            while select.select([fd],[],[],5)[0]:
+                try:
+                    chunk=os.read(fd,4096)
+                except OSError:
+                    break
+                if not chunk:break
+                seen+=chunk
+                if b'Type release to confirm' in seen:os.write(fd,b'release\n')
+        finally:
+            os.close(fd)
+        os.waitpid(pid,0)
+        self.assertNotIn(b'Type release to confirm',seen);self.assertEqual(['active'],self.held())
     def test_release_succeeds_in_a_terminal_after_the_user_confirms(self):
         import pty
         hold_id=self.hold()
