@@ -189,6 +189,8 @@ class ObserverPostingTests(unittest.TestCase):
             self.assertEqual("1", db.format)
             with self.assertRaisesRegex(store.StoreError, "lookup_unavailable"):
                 db.copy_of(copy)
+            with self.assertRaisesRegex(store.StoreError, "lookup_unavailable"):
+                db.waiting_for_answer()
         result, output = self.post(False, 3, "idea", copy)
         self.assertEqual(1, result, output)
         self.assertIn("could not be validated", output)  # the lookup could not complete: refused

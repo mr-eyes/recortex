@@ -682,9 +682,14 @@ class Store:
         """The events the automatic gate held back for the user's answer (observer_holds.ANSWER_REASONS), oldest
         first: deferred, and held."""
         reasons = observer_holds.ANSWER_REASONS
-        rows = self.db.execute("SELECT eventkey FROM events WHERE state='deferred' AND held=1 AND reason IN (%s) "
-                               "ORDER BY created,eventkey LIMIT 100" % ",".join("?" * len(reasons)), reasons)
-        return [self.event(row[0]) for row in rows.fetchall()]
+        if self.format != FORMAT:
+            raise StoreError("lookup_unavailable")  # a format 1 queue, read only: the next writable open migrates it
+        try:
+            rows = self.db.execute("SELECT eventkey FROM events WHERE state='deferred' AND held=1 AND reason IN (%s) "
+                                   "ORDER BY created,eventkey LIMIT 100" % ",".join("?" * len(reasons)), reasons)
+            return [self.event(row[0]) for row in rows.fetchall()]
+        except (sqlite3.Error, ValueError, TypeError) as error:
+            raise StoreError("lookup_unavailable") from error
 
     def transition(self, key, state, **fields):
         """Move an event on. One deferred or discarded with a reason of observer_holds.HELD_REASONS, or with
