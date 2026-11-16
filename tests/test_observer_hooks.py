@@ -63,6 +63,32 @@ class ObserverHookTests(unittest.TestCase):
         data = dict(self.data, tool_name="Bash", tool_input={"command": command})
         return hooks.handle(event, data, self.config, REPO)
 
+    def test_plain_phrase_holds_only_this_session(self):
+        self.append("Don't push.")
+        self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
+        later = self.path.with_name("session2.jsonl")
+        later.write_text("")
+        later.chmod(0o600)
+        data = dict(self.data, session_id="session2", transcript_path=str(later), tool_name="Bash",
+                    tool_input={"command": "git push"})
+        self.assertNotIn("hookSpecificOutput", hooks.handle("pre-tool", data, self.config, REPO))
+
+    def test_typed_recortex_command_in_its_stored_form_holds_and_releases(self):
+        stored = ("<command-message>recortex</command-message>\n<command-name>/recortex</command-name>\n"
+                  "<command-args>%s</command-args>")
+        self.append(stored % "hold git-push")
+        self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
+        later = self.path.with_name("session2.jsonl")
+        later.write_text("")
+        later.chmod(0o600)
+        data = dict(self.data, session_id="session2", transcript_path=str(later), tool_name="Bash",
+                    tool_input={"command": "git push"})
+        self.assertEqual("deny", hooks.handle("pre-tool", data, self.config, REPO)["hookSpecificOutput"]["permissionDecision"])
+        with Store(REPO) as store:
+            hold_id = store.holds()[0]["id"]
+        self.append(stored % ("release " + hold_id))
+        self.assertNotIn("hookSpecificOutput", self.run_hook())
+
     def test_original_hold_is_enforced_before_worker_or_inference(self):
         self.append("/recortex hold git-push")
         result = self.run_hook()

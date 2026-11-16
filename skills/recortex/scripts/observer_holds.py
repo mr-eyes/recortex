@@ -34,11 +34,18 @@ def _source(source):
     return sid, source["text"].strip()
 
 
+NATIVE = re.compile(r"<command-message>[^<\n]*</command-message>\n<command-name>/(?:recortex:)?recortex</command-name>\n"
+                    r"<command-args>([^<\n]*)</command-args>")
+
+
 def _control(text):
+    native = NATIVE.fullmatch(text)
+    if native:
+        text = ("/recortex " + native.group(1).strip()).strip()  # how Claude Code stores a typed /recortex command
     if "\n" in text or "\r" in text:
         return None
     if text.lower().rstrip(".! ") in PHRASES:
-        return {"operation": "hold", "action": PHRASES[text.lower().rstrip(".! ")], "command": None}
+        return {"operation": "hold", "action": PHRASES[text.lower().rstrip(".! ")], "command": None, "plain": True}
     match = re.fullmatch(r"/recortex hold (git-tag|git-push|gh-release|command)(?: (.+))?", text)
     if match:
         action, command = match.groups()
@@ -94,7 +101,9 @@ repository-wide hold. Narrower scope is an explicit make_hold argument instead.
         return None
     if parsed["operation"] == "release":
         return parsed
-    return {"operation": "hold", "hold": make_hold(source, repo, parsed["action"], command=parsed["command"])}
+    # A plain phrase ("Don't push.") holds this session; /recortex hold holds the repository until released.
+    scope = {"session_id": source.get("session_id")} if parsed.get("plain") else None
+    return {"operation": "hold", "hold": make_hold(source, repo, parsed["action"], scope=scope, command=parsed["command"])}
 
 
 def apply_release(holds, source, hold_id):
