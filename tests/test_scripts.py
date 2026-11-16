@@ -4994,6 +4994,55 @@ class SetupTests(Sandbox):
         self.assertEqual([], self.calls("api repos/octo-org/octo-repo"))  # a repository this run creates is private
         self.assertIn(people, created.stdout)
 
+    def test_apply_turns_on_the_observer_as_the_user_answered(self):
+        # The answer in the wizard is the approval: apply runs observer.py enable, with no terminal step. For automatic
+        # mode it checks the runtime first; a check that does not pass leaves shadow mode on and says what to run.
+        for bad in ({"mode": "always", "model": "sonnet"}, {"mode": "automatic"}, {"mode": "shadow", "model": "two words"},
+                    {"mode": "off", "extra": 1}, "automatic"):
+            result = self.setup_script("apply", "--answers", self.answers("single", observer=bad), "--root",
+                                       self.project(), "--dry-run")
+            self.assertNotEqual(0, result.returncode, bad)
+            self.assertIn("observer", result.stderr, bad)
+        script = os.path.join(SCRIPTS, "observer.py")
+        root = self.project()
+        automatic = self.answers("single", observer={"mode": "automatic", "model": "sonnet"})
+        dry = self.setup_script("apply", "--answers", automatic, "--root", root, "--dry-run")
+        self.assertEqual(0, dry.returncode, dry.stdout + dry.stderr)
+        for line in ("enable --mode shadow --model sonnet --yes", "runtime-check",
+                     "enable --mode automatic --model sonnet --yes"):
+            self.assertIn("would run: %s %s --repo %s %s   # " % (sys.executable, script, REPO, line), dry.stdout)
+        os.makedirs(os.path.join(self.dir, "bin"))
+        claude = self.write("bin/claude", "#!/bin/sh\nexit 1\n")  # a Claude that answers nothing: no model call
+        os.chmod(claude, 0o755)
+        env = {"XDG_STATE_HOME": os.path.join(self.dir, "xdg-state"), "CLAUDE_PROJECT_DIR": root,
+               "PATH": os.path.dirname(claude) + os.pathsep + os.environ["PATH"]}
+        real = self.setup_script("apply", "--answers", automatic, "--root", root, "--yes", gh=FAKE, env=env)
+        self.assertEqual(0, real.returncode, real.stdout + real.stderr)
+        self.assertIn("observer: on in shadow mode, but it does not post on its own yet (", real.stdout)
+        self.assertIn("setup applied", real.stdout)
+
+        def status(folder):
+            done = self.run_script("observer.py", "--repo", REPO, "status", gh=FAKE, cwd=folder,
+                                   env=dict(env, CLAUDE_PROJECT_DIR=folder,
+                                            RECORTEX_TRUSTED_FILE=os.path.join(self.dir, "trusted-repos")))
+            return json.loads(done.stdout.strip().splitlines()[-1])
+        found = status(root)
+        self.assertEqual((True, "shadow", "sonnet"), (found["approved"], found["settings"]["mode"],
+                                                      found["settings"]["model"]))
+        other = self.project()
+        real = self.setup_script("apply", "--answers", self.answers("single", observer={"mode": "shadow", "model": "haiku"}),
+                                 "--root", other, "--yes", gh=FAKE, env=dict(env, CLAUDE_PROJECT_DIR=other))
+        self.assertEqual(0, real.returncode, real.stdout + real.stderr)
+        self.assertIn("observer: on in shadow mode, with haiku\n", real.stdout)
+        self.assertEqual("haiku", status(other)["settings"]["model"])
+        plain = self.project()
+        real = self.setup_script("apply", "--answers", self.answers("single"), "--root", plain, "--yes", gh=FAKE,
+                                 env=dict(env, CLAUDE_PROJECT_DIR=plain))
+        self.assertEqual(0, real.returncode, real.stdout + real.stderr)
+        self.assertNotIn("observer.py", real.stdout)  # off by default: nothing runs
+        self.assertNotIn("\nobserver: ", real.stdout)
+        self.assertFalse(status(plain)["approved"])
+
     def test_apply_with_a_field_sheet_records_the_approval(self):
         root = self.project()
         env = {"XDG_STATE_HOME": os.path.join(self.dir, "xdg-state"), "CLAUDE_PROJECT_DIR": root}

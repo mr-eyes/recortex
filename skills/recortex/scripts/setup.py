@@ -15,8 +15,9 @@ detect  Read-only and local. Looks at the names of files and folders at the top
 apply   Makes every change, from an answers file written after the user's final
         confirmation: .recortex.json, the labels, the hub and its first
         resume comment, the trusted-repository entry, the optional triage
-        workflow and CLAUDE.md snippet, and a first index.py sync in the
-        foreground. --dry-run prints all of it and writes nothing; a real run
+        workflow and CLAUDE.md snippet, a first index.py sync in the
+        foreground, and the observer as the user answered. --dry-run prints
+        all of it and writes nothing; a real run
         needs --yes. Run again with new answers, it adds deliverables, sections
         and labels and never removes what is there.
 fields  The field sheet (references/fields.md), local only: `show` prints its
@@ -38,6 +39,8 @@ Answers file (JSON):
    "triage_workflow": false, "claude_md": false,
    "prompt_hook": {"enabled": true, "every": 10},
    "trust": true,                          true: the user agreed to add the repository to their trusted list
+   "observer": {"mode": "automatic", "model": "sonnet"},   optional: "automatic", "shadow" or "off" (the default),
+                                           and the Claude model of its background calls; see references/observer.md
    "fields": {"names": [...], "sensitive": [...], "brief": {...}, "checks": [...], "words": "...",
               "restricted": [{"name": ..., "pattern": ..., "example": ...}]}}   optional; see references/fields.md
 
@@ -397,6 +400,14 @@ def check_answers(answers):
         out["board"] = {"mode": "existing", "number": board["existing"]}
     else:
         raise AnswerError("board must be \"no\", \"new\" or {\"existing\": <the board's number>}")
+    observer = answers.get("observer", {"mode": "off"})
+    if not isinstance(observer, dict) or set(observer) - {"mode", "model"} or \
+            observer.get("mode") not in ("automatic", "shadow", "off"):
+        raise AnswerError('observer must be {"mode": "automatic" | "shadow" | "off", "model": "<a Claude model>"}')
+    model = observer.get("model")
+    if observer["mode"] != "off" and not (isinstance(model, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", model)):
+        raise AnswerError("observer.model must be a Claude alias or model ID, such as sonnet")
+    out["observer"] = None if observer["mode"] == "off" else {"mode": observer["mode"], "model": model}
     out["fields"], out["restricted"] = None, []
     if "fields" in answers:
         out["fields"], out["restricted"] = check_field_answers(answers["fields"])
@@ -1176,6 +1187,48 @@ def board_step(board, root, python, dry):
         print("board: not filled yet; run `board.py apply` when the reason above is dealt with.")
 
 
+def observer_step(answers, root, python, dry):
+    """Turn on the observer as the user answered in the wizard: shadow mode for this folder, and for automatic mode
+    the runtime check and then automatic mode. The answer is the approval, recorded here as the field sheet's is;
+    nothing asks on a terminal. A step that does not pass leaves what is on, and one line says what to run."""
+    script = os.path.join(HERE, "observer.py")
+    repo, mode, model = answers["repo"], answers["observer"]["mode"], answers["observer"]["model"]
+    steps = [([python, script, "--repo", repo, "enable", "--mode", "shadow", "--model", model, "--yes"],
+              "turn on the observer for this folder in shadow mode: it reviews memories and posts none")]
+    if mode == "automatic":
+        steps += [([python, script, "--repo", repo, "runtime-check"],
+                   "check that its background calls run isolated, with %s (one call)" % model),
+                  ([python, script, "--repo", repo, "enable", "--mode", "automatic", "--model", model, "--yes"],
+                   "let it post reviewed memories on its own")]
+    if dry:
+        for command, what in steps:
+            print("would run: %s   # %s" % (" ".join(command), what))
+        return
+    if repo.lower() not in recortex.trusted_repos():
+        print("observer: not turned on, because %s is not in the trusted list; it runs only for a trusted repository"
+              % repo)
+        return
+    environment = dict(os.environ, CLAUDE_PROJECT_DIR=root)  # the folder its entry is for
+    for number, (command, what) in enumerate(steps):
+        print("run: %s   # %s" % (" ".join(command), what))
+        try:
+            done = subprocess.run(command, capture_output=True, text=True, cwd=root, env=environment, timeout=240)
+            lines = done.stdout.strip().splitlines()
+            code = json.loads(lines[-1]).get("code", "") if done.returncode and lines else ""
+        except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
+            done, code = None, ""
+        if done is None or done.returncode:
+            code = code if isinstance(code, str) and re.fullmatch(r"[a-z][a-z_-]{0,39}", code) else "failed"
+            if number == 0:
+                print("observer: not turned on (%s); run observer.py status, then observer.py enable --model %s --yes"
+                      % (code, model))
+            else:
+                print("observer: on in shadow mode, but it does not post on its own yet (%s). Run observer.py "
+                      "runtime-check, then observer.py enable --mode automatic --model %s --yes" % (code, model))
+            return
+    print("observer: on in %s mode, with %s" % (mode, model))
+
+
 def apply(answers, root, dry, drafts):
     if not dry:
         print(preflight())  # before anything is written; a dry run writes nothing and makes no such check
@@ -1324,6 +1377,8 @@ def apply(answers, root, dry, drafts):
               % (existing["board"]["owner"], existing["board"]["number"]))  # checked by check_existing
     elif answers["board"]:
         board_step(answers["board"], root, python, dry)
+    if answers["observer"]:
+        observer_step(answers, root, python, dry)
     present = [item["kind"] for item in detect(root)]
     if dry:
         print("would record as known: %s   # the hooks suggest only deliverables that appear later" %

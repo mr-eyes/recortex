@@ -34,6 +34,7 @@ A project's goal usually does not exist as files yet (a manuscript is written du
 | Is there earlier work to catch up on? May this project's local Claude Code transcripts be read for it? | `catch_up`, `read_transcripts` (see [catch-up.md](catch-up.md)) |
 | Optional: the GitHub triage labeler workflow; the CLAUDE.md snippet; the prompt reminder line and how often | `triage_workflow`, `claude_md`, `prompt_hook` |
 | May this repository be added to your trusted list, so the hooks print its brief? | `trust` |
+| Turn on the observer (experimental)? It takes notes of the conversation, the prompts the user types and the agent's messages to the user, and posts reviewed memories on its own. Automatic: it posts them; shadow: it reviews them and keeps them on this machine; off, the default. Then: which Claude model runs its background calls, for example sonnet, opus or haiku. Say that its calls run under the user's Claude sign-in and count against their usage, at most 60 a day for the project, and that it needs the repository in the trusted list | `observer`: `{"mode": "automatic", "model": "sonnet"}`, with `"shadow"` or `"off"` as the mode; see [observer.md](observer.md) |
 
 An answers file:
 
@@ -44,7 +45,8 @@ An answers file:
                   {"kind": "paper", "sections": ["Background", "Methods", "Results", "Data availability"]}],
  "decision_makers": ["the project lead"], "timezone": "US Pacific time, written as 2026-03-04 14:10 PST",
  "topics": ["reader"], "catch_up": false, "read_transcripts": false,
- "triage_workflow": true, "claude_md": true, "prompt_hook": {"enabled": true, "every": 10}, "trust": true}
+ "triage_workflow": true, "claude_md": true, "prompt_hook": {"enabled": true, "every": 10}, "trust": true,
+ "observer": {"mode": "automatic", "model": "sonnet"}}
 ```
 
 The field questions:
@@ -77,6 +79,7 @@ The field questions:
 - Writes the CLAUDE.md snippet when asked for.
 - Runs the first `index.py sync` in the foreground, so the first session already has a brief.
 - With a `board` answer other than `"no"`: runs `board.py setup` and then `board.py apply`. When the `project` scope is missing the rest of the setup is done and one fixed line says to run `gh auth refresh -s project` in a terminal and then `board.py setup` again; the plugin never runs that command. Any other board failure also leaves the setup done.
+- With an `observer` answer other than off, and the repository in the trusted list: runs `observer.py enable --mode shadow --model M --yes` for this folder, and for automatic mode then `observer.py runtime-check` (one model call) and `observer.py enable --mode automatic --model M --yes`. The user's answer is the approval, recorded as the field sheet's is; nothing asks on a terminal. When a step does not pass, what is on stays on, and one line says what to run.
 - Records the kinds of deliverable that the project's files already suggest, so the hooks mention only what appears later.
 - With a `fields` entry in the answers: checks first that the approvals file can be read, and stops before any write if not; prints the notices of a sensitive mark (show them to the user, and when the first one says the repository is public, ask whether to go on, use a new private repository, or stop); writes the entry into the configuration with the rest, appends the checked identifier patterns to `restricted_patterns`, and right after the configuration file is written records the user's approval of the sheet on this machine. A project that already has another sheet is refused: change a sheet with `fields set --replace`. A sheet that `apply` does not write is printed as one line, `"fields": "(field guidance: <state>; see setup.py fields show)"`.
 

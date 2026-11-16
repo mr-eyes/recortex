@@ -159,9 +159,10 @@ def terminal():
         return None
 
 
-def entry_holds():
-    """The active holds of the repository this folder's entry names: [] without an entry, [None] when the approvals
-    or the holds cannot be read, since those holds may be active."""
+def entry_holds(keep=None):
+    """The active holds that replacing this folder's entry would stop applying here: those of the repository the
+    entry names, [] without an entry or when it names `keep` (the replacement names it too, so they still apply), and
+    [None] when the approvals or the holds cannot be read, since those holds may be active."""
     try:
         entry = runtime.stored_approval()
     except (ValueError, storage.StorageError, OSError):
@@ -171,6 +172,8 @@ def entry_holds():
     name = entry.get("repo") if isinstance(entry, dict) else None
     if not recortex.valid_repo(name):
         return [None]
+    if keep and name.lower() == keep.lower():
+        return []
     try:
         return [hold for hold in observer_store.read_holds(name) if hold.get("state") == "active"]
     except (observer_store.StoreError, storage.StorageError, OSError, ValueError, KeyError, TypeError):
@@ -327,14 +330,13 @@ def main(argv=None):
             emit({"code": "repository-not-trusted"}); return 1
         options = runtime.settings(config)
         if args.command == "enable":
-            # Like disable and release, these change what the user set up, so they are asked on the user's own
-            # terminal: automatic mode, and replacing this folder's entry while its repository's holds apply.
-            questions = []
-            if args.mode == "automatic":
-                questions.append("The observer will post reviewed memories to %s on its own." % repo)
-            if entry_holds():
-                questions.append("This replaces this folder's settings while holds apply.")
-            confirm = (lambda: confirmed("enable", " ".join(questions))) if questions else None
+            # Automatic mode is the user's answer to the setup question, which the setup wizard's session records
+            # here, as it records the field sheet's approval: no terminal step. Replacing this folder's entry with one
+            # for another repository, so that the holds of the one it names stop applying here, is asked on the
+            # user's own terminal, as disable and release are.
+            confirm = None
+            if entry_holds(keep=repo):
+                confirm = lambda: confirmed("enable", "This replaces this folder's settings while holds apply.")
             result = enable(repo, loaded, args.mode, args.yes, args.model, confirm=confirm)
             if result.get("code") == "terminal-required":
                 result["note"] = ("Run this enable yourself in a separate terminal, outside Claude Code: it asks you to "

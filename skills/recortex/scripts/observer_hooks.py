@@ -215,14 +215,15 @@ def _unchecked(data, denial=UNCHECKED):
     return None if observer_holds.read_only(tool_name, tool_input) else denial
 
 
-SELF_RELEASE = {"reason": "recortex observer: only the user releases a hold, switches the observer off, resumes it or "
-                          "turns on automatic posting, in a separate terminal outside Claude Code."}
-UNDO = re.compile(r"observer(?:\.py)?\b.*\b(?:release|disable|resume|automatic)\b")
+SELF_RELEASE = {"reason": "recortex observer: only the user releases a hold, switches the observer off or resumes it, "
+                          "in a separate terminal outside Claude Code."}
+UNDO = re.compile(r"observer(?:\.py)?\b.*\b(?:release|disable|resume)\b")
 
 
 def _undo(data):
-    """True for a Bash call that names observer.py together with release, disable, resume or automatic mode: the
-    user's own commands, which a session never needs. The command is read as the shell splits it (quotes taken out),
+    """True for a Bash call that names observer.py together with release, disable or resume: the user's own
+    commands, which a session never needs. Automatic mode is not among them: the setup wizard's session turns it on,
+    on the user's answer. The command is read as the shell splits it (quotes taken out),
     and as written when it does not split. A guard against mistakes: a session with shell access can get round it."""
     command = (data.get("tool_input") or {}).get("command") if isinstance(data.get("tool_input"), dict) else None
     if data.get("tool_name") not in ("Bash", "bash") or not isinstance(command, str):

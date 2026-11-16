@@ -137,28 +137,42 @@ class ObserverHookTests(unittest.TestCase):
         import observer_runtime
         return observer_runtime.stored_approval(str(self.project))
 
-    def test_automatic_mode_is_asked_on_the_users_terminal(self):
+    def test_automatic_mode_is_the_sessions_to_turn_on(self):
+        # The user's answer to the setup question, recorded by the wizard's session: no terminal step. Without a
+        # runtime proof it is still refused.
+        self.assertEqual(0, self.cli("enable", "--model", "haiku", "--yes")[0])
+        result, value, _ = self.cli("enable", "--mode", "automatic", "--model", "haiku", "--yes")
+        self.assertEqual((1, "runtime-gate"), (result, value.get("code")))
         with mock.patch("observer_hooks.observer_runtime.gate_valid", return_value=True):
-            self.assertEqual(0, self.cli("enable", "--model", "haiku", "--yes")[0])  # shadow: nothing to ask
-            for answer, code in ((None, "terminal-required"), ("no", "not-confirmed")):
-                result, value, tty = self.cli("enable", "--mode", "automatic", "--model", "haiku", "--yes", answer=answer)
-                self.assertEqual((1, code, False), (result, value["code"], value["approved"]), answer)
-                self.assertEqual("shadow", self.folder_entry()["settings"]["mode"])
-            result, value, tty = self.cli("enable", "--mode", "automatic", "--model", "haiku", "--yes", answer="enable")
-            self.assertEqual((0, True), (result, value["approved"]))
-            self.assertIn("post reviewed memories", tty.ask.call_args.args[0])
-            self.assertEqual("automatic", self.folder_entry()["settings"]["mode"])
+            result, value, _ = self.cli("enable", "--mode", "automatic", "--model", "haiku", "--yes")
+        self.assertEqual((0, True), (result, value["approved"]), value)
+        self.assertEqual("automatic", self.folder_entry()["settings"]["mode"])
 
-    def test_replacing_this_folders_entry_while_holds_apply_is_asked_on_the_users_terminal(self):
+    def test_replacing_this_folders_entry_while_its_holds_apply_is_asked_on_the_users_terminal(self):
+        # An entry for the same repository keeps its holds in force: nothing to ask. One that names another
+        # repository would stop that repository's holds applying here: asked on the user's own terminal.
+        import observer_holds
+        import observer_runtime
         self.entry_and_hold()
+        with mock.patch("observer_hooks.observer_runtime.gate_valid", return_value=True):
+            result, value, _ = self.cli("enable", "--mode", "automatic", "--model", "sonnet", "--yes")
+        self.assertEqual(0, result, value)
+        self.assertEqual("sonnet", self.folder_entry()["settings"]["model"])
+        other = "octo-org/other"
+        observer_runtime.approve(other, {"observer": {"enabled": True, "model": "haiku",
+                                                      "publisher_id": observer_runtime.publisher_id(create=True)}},
+                                 str(self.project))
+        with Store(other, config={}) as store:
+            source = {"source_id": "s9", "role": "user", "direct_user": True, "text": "/recortex hold git-push"}
+            store.update_holds(lambda holds: holds + [observer_holds.make_hold(source, other, "git-push")])
         result, value, _ = self.cli("enable", "--model", "sonnet", "--yes")
         self.assertEqual((1, "terminal-required"), (result, value["code"]))
         self.assertIn("separate terminal", value["note"])
-        self.assertEqual("haiku", self.folder_entry()["settings"]["model"])
+        self.assertEqual(other, self.folder_entry()["repo"])
         result, value, tty = self.cli("enable", "--model", "sonnet", "--yes", answer="enable")
         self.assertEqual(0, result, value)
         self.assertIn("while holds apply", tty.ask.call_args.args[0])
-        self.assertEqual("sonnet", self.folder_entry()["settings"]["model"])
+        self.assertEqual(REPO, self.folder_entry()["repo"])
         with Store(REPO) as store:
             self.assertEqual(["active"], [hold["state"] for hold in store.holds()])
 
@@ -179,9 +193,9 @@ class ObserverHookTests(unittest.TestCase):
             self.assertFalse(store.get_control("publication_paused"))
 
     def test_the_users_control_commands_are_denied_from_the_session_always(self):
-        # release, disable, resume and automatic mode are the user's, run in their own terminal: a session's Bash
-        # call naming them is denied whether or not a hold applies, read as the shell splits it. A guard against
-        # mistakes, not a boundary.
+        # release, disable and resume are the user's, run in their own terminal: a session's Bash call naming them is
+        # denied whether or not a hold applies, read as the shell splits it. A guard against mistakes, not a
+        # boundary. Automatic mode is the setup wizard's to turn on, on the user's answer.
         import observer_runtime
         observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
                                                      "publisher_id": observer_runtime.publisher_id(create=True)}},
@@ -189,8 +203,6 @@ class ObserverHookTests(unittest.TestCase):
         denied = ("python3 skills/recortex/scripts/observer.py resume all", "python3 observer.py resume publication",
                   "python3 'observer.py' 're''sume' all", 'python3 obs"erver".py "resume"',
                   "python3 observer.py release 0123456789abcdef01234567", "python3 observer.py disable",
-                  "python3 observer.py enable --mode automatic --model haiku --yes",
-                  "python3 observer.py enable --mode=automatic --model haiku --yes",
                   "python3 observer.py 'resume all")  # does not split: read as written
         for with_hold in (False, True):
             if with_hold:
@@ -201,7 +213,8 @@ class ObserverHookTests(unittest.TestCase):
                 self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"], (with_hold, command))
                 self.assertIn("in a separate terminal", result["hookSpecificOutput"]["permissionDecisionReason"])
             for command in ("python3 observer.py status", "python3 observer.py pending", "python3 observer.py holds",
-                            "python3 observer.py pause publication", "python3 observer.py enable --model haiku"):
+                            "python3 observer.py pause publication", "python3 observer.py enable --model haiku",
+                            "python3 observer.py enable --mode automatic --model haiku --yes"):
                 self.assertNotIn("hookSpecificOutput", self.run_hook(command=command), (with_hold, command))
         with mock.patch("observer_hooks.observer_runtime.stored_approval", return_value=None):
             self.assertNotIn("hookSpecificOutput", self.run_hook(command="python3 observer.py resume all"))
