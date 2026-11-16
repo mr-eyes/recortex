@@ -258,7 +258,8 @@ class ObserverHookTests(unittest.TestCase):
                                  (key, "s%d" % n, candidate, "0" * 64, n, n))
         return key
 
-    def ask(self, question, answer, ident="toolu_01ask", labels=("Post", "Drop"), structured=True, **extra):
+    def ask(self, question, answer, ident="toolu_01ask", labels=("Post", "Drop"), structured=True,
+            wording="User has answered your questions", **extra):
         """The main session's AskUserQuestion call and the result Claude Code records for the user's answer."""
         asked = {"question": question, "header": "Memory", "multiSelect": False,
                  "options": [{"label": label, "description": label} for label in labels]}
@@ -266,8 +267,8 @@ class ObserverHookTests(unittest.TestCase):
             {"type": "tool_use", "id": ident, "name": "AskUserQuestion", "input": {"questions": [asked]}}]}}, **extra)
         result = dict({"type": "user", "message": {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": ident,
-             "content": 'User has answered your questions: "%s"="%s". You can now continue with the user\'s answers '
-                        'in mind.' % (question, answer)}]}}, **extra)
+             "content": '%s: "%s"="%s". You can now continue with the user\'s answers '
+                        'in mind.' % (wording, question, answer)}]}}, **extra)
         if structured:
             result["toolUseResult"] = {"questions": [asked], "answers": {question: answer}}
         with self.path.open("a") as handle:
@@ -324,6 +325,10 @@ class ObserverHookTests(unittest.TestCase):
         self.assertFalse(self.granted(key))  # the same answer never grants again
         ask("toolu_01again", said="  correction:\n x ", structured=False)  # the line verbatim, spaces aside
         self.assertTrue(self.granted(key))  # a new answer, in the result's fixed sentence alone
+        with Store(REPO) as store:
+            store.take_grant(key)
+        ask("toolu_01new", structured=False, wording="Your questions have been answered")
+        self.assertTrue(self.granted(key))  # the sentence as Claude Code 2.1.325 writes it
         with Store(REPO) as store:
             store.take_grant(key)
         ask("toolu_01p2")

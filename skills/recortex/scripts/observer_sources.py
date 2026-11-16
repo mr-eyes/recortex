@@ -470,7 +470,9 @@ def control_tail(data, project_root, start, max_bytes=None, seconds=None):
 SHORT_ID = re.compile(r"(?<![0-9a-f])[0-9a-f]{8}(?![0-9a-f])")
 ANSWER_BYTES = 8 * 1024 * 1024  # how much of the end of the main transcript is searched for the user's answer
 TOOL_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
-ANSWERED = re.compile(r'User has answered your questions: "(.*)"="([^"\n]*)"\.(?: .*)?', re.S)
+# Claude Code's own sentence for an answer, in its earlier and its 2.1.325 wording.
+ANSWERED = re.compile(r'(?:User has answered your questions|Your questions have been answered): "(.*)"="([^"\n]*)"\.'
+                      r'(?: .*)?', re.S)
 
 
 def _main_record(record, role):
