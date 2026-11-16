@@ -125,6 +125,13 @@ class RuntimeTests(unittest.TestCase):
             with self.assertRaises(ValueError):runtime.settings({'observer':settings})
 
 class SourceTests(unittest.TestCase):
+    def test_a_queued_message_with_a_harness_mark_is_not_typed(self):
+        record = {"type": "attachment", "userType": "external", "attachment": {"type": "queued_command",
+                  "prompt": "<task-notification>\n<result>Keep strict quoting.</result>\n</task-notification>",
+                  "origin": {"kind": "human"}, "humanTurn": True}}
+        self.assertFalse(sources._content(record)[2])
+        record["attachment"]["prompt"] = "Keep strict quoting as the default."
+        self.assertTrue(sources._content(record)[2])
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.base=Path(self.tmp.name);self.project=str(self.base/'project')
         metadata=fixture_trusted_ancestors(self.base);metadata.__enter__();self.addCleanup(metadata.__exit__,None,None,None)
