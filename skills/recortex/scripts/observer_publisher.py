@@ -89,24 +89,48 @@ def exact_words(body):
                      if line.lstrip().startswith(">"))
 
 
+HELD = ("withheld", "status_change", "sensitive_project")  # why an event was kept from posting on its own
+
+
+def held_reason(store, event, config):
+    """Why this event is kept from posting: the session's withhold, or a reason the automatic gate holds it back
+    (HELD), or "". Recorded when the event is discarded ("discarded_withheld"), so that a copy of it stays refused."""
+    sessions = {item["metadata"].get("session_id") for item in (store.observation(sid) for sid in
+                                                                 event["candidate"]["sources"]) if item}
+    if observer_holds.publication_withheld(store.holds(), store.repo, sessions):
+        return "withheld"
+    if event.get("reason") in HELD:
+        return event["reason"]
+    reasons = held_back(store, event, config)
+    return reasons[0] if reasons else ""
+
+
+def _held_once(event):
+    """True for an event that is, or was when it was discarded, kept from posting (HELD)."""
+    return event["state"] != "rejected" or any(event.get("reason") == "discarded_" + reason for reason in HELD)
+
+
 def queued_decision(store, draft):
-    """An observer event that already holds the decision in `draft` (the same exact words), or None."""
+    """An observer event that already holds the decision in `draft` (the same exact words), or None. A discarded
+    event counts only when it was withheld or held back: then the same decision is not posted around it."""
     quoted = exact_words(draft).strip()
     if not quoted:
         return None
-    for event in store.events(states=["ready", "deferred", "sending", "uncertain", "verified"], limit=10000):
-        if event["candidate"]["kind"] == "decision" and exact_words(event["candidate"]["body"]).strip() == quoted:
+    for event in store.events(states=["ready", "deferred", "sending", "uncertain", "verified", "rejected"], limit=10000):
+        if (event["candidate"]["kind"] == "decision" and exact_words(event["candidate"]["body"]).strip() == quoted
+                and _held_once(event)):
             return event
     return None
 
 
 def queued_copy(store, draft):
-    """An observer event whose reviewed body is this draft, its eventkey aside, or None. Such a draft is posted with
-    --eventkey, which keeps the event's confirmation on the user's terminal and the session's withhold."""
+    """An observer event, in any state, whose reviewed body is this draft, its eventkey aside, or None. Such a draft
+    is posted with --eventkey, which keeps the event's confirmation on the user's terminal and the session's
+    withhold; a copy of a discarded event is not posted at all. A rewritten memory is the session's own."""
     def plain(text):
         return recortex.normalize(re.sub(r" eventkey=[0-9a-f]{32}", "", text or "", count=1))
     wanted = plain(draft)
-    for event in store.events(states=["ready", "deferred", "sending", "uncertain", "verified"], limit=10000):
+    for event in store.events(limit=10000):  # every state: a discarded event's copy is refused too
         if wanted in (plain(event["body"]), plain(event["candidate"]["body"])):
             return event
     return None

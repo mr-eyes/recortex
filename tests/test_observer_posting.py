@@ -67,6 +67,55 @@ class ObserverPostingTests(unittest.TestCase):
         result, output = self.post(False, 3, "idea", self.own_idea())
         self.assertEqual(0, result, output)
 
+    def discard(self, key):
+        import observer
+        out = io.StringIO()
+        with mock.patch.object(observer.recortex, "load_config", return_value=self.config), contextlib.redirect_stdout(out):
+            self.assertEqual(0, observer.main(["--repo", fixtures.REPO, "discard", key]), out.getvalue())
+        with store.Store(fixtures.REPO, config=self.config, readonly=True) as db:
+            return db.event(key)["reason"]
+
+    def test_discarding_a_withheld_event_does_not_free_its_copy(self):
+        # Discarding is allowed and posts nothing; it does not lift the copy check: the same body as the session's
+        # own memory is still refused, with no hint to discard, and a rewritten memory still posts.
+        import re
+        import observer_holds
+        hold = observer_holds.make_hold({"source_id": "s1", "role": "user", "direct_user": True, "text": "off the record"},
+                                        fixtures.REPO, "publish", scope={"session_id": "session1"})
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.update_holds(lambda holds: holds + [hold])
+            body = db.event(self.key)["body"]
+        self.assertEqual("discarded_withheld", self.discard(self.key))
+        result, output = self.post(False, 3, "idea", re.sub(r" eventkey=[0-9a-f]{32}", "", body, count=1))
+        self.assertEqual(1, result, output)
+        self.assertIn("discarded (event %s)" % self.key, output)
+        self.assertNotIn("observer.py discard", output)
+        self.assertEqual([], [args for args in self.calls() if args[:2] == ["issue", "comment"]])
+        result, output = self.post(False, 3, "idea", self.own_idea())
+        self.assertEqual(0, result, output)
+
+    def test_a_discarded_decision_blocks_its_exact_words_only_when_it_was_held(self):
+        from tests.test_observer_worker import BODY as decision  # a plain decision: no link, no change of status
+        def queue(source):
+            with store.Store(fixtures.REPO, config=self.config) as db:
+                db.capture([self.metadata(source)])
+                candidate = {"kind": "decision", "issue": 3, "body": decision, "sources": [source]}
+                ident = db.reserve_invocation("reviewer")
+                db.complete_invocation(ident, True, output_hash=store.candidate_hash(candidate))
+                return db.review_complete(source, candidate, {"reservation_id": ident, "accepted": True,
+                                                              "candidate_hash": store.candidate_hash(candidate)})
+        plain = queue("source9")
+        self.assertEqual("discarded", self.discard(plain))
+        result, output = self.post(False, 3, "decision", decision.replace("Strict parser", "Strict reader"))
+        self.assertEqual(0, result, output)  # discarded and never held: the session may record it itself
+        held = queue("source8")
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.transition(held, "deferred", reason="status_change")
+        self.assertEqual("discarded_status_change", self.discard(held))
+        result, output = self.post(False, 3, "decision", decision.replace("Strict parser", "Strict quoting"))
+        self.assertEqual(1, result, output)
+        self.assertIn("discarded (event %s)" % held, output)
+
     def own_idea(self):
         return (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text().replace("open quote", "quote state")
 
