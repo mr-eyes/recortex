@@ -270,21 +270,21 @@ class ObserverPostingTests(unittest.TestCase):
         self.assertEqual([], self.calls())
 
     def test_a_held_back_event_posts_through_its_eventkey_on_the_users_answer(self):
-        # Held back by the automatic gate (here: its reviewer doubted a marked project's memory), it is listed for the
+        # Held back by the automatic gate (a change of status that rests on what was not said), it is listed for the
         # session's question with pending --held, and --eventkey posts it with no terminal step. The daily cap of
         # automatic comments is not the session's; a pause still stops it, and a copy without --eventkey is refused.
         import observer
         self.config["observer"]["max_posts"] = 1
         observer_runtime.approve(fixtures.REPO, self.config)
         with store.Store(fixtures.REPO, config=self.config) as db:
-            db.transition(self.key, "deferred", reason="confidentiality")
+            db.transition(self.key, "deferred", reason="status_change")
             db.set_control("automatic_posts", [__import__("time").time()])
             body = db.event(self.key)["body"]
         out = io.StringIO()
         with mock.patch.object(observer.recortex, "load_config", return_value=self.config), contextlib.redirect_stdout(out):
             self.assertEqual(0, observer.main(["--repo", fixtures.REPO, "pending", "--held"]))
         listed = json.loads(out.getvalue())
-        self.assertEqual([(self.key, "idea", 3, "confidentiality")],
+        self.assertEqual([(self.key, "idea", 3, "status_change")],
                          [(item["eventkey"], item["kind"], item["issue"], item["reason"]) for item in listed["held"]])
         self.assertTrue(listed["held"][0]["line"])
         self.assertIn("multiple-choice question", listed["note"])

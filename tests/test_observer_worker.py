@@ -236,51 +236,23 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual([asked, told], [item['id'] for item in review['context']])
         self.assertIn('the other messages of the same stretch', runtime.PROMPTS['review'])
         self.assertIn("the agent's account of such a request withholds nothing", runtime.PROMPTS['review'])
-    def test_never_write_down_reaches_both_model_calls(self):
-        sheet = {'state': 'approved', 'entry': {'brief': {'never': 'names of client sites'}}, 'marks': []}
-        sid = self.capture()
-        with patch.object(worker.field_sheet, 'state', return_value=sheet):
-            self.run_worker(self.invoke(self.candidate(sid)))
-        self.assertEqual([('extract', 'names of client sites'), ('review', 'names of client sites')],
-                         [(purpose, payload['never_write_down']) for purpose, payload in self.calls])
-    def test_a_marked_projects_reviewer_answers_the_confidentiality_question(self):
-        # In a marked project the reviewer is asked, with the marks in fixed words; its answer is kept with the
-        # review, and no answer counts as a doubt. Both model calls get the restricted patterns, names and patterns
-        # without their examples, from an approved sheet only. An unmarked project's reviewer is not asked.
+    def test_no_field_sheet_mark_or_pattern_reaches_the_models(self):
+        # The observer does not judge confidentiality: a marked project's sheet, its "Never write down" line and the
+        # project's restricted patterns stay out of both calls; the mechanical refusals still apply to every body.
         self.config['restricted_patterns'] = [{'name': 'site code', 'pattern': '\\bST-[0-9]{3}\\b', 'example': 'ST-204'}]
-        marked = {'state': 'approved', 'entry': {'brief': {'never': 'names of client sites'}}, 'marks': ['people']}
-        changed = dict(marked, state='changed')
-        for sheet, answer, kept in ((marked, 'clear', 'clear'), (marked, None, 'doubt'), (marked, 'doubt', 'doubt'),
-                                    (changed, 'clear', 'clear'), (dict(marked, state='new'), None, 'doubt'),
-                                    ({'state': 'none', 'entry': None, 'marks': []}, 'clear', None)):
-            self.calls = []
-            sid = self.capture(QUOTE + ' Case %s %s.' % (sheet['state'], answer))
-            def call(payload, schema, purpose, config, candidate=self.candidate(sid)):
-                self.calls.append((purpose, payload))
-                if purpose == 'extract':
-                    return {'ok': True, 'structured': {'candidates': [candidate], 'ignored': []}}
-                result = {'candidate_hash': payload['candidate_hash'], 'accepted': True, 'reason': 'supported'}
-                return {'ok': True, 'structured': dict(result, **({'confidential': answer} if answer else {}))}
-            with patch.object(worker.field_sheet, 'state', return_value=sheet):
-                ready = self.run_worker(call)['ready']
-            payloads = dict(self.calls)
-            forms = [{'name': 'site code', 'pattern': '\\bST-[0-9]{3}\\b'}] if sheet['state'] == 'approved' else []
-            for purpose in ('extract', 'review'):
-                self.assertEqual(forms, payloads[purpose]['restricted_patterns'], (purpose, sheet['state']))
-                if not forms:
-                    self.assertNotIn('ST-', json.dumps(payloads[purpose]), sheet['state'])
-            self.assertNotIn('ST-204', json.dumps(payloads))
-            self.assertNotIn('confidentiality', payloads['extract'])
-            with store.Store(REPO, config=self.config) as db:
-                review = db.event(ready[0])['review']
-            if kept is None:
-                self.assertNotIn('confidentiality', payloads['review'])
-                self.assertNotIn('confidential', review)
-            else:
-                self.assertIn('marked as handling data about people', payloads['review']['confidentiality'])
-                self.assertEqual(kept, review['confidential'], answer)
-        self.assertIn('confidentiality question', runtime.PROMPTS['review'])
-        self.assertIn('restricted_patterns', runtime.PROMPTS['extract'])
+        sheet = {'state': 'approved', 'entry': {'brief': {'never': 'names of client sites'}}, 'marks': ['people']}
+        sid = self.capture()
+        import field_sheet
+        with patch.object(field_sheet, 'state', return_value=sheet):
+            ready = self.run_worker(self.invoke(self.candidate(sid)))['ready']
+        self.assertEqual(['extract', 'review'], [purpose for purpose, _ in self.calls])
+        for purpose, payload in self.calls:
+            text = json.dumps(payload)
+            for absent in ('never_write_down', 'names of client sites', 'restricted_patterns', 'ST-', 'confidential',
+                           'people'):
+                self.assertNotIn(absent, text, (purpose, absent))
+        self.assertEqual(1, len(ready))
+        self.assertNotIn('confidential', json.dumps(worker.REVIEW))
     def test_unbound_candidates_never_reach_the_reviewer(self):
         cases = {'excerpt_binding': dict(excerpts=['words that are not in the source']),
                  'destination': dict(issue=99),

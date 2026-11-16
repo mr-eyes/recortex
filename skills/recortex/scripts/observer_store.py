@@ -64,8 +64,8 @@ SCHEMA_1 = SCHEMA.replace(", body_hash TEXT NOT NULL DEFAULT '', words_hash TEXT
                           "NULL DEFAULT 0)", ")")
 INDEXES = ("CREATE INDEX IF NOT EXISTS events_body ON events(body_hash)",
            "CREATE INDEX IF NOT EXISTS events_words ON events(words_hash)")
-# Reasons a format 1 queue kept an event for that are no longer given: back-filled as held.
-EARLIER_HELD = ("sensitive_project",)
+# Reasons an earlier queue kept an event for that are no longer given: back-filled as held.
+EARLIER_HELD = ("sensitive_project", "confidentiality", "sheet_not_approved")
 
 
 class StoreError(RuntimeError):

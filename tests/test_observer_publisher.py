@@ -255,37 +255,23 @@ class ObserverPublisherTests(unittest.TestCase):
         self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config, main_session=True)["state"])
         self.assertIn("withheld", publisher.EVENT_PROBLEMS)
 
-    def test_a_marked_project_posts_what_its_reviewer_found_clear(self):
-        # The reviewer answers the confidentiality question on top of the mechanical filters. In a marked project
-        # whose sheet the user approved, a memory it found clear posts on its own, and one it doubted, or did not
-        # answer about, waits. Where the sheet is not approved as it stands, or the marks are in no sheet, every
-        # memory waits, "clear" or not. Each such reason is a held one, for the user's answer.
-        import observer_holds
+    def test_a_marked_project_posts_like_any_other(self):
+        # The observer does not judge confidentiality: whatever the field sheet's marks or state, a memory posts on
+        # its own under the mechanical limits and the linter's rules, and nothing is held back for it.
         sheet = lambda state, marks: {"state": state, "marks": marks, "entry": None}
         body = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text()
-        cases = [(sheet("approved", ["people"]), "clear", None), (sheet("approved", ["people"]), "doubt", "confidentiality"),
-                 (sheet("approved", ["people"]), None, "confidentiality"),
-                 (sheet("changed", ["people"]), "clear", "sheet_not_approved"),
-                 (sheet("new", ["confidential"]), "clear", "sheet_not_approved"),
-                 (sheet("malformed", []), "clear", "sheet_not_approved"),
-                 (sheet("unreadable", []), "clear", "sheet_not_approved"),
-                 (sheet("mark", ["people"]), "clear", "sheet_not_approved"),
-                 (sheet("approved", []), None, None), (sheet("none", []), None, None)]
-        for n, (state, answer, reason) in enumerate(cases):
-            key = self._second(body.replace("open quote", "open quote case %d" % n), source="source-case-%d" % n,
-                               review={"confidential": answer} if answer else {})
-            with mock.patch.object(publisher.field_sheet, "state", return_value=state):
-                if reason is None:
-                    self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config)["state"], n)
-                    continue
-                with self.assertRaisesRegex(publisher.PublishError, reason):
-                    publisher.publish(fixtures.REPO, key, self.config)
-                with store.Store(fixtures.REPO, config=self.config) as db:
-                    db.transition(key, "deferred", reason=reason)  # as the worker does
-                    self.assertIn(key, [event["eventkey"] for event in db.waiting_for_answer()], n)
-            self.assertEqual("answer", observer_holds.HELD_REASONS[reason])
-            self.assertIn(reason, publisher.EVENT_PROBLEMS)
-        self.assertEqual(3, len([a for a in self.calls() if a[:2] == ["issue", "comment"]]))
+        import field_sheet
+        for n, state in enumerate((sheet("approved", ["people"]), sheet("changed", ["confidential"]),
+                                   sheet("new", ["contested"]), sheet("malformed", []), sheet("mark", ["people"]))):
+            key = self._second(body.replace("open quote", "open quote case %d" % n), source="source-case-%d" % n)
+            with mock.patch.object(field_sheet, "state", return_value=state):
+                with store.Store(fixtures.REPO, config=self.config, readonly=True) as db:
+                    self.assertEqual([], publisher.held_back(db, db.event(key), self.config), n)
+                self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config)["state"], n)
+        self.config["fields"] = {"names": [], "sensitive": ["people"]}
+        self.assertEqual("verified", self.publish()["state"])
+        self.assertEqual(6, len([a for a in self.calls() if a[:2] == ["issue", "comment"]]))
+        self.assertFalse({"confidentiality", "sensitive_project", "sheet_not_approved"} & set(publisher.EVENT_PROBLEMS))
 
     def test_untrusted_repository_posts_nothing(self):
         with mock.patch.object(publisher.recortex, "trusted_repos", return_value={}):

@@ -43,8 +43,7 @@ NOTICES = {
 # At session start, for the main session, while reviewed memories wait for the user's answer (the number is the only
 # value in it).
 WAITING = ("recortex observer: %d reviewed memories wait for the user's answer. Each changes the status of an earlier "
-           "memory without the user's words or your message to the user, or its reviewer was not sure it is clear of "
-           "confidential material, or the project's field sheet is not approved on this machine. Run observer.py pending --held, show the user each one's plain line, and ask with "
+           "memory without the user's words or your message to the user. Run observer.py pending --held, show the user each one's plain line, and ask with "
            "the multiple-choice question tool, one question per memory: post it, or drop it. Post each one kept with "
            "post_verified.py comment --eventkey KEY, and drop the others with observer.py discard KEY.")
 # Once, at the next session start after a session switched automatic mode on (the date is the only value in it).

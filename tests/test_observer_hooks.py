@@ -213,7 +213,7 @@ class ObserverHookTests(unittest.TestCase):
         with Store(REPO) as store:
             with store.transaction():
                 for n, (state, reason, held) in enumerate((("deferred", "status_change", 1),
-                                                           ("deferred", "confidentiality", 1),
+                                                           ("deferred", "status_change", 1),
                                                            ("deferred", "main_session", 0),
                                                            ("rejected", "discarded", 1),
                                                            ("deferred", "withheld", 1))):

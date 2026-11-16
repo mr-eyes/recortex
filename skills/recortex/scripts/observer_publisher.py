@@ -14,7 +14,6 @@ import re
 import time
 from urllib.parse import unquote, urljoin, urlsplit
 
-import field_sheet
 import lint_drafts
 import lookup
 import observer_holds
@@ -186,31 +185,14 @@ def outbound_problem(body, repo, status_ok=False):
     return None
 
 
-UNAPPROVED = ("malformed", "unreadable", "new", "changed")  # field sheet states the user has not approved as they are
-
-
-def confidential_project(config, repo):
-    """True when the reviewer answers the confidentiality question: a project marked as handling sensitive material,
-    or one whose field sheet is not approved on this machine, whose marks are then not known for sure."""
-    sheet = field_sheet.state(config, repo)
-    return bool(sheet["marks"]) or sheet["state"] in UNAPPROVED
-
-
 def held_back(store, event, config):
     """Why the automatic gate holds this event back, as reasons of observer_holds.ANSWER_REASONS, which the main
     session passes on the user's answer to its question: a change of an earlier memory's status that rests neither on
-    the user's typed words nor on the agent's message to the user; in a project whose field sheet the user has not
-    approved as it stands, or whose marks are in no sheet, every memory, whatever its reviewer found; and in an
-    approved, marked project a memory its reviewer did not find clear. The reviewer's "clear" counts only there: the
-    owner's decision covers the marks the user approved."""
+    the user's typed words nor on the agent's message to the user. The observer does not judge confidentiality: a
+    project marked as handling sensitive material is held back for nothing more."""
     reasons = []
     if status_change(event["body"]) and event["review"].get("status_authority") not in STATUS_AUTHORITY:
         reasons.append("status_change")
-    sheet = field_sheet.state(config, store.repo)
-    if sheet["state"] in UNAPPROVED or (sheet["marks"] and sheet["state"] != "approved"):
-        reasons.append("sheet_not_approved")
-    elif sheet["marks"] and event["review"].get("confidential") != "clear":
-        reasons.append("confidentiality")
     return reasons
 
 
