@@ -42,11 +42,17 @@ NOTICES = {
 }
 # At session start, for the main session, while reviewed memories wait for the user's answer (the number is the only
 # value in it).
-WAITING = ("recortex observer: %d reviewed memories wait for the user's answer. Each changes the status of an earlier "
-           "memory without the user's words or your message to the user. Run observer.py pending --held, and ask the "
-           "user with the multiple-choice question tool, one question per memory that names its short id and quotes "
-           "its line as pending --held gives it, with the options Post and Drop. For each Post, run post_verified.py comment --eventkey KEY "
-           "right after; for each Drop, observer.py discard KEY.")
+WAITING = ("recortex observer: %s for the user's answer. %s the status of an earlier memory without the user's "
+           "words or your message to the user. Run observer.py pending --held, and ask the user with the "
+           "multiple-choice question tool, one question per memory that names its short id and quotes its line as "
+           "pending --held gives it, with the options Post and Drop. For each Post, run post_verified.py comment "
+           "--eventkey KEY right after; for each Drop, observer.py discard KEY.")
+
+
+def waiting_line(count):
+    """WAITING for `count` memories, the number its only value, in the singular for one."""
+    return WAITING % (("1 reviewed memory waits", "It changes") if count == 1 else
+                      ("%d reviewed memories wait" % count, "Each changes"))
 # Once, at the next session start after a session switched automatic mode on (the date is the only value in it).
 SWITCHED = ("recortex observer: automatic mode was switched on for this folder on %s from a session; run observer.py "
             "disable in your own terminal to turn it off.")
@@ -498,7 +504,7 @@ def _handle(event, data, config, repo, decision):
                 waiting = len(store.waiting_for_answer())
                 if waiting:
                     notices.append("held")
-                    context = WAITING % waiting  # every session start, compaction included: the context is new
+                    context = waiting_line(waiting)  # every session start, compaction included: the context is new
                 switched = _switched(store)
                 if switched:
                     lines.append(switched)

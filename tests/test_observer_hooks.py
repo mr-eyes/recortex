@@ -224,10 +224,15 @@ class ObserverHookTests(unittest.TestCase):
                                      ("%032x" % n, "s%d" % n, candidate, "0" * 64, state, reason, n, n, held))
             self.assertEqual(["%032x" % 0, "%032x" % 1], [event["eventkey"] for event in store.waiting_for_answer()])
         first = start()
-        self.assertEqual(hooks.WAITING % 2, first["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual(hooks.waiting_line(2), first["hookSpecificOutput"]["additionalContext"])
+        self.assertTrue(hooks.waiting_line(2).startswith("recortex observer: 2 reviewed memories wait for "))
         self.assertIn(hooks.NOTICES["held"], first["systemMessage"])
         again = start()
-        self.assertEqual(hooks.WAITING % 2, again["hookSpecificOutput"]["additionalContext"])  # after a compaction too
+        self.assertEqual(hooks.waiting_line(2), again["hookSpecificOutput"]["additionalContext"])  # after a compaction too
+        with Store(REPO) as store:
+            store.transition("%032x" % 1, "rejected", reason="discarded")
+        self.assertTrue(start()["hookSpecificOutput"]["additionalContext"].startswith(
+            "recortex observer: 1 reviewed memory waits for the user's answer. It changes "))
         self.assertNotIn(hooks.NOTICES["held"], again.get("systemMessage", ""))
         self.assertNotIn("additionalContext", json.dumps(hooks.handle("stop", self.data, self.config, REPO)))
 
