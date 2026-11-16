@@ -43,6 +43,21 @@ BODY='''<!-- ghim:event type=decision at=2026-03-01T12:00:00Z -->
 
 **Next step:** Update the parser tests, owner maintainer
 '''
+CORRECTION='''<!-- ghim:event type=correction at=2026-03-01T12:00:00Z -->
+### Correction: 2026-03-01 12:00 UTC - Quoting default
+
+**In plain words, we corrected ourselves:** strict quoting stays the default of the reader
+
+**Corrects:** the earlier note on the quoting default
+
+**Was:** relaxed quoting is the default
+
+**Is:** strict quoting is the default, as the user said in this session
+
+**Why:** the earlier note misread the session
+
+**Also updated:** Nothing else
+'''
 REAL_REFRESH=worker.refresh_record
 CONTEXT={'targets':[{'issue':2,'title':'Parser','body':'Strict parser requirements.'}], 'memories':[], 'incomplete':False}
 
@@ -84,6 +99,57 @@ class WorkerTests(unittest.TestCase):
             return {'ok':True,'structured':{'candidate_hash':'0'*64 if bad_hash else payload['candidate_hash'],'accepted':accepted,'reason':'supported' if accepted else 'unsupported'}}
         return call
     def run_worker(self,invoke):return worker.run_once(REPO,self.config,self.project,invoke)
+    def test_model_text_cannot_reach_outside_the_record(self):
+        cases = {'outbound_markup': '![s](https://collector.example.test/p.png?d=6768)',
+                 'outbound_mention': 'cc @hubot', 'outbound_address': 'see https://collector.example.test/x'}
+        for n, (reason, extra) in enumerate(sorted(cases.items())):
+            self.calls = []
+            sid = self.capture(QUOTE + ' Case %d.' % n)
+            body = BODY.replace('**Effect:** Strict quoting remains the default.',
+                                '**Effect:** Strict quoting remains the default. ' + extra)
+            self.run_worker(self.invoke(self.candidate(sid, body=body)))
+            self.assertEqual(['extract'], [x[0] for x in self.calls], reason)
+            with store.Store(REPO, config=self.config) as db:
+                self.assertEqual(reason, db.observation(sid)['reason'])
+    def test_a_change_of_status_records_what_it_rests_on(self):
+        import observer_publisher
+        idea = (ROOT / 'examples/octo-repo/chain/1-idea.md').read_text()
+        said = 'No, the earlier note was wrong: strict quoting stays the default.'
+        cases = [('idea', idea.replace('-08:00 -->', '-08:00 replaces=123 -->'), 'Reader idea.', 'assistant', [], ''),
+                 ('correction', CORRECTION, said, 'user', [said], 'user'),
+                 ('correction', CORRECTION, said + ' Again.', 'user', ['wrong'], ''),
+                 ('decision', BODY.replace('at=2026-03-01T12:00:00Z -->', 'at=2026-03-01T12:00:00Z replaces=123 -->'),
+                  QUOTE + ' Replaced.', 'user', [QUOTE], 'user')]
+        with patch.object(worker, 'record_context', return_value=dict(CONTEXT, memories=[{'id': 123}])):
+            for kind, body, text, role, excerpts, authority in cases:
+                self.calls = []
+                sid = self.capture(text, role=role)
+                report = self.run_worker(self.invoke(self.candidate(sid, kind=kind, body=body, excerpts=excerpts)))
+                self.assertEqual(['extract', 'review'], [x[0] for x in self.calls], (kind, authority))
+                with store.Store(REPO, config=self.config) as db:
+                    event = db.event(report['ready'][0])
+                self.assertEqual(authority, event['review']['status_authority'], (kind, excerpts))
+                problem = observer_publisher.outbound_problem(event['body'], REPO, status_ok=bool(authority))
+                self.assertEqual(None if authority else 'status_change', problem, (kind, excerpts))
+    def test_never_write_down_reaches_both_model_calls(self):
+        sheet = {'state': 'approved', 'entry': {'brief': {'never': 'names of client sites'}}, 'marks': []}
+        sid = self.capture()
+        with patch.object(worker.field_sheet, 'state', return_value=sheet):
+            self.run_worker(self.invoke(self.candidate(sid)))
+        self.assertEqual([('extract', 'names of client sites'), ('review', 'names of client sites')],
+                         [(purpose, payload['never_write_down']) for purpose, payload in self.calls])
+    def test_unbound_candidates_never_reach_the_reviewer(self):
+        cases = {'excerpt_binding': dict(excerpts=['words that are not in the source']),
+                 'destination': dict(issue=99),
+                 'link_binding': dict(body=BODY.replace('at=2026-03-01T12:00:00Z -->', 'at=2026-03-01T12:00:00Z because=777 -->')),
+                 'privacy': dict(body=BODY.replace('**Effect:**', '**Effect:** token ghp_' + 'A' * 36 + '.'))}
+        for n, (reason, change) in enumerate(sorted(cases.items())):
+            self.calls = []
+            sid = self.capture(QUOTE + ' Unbound %d.' % n)
+            self.run_worker(self.invoke(self.candidate(sid, **change)))
+            self.assertEqual(['extract'], [x[0] for x in self.calls], reason)
+            with store.Store(REPO, config=self.config) as db:
+                self.assertEqual(reason, db.observation(sid)['reason'])
     def test_two_independent_passes_bind_review_before_persistence(self):
         sid=self.capture();candidate=self.candidate(sid)
         report=self.run_worker(self.invoke(candidate))

@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 
+import field_sheet
 import lint_drafts
 import lookup
 import observer_holds
@@ -24,7 +25,40 @@ class PublishError(RuntimeError):
         super().__init__("observer publication deferred: " + reason)
 
 
-def _gate(store, config):
+MENTION = re.compile(r"(?<![\w`/@.])@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\b")
+ADDRESS = re.compile(r"(?i)\b(?:[a-z][a-z0-9+.-]*://|www\.)[^\s<>()\]]+")
+MARKUP = re.compile(r"!\[|<(?!/?(?:details|summary)>|!-- ghim:event )[A-Za-z!/?]")
+STATUS_LINKS = ("replaces", "instead")
+STATUS_AUTHORITY = ("user", "command")
+# A problem of the event itself: the event is deferred with this reason and the next one is tried.
+EVENT_PROBLEMS = frozenset(("lint_failed", "invalid_target", "explicit_hold", "status_change", "outbound_markup",
+                            "outbound_mention", "outbound_address", "payload_changed", "review_changed"))
+
+
+def status_change(body):
+    """True for a memory that overturns or sets aside an earlier one: a correction, or a replaces= or instead= key."""
+    marker = record_format.parse_marker(record_format.first_lines(body)[0]) or {}
+    return marker.get("type") == "correction" or any(key in marker for key in STATUS_LINKS)
+
+
+def outbound_problem(body, repo, status_ok=False):
+    """What a model wrote stays inside the record. A memory that changes what an earlier one means posts on its own
+    only when it rests on the user's own words or on a command that ran (status_ok); otherwise it waits for the main
+    session. No image and no HTML beyond the event marker and folds; no @mention; no address other than this
+    repository on github.com. None when the body passes."""
+    if status_change(body) and not status_ok:
+        return "status_change"
+    if MARKUP.search(body):
+        return "outbound_markup"
+    if MENTION.search("\n".join(lint_drafts.strip_inline_code(line) for line in body.splitlines())):
+        return "outbound_mention"
+    home = "https://github.com/%s/" % repo.lower()
+    if any(not address.lower().startswith(home) for address in ADDRESS.findall(body)):
+        return "outbound_address"
+    return None
+
+
+def _gate(store, config, main_session=False):
     settings = observer_runtime.settings(config)
     if store.repo not in recortex.trusted_repos():
         raise PublishError("not_trusted")
@@ -34,6 +68,12 @@ def _gate(store, config):
         raise PublishError("runtime_unavailable")
     if store.get_control("publication_paused", False):
         raise PublishError("publication_paused")
+    if not main_session:
+        sheet = field_sheet.state(config, store.repo)
+        if sheet["marks"] or sheet["state"] in ("malformed", "unreadable", "new", "changed"):
+            # 0.8.0: before anything cited is posted in a marked project, the step-7 reviewer answers the
+            # confidentiality question and the user is told. Only the main session can do that.
+            raise PublishError("sensitive_project")
     return settings
 
 
@@ -150,8 +190,10 @@ def _reconcile_locked(store, event):
         return _uncertain(store, event["eventkey"], getattr(error, "reason", "remote_unavailable"))
 
 
-def publish(repo, eventkey, config, dry_run=False):
-    """Append one frozen reviewed event. A dry run returns the exact command without network or writes."""
+def publish(repo, eventkey, config, dry_run=False, main_session=False):
+    """Append one frozen reviewed event. A dry run returns the exact command without network or writes.
+    main_session=True is post_verified.py, run by the main session after its own review and the user's word: it may
+    post an event in a marked project and one that changes what an earlier memory means."""
     settings = observer_runtime.settings(config)
     with Store(repo, config=config, create=False, readonly=dry_run, max_bytes=settings["max_pending_bytes"],
                max_pending=settings["max_pending_observations"]) as store:
@@ -163,7 +205,7 @@ def publish(repo, eventkey, config, dry_run=False):
                     "command": recortex.show_command(_command(repo, event), "frozen reviewed body from stdin"),
                     "payload_hash": event["payload_hash"]}
         with store.publication_lock():
-            _gate(store, config)
+            _gate(store, config, main_session)
             event = store.event(eventkey)
             if event["state"] == "verified":
                 _payload_bound(event)
@@ -173,6 +215,10 @@ def publish(repo, eventkey, config, dry_run=False):
             if event["state"] != "ready":
                 raise PublishError("not_ready")
             _bound(event, store)
+            problem = outbound_problem(event["body"], repo, status_ok=main_session or
+                                       event["review"].get("status_authority") in STATUS_AUTHORITY)
+            if problem:
+                raise PublishError(problem)
             _hold(store, event)
             me = _account(repo)
             # Target existence and draft rules are checked on the live record before sending.
@@ -187,7 +233,7 @@ def publish(repo, eventkey, config, dry_run=False):
                 record.close()
             if any(f.level == "error" for f in findings):
                 raise PublishError("lint_failed")
-            _gate(store, config)
+            _gate(store, config, main_session)
             _hold(store, event)
             if _account(repo) != me:
                 raise PublishError("account_changed")
@@ -198,7 +244,7 @@ def publish(repo, eventkey, config, dry_run=False):
                 prior = _find_remote(repo, event)
                 if prior is not None:
                     return _reconcile_locked(store, event)
-                _gate(store, config)
+                _gate(store, config, main_session)
                 _hold(store, event)
                 if _account(repo) != event["account"]:
                     raise PublishError("account_changed")

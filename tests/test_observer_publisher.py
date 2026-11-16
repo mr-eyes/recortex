@@ -57,6 +57,84 @@ class ObserverPublisherTests(unittest.TestCase):
     def publish(self, **kwargs):
         return publisher.publish(fixtures.REPO, self.key, self.config, **kwargs)
 
+    def _second(self, body, source="source2", review=None):
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.capture([self.metadata(source)])
+            candidate = {"kind": "idea", "issue": 3, "body": body, "sources": [source]}
+            ident = db.reserve_invocation("reviewer")
+            db.complete_invocation(ident, True, output_hash=store.candidate_hash(candidate))
+            return db.review_complete(source, candidate, dict({"reservation_id": ident, "accepted": True,
+                                                               "candidate_hash": store.candidate_hash(candidate)},
+                                                              **(review or {})))
+
+    def test_frozen_body_with_an_outside_address_is_refused_before_any_write(self):
+        body = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text().replace(
+            "**What it would take:**", "![s](https://collector.example.test/p.png)\n\n**What it would take:**")
+        key = self._second(body)
+        for main_session in (False, True):
+            with self.assertRaisesRegex(publisher.PublishError, "outbound_markup"):
+                publisher.publish(fixtures.REPO, key, self.config, main_session=main_session)
+        self.assertEqual([], [a for a in self.calls() if a[:2] == ["issue", "comment"]])
+
+    def test_change_of_status_without_the_users_words_or_a_command_waits_for_the_main_session(self):
+        idea = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text()
+        data = self.state()
+        data["comments"]["9050"] = {"issue": 3, "user": "octocat", "body": idea, "created_at": "2026-03-05T18:00:00Z"}
+        self.remote.write_text(json.dumps(data))
+        body = idea.replace("-08:00 -->", "-08:00 instead=9050 -->").replace("open quote", "open quote again")
+        key = self._second(body)
+        with self.assertRaisesRegex(publisher.PublishError, "status_change"):
+            publisher.publish(fixtures.REPO, key, self.config)
+        self.assertEqual([], self.calls())
+        command = self._second(body.replace("again", "once more"), source="source3",
+                               review={"status_authority": "command"})
+        self.assertEqual("verified", publisher.publish(fixtures.REPO, command, self.config)["state"])
+        self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config, main_session=True)["state"])
+
+    def test_marked_project_waits_for_the_main_session(self):
+        self.config["fields"] = {"sensitive": ["people"]}
+        with self.assertRaisesRegex(publisher.PublishError, "sensitive_project"):
+            self.publish()
+        self.assertEqual([], [a for a in self.calls() if a[:2] == ["issue", "comment"]])
+        self.assertEqual("verified", publisher.publish(fixtures.REPO, self.key, self.config, main_session=True)["state"])
+
+    def test_untrusted_repository_posts_nothing(self):
+        with mock.patch.object(publisher.recortex, "trusted_repos", return_value={}):
+            with self.assertRaisesRegex(publisher.PublishError, "not_trusted"):
+                self.publish()
+        self.assertEqual([], [a for a in self.calls() if a[:2] == ["issue", "comment"]])
+
+    def test_account_outside_the_allowed_list_posts_nothing(self):
+        with mock.patch.dict(os.environ, {"FAKE_GH_LOGIN": "someone-else"}):
+            with self.assertRaisesRegex(publisher.PublishError, "account_not_allowed"):
+                self.publish()
+        self.assertEqual([], [a for a in self.calls() if a[:2] == ["issue", "comment"]])
+
+    def test_exact_command_hold_stops_the_post(self):
+        with mock.patch.object(publisher.observer_holds, "check_action", return_value={"decision": "deny"}):
+            with self.assertRaisesRegex(publisher.PublishError, "explicit_hold"):
+                self.publish()
+        self.assertEqual([], [a for a in self.calls() if a[:2] == ["issue", "comment"]])
+
+    def test_publish_time_lint_failure_posts_nothing(self):
+        body = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text().replace(
+            "**What it would take:** A flag", "**What it would take:** As in #99, a flag")
+        key = self._second(body)
+        with self.assertRaisesRegex(publisher.PublishError, "lint_failed"):
+            publisher.publish(fixtures.REPO, key, self.config)
+        self.assertEqual([], [a for a in self.calls() if a[:2] == ["issue", "comment"]])
+
+    def test_read_back_refuses_another_body_or_issue(self):
+        event = {"candidate": {"issue": 3}, "account": "octocat", "body": "posted text", "payload_hash": "a" * 64}
+        good = {"id": 5, "issue_url": "https://api.github.com/repos/%s/issues/3" % fixtures.REPO,
+                "user": {"login": "octocat"}, "created_at": "t", "updated_at": "t", "body": "posted text"}
+        self.assertEqual(5, publisher._check_remote(fixtures.REPO, event, good)["comment_id"])
+        for change, reason in (({"body": "other text"}, "remote_changed"),
+                               ({"issue_url": good["issue_url"][:-1] + "4"}, "wrong_target"),
+                               ({"user": {"login": "hubot"}}, "wrong_author")):
+            with self.assertRaisesRegex(publisher.PublishError, reason):
+                publisher._check_remote(fixtures.REPO, event, dict(good, **change))
+
     def test_verified_post_is_append_only_and_retry_is_noop(self):
         result = self.publish()
         self.assertEqual("verified", result["state"])

@@ -5,9 +5,11 @@ import os
 import re
 import time
 
+import field_sheet
 import index
 import mind_model
 import observer_context
+import observer_publisher
 import lint_drafts
 import names
 import observer_runtime as runtime
@@ -100,7 +102,33 @@ def template_context():
     return templates
 
 
-def candidate_problem(candidate, supplied, context, config):
+MIN_QUOTE = 12  # characters an excerpt needs before it counts as the user's own words
+
+
+def _executed(candidate, supplied):
+    """True when the candidate rests on a Bash call that ran, matched to its tool result among its own sources."""
+    selected = candidate["sources"]
+    return any(item.get("matched") is True and item.get("tool_name") == "Bash"
+               and item.get("invocation_source_id") in selected
+               for source in selected if supplied[source]["role"] == "tool"
+               for item in supplied[source].get("tool_results", []))
+
+
+def status_authority(candidate, supplied):
+    """What a memory that overturns or sets aside an earlier one rests on: "user" for the user's own words in this
+    session (a decision's exact words, checked before this, or an excerpt from a direct user message), "command" for a
+    Bash call that ran, "" for tool output, a web page or a file alone. Without one it waits for the main session."""
+    if candidate["kind"] == "decision":
+        return "user"
+    users = [supplied[source]["text"] for source in candidate["sources"]
+             if supplied[source].get("direct_user") is True and supplied[source]["role"] == "user"]
+    if any(len(excerpt.strip()) >= MIN_QUOTE and any(excerpt in text for text in users)
+           for excerpt in candidate["excerpts"]):
+        return "user"
+    return "command" if _executed(candidate, supplied) else ""
+
+
+def candidate_problem(candidate, supplied, context, config, repo=None):
     if not runtime.validate(candidate, CANDIDATE):
         return "candidate-schema"
     selected = candidate["sources"]
@@ -113,6 +141,11 @@ def candidate_problem(candidate, supplied, context, config):
         return "candidate-event"
     if privacy_problem(candidate["body"] + "\n" + "\n".join(candidate["excerpts"]), config):
         return "privacy"
+    # Images, HTML, @mentions and outside addresses wait for the main session; a change of status is checked when
+    # the event is posted, against what it rests on (status_authority).
+    outbound = observer_publisher.outbound_problem(candidate["body"], repo or config.get("repo", ""), status_ok=True)
+    if outbound:
+        return outbound
     if any(not any(excerpt in supplied[source]["text"] for source in selected) for excerpt in candidate["excerpts"]):
         return "excerpt-binding"
     if candidate["kind"] == "decision":
@@ -121,13 +154,8 @@ def candidate_problem(candidate, supplied, context, config):
         quoted = "\n".join(line.lstrip()[1:].lstrip() for line in fields.get("Exact words", "").splitlines() if line.lstrip().startswith(">"))
         if not quoted or not any(quoted in text for text in original):
             return "decision-authority"
-    if candidate["kind"] in ("result", "failure"):
-        execution = any(item.get("matched") is True and item.get("tool_name") == "Bash"
-                        and item.get("invocation_source_id") in selected
-                        for source in selected if supplied[source]["role"] == "tool"
-                        for item in supplied[source].get("tool_results", []))
-        if not execution:
-            return "observed-evidence"
+    if candidate["kind"] in ("result", "failure") and not _executed(candidate, supplied):
+        return "observed-evidence"
     marker = record_format.parse_marker(record_format.first_lines(candidate["body"])[0])
     known = {m["id"] for m in context["memories"]}
     if any(target not in known for _, target in record_format.links(marker)):
@@ -229,7 +257,10 @@ def _process(repo, config, project_root=None, invoke_fn=None):
             for sid in supplied: store.defer(sid, "budget")
             return dict(report, code="budget")
         started = time.monotonic()
-        payload = {"sources": list(supplied.values()), "record": context, "templates": template_context(), "max_candidates": options["max_candidates"]}
+        sheet = field_sheet.state(config, repo)
+        never = (sheet["entry"] or {}).get("brief", {}).get("never", "") if sheet["state"] == "approved" else ""
+        payload = {"sources": list(supplied.values()), "record": context, "templates": template_context(),
+                   "max_candidates": options["max_candidates"], "never_write_down": never}
         result = invoke(payload, EXTRACTION, "extract", options)
         valid = result.get("ok") is True and runtime.validate(result.get("structured"), EXTRACTION)
         store.complete_invocation(reservation, valid, runtime.candidate_hash(result["structured"]) if valid else "")
@@ -245,7 +276,7 @@ def _process(repo, config, project_root=None, invoke_fn=None):
         handled = set(extracted["ignored"]) & set(supplied) - selected_sources
         for candidate in candidates:
             primary = next((sid for sid in candidate["sources"] if sid in supplied), None)
-            problem = candidate_problem(candidate, supplied, context, config)
+            problem = candidate_problem(candidate, supplied, context, config, repo)
             if problem or not primary or set(candidate["sources"]) & handled:
                 if primary and primary not in handled:
                     store.defer(primary, (problem or "source-overlap").replace("-", "_"))
@@ -259,7 +290,8 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 store.defer(primary, "budget"); report["deferred"] += 1
                 continue
             digest = runtime.candidate_hash(candidate)
-            reviewed = invoke({"candidate": candidate, "candidate_hash": digest, "sources": [supplied[sid] for sid in candidate["sources"]], "record": context}, REVIEW, "review", options)
+            reviewed = invoke({"candidate": candidate, "candidate_hash": digest, "sources": [supplied[sid] for sid in candidate["sources"]],
+                               "record": context, "never_write_down": never}, REVIEW, "review", options)
             answer = reviewed.get("structured")
             valid = reviewed.get("ok") is True and runtime.validate(answer, REVIEW) and answer["candidate_hash"] == digest
             store.complete_invocation(review_id, valid, digest if valid else "")
@@ -270,7 +302,10 @@ def _process(repo, config, project_root=None, invoke_fn=None):
             if not answer["accepted"] or answer["reason"] != "supported":
                 store.defer(primary, "review_rejected"); report["deferred"] += 1
                 continue
-            eventkey = store.review_complete(primary, candidate, {"accepted": True, "candidate_hash": digest, "reservation_id": review_id})
+            review = {"accepted": True, "candidate_hash": digest, "reservation_id": review_id}
+            if observer_publisher.status_change(candidate["body"]):
+                review["status_authority"] = status_authority(candidate, supplied)
+            eventkey = store.review_complete(primary, candidate, review)
             if eventkey is None:
                 report["deferred"] += 1
                 continue
@@ -330,7 +365,6 @@ def run_once(repo, config, project_root=None, invoke_fn=None):
                 approved = runtime.approval_valid(repo, config)
                 if (approved and runtime.gate_valid(store.get_control("runtime_gate"), options)
                         and options["mode"] == "automatic" and not store.get_control("publication_paused", False)):
-                    import observer_publisher
                     # Includes reviewed events left ready by a previous interrupted worker.
                     for event in store.events(states=["ready"], limit=4):
                         observer_publisher.publish(repo, event["eventkey"], config)
