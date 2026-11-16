@@ -560,6 +560,57 @@ class ObserverHookTests(unittest.TestCase):
             self.run_hook(event="stop")
         self.assertEqual(1, scan.call_count)
 
+    def big_turn(self, count=40):
+        """More transcript than one scan reads (attachments), as a long turn leaves before a Bash call."""
+        with self.path.open("a") as handle:
+            for n in range(count):
+                handle.write(json.dumps({"type": "attachment", "attachment": {"content": "x" * 20000}}) + "\n")
+
+    def test_a_hold_typed_in_the_unread_tail_stops_the_next_command(self):
+        # Before a Bash call capture reads one scan; a hold typed past it is still found, by a search of the unread
+        # tail for user messages that hold a control.
+        import observer_runtime
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+                                                     "publisher_id": observer_runtime.publisher_id(create=True)}},
+                                 str(self.project))
+        self.run_hook(event="stop")
+        self.big_turn()
+        self.append("Don't push.", promptSource="sdk", turnOrigin="sdk")
+        result = self.run_hook()
+        self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"])
+        self.assertEqual("The user has asked that this action not be taken.",
+                         result["hookSpecificOutput"]["permissionDecisionReason"])
+        with Store(REPO) as store:
+            self.assertGreater(Path(self.path).stat().st_size,
+                               store.cursor(__import__("hashlib").sha256(str(self.path).encode()).hexdigest()))
+
+    def test_an_unread_tail_without_a_hold_lets_commands_through_and_one_not_searched_in_time_does_not(self):
+        self.run_hook(event="stop")
+        self.big_turn()
+        self.append("Run the tests again, please.")
+        for command in ("git push", "python3 run.py", "ls"):
+            self.assertNotIn("hookSpecificOutput", self.run_hook(command=command), command)
+        self.big_turn()
+        with mock.patch.object(sources, "TAIL_SECONDS", 0):
+            for command, denied in (("git push", True), ("python3 run.py", True), ("ls", False)):
+                result = self.run_hook(command=command)
+                self.assertEqual(denied, "hookSpecificOutput" in result, command)
+        self.big_turn()
+        with mock.patch.object(sources, "TAIL_BYTES", 1000):  # more unread than the search reads: as unreadable
+            self.assertIn("hookSpecificOutput", self.run_hook())
+
+    def test_a_deadline_inside_the_handler_stops_what_a_hold_could_apply_to(self):
+        # A TimeoutError inside the handler reaches handle(), which stops every command a hold could apply to when
+        # the final check did not run, and gives the final decision when it did.
+        with mock.patch.object(hooks.observer_holds, "check_action", side_effect=TimeoutError("deadline")):
+            result = self.run_hook()
+            self.assertEqual(hooks.UNCHECKED["reason"], result["hookSpecificOutput"]["permissionDecisionReason"])
+            self.assertNotIn("hookSpecificOutput", self.run_hook(command="ls"))
+        with mock.patch.object(hooks, "_context", side_effect=TimeoutError("deadline")):
+            self.assertNotIn("hookSpecificOutput", self.run_hook())  # the final check ran: no hold, nothing stopped
+            self.append("/recortex hold git-push")
+            self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
+
     def test_a_deadline_during_capture_or_the_hold_check_still_stops_a_held_action(self):
         import contextlib, io, observer
         self.entry_and_hold()
@@ -765,14 +816,17 @@ class ObserverHookTests(unittest.TestCase):
         with Store(REPO) as store:
             self.assertFalse(store.get_control("hook_degraded"))
 
-    def test_deadline_stops_after_capture_and_preserves_only_an_existing_hold(self):
+    def test_deadline_during_capture_stops_what_a_hold_could_apply_to(self):
+        # Capture began but the final check did not run: holds typed in what was not read may apply, so every command
+        # a hold could apply to is stopped, as when the holds cannot be read; the plainest reads go on.
         with mock.patch("observer_hooks._capture", side_effect=TimeoutError), \
                 mock.patch("observer_hooks._context") as context, \
                 mock.patch("observer_hooks.observer_runtime.gate_valid", return_value=True):
             result = self.run_hook()
+            self.assertNotIn("hookSpecificOutput", self.run_hook(command="ls"))
         context.assert_not_called()
         self.worker.assert_not_called()
-        self.assertNotIn("hookSpecificOutput", result)
+        self.assertEqual(hooks.UNCHECKED["reason"], result["hookSpecificOutput"]["permissionDecisionReason"])
         self.append("/recortex hold git-push")
         self.run_hook()
         with mock.patch("observer_hooks._capture", side_effect=TimeoutError):

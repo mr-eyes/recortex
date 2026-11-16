@@ -115,6 +115,9 @@ def _controls(store, rows, project_root, repo, config):
 
 
 def _capture(store, event, data, project_root, repo, config, capture=True, rounds=SCAN_ROUNDS):
+    """(controlled, behind, refused, unproven, stale). Before a Bash call (one round), a transcript left unread past
+    the scan is searched for controls too (observer_sources.control_tail); stale is True when that search could not
+    reach its end in time, so that holds typed there may be missing."""
     # PreToolUse rescans the persisted transcript synchronously: never wait for a
     # model/worker to compile a recognized original-user hold before an action.
     scan_data = dict(data, hook_event_name=event)
@@ -141,7 +144,13 @@ def _capture(store, event, data, project_root, repo, config, capture=True, round
                 or time.monotonic() > until):
             break
     # What is left is a line Claude Code is still writing, or a backlog the next hook goes on with.
-    return controlled, os.stat(path, follow_symlinks=False).st_size > cursor, refused, unproven
+    behind, stale = os.stat(path, follow_symlinks=False).st_size > cursor, False
+    if behind and rounds == 1:
+        tail, complete = observer_sources.control_tail(scan_data, project_root, cursor)
+        found = _controls(store, tail, project_root, repo, config)
+        controlled, refused, unproven = controlled or found[0], refused or found[1], unproven or found[2]
+        stale = not complete
+    return controlled, behind, refused, unproven, stale
 
 
 def _notices(store, notices, data, event):
@@ -296,8 +305,12 @@ stopped as when they cannot be read (fail_closed).
         return _handle(event, data, config, repo, decision)
     except TimeoutError:
         if event != "PreToolUse":
-            raise
-        return _output(event, denial=decision["held"] if "held" in decision else _unchecked(data))
+            return _output(event, notices=[] if event in TOOL_EVENTS else ["capture"])  # out of time: say so
+        # The final decision when it was made; else a denial the stored holds already gave; else, since holds may have
+        # been typed that were not read, every command a hold could apply to is stopped.
+        if "held" in decision:
+            return _output(event, denial=decision["held"])
+        return _output(event, denial=decision.get("early") or _unchecked(data))
 
 
 def fail_closed(data):
@@ -320,7 +333,7 @@ def _handle(event, data, config, repo, decision):
             held, checked = (_held(held_repo, data) if held_repo else _unchecked(data)), True
             if not held and recortex.valid_repo(repo) and repo.lower() != held_repo:
                 held = _held(repo.lower(), data)
-            decision["held"] = held
+            decision["early"] = held
     if not recortex.valid_repo(repo) or repo.lower() not in recortex.trusted_repos():
         return _output(event, denial=held) if held else {}
     raw = config.get("observer", {})
@@ -335,15 +348,16 @@ def _handle(event, data, config, repo, decision):
             # that no longer validate). Nothing is created, and the line shows at session start only.
             return _output(event, notices=["approval"] if event == "SessionStart" else [], denial=held)
         if event == "PreToolUse" and not checked:
-            denial = decision["held"] = _held(repo, data)
+            denial = decision["early"] = _held(repo, data)
         with observer_store.Store(repo, max_bytes=settings["max_pending_bytes"], wait=0.1,
                                   max_pending=settings["max_pending_observations"], config=config) as store:
             paused = store.get_control("capture_paused", False)
             if paused:
                 notices.append("paused")
+            stale = False
             if event in observer_sources.EVENTS:
                 try:
-                    controlled, incomplete, refused, unproven = _capture(
+                    controlled, incomplete, refused, unproven, stale = _capture(
                         store, event, data, project_root, repo, config, capture=not paused,
                         rounds=1 if event == "PreToolUse" else SCAN_ROUNDS)
                     if controlled:
@@ -379,6 +393,9 @@ def _handle(event, data, config, repo, decision):
                 result = observer_holds.check_action(store.holds(), repo, data.get("tool_name"),
                                                      data.get("tool_input"), session_id=data.get("session_id"))
                 denial = result if result["decision"] == "deny" else denial  # nothing in a session releases a hold
+                if not denial and stale:
+                    denial = _unchecked(data)  # holds typed in the part not read may apply: as when unreadable
+                decision["held"] = denial
             try:
                 context = _context(store, event, data, repo, recortex.allowed_users(repo))
             except TimeoutError:
@@ -416,6 +433,8 @@ def _handle(event, data, config, repo, decision):
                 if oldest is not None and time.time() - oldest > STALE:
                     notices.append("pending")
             notices = _notices(store, notices, data, event)
+    except TimeoutError:
+        raise  # handle() gives the decision made, or stops what a hold could apply to
     except Exception:
         # Fixed text only: exception strings can contain source text or paths. Tool events fire on every call and
         # cannot record a suppression when the queue is what failed, so the notice waits for the prompt or stop.

@@ -371,6 +371,64 @@ def scan(data, project_root, cursor=0, max_bytes=MAX_READ):
     return rows, position
 
 
+TAIL_BYTES = 32 * 1024 * 1024  # how much unread transcript the check before a Bash call reads for controls
+TAIL_SECONDS = 1.0  # and for how long
+# Words every control has: /recortex hold, "don't push", "do not tag", "don't release", "don't post", "off the record".
+CONTROL_WORDS = (b"recortex", b"push", b"tag", b"release", b"post", b"record", b"publish")
+
+
+def control_tail(data, project_root, start, max_bytes=None, seconds=None):
+    """(rows, complete): metadata rows for the user messages past `start` that may hold a control, read without being
+    captured, so that the check before a Bash call sees a hold typed in a part of the transcript capture has not
+    reached yet. Other lines are passed over without being parsed. complete is False when the end of the transcript
+    was not reached within `max_bytes` and `seconds`; a line longer than one read (MAX_READ) is passed over."""
+    session = data.get("session_id")
+    event = data.get("hook_event_name", "PreToolUse")
+    path = approved_path(data.get("agent_transcript_path") if event == "SubagentStop" else data.get("transcript_path"),
+                         project_root, session)
+    subagent = os.sep + "subagents" + os.sep in path
+    size = os.stat(path, follow_symlinks=False).st_size
+    if size - start > (TAIL_BYTES if max_bytes is None else max_bytes):
+        return [], False
+    until = time.monotonic() + (TAIL_SECONDS if seconds is None else seconds)
+    rows, stamp, position = [], time.time(), start
+    buffer, buffer_start = b"", start
+    skip = bool(start) and _read(path, start - 1, 1) != b"\n"  # a cursor inside an oversized line
+    while position < size:
+        if time.monotonic() > until:
+            return rows, False
+        chunk = _read(path, position, min(MAX_READ, size - position))
+        if not chunk:
+            break
+        position += len(chunk)
+        buffer += chunk
+        while True:
+            newline = buffer.find(b"\n")
+            if newline < 0:
+                break
+            line, line_start = buffer[:newline + 1], buffer_start
+            buffer, buffer_start = buffer[newline + 1:], buffer_start + newline + 1
+            if skip:
+                skip = False
+                continue
+            low = line.lower()
+            if b'"user"' not in low or not any(word in low for word in CONTROL_WORDS):
+                continue
+            try:
+                record = json.loads(line)
+            except (ValueError, UnicodeError):
+                continue
+            role, text, _, control = _content(record) if isinstance(record, dict) else ("unknown", "", False, False)
+            if role == "user" and control and text:
+                rows.append({"source_id": _identity(session, role, line, record, subagent), "session_id": session,
+                             "role": role, "event_type": event, "path": path, "offset": line_start,
+                             "end": line_start + len(line), "sha256": hashlib.sha256(line).hexdigest(),
+                             "content_sha256": _content_hash(record, role, subagent), "observed_at": stamp})
+        if len(buffer) > MAX_READ:  # an oversized line holds no typed control
+            skip, buffer_start, buffer = True, buffer_start + len(buffer), b""
+    return rows, True
+
+
 def capture_descriptors(data, project_root, event_type=None):
     """Compatibility helper for a bounded tail; scan+atomic cursor is preferred by hooks."""
     selected = dict(data)
