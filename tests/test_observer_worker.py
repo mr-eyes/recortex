@@ -253,6 +253,39 @@ class WorkerTests(unittest.TestCase):
                 self.assertNotIn(absent, text, (purpose, absent))
         self.assertEqual(1, len(ready))
         self.assertNotIn('confidential', json.dumps(worker.REVIEW))
+    def test_a_final_message_written_after_stop_is_captured_by_the_worker(self):
+        # Claude Code writes a turn's final message after its Stop hook. The worker that hook starts waits for the
+        # transcript to settle and captures again before it selects: a message written 200 ms after Stop is read.
+        import threading
+        import observer_hooks
+        with self.path.open('a') as f:
+            f.write(json.dumps({'type': 'user', 'userType': 'external', 'message': {'role': 'user', 'content': QUOTE},
+                                'timestamp': '2026-03-01T12:00:00Z'}) + '\n')
+        with store.Store(REPO, config=self.config) as db:
+            observer_hooks._capture(db, 'Stop', self.hook, self.project, REPO, self.config)  # the Stop hook
+        final = 'I ran the parser tests: strict quoting passes 12 of 12.'
+        def late():
+            time.sleep(0.2)
+            with self.path.open('a') as f:
+                f.write(json.dumps({'type': 'assistant', 'message': {'role': 'assistant', 'model': 'claude-test',
+                                                                     'content': [{'type': 'text', 'text': final}]},
+                                    'timestamp': '2026-03-01T12:00:05Z'}) + '\n')
+        writer = threading.Thread(target=late)
+        writer.start()
+        started = time.monotonic()
+        with store.Store(REPO, config=self.config) as db:
+            self.assertEqual(1, worker.settle(db, REPO, self.config, self.project))
+            said = [sources.resolve(row['metadata'], self.project)['text'] for row in db.pending(limit=10)]
+        writer.join()
+        self.assertIn(final, said)
+        self.assertLess(time.monotonic() - started, worker.SETTLE_SECONDS + 1)
+        # The worker a hook starts settles first; one run for a retry does not.
+        calls = []
+        with patch.object(worker, 'settle', side_effect=lambda *args, **kwargs: calls.append(1) or 0):
+            worker.run_once(REPO, self.config, self.project, lambda *args: {'ok': False}, settle_first=True)
+            worker.run_once(REPO, self.config, self.project, lambda *args: {'ok': False})
+        self.assertEqual([1], calls)
+
     def test_unbound_candidates_never_reach_the_reviewer(self):
         cases = {'excerpt_binding': dict(excerpts=['words that are not in the source']),
                  'destination': dict(issue=99),

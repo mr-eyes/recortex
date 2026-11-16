@@ -526,8 +526,58 @@ def refresh_record(repo, config, store, options):
     return complete
 
 
-def run_once(repo, config, project_root=None, invoke_fn=None):
-    """One locked finite pass; existing ready events survive restarts and capture pauses."""
+SETTLE_SECONDS = 3.0  # how long the worker waits for the transcripts it knows to stop growing
+SETTLE_QUIET = 0.4  # and how long one must stay the same size to count as settled
+KNOWN_HOURS = 6  # a transcript it knows: one with an observation this recent
+
+
+def settle(store, repo, config, project_root, seconds=SETTLE_SECONDS, quiet=SETTLE_QUIET):
+    """Capture what the hooks could not. Claude Code writes a turn's final message after its Stop hook has run, so the
+    worker started there waits until the transcripts it knows stop growing (at most `seconds`), then scans their unread
+    tails as a hook does, holds included. The transcript stays the only source. Returns the number of transcripts
+    read; one that cannot be read is left to the next hook."""
+    import observer_hooks  # here: the worker needs it only for this
+    since = time.time() - KNOWN_HOURS * 3600
+    known = {}
+    for (metadata,) in store.db.execute("SELECT metadata FROM observations WHERE updated>? ORDER BY updated DESC "
+                                        "LIMIT 2000", (since,)):
+        meta = json.loads(metadata)
+        path, session = meta.get("path"), meta.get("session_id")
+        if isinstance(path, str) and isinstance(session, str) and os.path.basename(path) == session + ".jsonl":
+            known.setdefault(path, session)
+    known = dict(list(known.items())[:20])
+
+    def sizes():
+        out = {}
+        for path in known:
+            try:
+                out[path] = os.stat(path, follow_symlinks=False).st_size
+            except OSError:
+                out[path] = None
+        return out
+    last, changed, until = sizes(), time.monotonic(), time.monotonic() + seconds
+    while known and time.monotonic() < until:
+        time.sleep(0.05)
+        now = sizes()
+        if now != last:
+            last, changed = now, time.monotonic()
+        elif time.monotonic() - changed >= quiet:
+            break
+    read = 0
+    paused = store.get_control("capture_paused", False)
+    for path, session in known.items():
+        data = {"session_id": session, "transcript_path": path, "hook_event_name": "Stop"}
+        try:
+            observer_hooks._capture(store, "Stop", data, project_root, repo, config, capture=not paused)
+            read += 1
+        except (sources.SourceError, observer_store.StoreError, OSError, ValueError):
+            continue
+    return read
+
+
+def run_once(repo, config, project_root=None, invoke_fn=None, settle_first=False):
+    """One locked finite pass; existing ready events survive restarts and capture pauses. With settle_first (the
+    worker a hook starts), the known transcripts are captured again first (settle)."""
     options = runtime.settings(config)
     if names.env(runtime.GUARD) == "1" or not options["enabled"] or not recortex.allowed_users(repo):
         return {"code": "disabled", "ready": []}
@@ -546,6 +596,8 @@ def run_once(repo, config, project_root=None, invoke_fn=None):
                 if not runtime.gate_valid(store.get_control("runtime_gate"), options):
                     store.set_control("worker_degraded", "runtime_gate")
                     return {"code": "runtime-gate", "ready": []}
+                if settle_first:
+                    settle(store, repo, config, project_root or recortex.project_root())
                 if not refresh_record(repo, config, store, options):
                     store.set_control("worker_degraded", "record_unavailable")
                     return {"code": "record-unavailable", "ready": []}

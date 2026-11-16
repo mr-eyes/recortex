@@ -468,7 +468,7 @@ def main(argv=None):
             previous = signal.signal(signal.SIGALRM, _alarm)
             signal.setitimer(signal.ITIMER_REAL, 250)
             try:
-                emit(observer_worker.run_once(repo, config))
+                emit(observer_worker.run_once(repo, config, settle_first=args.command == "run-worker"))
             finally:
                 signal.setitimer(signal.ITIMER_REAL, 0); signal.signal(signal.SIGALRM, previous)
             return 0
