@@ -16,7 +16,6 @@ import time
 from urllib.parse import quote
 
 import recortex
-import lint_drafts
 import record_format
 import storage
 
@@ -519,6 +518,7 @@ class Store:
         excerpts = candidate.get("excerpts", [])
         if not isinstance(excerpts, list) or any(not isinstance(x, str) for x in excerpts) or sum(map(len, excerpts)) > 48000:
             raise StoreError("invalid_candidate")
+        import lint_drafts  # here: the hooks open the store on every Bash call
         restricted = lint_drafts.lint_text(body + "\n" + "\n".join(excerpts), kind="generic", config=self.config)
         if any(f.level == "error" and f.code in ("secret", "restricted") for f in restricted):
             raise StoreError("restricted")

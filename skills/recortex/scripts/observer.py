@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
 """Explicit observer controls and bounded hook entry point. No automatic opt-in."""
-import argparse
 import json
 import os
 import signal
 import sys
 import time
 
-import index
 import names
-import observer_context
 import observer_holds
 import observer_runtime as runtime
 import observer_store
 import observer_sources
-import observer_publisher
 import recortex
 import storage
 
@@ -24,6 +20,7 @@ def emit(value):
 
 
 def parser():
+    import argparse  # the modules only some commands need are imported where they are used: a hook starts this
     root = argparse.ArgumentParser(description=__doc__)
     root.add_argument("--repo")
     sub = root.add_subparsers(dest="command", required=True)
@@ -297,6 +294,9 @@ def main(argv=None):
     args = parser().parse_args(argv)
     if args.command == "hook":
         return hook(args.event, repo=args.repo)
+    import index
+    import observer_context
+    import observer_publisher
     try:
         loaded = recortex.load_config()
         if args.command == "disable":

@@ -11,6 +11,14 @@ case "$state" in /*) ;; *) case "${HOME:-}" in /*) state="$HOME/.local/state" ;;
 if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -n "$state" ] && command -v grep >/dev/null 2>&1; then
   cd -P "$CLAUDE_PROJECT_DIR" 2>/dev/null || exit 0
   grep -qsF -e "\"$PWD\"" -- "$state"/*/private/observer-approvals.json || exit 0
+  # The project file switches the observer off ("observer": false): then only the check before a Bash call starts
+  # Python, since holds stay in force while this folder has an entry. A file named by a variable, another spelling or
+  # the earlier file name is left to Python.
+  if [ "${1:-}" != "pre-tool" ] && [ -f .recortex.json ]; then
+    named=no
+    for name in $(compgen -e); do case "$name" in *_CONFIG) named=yes ;; esac; done
+    if [ "$named" = no ] && grep -qsE '"observer"[[:space:]]*:[[:space:]]*false' -- .recortex.json; then exit 0; fi
+  fi
 fi
 here="$(cd "$(dirname "$src")" 2>/dev/null && pwd)" || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0

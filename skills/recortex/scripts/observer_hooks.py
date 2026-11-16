@@ -12,10 +12,7 @@ import subprocess
 import sys
 import time
 
-import index
-import lint_drafts
 import names
-import observer_context
 import observer_holds
 import observer_runtime
 import observer_sources
@@ -93,6 +90,7 @@ def _controls(store, rows, project_root, repo, config):
                                        for hold in store.holds())
             continue
         if control:
+            import lint_drafts  # only when a control is found: every Bash call starts this hook
             # What is stored is the hold's quote: the whole message, or only the phrase that withheld a session.
             if any(f.code in ("secret", "restricted") for f in lint_drafts.lint_text(control["hold"]["quote"],
                                                                                      config=config)):
@@ -139,7 +137,8 @@ def _capture(store, event, data, project_root, repo, config, capture=True, round
         # never advance a cursor past a hold that has not been compiled.
         found = _controls(store, rows, project_root, repo, config)
         controlled, refused, unproven = controlled or found[0], refused or found[1], unproven or found[2]
-        store.capture(rows if capture else [], stream=stream, cursor=cursor, expected_cursor=old)
+        if rows or old is None or cursor != old:  # nothing new since the last hook: no write, no sync to disk
+            store.capture(rows if capture else [], stream=stream, cursor=cursor, expected_cursor=old)
         if (cursor == (old if old is not None else start) or os.stat(path, follow_symlinks=False).st_size <= cursor
                 or time.monotonic() > until):
             break
@@ -242,7 +241,8 @@ def _held(repo, data):
 
 def _degraded(store, reason):
     try:
-        store.set_control("hook_degraded", reason)
+        if store.get_control("hook_degraded") != reason:  # a write syncs to disk: only when it changes
+            store.set_control("hook_degraded", reason)
     except observer_store.StoreError:
         pass  # a full queue must not prevent checking an already stored hold
 
@@ -259,6 +259,8 @@ def _context(store, event, data, repo, allowed):
         query = json.dumps(data.get("tool_input", {}), sort_keys=True)
     if not isinstance(query, str):
         query = ""
+    import index  # here, not at the top: most hook calls never build a context packet
+    import observer_context
     db = index.connect(repo, create=False, tighten=False)
     if db is None:
         raise ValueError("context-unavailable")

@@ -768,8 +768,8 @@ class ObserverHookTests(unittest.TestCase):
                 pass
         self._context.stop()
         packet = {"text": "CONTEXT", "selected": [1], "resume_id": None}
-        with mock.patch("observer_hooks.index.connect", return_value=Empty()), \
-                mock.patch("observer_hooks.observer_context.build_packet", return_value=packet):
+        with mock.patch("index.connect", return_value=Empty()), \
+                mock.patch("observer_context.build_packet", return_value=packet):
             for event in ("stop", "subagent-stop", "pre-compact"):
                 self.assertNotIn("hookSpecificOutput", self.run_hook(event=event), event)
             prompt = hooks.handle("prompt-submit", dict(self.data, prompt="the parser"), self.config, REPO)
@@ -786,8 +786,8 @@ class ObserverHookTests(unittest.TestCase):
                 pass
         self._context.stop()
         packets = iter([{"text": "CONTEXT synced %d" % n, "selected": [1], "resume_id": None} for n in range(40)])
-        with mock.patch("observer_hooks.index.connect", return_value=Empty()), \
-                mock.patch("observer_hooks.observer_context.build_packet", side_effect=lambda *a, **k: next(packets)):
+        with mock.patch("index.connect", return_value=Empty()), \
+                mock.patch("observer_context.build_packet", side_effect=lambda *a, **k: next(packets)):
             for n in range(20):
                 tool, given = ("Read", {"file_path": "reader%d.py" % n}) if n % 2 else ("Grep", {"pattern": "quote%d" % n})
                 data = dict(self.data, tool_name=tool, tool_input=given)
@@ -800,6 +800,7 @@ class ObserverHookTests(unittest.TestCase):
     def test_existing_hold_survives_capture_and_diagnostic_write_failure(self):
         self.append("/recortex hold git-push")
         self.run_hook()
+        self.append("A new line to capture.", role="assistant")  # with nothing new, capture writes nothing
         with mock.patch.object(Store, "capture", side_effect=StoreError("capacity")), \
                 mock.patch.object(Store, "set_control", side_effect=StoreError("capacity")):
             result = self.run_hook()
@@ -945,6 +946,31 @@ class FastPathTests(unittest.TestCase):
         link.symlink_to(configured)
         approvals.write_text(json.dumps({"form": 1, "folders": {os.path.realpath(configured): {}}}, indent=1))
         self.run_all(link)
+        self.assertTrue(self.marker.exists())
+
+    def test_a_project_file_that_switches_the_observer_off_starts_python_only_before_a_bash_call(self):
+        # With this folder's entry present, "observer": false still keeps the holds in force: Python starts before a
+        # Bash call, and for no other event.
+        project = self.base / "off"
+        project.mkdir()
+        approvals = self.state / "recortex" / "private" / "observer-approvals.json"
+        approvals.parent.mkdir(parents=True)
+        approvals.write_text(json.dumps({"form": 1, "folders": {os.path.realpath(project): {}}}, indent=1))
+        (project / ".recortex.json").write_text('{"repo": "%s",\n "observer" :  false}\n' % REPO)
+        env = dict(self.env, CLAUDE_PROJECT_DIR=str(project))
+        for event in EVENT_NAMES:
+            subprocess.run(["bash", str(SCRIPT), event], input="{}", capture_output=True, text=True, env=env)
+            self.assertEqual(event == "pre-tool", self.marker.exists(), event)
+            if self.marker.exists():
+                self.marker.unlink()
+        for case in ({"repo": REPO, "observer": {"enabled": True}}, {"repo": REPO}):  # on, or left to Python
+            (project / ".recortex.json").write_text(json.dumps(case))
+            subprocess.run(["bash", str(SCRIPT), "stop"], input="{}", capture_output=True, text=True, env=env)
+            self.assertTrue(self.marker.exists(), case)
+            self.marker.unlink()
+        (project / ".recortex.json").write_text(json.dumps({"repo": REPO, "observer": False}))
+        named = dict(env, **{names.ENV_PREFIX + "CONFIG": str(project / "other.json")})  # another file: Python decides
+        subprocess.run(["bash", str(SCRIPT), "stop"], input="{}", capture_output=True, text=True, env=named)
         self.assertTrue(self.marker.exists())
 
     def test_every_event_on_an_enabled_folder_ends_cleanly_with_hook_json(self):
