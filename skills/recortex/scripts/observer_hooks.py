@@ -140,15 +140,18 @@ def _notices(store, notices, data, event):
     if not isinstance(previous, dict):
         previous = {}
     now = time.time()
-    digest = hashlib.sha256(json.dumps(sorted(set(notices))).encode()).hexdigest()
     old = previous.get(key, {})
-    # An unchanged set is shown once per session, Stop included: Stop fires after every turn.
-    if old.get("digest") == digest and not set(notices) & ANSWERS:
+    shown = set(old.get("codes", [])) if isinstance(old.get("codes"), list) else set()
+    # Each line is shown once per session, whatever event carries it: a turn alternates between sets (a prompt
+    # without "pending", a stop with it), so comparing whole sets would show both lines on every turn. A line that
+    # answers something the user just did is always shown.
+    fresh = [code for code in notices if code not in shown or code in ANSWERS]
+    if not fresh:
         return []
-    previous[key] = {"digest": digest, "at": now}
+    previous[key] = {"codes": sorted(shown | set(notices)), "at": now}
     previous = dict(sorted(previous.items(), key=lambda pair: pair[1].get("at", 0))[-50:])
     store.set_control("hook_notices", previous)
-    return notices
+    return fresh
 
 
 def _held(repo, data):

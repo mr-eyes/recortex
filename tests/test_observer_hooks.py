@@ -359,6 +359,15 @@ class ObserverHookTests(unittest.TestCase):
             store.set_control("capture_paused", True)  # a new line, which Claude Code would discard at compaction
         self.assertEqual({}, self.run_hook(event="pre-compact"))
 
+    def test_each_notice_shows_once_per_session_across_turns(self):
+        lines = []
+        for turn in range(5):
+            self.append("Turn %d result." % turn, role="assistant")
+            for event in ("prompt-submit", "pre-tool", "post-tool", "stop"):
+                lines += self.run_hook(event=event).get("systemMessage", "").splitlines()
+        self.assertEqual(1, sum("independent checks are unavailable" in line for line in lines))
+        self.assertEqual(1, sum("not yet verified in GitHub" in line for line in lines))
+
     def test_a_failing_queue_is_silent_on_tool_calls_and_shown_at_the_turns_edge(self):
         import fcntl
         import time as clock
