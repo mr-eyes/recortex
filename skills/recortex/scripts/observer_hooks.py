@@ -39,12 +39,15 @@ NOTICES = {
     "cap": "recortex observer: today's limit of automatic comments is reached; reviewed memories wait in the queue. Run observer.py pending.",
     "release-refused": "recortex observer: a hold is released only when you type /recortex release HOLD_ID as your own whole message; nothing was released. Run observer.py holds.",
 }
+TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure")
 # Lines that answer something the user just did (a hold, a release); each arises once, so it is never held back.
 ANSWERS = frozenset(("control", "control-refused", "release-refused"))
 TAIL = 262144  # bytes of the transcript searched for a model's command call before a typed release is accepted
 
 
 def _output(event, context="", notices=(), denial=None):
+    if event == "PreCompact":
+        return {}  # Claude Code discards a PreCompact hook's systemMessage; its capture has run
     out = {}
     if notices:
         out["systemMessage"] = "\n".join(dict.fromkeys(NOTICES[code] for code in notices))
@@ -176,8 +179,8 @@ def _notices(store, notices, data, event):
     now = time.time()
     digest = hashlib.sha256(json.dumps(sorted(set(notices))).encode()).hexdigest()
     old = previous.get(key, {})
-    if (old.get("digest") == digest and now - old.get("at", 0) < 60
-            and event not in ("Stop", "SubagentStop", "PreCompact") and not set(notices) & ANSWERS):
+    # An unchanged set is shown once per session, Stop included: Stop fires after every turn.
+    if old.get("digest") == digest and not set(notices) & ANSWERS:
         return []
     previous[key] = {"digest": digest, "at": now}
     previous = dict(sorted(previous.items(), key=lambda pair: pair[1].get("at", 0))[-50:])
@@ -197,6 +200,10 @@ def _context(store, event, data, repo, allowed):
         return ""
     query = data.get("prompt", "")
     if event == "PreToolUse":
+        # Only before a supported git or gh action, where a hold can apply; other calls would add up to 4,000
+        # characters whenever their words match another group.
+        if not observer_holds.classify_action(data.get("tool_name"), data.get("tool_input"))["actions"]:
+            return ""
         query = json.dumps(data.get("tool_input", {}), sort_keys=True)
     if not isinstance(query, str):
         query = ""
@@ -212,7 +219,9 @@ def _context(store, event, data, repo, allowed):
     session = data.get("session_id", "")
     if not isinstance(session, str) or not observer_sources.SESSION.fullmatch(session):
         return ""
-    digest = hashlib.sha256(packet["text"].encode("utf-8")).hexdigest()
+    # The selection, not the text: the text carries the index's sync time, so every sync would make it new.
+    digest = hashlib.sha256(json.dumps([packet.get("selected"), packet.get("resume_id")], sort_keys=True,
+                                       default=str).encode("utf-8")).hexdigest()
     key = hashlib.sha256((session + ":" + str(data.get("agent_id", ""))).encode()).hexdigest()[:24]
     seen = store.get_control("hook_context", {})
     if not isinstance(seen, dict):
@@ -248,7 +257,7 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
             # This machine's entry for the folder does not hold (another repository or machine key, or settings
             # that no longer validate). Nothing is created, and the line shows at session start only.
             return _output(event, notices=["approval"]) if event == "SessionStart" else {}
-        with observer_store.Store(repo, max_bytes=settings["max_pending_bytes"],
+        with observer_store.Store(repo, max_bytes=settings["max_pending_bytes"], wait=0.1,
                                   max_pending=settings["max_pending_observations"], config=config) as store:
             if event == "PreToolUse":
                 result = observer_holds.check_action(store.holds(), repo, data.get("tool_name"),
@@ -312,7 +321,9 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
             has_handled = any(status["events"].get(state, 0) for state in observer_store.TERMINAL)
             # Local retention remains available while models are unavailable or
             # capture is paused. The worker checks its model/network gates itself.
-            if runtime_ready or (maintenance_due and has_handled):
+            # Tool events fire on every call; the worker starts from the edges of a turn only.
+            if event in ("SessionStart", "UserPromptSubmit", "Stop", "SubagentStop", "PreCompact") and (
+                    runtime_ready or (maintenance_due and has_handled)):
                 try:
                     launch_worker(project_root)
                 except OSError:
@@ -329,6 +340,8 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
                 notices.append("pending")
             notices = _notices(store, notices, data, event)
     except Exception:
-        # Fixed text only: exception strings can contain source text or paths.
-        notices.append("capture")
+        # Fixed text only: exception strings can contain source text or paths. Tool events fire on every call and
+        # cannot record a suppression when the queue is what failed, so the notice waits for the prompt or stop.
+        if event not in TOOL_EVENTS:
+            notices.append("capture")
     return _output(event, context=context, notices=notices, denial=denial)

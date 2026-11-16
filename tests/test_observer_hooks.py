@@ -52,6 +52,7 @@ class ObserverHookTests(unittest.TestCase):
             patch = mock.patch("observer_hooks." + target, return_value=value)
             patch.start()
             self.addCleanup(patch.stop)
+        self._context = patch  # the last one; a test of the real context stops it
         patch = mock.patch("observer_hooks.launch_worker")
         self.worker = patch.start()
         self.addCleanup(patch.stop)
@@ -200,7 +201,8 @@ class ObserverHookTests(unittest.TestCase):
         self.assertIn("budget is exhausted", result["systemMessage"])
         self.assertIn("not yet verified in GitHub", result["systemMessage"])
         with mock.patch("observer_hooks.observer_store.Store", side_effect=ValueError("SECRET SOURCE")):
-            result = self.run_hook()
+            self.assertEqual({}, self.run_hook())  # a tool call stays silent
+            result = self.run_hook(event="prompt-submit")
             self.assertIn("capture is incomplete", result["systemMessage"])
             self.assertNotIn("SECRET", json.dumps(result))
 
@@ -253,11 +255,104 @@ class ObserverHookTests(unittest.TestCase):
             self.assertEqual([], store.holds())
             self.assertNotIn(b"PRIVATE-SAMPLE", Path(store.path).read_bytes())
 
-    def test_unchanged_notices_are_suppressed_until_stop_or_change(self):
-        first, second = self.run_hook(), self.run_hook()
+    def test_an_unchanged_set_of_notices_shows_once_per_session_stop_included(self):
+        first, second = self.run_hook(event="stop"), self.run_hook(event="stop")
         self.assertIn("systemMessage", first)
         self.assertNotIn("systemMessage", second)
-        self.assertIn("systemMessage", self.run_hook(event="stop"))
+        self.assertNotIn("systemMessage", self.run_hook())
+        with Store(REPO) as store:
+            store.set_control("worker_degraded", "runtime_gate")  # a changed set shows again
+        self.assertIn("not yet verified", self.run_hook(event="stop")["systemMessage"])
+        self.assertEqual({}, self.run_hook(event="pre-compact"))  # Claude Code would discard it
+
+    def test_a_failing_queue_is_silent_on_tool_calls_and_shown_at_the_turns_edge(self):
+        import fcntl
+        import time as clock
+        with Store(REPO) as store:
+            folder = store.folder
+        holder = os.open(os.path.join(folder, "initialization.lock"), os.O_RDWR)
+        self.addCleanup(os.close, holder)
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        started = clock.monotonic()
+        result = self.run_hook(event="pre-tool")
+        self.assertLess(clock.monotonic() - started, 0.5)
+        self.assertNotIn("systemMessage", result)
+        self.assertIn("capture is incomplete", self.run_hook(event="stop")["systemMessage"])
+
+    def test_the_worker_starts_from_the_edges_of_a_turn_only(self):
+        with mock.patch("observer_hooks.observer_runtime.gate_valid", return_value=True):
+            for event in ("pre-tool", "post-tool", "tool-failure"):
+                self.run_hook(event=event)
+            self.worker.assert_not_called()
+            self.run_hook(event="stop")
+            self.worker.assert_called_once_with(str(self.project))
+
+    def entry(self, event, text, handle=None):
+        import contextlib, io, observer
+        out = io.StringIO()
+        with mock.patch.object(observer.sys, "stdin", io.StringIO(text)), contextlib.redirect_stdout(out), \
+                mock.patch.object(observer.recortex, "allowed_users", return_value={"octocat"}), \
+                mock.patch("observer_hooks.handle", side_effect=handle or (lambda *args: {})) as called:
+            self.assertEqual(0, observer.hook(event, config=self.config, repo=REPO))
+        return out.getvalue(), called
+
+    def test_hook_entry_bounds_its_input(self):
+        large = json.dumps({"tool_input": {"content": "x" * 300000}})
+        output, called = self.entry("post-tool", large)
+        self.assertEqual("", output)
+        called.assert_not_called()  # a large tool result: the next hook scans its transcript lines
+        output, called = self.entry("pre-tool", large)
+        self.assertEqual("", output)
+        called.assert_called_once()  # before an action the input is read, holds are checked
+        huge = "{}" + " " * 9000000
+        for event, line in (("stop", True), ("pre-tool", False)):
+            output, called = self.entry(event, huge)
+            called.assert_not_called()
+            self.assertEqual(line, "hook deadline or local state failure" in output, event)
+
+    def test_hook_entry_ends_at_its_deadline(self):
+        import time as clock
+        started = clock.monotonic()
+        output, _ = self.entry("stop", "{}", handle=lambda *args: clock.sleep(10))
+        self.assertLess(clock.monotonic() - started, 4)
+        self.assertEqual({"systemMessage": "recortex observer unavailable: hook deadline or local state failure; "
+                                           "run observer.py status."}, json.loads(output))
+
+    def test_stop_and_compaction_never_carry_context(self):
+        class Empty:
+            def execute(self, *args):
+                return []
+
+            def close(self):
+                pass
+        self._context.stop()
+        packet = {"text": "CONTEXT", "selected": [1], "resume_id": None}
+        with mock.patch("observer_hooks.index.connect", return_value=Empty()), \
+                mock.patch("observer_hooks.observer_context.build_packet", return_value=packet):
+            for event in ("stop", "subagent-stop", "pre-compact"):
+                self.assertNotIn("hookSpecificOutput", self.run_hook(event=event), event)
+            prompt = hooks.handle("prompt-submit", dict(self.data, prompt="the parser"), self.config, REPO)
+            self.assertIn("CONTEXT", prompt["hookSpecificOutput"]["additionalContext"])
+
+    def test_tool_calls_get_context_only_before_a_holdable_action_and_once_per_selection(self):
+        class Empty:
+            def execute(self, *args):
+                return []
+
+            def close(self):
+                pass
+        self._context.stop()
+        packets = iter([{"text": "CONTEXT synced %d" % n, "selected": [1], "resume_id": None} for n in range(40)])
+        with mock.patch("observer_hooks.index.connect", return_value=Empty()), \
+                mock.patch("observer_hooks.observer_context.build_packet", side_effect=lambda *a, **k: next(packets)):
+            for n in range(20):
+                tool, given = ("Read", {"file_path": "reader%d.py" % n}) if n % 2 else ("Grep", {"pattern": "quote%d" % n})
+                data = dict(self.data, tool_name=tool, tool_input=given)
+                self.assertNotIn("hookSpecificOutput", hooks.handle("pre-tool", data, self.config, REPO))
+            first = self.run_hook(command="git push")
+            self.assertIn("CONTEXT", first["hookSpecificOutput"]["additionalContext"])
+            again = self.run_hook(command="git push")  # a newer sync time, the same selection
+            self.assertNotIn("hookSpecificOutput", again)
 
     def test_existing_hold_survives_capture_and_diagnostic_write_failure(self):
         self.append("/recortex hold git-push")
@@ -296,9 +391,11 @@ class ObserverHookTests(unittest.TestCase):
         with mock.patch("observer_hooks._context", side_effect=TimeoutError), \
                 mock.patch("observer_hooks.observer_runtime.gate_valid", return_value=True):
             result = self.run_hook()
+            prompt = hooks.handle("prompt-submit", dict(self.data, prompt="the parser"), self.config, REPO)
         self.worker.assert_not_called()
         self.assertNotIn("hookSpecificOutput", result)
-        self.assertIn("capture is incomplete", result["systemMessage"])
+        self.assertNotIn("systemMessage", result)
+        self.assertIn("capture is incomplete", prompt["systemMessage"])
 
     def test_handled_retention_dispatch_does_not_require_model_gate_or_capture(self):
         with Store(REPO) as store:

@@ -117,7 +117,7 @@ class SourcePermissionTests(unittest.TestCase):
         def swapped(descriptor):
             return changed_stat(actual(descriptor), st_uid=max(os.getuid(), 1) + 10000)
 
-        with mock.patch.object(sources.os, "fstat", side_effect=swapped), mock.patch.object(sources.os, "read") as read:
+        with mock.patch.object(sources.os, "fstat", side_effect=swapped), mock.patch.object(sources.os, "read", side_effect=AssertionError("bytes read")) as read:
             with self.assertRaisesRegex(sources.SourceError, "source-owner"):
                 sources._read(str(self.path), 0, 16)
             read.assert_not_called()
@@ -128,7 +128,7 @@ class SourcePermissionTests(unittest.TestCase):
         def writable(descriptor):
             return changed_stat(actual(descriptor), st_mode=stat.S_IFREG | 0o666)
 
-        with mock.patch.object(sources.os, "fstat", side_effect=writable), mock.patch.object(sources.os, "read") as read:
+        with mock.patch.object(sources.os, "fstat", side_effect=writable), mock.patch.object(sources.os, "read", side_effect=AssertionError("bytes read")) as read:
             with self.assertRaisesRegex(sources.SourceError, "source-permissions"):
                 sources._read(str(self.path), 0, 16)
             read.assert_not_called()

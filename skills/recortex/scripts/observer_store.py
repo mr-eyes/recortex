@@ -127,7 +127,8 @@ def _with_key(body, key):
 
 
 class Store:
-    def __init__(self, repo, create=True, max_bytes=DEFAULT_BYTES, max_pending=DEFAULT_PENDING, config=None, readonly=False):
+    def __init__(self, repo, create=True, max_bytes=DEFAULT_BYTES, max_pending=DEFAULT_PENDING, config=None, readonly=False,
+                 wait=1):
         if not recortex.valid_repo(repo):
             raise StoreError("invalid_repository")
         self.repo = repo.lower()
@@ -145,7 +146,8 @@ class Store:
         if readonly:
             self._read_only()
             return
-        with _exclusive_lock(self.folder, "initialization.lock", wait=1):
+        # The hooks wait at most 0.1 s for another process's initialization; a busy queue must not slow every call.
+        with _exclusive_lock(self.folder, "initialization.lock", wait=max(0.01, min(1, wait))):
             self._initialize(create)
 
     def _read_only(self):
