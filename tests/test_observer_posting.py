@@ -85,27 +85,50 @@ class ObserverPostingTests(unittest.TestCase):
         self.assertIn("already holds this decision (event %s" % held, output)
         self.assertEqual([], self.calls())
 
-    def test_the_main_session_posts_a_deferred_event_of_a_marked_project_past_the_daily_cap(self):
-        # post_verified.py --eventkey is the main session's own post, after its review and the user's word
-        # (references/observer.md): a deferred event, a marked project and a full day of automatic comments do not
-        # stop it, and a refusal names its real reason.
+    def terminal(self, answer):
+        tty = mock.MagicMock()
+        tty.__enter__.return_value = tty
+        tty.ask.return_value = answer
+        return tty
+
+    def test_a_held_back_event_posts_only_after_the_user_confirms_on_their_terminal(self):
+        # post_verified.py --eventkey is the main session's post: a deferred event and a full day of automatic
+        # comments do not stop it, but an event the automatic gate held back (here a marked project) is posted only
+        # after the user types the confirmation on their own terminal, as for observer.py release.
+        import observer
         self.config["fields"] = {"sensitive": ["people"]}
         self.config["observer"]["max_posts"] = 1
         observer_runtime.approve(fixtures.REPO, self.config)
         with store.Store(fixtures.REPO, config=self.config) as db:
             db.transition(self.key, "deferred", reason="sensitive_project")
             db.set_control("automatic_posts", [__import__("time").time()])
-            db.set_control("publication_paused", True)
-        result, output = self.post()
-        self.assertEqual(1, result, output)
-        self.assertIn("refused this event (publication_paused)", output)
+        for tty, said in ((None, "held back (sensitive_project)"), (self.terminal("no"), "not typed")):
+            with mock.patch.object(observer, "terminal", return_value=tty):
+                result, output = self.post()
+            self.assertEqual(1, result, output)
+            self.assertIn(said, output)
         self.assertEqual([], self.calls())
         with store.Store(fixtures.REPO, config=self.config) as db:
+            db.set_control("publication_paused", True)
+        with mock.patch.object(observer, "terminal", return_value=self.terminal("post")):
+            result, output = self.post()
+        self.assertIn("refused this event (publication_paused)", output)  # a refusal names its real reason
+        with store.Store(fixtures.REPO, config=self.config) as db:
             db.set_control("publication_paused", False)
-        result, output = self.post()
+        with mock.patch.object(observer, "terminal", return_value=self.terminal("post")) as asked:
+            result, output = self.post()
         self.assertEqual(0, result, output)
+        self.assertIn("Type post to confirm", asked.return_value.ask.call_args.args[0])
         self.assertIn("memory id: 9100", output)
         self.assertEqual(1, len([args for args in self.calls() if args[:2] == ["issue", "comment"]]))
+
+    def test_an_event_the_gate_did_not_hold_back_needs_no_terminal(self):
+        import observer
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.transition(self.key, "deferred", reason="main_session")
+        with mock.patch.object(observer, "terminal", return_value=None):
+            result, output = self.post()
+        self.assertEqual(0, result, output)
 
     def test_exact_reviewed_body_target_and_kind_are_required_before_network(self):
         for changes in ({"issue": 2}, {"kind": "decision"}, {"text": "Altered private draft"}):

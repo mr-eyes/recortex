@@ -182,6 +182,20 @@ def outbound_problem(body, repo, status_ok=False):
     return None
 
 
+def held_back(store, event, config):
+    """Why the automatic gate holds this event back, as reasons the main session may pass only with the user's
+    confirmation on their own terminal: a change of an earlier memory's status that rests neither on the user's typed
+    words nor on the agent's message to the user, and a project marked sensitive (or whose field sheet is not
+    approved on this machine)."""
+    reasons = []
+    if status_change(event["body"]) and event["review"].get("status_authority") not in STATUS_AUTHORITY:
+        reasons.append("status_change")
+    sheet = field_sheet.state(config, store.repo)
+    if sheet["marks"] or sheet["state"] in ("malformed", "unreadable", "new", "changed"):
+        reasons.append("sensitive_project")
+    return reasons
+
+
 def _gate(store, config, main_session=False):
     settings = observer_runtime.settings(config)
     if store.repo not in recortex.trusted_repos():
@@ -332,10 +346,11 @@ def _reconcile_locked(store, event):
         return _uncertain(store, event["eventkey"], getattr(error, "reason", "remote_unavailable"))
 
 
-def publish(repo, eventkey, config, dry_run=False, main_session=False):
+def publish(repo, eventkey, config, dry_run=False, main_session=False, confirmed=False):
     """Append one frozen reviewed event. A dry run returns the exact command without network or writes.
-    main_session=True is post_verified.py, run by the main session after its own review and the user's word: it may
-    post an event in a marked project and one that changes what an earlier memory means."""
+    main_session=True is post_verified.py, run by the main session after its own review: it may post a deferred
+    event, and with confirmed=True, which post_verified.py sets only after the user typed the confirmation on their
+    own terminal, one the automatic gate held back (held_back)."""
     settings = observer_runtime.settings(config)
     with Store(repo, config=config, create=False, readonly=dry_run, max_bytes=settings["max_pending_bytes"],
                max_pending=settings["max_pending_observations"]) as store:
@@ -357,8 +372,10 @@ def publish(repo, eventkey, config, dry_run=False, main_session=False):
             # A deferred event waits for the main session, which may post it after its own review.
             if event["state"] != "ready" and not (main_session and event["state"] == "deferred"):
                 raise PublishError("not_ready")
+            if main_session and not confirmed and held_back(store, event, config):
+                raise PublishError("confirmation_required")
             _bound(event, store)
-            problem = outbound_problem(event["body"], repo, status_ok=main_session or
+            problem = outbound_problem(event["body"], repo, status_ok=main_session and confirmed or
                                        event["review"].get("status_authority") in STATUS_AUTHORITY)
             if problem:
                 raise PublishError(problem)

@@ -203,7 +203,11 @@ class ObserverPublisherTests(unittest.TestCase):
         run = self._second(body.replace("again", "after a run"), source="source9", review={"status_authority": "command"})
         with self.assertRaisesRegex(publisher.PublishError, "status_change"):
             publisher.publish(fixtures.REPO, run, self.config)
-        self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config, main_session=True)["state"])
+        # The main session posts the held-back event only after the user typed the confirmation on their terminal.
+        with self.assertRaisesRegex(publisher.PublishError, "confirmation_required"):
+            publisher.publish(fixtures.REPO, key, self.config, main_session=True)
+        self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config, main_session=True,
+                                                       confirmed=True)["state"])
 
     def test_daily_cap_counts_automatic_comments_only(self):
         self.config["observer"]["max_posts"] = 1
@@ -249,12 +253,17 @@ class ObserverPublisherTests(unittest.TestCase):
         self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config, main_session=True)["state"])
         self.assertIn("withheld", publisher.EVENT_PROBLEMS)
 
-    def test_marked_project_waits_for_the_main_session(self):
+    def test_marked_project_waits_for_the_users_confirmation(self):
         self.config["fields"] = {"sensitive": ["people"]}
         with self.assertRaisesRegex(publisher.PublishError, "sensitive_project"):
             self.publish()
+        with self.assertRaisesRegex(publisher.PublishError, "confirmation_required"):
+            self.publish(main_session=True)
         self.assertEqual([], [a for a in self.calls() if a[:2] == ["issue", "comment"]])
-        self.assertEqual("verified", publisher.publish(fixtures.REPO, self.key, self.config, main_session=True)["state"])
+        with store.Store(fixtures.REPO, config=self.config, readonly=True) as db:
+            self.assertEqual(["sensitive_project"], publisher.held_back(db, db.event(self.key), self.config))
+        self.assertEqual("verified", publisher.publish(fixtures.REPO, self.key, self.config, main_session=True,
+                                                       confirmed=True)["state"])
 
     def test_untrusted_repository_posts_nothing(self):
         with mock.patch.object(publisher.recortex, "trusted_repos", return_value={}):

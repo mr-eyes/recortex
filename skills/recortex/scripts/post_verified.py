@@ -66,9 +66,15 @@ REFUSALS = {
     "lint_failed": "The reviewed body does not pass the record's rules.",
     "withheld": "The user asked in that session that its moments not be posted; post it only on the user's explicit "
                 "request.",
+    "confirmation_required": "The observer held this event back; post it from your own terminal, which asks you to "
+                             "confirm.",
     "outbound_local": "The body names something of this machine (a local path, the home folder, a user name or an "
                       "email address); discard the event and post your own memory instead.",
 }
+
+
+CONFIRM = {"terminal-required": "the user posts it in a separate terminal, outside Claude Code, which asks to confirm.",
+           "not-confirmed": "the confirmation was not typed."}
 
 
 def observer_comment(args, draft, repo, config):
@@ -119,9 +125,21 @@ def observer_comment(args, draft, repo, config):
                 observer_publisher._payload_bound(event)
             else:
                 observer_publisher._bound(event, store)
-        # The main session, after its own review and the user's word: it may post a deferred event, one in a marked
-        # project or one that changes what an earlier memory means; the daily cap of automatic comments is not its.
-        result = observer_publisher.publish(repo, args.eventkey, config, dry_run=args.dry_run, main_session=True)
+            held = ([] if args.dry_run or event["state"] in ("verified", "sending", "uncertain")
+                    else observer_publisher.held_back(store, event, config))
+        # The main session, after its own review: it may post a deferred event, and the daily cap of automatic
+        # comments is not its. An event the automatic gate held back (a change of status that rests on neither the
+        # user's words nor the agent's message, a project marked sensitive) is posted only after the user types the
+        # confirmation on their own terminal, as for observer.py release.
+        if held:
+            import observer
+            refused = observer.confirmed("post", "The observer held back this %s for #%d (%s). Post it to %s?" % (
+                args.kind, args.issue, ", ".join(held), repo))
+            if refused:
+                print("not posted: this event was held back (%s); %s" % (", ".join(held), CONFIRM[refused]))
+                return 1
+        result = observer_publisher.publish(repo, args.eventkey, config, dry_run=args.dry_run, main_session=True,
+                                            confirmed=bool(held))
     except observer_store.StoreError as error:
         if not args.eventkey and error.reason == "missing":
             return None
