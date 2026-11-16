@@ -1,18 +1,11 @@
 """Bounded native transcript pointers. Source contents exist only in the worker's memory."""
 import datetime
-import functools
 import hashlib
 import json
 import os
 import re
 import stat
 import time
-
-try:
-    import grp
-    import pwd
-except ImportError:  # no user database: group write is never accepted
-    grp = pwd = None
 
 MAX_READ = 262144
 MAX_ROWS = 512
@@ -40,33 +33,53 @@ def _boundary(path, folder, source_file=None):
     return "ancestor"
 
 
-def private_group(uid, gid):
-    """True when `gid` is the user private group of `uid`: the owner's primary group, named after the owner, with no
-    member but the owner, and no other user's primary group. Only then is a group-writable folder as private as one
-    without group write. Default Ubuntu makes ~/.claude and ~/.claude/projects 775 in such a group."""
-    if grp is None or pwd is None or type(uid) is not int or type(gid) is not int:
-        return False
-    return _private_group(uid, gid)
+PASSWD = "/etc/passwd"
+GROUP = "/etc/group"
 
 
-@functools.lru_cache(maxsize=16)
-def _private_group(uid, gid):
+def _local(path, fields):
+    """The entries of a local account file as lists of fields; None when it cannot be read."""
     try:
-        owner = pwd.getpwuid(uid)
-        group = grp.getgrgid(gid)
-        if gid != owner.pw_gid or group.gr_name != owner.pw_name:
-            return False
-        if any(member != owner.pw_name for member in group.gr_mem):
-            return False
-        return not any(entry.pw_gid == gid and entry.pw_uid != uid for entry in pwd.getpwall())
-    except (KeyError, OverflowError, OSError):
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read(4 * 1024 * 1024)
+    except OSError:
+        return None
+    entries = []
+    for line in text.splitlines():
+        parts = line.split(":")
+        if line.startswith("#") or len(parts) != fields:
+            continue
+        entries.append(parts)
+    return entries
+
+
+def private_group(uid, gid):
+    """True when `gid` is the user private group of `uid`, established from the local account files and never from
+    an enumeration that a network directory can leave incomplete: the owner and the group are each defined once in
+    /etc/passwd and /etc/group, the group is the owner's primary group and is named after the owner, it has no member
+    but the owner, and no other local account has it as its primary group. A network account or group is refused.
+    Default Ubuntu makes ~/.claude and ~/.claude/projects 775 in such a group."""
+    if type(uid) is not int or type(gid) is not int:
         return False
+    users, groups = _local(PASSWD, 7), _local(GROUP, 4)
+    if users is None or groups is None:
+        return False
+    owners = [entry for entry in users if entry[2] == str(uid)]
+    named = [entry for entry in groups if entry[2] == str(gid)]
+    if len(owners) != 1 or len(named) != 1:
+        return False
+    owner, group = owners[0], named[0]
+    members = [member for member in group[3].split(",") if member]
+    return (owner[3] == str(gid) and group[0] == owner[0] and all(member == owner[0] for member in members)
+            and not any(entry[3] == str(gid) and entry[0] != owner[0] for entry in users))
 
 
-def _writable(info):
-    """World write, or group write by any group but the owner's private group."""
-    return bool(info.st_mode & stat.S_IWOTH) or bool(info.st_mode & stat.S_IWGRP) and not private_group(
-        info.st_uid, getattr(info, "st_gid", None))
+def _writable(info, leaf=False):
+    """World write; group write on a transcript file; group write on a folder by any group but the owner's private
+    group."""
+    if info.st_mode & stat.S_IWOTH or leaf and info.st_mode & stat.S_IWGRP:
+        return True
+    return bool(info.st_mode & stat.S_IWGRP) and not private_group(info.st_uid, getattr(info, "st_gid", None))
 
 
 def _component_problem(path, info, folder, source_file=None):
@@ -76,7 +89,8 @@ An ancestor's owner can replace its children even when group/other write bits
 are clear. Sticky mode protects entries from other users, not from that owner.
 Only sticky ancestors owned by root or the current user, outside the source
 tree, are an exception to the write-bit rule; source directories stay private.
-Group write is accepted only for the owner's user private group (private_group).
+Group write is accepted only on a folder, and only for the owner's user private group
+(private_group); a transcript file must be writable by the user alone.
 """
     if stat.S_ISLNK(info.st_mode):
         return "source-symlink"
@@ -91,7 +105,7 @@ Group write is accepted only for the owner's user private group (private_group).
     trusted_owner = info.st_uid == 0 or hasattr(os, "getuid") and info.st_uid == os.getuid()
     shared_sticky = (not inside and not leaf and trusted_owner and
                      stat.S_ISDIR(info.st_mode) and bool(info.st_mode & stat.S_ISVTX))
-    if _writable(info) and not shared_sticky:
+    if _writable(info, leaf) and not shared_sticky:
         return "source-permissions"
     return None
 
@@ -173,8 +187,8 @@ def _read(path, offset, size):
         # validation. A swapped regular file must not acquire source authority.
         if hasattr(os, "getuid") and info.st_uid != os.getuid():
             raise SourceError("source-owner")
-        if _writable(info):
-            raise SourceError("source-permissions")
+        if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise SourceError("source-permissions")  # the transcript itself is writable by the user alone
         os.lseek(descriptor, offset, os.SEEK_SET)
         chunks, left = [], size
         while left:

@@ -23,31 +23,22 @@ def changed_stat(info, **changes):
     return SimpleNamespace(**values)
 
 
-def user_database(gid, group_name="octocat", members=(), other_primary=False, user="octocat", primary=None):
-    """Patched pwd and grp modules: the current user `user` whose primary group is `gid` (or `primary`)."""
-    users = [SimpleNamespace(pw_name=user, pw_uid=os.getuid(), pw_gid=gid if primary is None else primary)]
+def account_files(folder, gid, group_name="octocat", members="", other_primary=False, user="octocat", primary=None,
+                  in_passwd=True, in_group=True):
+    """Fake /etc/passwd and /etc/group in `folder`, patched in: the current user `user` whose primary group is `gid`
+    (or `primary`)."""
+    users = ["root:x:0:0:root:/root:/bin/bash"]
+    if in_passwd:
+        users.append("%s:x:%d:%d::/home/%s:/bin/bash" % (user, os.getuid(), gid if primary is None else primary, user))
     if other_primary:
-        users.append(SimpleNamespace(pw_name="hubot", pw_uid=os.getuid() + 1, pw_gid=gid))
-
-    def getpwuid(uid):
-        for entry in users:
-            if entry.pw_uid == uid:
-                return entry
-        raise KeyError(uid)
-
-    def getgrgid(number):
-        if number != gid:
-            raise KeyError(number)
-        return SimpleNamespace(gr_name=group_name, gr_mem=list(members))
-
-    sources._private_group.cache_clear()
-    return mock.patch.multiple(sources, pwd=SimpleNamespace(getpwuid=getpwuid, getpwall=lambda: list(users)),
-                               grp=SimpleNamespace(getgrgid=getgrgid))
-
-
-def shared_group():
-    """A group that is not the user's own private group (another account is in it)."""
-    return user_database(os.getgid(), members=("hubot",))
+        users.append("hubot:x:%d:%d::/home/hubot:/bin/bash" % (os.getuid() + 1, gid))
+    groups = ["root:x:0:"] + (["%s:x:%d:%s" % (group_name, gid, members)] if in_group else [])
+    passwd, group = os.path.join(folder, "passwd"), os.path.join(folder, "group")
+    with open(passwd, "w") as handle:
+        handle.write("\n".join(users) + "\n")
+    with open(group, "w") as handle:
+        handle.write("\n".join(groups) + "\n")
+    return mock.patch.multiple(sources, PASSWD=passwd, GROUP=group)
 
 
 class SourcePermissionTests(unittest.TestCase):
@@ -125,48 +116,75 @@ class SourcePermissionTests(unittest.TestCase):
             with self.assertRaisesRegex(sources.SourceError, "source-permissions"):
                 sources.approved_path(str(self.path), str(self.project), "session-1")
 
-    def test_group_write_is_accepted_only_in_the_users_own_private_group(self):
+    def test_group_write_on_a_folder_is_accepted_only_in_a_local_private_group(self):
         gid = 4242
+        files = self.base / "etc"
+        files.mkdir()
         info = changed_stat(os.lstat(self.folder), st_mode=stat.S_IFDIR | 0o775, st_gid=gid)
-        cases = {"private group": (dict(), None),
-                 "the owner listed as its member": (dict(members=("octocat",)), None),
-                 "another member": (dict(members=("hubot",)), "source-permissions"),
-                 "another user's primary group": (dict(other_primary=True), "source-permissions"),
+        cases = {"local private group": (dict(), None),
+                 "the owner listed as its member": (dict(members="octocat"), None),
+                 "another member": (dict(members="hubot"), "source-permissions"),
+                 "another local user's primary group": (dict(other_primary=True), "source-permissions"),
                  "a name other than the user's": (dict(group_name="staff"), "source-permissions"),
-                 "not the user's primary group": (dict(primary=gid + 7), "source-permissions")}
-        for case, (database, expected) in cases.items():
-            with user_database(gid, **database):
+                 "not the user's primary group": (dict(primary=gid + 7), "source-permissions"),
+                 "a group missing from the local files": (dict(in_group=False), "source-permissions"),
+                 "a user missing from the local files": (dict(in_passwd=False), "source-permissions")}
+        for case, (accounts, expected) in cases.items():
+            with account_files(str(files), gid, **accounts):
                 self.assertEqual(expected, sources._component_problem(str(self.folder), info, str(self.folder)), case)
-        world = changed_stat(info, st_mode=stat.S_IFDIR | 0o777)
-        with user_database(gid):
+        with account_files(str(files), gid):
+            world = changed_stat(info, st_mode=stat.S_IFDIR | 0o777)
             self.assertEqual("source-permissions", sources._component_problem(str(self.folder), world, str(self.folder)))
-            other_gid = changed_stat(info, st_gid=gid + 1)
-            self.assertEqual("source-permissions", sources._component_problem(str(self.folder), other_gid, str(self.folder)))
-        with mock.patch.multiple(sources, pwd=None, grp=None):
+        with mock.patch.multiple(sources, PASSWD=str(files / "missing"), GROUP=str(files / "missing")):
             self.assertEqual("source-permissions", sources._component_problem(str(self.folder), info, str(self.folder)))
-        sources._private_group.cache_clear()
 
-    def test_default_ubuntu_layout_is_ready_and_its_transcript_readable(self):
-        # ~/.claude and ~/.claude/projects 775 in the user's private group; the transcript 660 in it as well.
+    def test_default_ubuntu_layout_is_ready_and_a_transcript_stays_writable_by_the_user_alone(self):
+        # ~/.claude, ~/.claude/projects and the project's folder 775 in the user's private group; transcripts 600.
+        files = self.base / "etc"
+        files.mkdir(mode=0o700)
         for directory in (self.native, self.folder.parent, self.folder):
             directory.chmod(0o775)
-        self.path.chmod(0o660)
-        with user_database(os.getgid()):
+        gid = os.lstat(self.folder).st_gid
+        with account_files(str(files), gid):
             self.assertTrue(sources.preflight(str(self.project))["ready"])
             self.assertEqual(sources.approved_path(str(self.path), str(self.project), "session-1"), str(self.path))
             self.assertTrue(sources._read(str(self.path), 0, 16))
-        with user_database(os.getgid(), members=("hubot",)):
-            self.assertEqual("source-permissions", sources.preflight(str(self.project))["code"])
+            # In that accepted folder: a group-writable transcript, one another account owns, one behind a symlink.
+            self.path.chmod(0o660)
+            with self.assertRaisesRegex(sources.SourceError, "source-permissions"):
+                sources.approved_path(str(self.path), str(self.project), "session-1")
             with self.assertRaisesRegex(sources.SourceError, "source-permissions"):
                 sources._read(str(self.path), 0, 16)
-        sources._private_group.cache_clear()
+            self.path.chmod(0o600)
+            actual = os.fstat
+            with mock.patch.object(sources.os, "fstat", side_effect=lambda fd: changed_stat(actual(fd), st_uid=os.getuid() + 1)), \
+                    mock.patch.object(sources.os, "read", side_effect=AssertionError("bytes read")):
+                with self.assertRaisesRegex(sources.SourceError, "source-owner"):
+                    sources._read(str(self.path), 0, 16)
+            planted = self.folder / "session-2.jsonl"
+            planted.symlink_to(self.path)
+            with self.assertRaisesRegex(sources.SourceError, "source-symlink"):
+                sources.approved_path(str(planted), str(self.project), "session-2")
+            with self.assertRaises(OSError):
+                sources._read(str(planted), 0, 16)
+            subagent = self.folder / "session-1" / "subagents"
+            subagent.mkdir(parents=True, mode=0o775)
+            (subagent.parent).chmod(0o775)
+            report = subagent / "agent-a1.jsonl"
+            report.write_text('{"message":{"role":"assistant","content":"done"}}\n')
+            report.chmod(0o660)
+            with self.assertRaisesRegex(sources.SourceError, "source-permissions"):
+                sources.approved_path(str(report), str(self.project), "session-1")
+        with account_files(str(files), gid, members="hubot"):
+            self.assertEqual("source-permissions", sources.preflight(str(self.project))["code"])
 
     def test_details_identify_all_failed_boundaries_without_changing_modes(self):
         self.native.chmod(0o775)
         self.folder.parent.chmod(0o775)
-        group = shared_group()
+        files = self.base / "etc"
+        files.mkdir()
+        group = account_files(str(files), os.lstat(self.native).st_gid, members="hubot")  # a group shared with hubot
         group.start()
-        self.addCleanup(sources._private_group.cache_clear)
         self.addCleanup(group.stop)
         result = sources.preflight(str(self.project))
         self.assertEqual("source-permissions", result["code"])
