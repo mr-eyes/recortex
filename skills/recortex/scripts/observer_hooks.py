@@ -41,8 +41,9 @@ NOTICES = {
     "release-refused": "recortex observer: nothing in a session releases a hold; run observer.py release HOLD_ID in a separate terminal, outside Claude Code. Run observer.py holds.",
 }
 TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure")
-UNCHECKED = {"reason": "recortex observer: the holds could not be checked, so this kind of action, which a hold can "
-                       "stop, is stopped too. Run observer.py status."}
+UNCHECKED = {"reason": "recortex observer: this machine's holds could not be checked, so every command but pwd, ls and "
+                       "cat is stopped. In a separate terminal, observer.py status says why and observer.py disable "
+                       "switches the observer off for this folder; \"observer\": false in the project file does too."}
 # Lines that answer something the user just did (a hold, a release); each arises once, so it is never held back.
 ANSWERS = frozenset(("control", "control-refused", "release-refused"))
 
@@ -152,23 +153,22 @@ def _notices(store, notices, data, event):
 
 def _held(repo, data):
     """The decision before a tool call, from holds read without any lock (observer_store.read_holds). When they cannot
-    be read, a call a hold could stop (a push, a tag, a release, or a command under an exact-command hold) is denied
-    with one fixed reason; every other call goes on."""
+    be read, every Bash command is denied with one fixed reason, except pwd, ls and cat with plain path arguments
+    (observer_holds.read_only), and those too when the held exact commands, still known beside the queue, name them.
+    No hold applies to another tool."""
     tool_name, tool_input = data.get("tool_name"), data.get("tool_input")
     try:
         holds = observer_store.read_holds(repo)
     except (observer_store.StoreError, storage.StorageError, OSError, ValueError, KeyError, TypeError):
-        classified = observer_holds.classify_action(tool_name, tool_input)
-        if classified["actions"] or classified.get("target_unknown"):
-            return UNCHECKED
-        if classified["command"] is None:
+        command = observer_holds.classify_action(tool_name, tool_input)["command"]
+        if command is None:
             return None  # not a shell command: no hold applies to it
+        if not observer_holds.read_only(tool_name, tool_input):
+            return UNCHECKED
         try:
-            held = observer_store.held_commands(repo)
+            return UNCHECKED if observer_store._command_digest(command) in observer_store.held_commands(repo) else None
         except observer_store.StoreError:
-            # Unknown held commands never count as none: only a command that only reads goes on.
-            return None if observer_holds.read_only(tool_name, tool_input) else UNCHECKED
-        return UNCHECKED if observer_store._command_digest(classified["command"]) in held else None
+            return None  # the plainest reads go on even when the held commands are unknown
     result = observer_holds.check_action(holds, repo, tool_name, tool_input, session_id=data.get("session_id"))
     return result if result["decision"] == "deny" else None
 

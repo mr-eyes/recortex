@@ -196,17 +196,18 @@ class ObserverHookTests(unittest.TestCase):
             self.assertIn("capture is incomplete", result["systemMessage"])
             self.assertNotIn("SECRET", json.dumps(result))
 
-    def test_unreadable_holds_stop_only_what_a_hold_could_stop(self):
+    def test_unreadable_holds_stop_all_but_the_plainest_reads(self):
         self.append("/recortex hold command python publish.py")
         self.run_hook()
         with Store(REPO) as store:
             path = Path(store.path)
         path.write_bytes(b"not a database" * 100)  # a damaged queue: neither read nor opened
-        for command in ("git push", "git tag v1", "gh release create v1", "git -C ../other push", "python publish.py"):
+        for command in ("git push", "git tag v1", "gh release create v1", "git -C ../other push", "python publish.py",
+                        "git status", "python other.py"):
             result = self.run_hook(command=command)
             self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"], command)
             self.assertIn("could not be checked", result["hookSpecificOutput"]["permissionDecisionReason"])
-        for command in ("ls", "git status", "python other.py"):
+        for command in ("ls", "pwd", "cat README.md"):
             self.assertNotIn("hookSpecificOutput", self.run_hook(command=command), command)
         self.assertNotIn("hookSpecificOutput", hooks.handle("pre-tool", dict(self.data, tool_name="Read",
                                                                             tool_input={"file_path": "x"}), self.config, REPO))
@@ -215,10 +216,15 @@ class ObserverHookTests(unittest.TestCase):
         with mock.patch("observer_hooks.observer_store.read_holds", side_effect=StoreError("unreadable")), \
                 mock.patch("observer_hooks.observer_store.Store", side_effect=StoreError("corrupt")), \
                 mock.patch("observer_hooks.observer_store.held_commands", side_effect=StoreError("unreadable")):
-            for command in ("python other.py", "cat a > b", "git log --output=x", "ls; rm -r x", "make release"):
+            for command in ("python other.py", "cat a > b", "git log --output=x", "ls; rm -r x", "make release",
+                            "rg --pre x quote", "git diff --ext-diff", "ls -la", "cat a; git push", "ls $(echo x)",
+                            "git status", "grep -n quote reader.py", "cat 'a b'", "pwd -P", "ls ~"):
                 self.assertEqual("deny", self.run_hook(command=command)["hookSpecificOutput"]["permissionDecision"], command)
-            for command in ("ls -la", "git status", "cat notes.txt", "git diff HEAD~1", "grep -n quote reader.py"):
+            for command in ("ls", "pwd", "cat README.md", "ls docs/notes", "cat notes.txt"):
                 self.assertNotIn("hookSpecificOutput", self.run_hook(command=command), command)
+        # With the holds readable, the ordinary rules apply: no hold, no decision.
+        for command in ("rg --pre x quote", "git diff --ext-diff", "ls -la"):
+            self.assertNotIn("hookSpecificOutput", self.run_hook(command=command), command)
 
     def test_a_missing_side_file_is_unknown_not_empty(self):
         self.append("/recortex hold command python publish.py")

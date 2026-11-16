@@ -126,30 +126,20 @@ def release(holds, hold_id, by="terminal"):
     return result
 
 
-READ_ONLY = frozenset(("ls", "cat", "head", "tail", "pwd", "wc", "grep", "rg", "stat", "file", "which", "date",
-                       "whoami", "echo", "true", "tree", "du", "df"))
-READ_ONLY_GIT = frozenset(("status", "log", "diff", "show", "rev-parse", "ls-files", "blame", "describe"))
+PLAIN = re.compile(r"[A-Za-z0-9_./@%+,:-]+")
 
 
 def read_only(tool_name, tool_input):
-    """True for a simple shell command that only reads: no shell syntax, a program from a short list, or git with a
-    reading subcommand and no option that writes a file. Used only to let such calls go on when the holds cannot be
-    read; anything else is then stopped."""
+    """True only for the plainest reads: pwd, ls or cat with plain path arguments, no option and no shell syntax.
+    When the holds cannot be read, these are the only Bash commands that go on: any option of a longer list of
+    reading programs can run another program (rg --pre, git diff --ext-diff), and git obeys the repository's config."""
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if tool_name not in ("Bash", "bash") or not isinstance(command, str) or len(command) > 4096:
         return False
-    if any(char in command for char in ("\n", "\r", ";", "&", "|", "`", "$", "(", ")", "<", ">")):
+    words = command.split()
+    if not words or words[0] not in ("pwd", "ls", "cat") or words[0] == "pwd" and len(words) > 1:
         return False
-    try:
-        words = shlex.split(command)
-    except ValueError:
-        return False
-    if not words:
-        return True
-    if words[0] in READ_ONLY:
-        return True
-    return (words[0] == "git" and len(words) > 1 and words[1] in READ_ONLY_GIT
-            and not any(word.startswith(("--output", "-o")) for word in words[2:]))
+    return all(PLAIN.fullmatch(word) and not word.startswith("-") for word in words[1:])
 
 
 def classify_action(tool_name, tool_input):
