@@ -414,6 +414,21 @@ class ObserverHookTests(unittest.TestCase):
         self.release(hold_id)
         self.assertNotIn("hookSpecificOutput", self.run_hook())
 
+    def test_a_hold_typed_while_capture_is_paused_takes_effect(self):
+        # While capture is paused the transcript is still scanned for holds, under a cursor of its own
+        # ("controls_" and the capture stream's name, which observer_store.SOURCE_ID accepts).
+        self.run_hook(event="stop")
+        with Store(REPO) as store:
+            store.set_control("capture_paused", True)
+        self.append("/recortex hold git-push")
+        result = self.run_hook()
+        self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"])
+        self.assertIn("explicit hold was recorded", result["systemMessage"])
+        with Store(REPO) as store:
+            self.assertEqual(["git-push"], [hold["action"] for hold in store.holds()])
+            self.assertEqual([], [row for row in store.pending() if row["metadata"]["offset"] > 0])  # nothing captured
+            self.assertIsNotNone(store.cursor("controls_" + __import__("hashlib").sha256(str(self.path).encode()).hexdigest()))
+
     def test_exact_control_containing_restricted_text_is_refused_before_storage(self):
         self.config["restricted_patterns"] = ["PRIVATE-SAMPLE"]
         self.append("/recortex hold command publish PRIVATE-SAMPLE")
