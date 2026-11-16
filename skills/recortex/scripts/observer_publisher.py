@@ -32,18 +32,26 @@ class PublishError(RuntimeError):
 # Checked on the raw body, code included: GitHub's own rules for code spans (backslash escapes, backtick runs of equal
 # length) decide what renders as a live mention, so nothing is taken for code here. An @ after a word character is an
 # email address or a path, never a mention.
-MENTION = re.compile(r"(?<!\w)@[A-Za-z0-9]")
+MENTION = re.compile(r"(?<![A-Za-z0-9_])@[A-Za-z0-9]")
 ADDRESS = re.compile(r"(?i)\b(?:[a-z][a-z0-9+.-]*://|www\.)[^\s<>()\]]+")
 # Targets of inline links and images, and of reference definitions; each is resolved as a browser would.
 LINK_TARGET = re.compile(r"\]\(\s*<?([^\s)>]*)")
 REFERENCE = re.compile(r"(?m)^ {0,3}\[[^\]\n]+\]:[ \t]*\n?[ \t]*<?([^\s>]+)")
 ESCAPED = re.compile(r"\\([!-/:-@\[-`{-~])")
+# Not every Markdown form of a link can be matched with the standard library, so these are refused outright once this
+# repository's own addresses are taken out: a reference definition ("]:" anywhere), "//", a backslash pair, "www.",
+# and anything shaped like a scheme ("data:", "javascript:"; a field label ends in ":**" or ": ", a time in a digit).
+OUTSIDE = re.compile(r"\]:|//|\\\\|(?i:www\.)|(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*:(?=[^\s*0-9])")
+# owner/repo#123 and owner/repo@<sha> link, and can notify, another repository; user@<sha> names a fork's commit.
+CROSS = re.compile(r"(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:#[0-9]+|@[0-9a-fA-F]{7,40}\b)")
+FORK = re.compile(r"(?<![A-Za-z0-9_.-])([A-Za-z0-9-]+)@[0-9a-fA-F]{7,40}\b")
 MARKUP = re.compile(r"!\[|<(?!/?(?:details|summary)>|!-- ghim:event )[A-Za-z!/?]")
 STATUS_LINKS = ("replaces", "instead")
 STATUS_AUTHORITY = ("user", "command")
 # A problem of the event itself: the event is deferred with this reason and the next one is tried.
 EVENT_PROBLEMS = frozenset(("lint_failed", "invalid_target", "explicit_hold", "status_change", "outbound_markup",
-                            "outbound_mention", "outbound_address", "payload_changed", "review_changed"))
+                            "outbound_mention", "outbound_address", "outbound_reference", "payload_changed",
+                            "review_changed"))
 
 
 def off_repository(target, repo):
@@ -109,6 +117,14 @@ def outbound_problem(body, repo, status_ok=False):
     targets = ADDRESS.findall(body) + LINK_TARGET.findall(body) + REFERENCE.findall(body)
     if any(off_repository(target, repo) for target in targets):
         return "outbound_address"
+    # Every address left is this repository's; the event marker is the record's own.
+    rest = ADDRESS.sub(" ", body).replace("<!-- ghim:event ", "<!-- ")
+    if OUTSIDE.search(rest):
+        return "outbound_address"
+    owner = repo.split("/")[0].lower()
+    if (any((first + "/" + second).lower() != repo.lower() for first, second in CROSS.findall(rest))
+            or any(user.lower() != owner for user in FORK.findall(rest))):
+        return "outbound_reference"
     return None
 
 

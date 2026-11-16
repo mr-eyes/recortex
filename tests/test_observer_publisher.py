@@ -95,6 +95,27 @@ class ObserverPublisherTests(unittest.TestCase):
         for text in ("[x](https://github.com/%s/issues/3)" % repo, "[x](issues/3)", "[x](#fold)", "As in #3."):
             self.assertIsNone(publisher.outbound_problem("Plain text " + text, repo), text)
 
+    def test_forms_the_filters_cannot_parse_are_refused_outright(self):
+        repo = fixtures.REPO
+        hostile = {
+            "outbound_address": ["[status][1]\n\n- [1]: https://collector.example.test/p",
+                                 "[status][1]\n\n> [1]: //collector.example.test/p",
+                                 "[status][1]\n\n      [1]: collector.example.test/p",
+                                 "see //collector.example.test/x", "share \\\\server\\share", "WWW.collector.example.test",
+                                 "data:text/html,x", "javascript:alert(1)", "mailto:octocat@example.test",
+                                 "https://github.com/%s/x then //collector.example.test" % repo],
+            "outbound_mention": ["caf\u00e9@octocat", "\u00e9@hubot"],
+            "outbound_reference": ["fixed in other-org/other-repo#12", "see other-org/other-repo@abc1234",
+                                   "from hubot@abc1234def", "Octo-Org/Other#3"]}
+        for reason, texts in hostile.items():
+            for text in texts:
+                self.assertEqual(reason, publisher.outbound_problem("Plain text " + text + ".", repo), text)
+        same = ["As in #3.", "As in GH-3.", "As in Octo-Org/Octo-Repo#3.", "At octo-org@abc1234.",
+                "Mail octocat@example.test.", "**Effect:** none", "Took 12:30 minutes.",
+                "See https://github.com/%s/issues/3#issuecomment-9003 for it." % repo]
+        for text in same:
+            self.assertIsNone(publisher.outbound_problem("Plain text " + text, repo), text)
+
     def test_change_of_status_without_the_users_words_or_a_command_waits_for_the_main_session(self):
         idea = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text()
         data = self.state()
