@@ -211,6 +211,61 @@ class ObserverHookTests(unittest.TestCase):
         self.assertNotIn("hookSpecificOutput", hooks.handle("pre-tool", dict(self.data, tool_name="Read",
                                                                             tool_input={"file_path": "x"}), self.config, REPO))
 
+    def test_unknown_held_commands_stop_everything_but_reading(self):
+        with mock.patch("observer_hooks.observer_store.read_holds", side_effect=StoreError("unreadable")), \
+                mock.patch("observer_hooks.observer_store.Store", side_effect=StoreError("corrupt")), \
+                mock.patch("observer_hooks.observer_store.held_commands", side_effect=StoreError("unreadable")):
+            for command in ("python other.py", "cat a > b", "git log --output=x", "ls; rm -r x", "make release"):
+                self.assertEqual("deny", self.run_hook(command=command)["hookSpecificOutput"]["permissionDecision"], command)
+            for command in ("ls -la", "git status", "cat notes.txt", "git diff HEAD~1", "grep -n quote reader.py"):
+                self.assertNotIn("hookSpecificOutput", self.run_hook(command=command), command)
+
+    def test_a_missing_side_file_is_unknown_not_empty(self):
+        self.append("/recortex hold command python publish.py")
+        self.run_hook()
+        with Store(REPO) as store:
+            folder, path = Path(store.folder), Path(store.path)
+        path.write_bytes(b"not a database" * 100)
+        os.unlink(folder / "command-holds.json")
+        for command in ("python publish.py", "python other.py"):
+            self.assertEqual("deny", self.run_hook(command=command)["hookSpecificOutput"]["permissionDecision"], command)
+        self.assertNotIn("hookSpecificOutput", self.run_hook(command="ls"))
+
+    def test_a_failed_side_file_write_never_leaves_fewer_held_commands_than_the_queue(self):
+        import observer_holds
+        import observer_store
+        self.append("/recortex hold command python publish.py")
+        self.run_hook()
+        with Store(REPO) as store:
+            folder, path = Path(store.folder), Path(store.path)
+            hold_id = store.holds()[0]["id"]
+        side = folder / "command-holds.json"
+        before = side.read_text()
+        real = observer_store.storage.write_file
+        # The write before the commit fails: the release is not made, and the file is as it was.
+        with mock.patch.object(observer_store.storage, "write_file", side_effect=observer_store.storage.StorageError("x")):
+            with Store(REPO) as store, self.assertRaises(observer_store.storage.StorageError):
+                store.update_holds(lambda holds: observer_holds.release(holds, hold_id))
+        with Store(REPO) as store:
+            self.assertEqual("active", store.holds()[0]["state"])
+        self.assertEqual(before, side.read_text())
+        # The write after the commit fails: the hold is released, and the file keeps the superset, so that with the
+        # queue unreadable the command is stopped rather than allowed.
+        calls = []
+        def second_fails(target, text):
+            calls.append(target)
+            if len(calls) == 2:
+                raise observer_store.storage.StorageError("x")
+            return real(target, text)
+        with mock.patch.object(observer_store.storage, "write_file", side_effect=second_fails):
+            with Store(REPO) as store:
+                store.update_holds(lambda holds: observer_holds.release(holds, hold_id))
+        with Store(REPO) as store:
+            self.assertEqual("released", store.holds()[0]["state"])
+        self.assertEqual(before, side.read_text())
+        path.write_bytes(b"not a database" * 100)
+        self.assertEqual("deny", self.run_hook(command="python publish.py")["hookSpecificOutput"]["permissionDecision"])
+
     def test_a_busy_queue_does_not_keep_a_hold_from_being_checked(self):
         import fcntl
         import sqlite3

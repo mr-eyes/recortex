@@ -161,12 +161,14 @@ def _held(repo, data):
         classified = observer_holds.classify_action(tool_name, tool_input)
         if classified["actions"] or classified.get("target_unknown"):
             return UNCHECKED
+        if classified["command"] is None:
+            return None  # not a shell command: no hold applies to it
         try:
             held = observer_store.held_commands(repo)
         except observer_store.StoreError:
-            held = set()
-        command = tool_input.get("command") if isinstance(tool_input, dict) else None
-        return UNCHECKED if isinstance(command, str) and observer_store._command_digest(command) in held else None
+            # Unknown held commands never count as none: only a command that only reads goes on.
+            return None if observer_holds.read_only(tool_name, tool_input) else UNCHECKED
+        return UNCHECKED if observer_store._command_digest(classified["command"]) in held else None
     result = observer_holds.check_action(holds, repo, tool_name, tool_input, session_id=data.get("session_id"))
     return result if result["decision"] == "deny" else None
 

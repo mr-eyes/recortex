@@ -157,13 +157,17 @@ def read_holds(repo, tries=3):
 
 
 def held_commands(repo):
-    """The digests of the commands under active exact-command holds, from the file update_holds keeps beside the
-    queue: what is still known about them when the queue itself cannot be read. Raises StoreError when unknown."""
+    """The digests of the commands under active exact-command holds, from the file kept beside the queue: what is
+    still known about them when the queue itself cannot be read. update_holds keeps it a superset of the queue's held
+    commands at every moment. Raises StoreError when it is unknown: missing, unreadable or not of its form; an unknown
+    set never counts as empty."""
     try:
         folder = storage.folder(storage.state_top(), storage.repo_folder(repo.lower()), "observer", create=False,
                                 tighten=False)
         text = storage.read_file(os.path.join(folder, COMMAND_HOLDS)) if folder else None
-        digests = json.loads(text) if text is not None else []
+        if text is None:
+            raise StoreError("unreadable")
+        digests = json.loads(text)
     except (storage.StorageError, OSError, ValueError) as error:
         raise StoreError("unreadable") from error
     if not isinstance(digests, list) or not all(isinstance(item, str) and HEX.fullmatch(item) for item in digests):
@@ -268,6 +272,7 @@ class Store:
                     self.db.executemany("INSERT INTO meta(key,value) VALUES (?,?)",
                                         [("format", "1"), ("repo", self.repo),
                                          ("mark", storage.mark(self.path, self.repo))])
+                    self._write_held([])  # a new queue holds no command; a missing file later means unknown
                 descriptor = os.open(self.folder, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
                 try:
                     os.fsync(descriptor)
@@ -608,21 +613,28 @@ class Store:
             raise StoreError("invalid_holds")
         self.set_control("holds", holds)
 
+    def _write_held(self, holds):
+        """Beside the queue, the digests of the held exact commands, so that a call can still be stopped when the
+        queue cannot be read (held_commands)."""
+        digests = sorted({_command_digest(hold["command"]) for hold in holds if isinstance(hold, dict)
+                          and hold.get("state") == "active" and hold.get("action") == "command"
+                          and isinstance(hold.get("command"), str)})
+        storage.write_file(os.path.join(self.folder, COMMAND_HOLDS), json.dumps(digests))
+
     def update_holds(self, transform):
         with self.transaction():
-            changed = transform(self.holds())
+            before = self.holds()
+            changed = transform(before)
             if not isinstance(changed, list) or len(canonical(changed).encode("utf-8")) > 1024 * 1024:
                 raise StoreError("invalid_holds")
             self.db.execute("INSERT OR REPLACE INTO controls VALUES ('holds',?)", (canonical(changed),))
-        # Beside the queue, the digests of the held exact commands: a call can still be stopped when the queue
-        # cannot be read (held_commands).
-        digests = sorted({_command_digest(hold["command"]) for hold in changed if isinstance(hold, dict)
-                          and hold.get("state") == "active" and hold.get("action") == "command"
-                          and isinstance(hold.get("command"), str)})
+            # Before the commit: the held commands of the old and the new holds together, so that the file never
+            # holds fewer than the queue, whether the commit happens or not. A write that fails aborts the update.
+            self._write_held(before + changed)
         try:
-            storage.write_file(os.path.join(self.folder, COMMAND_HOLDS), json.dumps(digests))
+            self._write_held(changed)  # after the commit: exactly the queue's; a failure leaves the superset
         except (storage.StorageError, OSError):
-            pass  # the queue holds the holds; this copy only serves when the queue cannot be read
+            pass
         return changed
 
     def status(self):
