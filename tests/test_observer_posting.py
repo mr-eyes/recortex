@@ -130,6 +130,20 @@ class ObserverPostingTests(unittest.TestCase):
             result, output = self.post()
         self.assertEqual(0, result, output)
 
+    def test_a_withheld_session_is_not_posted_by_the_main_session_either(self):
+        import observer_holds
+        hold = observer_holds.make_hold({"source_id": "s1", "role": "user", "direct_user": True, "text": "off the record"},
+                                        fixtures.REPO, "publish", scope={"session_id": "session1"})
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.update_holds(lambda holds: holds + [hold])
+        result, output = self.post()
+        self.assertEqual(1, result, output)
+        self.assertIn("withheld", output)
+        self.assertEqual([], [args for args in self.calls() if args[:2] == ["issue", "comment"]])
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.update_holds(lambda holds: observer_holds.release(holds, hold["id"]))
+        self.assertEqual(0, self.post()[0])
+
     def test_exact_reviewed_body_target_and_kind_are_required_before_network(self):
         for changes in ({"issue": 2}, {"kind": "decision"}, {"text": "Altered private draft"}):
             with self.subTest(changes=changes):

@@ -64,8 +64,8 @@ REFUSALS = {
     "explicit_hold": "The user has asked that this action not be taken.",
     "not_ready": "Only a reviewed event that is ready or deferred can be posted.",
     "lint_failed": "The reviewed body does not pass the record's rules.",
-    "withheld": "The user asked in that session that its moments not be posted; post it only on the user's explicit "
-                "request.",
+    "withheld": "The user asked in that session that its moments not be posted. Only the user lifts that, with "
+                "observer.py release HOLD_ID in their own terminal (observer.py holds lists it).",
     "confirmation_required": "The observer held this event back; post it from your own terminal, which asks you to "
                              "confirm.",
     "outbound_local": "The body names something of this machine (a local path, the home folder, a user name or an "

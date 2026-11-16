@@ -269,10 +269,11 @@ def _hold(store, event, main_session=False):
     if answer["decision"] == "deny":
         raise PublishError("explicit_hold")
     # The user asked in a session that its moments not be posted ("don't post", "keep this off the record"): nothing
-    # of it posts on its own. The main session posts it only on the user's later, explicit request.
+    # of it posts, the main session's --eventkey included, until the user releases that hold in their own terminal
+    # (observer.py release HOLD_ID), which is the later, explicit request.
     sessions = {item["metadata"].get("session_id") for item in (store.observation(sid) for sid in
                                                                  event["candidate"]["sources"]) if item}
-    if not main_session and observer_holds.publication_withheld(holds, store.repo, sessions | {session}):
+    if observer_holds.publication_withheld(holds, store.repo, sessions | {session}):
         raise PublishError("withheld")
 
 

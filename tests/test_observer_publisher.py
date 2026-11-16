@@ -239,17 +239,22 @@ class ObserverPublisherTests(unittest.TestCase):
         with store.Store(fixtures.REPO, config=self.config) as db:
             db.update_holds(lambda holds: holds + [hold])
 
-    def test_a_session_the_user_withheld_posts_nothing_on_its_own(self):
-        # "Don't post", "keep this off the record": nothing of that session posts on its own. The main session posts
-        # it on the user's later, explicit request.
+    def test_a_session_the_user_withheld_posts_nothing_until_the_user_releases_it(self):
+        # "Don't post", "keep this off the record": nothing of that session posts, the main session's --eventkey
+        # included, until the user releases the hold in their own terminal (the later, explicit request).
+        import observer_holds
         self.withhold("another-session")
         self.assertEqual("verified", self.publish()["state"])  # another session's hold does not apply
         body = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text().replace("open quote", "open quote again")
         key = self._second(body)
         self.withhold()
-        with self.assertRaisesRegex(publisher.PublishError, "withheld"):
-            publisher.publish(fixtures.REPO, key, self.config)
+        for main_session in (False, True):
+            with self.assertRaisesRegex(publisher.PublishError, "withheld"):
+                publisher.publish(fixtures.REPO, key, self.config, main_session=main_session, confirmed=main_session)
         self.assertEqual(1, len([a for a in self.calls() if a[:2] == ["issue", "comment"]]))
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            held = [hold["id"] for hold in db.holds() if hold["scope"].get("session_id") == "session1"]
+            db.update_holds(lambda holds: observer_holds.release(holds, held[0]))
         self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config, main_session=True)["state"])
         self.assertIn("withheld", publisher.EVENT_PROBLEMS)
 
