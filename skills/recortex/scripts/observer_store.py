@@ -15,6 +15,7 @@ import sqlite3
 import time
 from urllib.parse import quote
 
+import observer_holds
 import recortex
 import record_format
 import storage
@@ -50,10 +51,21 @@ CREATE TABLE IF NOT EXISTS invocations(id INTEGER PRIMARY KEY AUTOINCREMENT, pur
 CREATE TABLE IF NOT EXISTS events(eventkey TEXT PRIMARY KEY, source_id TEXT NOT NULL, candidate TEXT NOT NULL,
  review TEXT NOT NULL, body TEXT NOT NULL, payload_hash TEXT NOT NULL, state TEXT NOT NULL,
  account TEXT NOT NULL DEFAULT '', receipt TEXT NOT NULL DEFAULT '{}', reason TEXT NOT NULL DEFAULT '',
- created REAL NOT NULL, updated REAL NOT NULL);
+ created REAL NOT NULL, updated REAL NOT NULL, body_hash TEXT NOT NULL DEFAULT '', words_hash TEXT NOT NULL DEFAULT '',
+ held INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS event_sources(source_id TEXT PRIMARY KEY, eventkey TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS transitions(eventkey TEXT NOT NULL, state TEXT NOT NULL, at REAL NOT NULL);
 """
+# Format 2 added to each event the digests its copies are looked up by and the held mark (copy_of, decision_of).
+FORMAT = "2"
+ADDED = (("body_hash", "TEXT NOT NULL DEFAULT ''"), ("words_hash", "TEXT NOT NULL DEFAULT ''"),
+         ("held", "INTEGER NOT NULL DEFAULT 0"))
+SCHEMA_1 = SCHEMA.replace(", body_hash TEXT NOT NULL DEFAULT '', words_hash TEXT NOT NULL DEFAULT '',\n held INTEGER NOT "
+                          "NULL DEFAULT 0)", ")")
+INDEXES = ("CREATE INDEX IF NOT EXISTS events_body ON events(body_hash)",
+           "CREATE INDEX IF NOT EXISTS events_words ON events(words_hash)")
+# Reasons a format 1 queue kept an event for that are no longer given: back-filled as held.
+EARLIER_HELD = ("sensitive_project",)
 
 
 class StoreError(RuntimeError):
@@ -174,6 +186,32 @@ def held_commands(repo):
     return set(digests)
 
 
+def exact_words(body):
+    """The text of a decision's "Exact words" field: its quoted lines, joined."""
+    fields = dict(record_format.fields(body))
+    return "\n".join(line.lstrip()[1:].lstrip() for line in fields.get("Exact words", "").splitlines()
+                     if line.lstrip().startswith(">"))
+
+
+def _digest(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def copy_digests(kind, body):
+    """(body digest, words digest) of a reviewed body, as its copies are looked up: the body without its eventkey,
+    normalized as GitHub's copy is compared, and for a decision its exact words ("" otherwise)."""
+    plain = recortex.normalize(re.sub(r" eventkey=[0-9a-f]{32}", "", body or "", count=1))
+    words = exact_words(body or "").strip() if kind == "decision" else ""
+    return _digest(plain), _digest(words) if words else ""
+
+
+def _held_before(reason):
+    """True for a reason an event was deferred or discarded with that kept it from posting (HELD_REASONS, earlier
+    ones, and a format 1 discard's "discarded_<reason>")."""
+    reason = reason[len("discarded_"):] if reason.startswith("discarded_") else reason
+    return reason in observer_holds.HELD_REASONS or reason in EARLIER_HELD
+
+
 def _with_key(body, key):
     lines = body.splitlines(keepends=True)
     first = next((n for n, line in enumerate(lines) if line.strip()), None)
@@ -205,6 +243,7 @@ class Store:
         if self.folder is None:
             raise StoreError("missing")
         self.path = os.path.join(self.folder, "pending.sqlite")
+        self.format = None
         if readonly:
             self._read_only()
             return
@@ -268,10 +307,16 @@ class Store:
                     for statement in SCHEMA.split(";"):
                         if statement.strip():
                             self.db.execute(statement)
+                    for statement in INDEXES:
+                        self.db.execute(statement)
                     self.db.executemany("INSERT INTO meta(key,value) VALUES (?,?)",
-                                        [("format", "1"), ("repo", self.repo),
+                                        [("format", FORMAT), ("repo", self.repo),
                                          ("mark", storage.mark(self.path, self.repo))])
                     self._write_held([])  # a new queue holds no command; a missing file later means unknown
+                self.format = FORMAT
+            if self.format == "1":
+                self._migrate()
+            if not initialized:
                 descriptor = os.open(self.folder, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
                 try:
                     os.fsync(descriptor)
@@ -285,20 +330,48 @@ class Store:
             raise
 
     def _validate_existing(self):
+        """Check an existing queue against its format's schema: the current one, or format 1, which a writable open
+        then migrates (_migrate) and a read-only open reads as it is."""
         if [row[0] for row in self.db.execute("PRAGMA quick_check")] != ["ok"]:
             raise StoreError("corrupt")
         actual = dict(self.db.execute("SELECT name,sql FROM sqlite_master WHERE type='table'"))
-        for statement in SCHEMA.split(";"):
+        if "meta" not in actual:
+            raise StoreError("corrupt")
+        meta = dict(self.db.execute("SELECT key,value FROM meta"))
+        version = meta.get("format") if meta.get("format") in ("1", FORMAT) else FORMAT
+        for statement in (SCHEMA_1 if version == "1" else SCHEMA).split(";"):
             if not statement.strip():
                 continue
             expected = re.sub(r"\s+", " ", statement.replace(" IF NOT EXISTS", "")).strip()
             name = expected.split("(", 1)[0].split()[-1]
             if name not in actual or re.sub(r"\s+", " ", actual[name] or "").strip() != expected:
                 raise StoreError("corrupt")
-        meta = dict(self.db.execute("SELECT key,value FROM meta"))
-        if meta != {"format": "1", "repo": self.repo,
+        if version == FORMAT:
+            indexes = dict(self.db.execute("SELECT name,sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"))
+            for statement in INDEXES:
+                expected = statement.replace(" IF NOT EXISTS", "")
+                if re.sub(r"\s+", " ", indexes.get(expected.split()[2]) or "").strip() != expected:
+                    raise StoreError("corrupt")
+        if meta != {"format": version, "repo": self.repo,
                     "mark": storage.mark(self.path, self.repo, create=False, tighten=False)}:
             raise StoreError("identity")
+        self.format = version
+
+    def _migrate(self):
+        """Format 1 to 2 in one transaction: the columns and indexes are added and every event's digests and held
+        mark are back-filled, so that a copy of an earlier event is found as a copy of a new one is."""
+        with self.transaction():
+            for name, kind in ADDED:
+                self.db.execute("ALTER TABLE events ADD COLUMN %s %s" % (name, kind))
+            for statement in INDEXES:
+                self.db.execute(statement)
+            for row in self.db.execute("SELECT eventkey,candidate,reason FROM events").fetchall():
+                candidate = json.loads(row["candidate"])
+                body_hash, words_hash = copy_digests(candidate.get("kind"), candidate.get("body"))
+                self.db.execute("UPDATE events SET body_hash=?,words_hash=?,held=? WHERE eventkey=?",
+                                (body_hash, words_hash, int(_held_before(row["reason"])), row["eventkey"]))
+            self.db.execute("UPDATE meta SET value=? WHERE key='format'", (FORMAT,))
+        self.format = FORMAT
 
     def __enter__(self):
         return self
@@ -545,9 +618,11 @@ class Store:
             if overlap:
                 self._overlap(source_id)
                 return None
-            self.db.execute("INSERT INTO events(eventkey,source_id,candidate,review,body,payload_hash,state,created,updated) "
-                            "VALUES (?,?,?,?,?,?,'ready',?,?)", (key, source_id, canonical(candidate), canonical(review),
-                            posted_body, hashlib.sha256(posted_body.encode("utf-8")).hexdigest(), now, now))
+            body_hash, words_hash = copy_digests(candidate["kind"], body)
+            self.db.execute("INSERT INTO events(eventkey,source_id,candidate,review,body,payload_hash,state,created,updated,"
+                            "body_hash,words_hash) VALUES (?,?,?,?,?,?,'ready',?,?,?,?)",
+                            (key, source_id, canonical(candidate), canonical(review), posted_body,
+                             hashlib.sha256(posted_body.encode("utf-8")).hexdigest(), now, now, body_hash, words_hash))
             self.db.executemany("INSERT INTO event_sources VALUES (?,?)", [(source, key) for source in sources])
             for state in ("candidate", "reviewed", "ready"):
                 self.db.execute("INSERT INTO transitions VALUES (?,?,?)", (key, state, now))
@@ -581,8 +656,40 @@ class Store:
                                ",".join("?" * len(states)), states + (max(1, min(10000, int(limit))),))
         return [self.event(row[0]) for row in rows]
 
+    def copy_of(self, draft):
+        """The newest event, in any state, whose reviewed body `draft` copies (its eventkey aside), or None. Looked up
+        by digest across the whole queue. Raises StoreError when the lookup cannot complete, so that a post that
+        cannot be checked is refused."""
+        return self._lookup("body_hash=?", copy_digests(None, draft)[0])
+
+    def decision_of(self, draft):
+        """The newest decision event with the exact words of `draft`, or None: in any state but discarded, and a
+        discarded one too when it was held (held mark). Raises StoreError as copy_of."""
+        words = exact_words(draft or "").strip()
+        return self._lookup("words_hash=? AND (state!='rejected' OR held=1)", _digest(words)) if words else None
+
+    def _lookup(self, where, digest):
+        if self.format != FORMAT:
+            raise StoreError("lookup_unavailable")  # a format 1 queue, read only: the next writable open migrates it
+        try:
+            row = self.db.execute("SELECT eventkey FROM events WHERE %s ORDER BY created DESC,eventkey LIMIT 1" % where,
+                                  (digest,)).fetchone()
+            return self.event(row[0]) if row else None
+        except (sqlite3.Error, ValueError, TypeError) as error:
+            raise StoreError("lookup_unavailable") from error
+
+    def waiting_for_answer(self):
+        """The events the automatic gate held back for the user's answer (observer_holds.ANSWER_REASONS), oldest
+        first: deferred, and held."""
+        reasons = observer_holds.ANSWER_REASONS
+        rows = self.db.execute("SELECT eventkey FROM events WHERE state='deferred' AND held=1 AND reason IN (%s) "
+                               "ORDER BY created,eventkey LIMIT 100" % ",".join("?" * len(reasons)), reasons)
+        return [self.event(row[0]) for row in rows.fetchall()]
+
     def transition(self, key, state, **fields):
-        if set(fields) - {"account", "receipt", "reason"}:
+        """Move an event on. One deferred or discarded with a reason of observer_holds.HELD_REASONS, or with
+        held=True, is marked held for good."""
+        if set(fields) - {"account", "receipt", "reason", "held"}:
             raise StoreError("invalid_state")
         with self.transaction():
             event = self.event(key)
@@ -599,8 +706,9 @@ class Store:
             receipt = fields.get("receipt", event["receipt"])
             if state == "verified" and (not isinstance(receipt, dict) or not receipt.get("comment_id")):
                 raise StoreError("invalid_receipt")
-            self.db.execute("UPDATE events SET state=?,account=?,receipt=?,reason=?,updated=? WHERE eventkey=?",
-                            (state, account, canonical(receipt), reason, time.time(), key))
+            held = int(bool(event["held"]) or fields.get("held") is True or reason in observer_holds.HELD_REASONS)
+            self.db.execute("UPDATE events SET state=?,account=?,receipt=?,reason=?,updated=?,held=? WHERE eventkey=?",
+                            (state, account, canonical(receipt), reason, time.time(), held, key))
             self.db.execute("INSERT INTO transitions VALUES (?,?,?)", (key, state, time.time()))
             for row in self.db.execute("SELECT source_id FROM event_sources WHERE eventkey=?", (key,)):
                 self._observation_state(row[0], state, reason)

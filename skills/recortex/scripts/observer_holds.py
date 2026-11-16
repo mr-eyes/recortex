@@ -31,6 +31,18 @@ WITHHOLD = {"do not post": "publish", "don't post": "publish", "dont post": "pub
             "do not publish": "publish", "don't publish": "publish", "dont publish": "publish",
             "off the record": "publish"}
 PHRASES.update(WITHHOLD)
+# Every reason an event is kept from posting on its own, in one place. The publisher raises only these for a hold or
+# a held-back event, the worker defers an event with them, and the queue marks an event deferred or discarded with
+# one of them as held, for good, so that a copy of it is never posted around it (observer_store.Store.copy_of):
+# - explicit_hold: a /recortex hold covers the comment (check_action);
+# - withheld: the user kept that session off the record (publication_withheld);
+# - status_change: a change of an earlier memory's status that rests on neither the user's typed words nor the
+#   agent's message to the user;
+# - sensitive_project: the project is marked as handling sensitive material, or its field sheet is not approved.
+# The value says who lifts it: "user", the user's own act (a release); "answer", the user's confirmation of a post.
+HELD_REASONS = {"explicit_hold": "user", "withheld": "user", "status_change": "answer", "sensitive_project": "answer"}
+ANSWER_REASONS = tuple(sorted(reason for reason, who in HELD_REASONS.items() if who == "answer"))
+
 WITHHELD = re.compile(r"(?<![A-Za-z0-9])(?:(?:do not|don't|dont|never)[ \t]+(?:post|record|publish)|off the record)"
                       r"(?![A-Za-z0-9])", re.IGNORECASE)
 

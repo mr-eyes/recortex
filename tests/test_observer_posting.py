@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import unittest
 from unittest import mock
@@ -73,7 +74,9 @@ class ObserverPostingTests(unittest.TestCase):
         with mock.patch.object(observer.recortex, "load_config", return_value=self.config), contextlib.redirect_stdout(out):
             self.assertEqual(0, observer.main(["--repo", fixtures.REPO, "discard", key]), out.getvalue())
         with store.Store(fixtures.REPO, config=self.config, readonly=True) as db:
-            return db.event(key)["reason"]
+            event = db.event(key)
+        self.assertEqual(("rejected", "discarded"), (event["state"], event["reason"]))
+        return event["held"]
 
     def test_discarding_a_withheld_event_does_not_free_its_copy(self):
         # Discarding is allowed and posts nothing; it does not lift the copy check: the same body as the session's
@@ -85,7 +88,7 @@ class ObserverPostingTests(unittest.TestCase):
         with store.Store(fixtures.REPO, config=self.config) as db:
             db.update_holds(lambda holds: holds + [hold])
             body = db.event(self.key)["body"]
-        self.assertEqual("discarded_withheld", self.discard(self.key))
+        self.assertEqual(1, self.discard(self.key))
         result, output = self.post(False, 3, "idea", re.sub(r" eventkey=[0-9a-f]{32}", "", body, count=1))
         self.assertEqual(1, result, output)
         self.assertIn("discarded (event %s)" % self.key, output)
@@ -105,16 +108,128 @@ class ObserverPostingTests(unittest.TestCase):
                 return db.review_complete(source, candidate, {"reservation_id": ident, "accepted": True,
                                                               "candidate_hash": store.candidate_hash(candidate)})
         plain = queue("source9")
-        self.assertEqual("discarded", self.discard(plain))
+        self.assertEqual(0, self.discard(plain))
         result, output = self.post(False, 3, "decision", decision.replace("Strict parser", "Strict reader"))
         self.assertEqual(0, result, output)  # discarded and never held: the session may record it itself
         held = queue("source8")
         with store.Store(fixtures.REPO, config=self.config) as db:
             db.transition(held, "deferred", reason="status_change")
-        self.assertEqual("discarded_status_change", self.discard(held))
+        self.assertEqual(1, self.discard(held))
         result, output = self.post(False, 3, "decision", decision.replace("Strict parser", "Strict quoting"))
         self.assertEqual(1, result, output)
         self.assertIn("discarded (event %s)" % held, output)
+
+    def test_discarding_an_event_under_a_recortex_hold_does_not_free_its_copy(self):
+        # A /recortex hold on the comment's exact command: the event is held whether the worker deferred it first
+        # (explicit_hold marks it held) or it is discarded while still ready (the hold is checked at the discard).
+        import re
+        import observer_holds
+        import observer_publisher
+        second = publisher_fixtures.ObserverPublisherTests._second(self, self.own_idea().replace("quote state", "quote "
+                                                                                                   "tracking"))
+        for key, deferred in ((self.key, False), (second, True)):
+            with store.Store(fixtures.REPO, config=self.config) as db:
+                event = db.event(key)
+                command = __import__("recortex").show_command(observer_publisher._command(fixtures.REPO, event))
+                hold = observer_holds.make_hold({"source_id": "s1", "role": "user", "direct_user": True,
+                                                 "text": "/recortex hold command " + command}, fixtures.REPO, "command",
+                                                command=command)
+                db.update_holds(lambda holds: holds + [hold])
+                if deferred:  # the worker met the hold first, then the user lifted it
+                    db.transition(key, "deferred", reason="explicit_hold")
+                    self.assertEqual(1, db.event(key)["held"])
+                    db.update_holds(lambda holds: observer_holds.release(holds, hold["id"]))
+            self.assertEqual(1, self.discard(key))
+            with store.Store(fixtures.REPO, config=self.config) as db:
+                if not deferred:  # discarded under the hold, which is lifted afterwards
+                    db.update_holds(lambda holds: observer_holds.release(holds, hold["id"]))
+                body = db.event(key)["body"]
+            result, output = self.post(False, 3, "idea", re.sub(r" eventkey=[0-9a-f]{32}", "", body, count=1))
+            self.assertEqual(1, result, output)
+            self.assertIn("discarded (event %s)" % key, output)
+        self.assertEqual([], [args for args in self.calls() if args[:2] == ["issue", "comment"]])
+        result, output = self.post(False, 3, "idea", self.own_idea())
+        self.assertEqual(0, result, output)
+
+    def test_a_copy_is_found_among_more_than_ten_thousand_events(self):
+        # The lookup is by digest over the whole queue, whatever its size: the fixture's event is the newest of
+        # 10,051, and its copy is still refused.
+        import re
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            body = db.event(self.key)["body"]
+            filler = [("%032x" % n, "filler", "{}", "{}", "x", "0" * 64, "rejected", 1.0 + n, 1.0 + n,
+                       store.copy_digests("idea", "filler %d" % n)[0]) for n in range(10050)]
+            with db.transaction():
+                db.db.executemany("INSERT INTO events(eventkey,source_id,candidate,review,body,payload_hash,state,"
+                                  "created,updated,body_hash) VALUES (?,?,?,?,?,?,?,?,?,?)", filler)
+            self.assertEqual(10051, db.db.execute("SELECT COUNT(*) FROM events").fetchone()[0])
+        result, output = self.post(False, 3, "idea", re.sub(r" eventkey=[0-9a-f]{32}", "", body, count=1))
+        self.assertEqual(1, result, output)
+        self.assertIn("already holds this memory (event %s" % self.key, output)
+        self.assertEqual([], [args for args in self.calls() if args[:2] == ["issue", "comment"]])
+
+    def test_an_earlier_queue_is_migrated_and_its_events_found(self):
+        # A format 1 queue: the columns and indexes are added and every event back-filled on the next writable open,
+        # held reasons included; read only, it is read as it is and a lookup on it refuses the post.
+        import re
+        import sqlite3
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            body, path = db.event(self.key)["body"], db.path
+            db.transition(self.key, "deferred", reason="withheld")
+        connection = sqlite3.connect(path)
+        for statement in store.INDEXES:
+            connection.execute("DROP INDEX %s" % statement.split()[5])
+        for name, _ in reversed(store.ADDED):
+            connection.execute("ALTER TABLE events DROP COLUMN %s" % name)
+        connection.execute("UPDATE meta SET value='1' WHERE key='format'")
+        connection.commit()
+        connection.close()
+        copy = re.sub(r" eventkey=[0-9a-f]{32}", "", body, count=1)
+        with store.Store(fixtures.REPO, config=self.config, readonly=True) as db:
+            self.assertEqual("1", db.format)
+            with self.assertRaisesRegex(store.StoreError, "lookup_unavailable"):
+                db.copy_of(copy)
+        result, output = self.post(False, 3, "idea", copy)
+        self.assertEqual(1, result, output)
+        self.assertIn("could not be validated", output)  # the lookup could not complete: refused
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            self.assertEqual(store.FORMAT, db.format)
+            self.assertEqual(1, db.event(self.key)["held"])
+            self.assertEqual(self.key, db.copy_of(copy)["eventkey"])
+        result, output = self.post(False, 3, "idea", copy)
+        self.assertEqual(1, result, output)
+        self.assertIn("already holds this memory (event %s" % self.key, output)
+        self.assertEqual([], [args for args in self.calls() if args[:2] == ["issue", "comment"]])
+
+    def test_a_copy_check_that_cannot_complete_refuses_the_post(self):
+        with mock.patch.object(store.Store, "copy_of", side_effect=store.StoreError("lookup_unavailable")):
+            result, output = self.post(False, 3, "idea", self.own_idea())
+        self.assertEqual(1, result, output)
+        self.assertIn("could not be validated", output)
+        self.assertEqual([], [args for args in self.calls() if args[:2] == ["issue", "comment"]])
+
+    def test_every_reason_that_keeps_an_event_back_marks_it_held(self):
+        # One registry: what the publisher raises for a hold or a held-back event, what the worker defers with, and
+        # what marks an event held are the same set.
+        import inspect
+        import observer_holds
+        import observer_publisher
+        source = inspect.getsource(observer_publisher.held_back) + inspect.getsource(observer_publisher.hold_reason)
+        named = set(re.findall(r'(?:append|return)\("([a-z_]+)"', source))
+        self.assertTrue(named)
+        self.assertLessEqual(named, set(observer_holds.HELD_REASONS))
+        self.assertLessEqual(set(observer_holds.HELD_REASONS), observer_publisher.EVENT_PROBLEMS)
+        for reason in observer_holds.HELD_REASONS:
+            key = publisher_fixtures.ObserverPublisherTests._second(self, self.own_idea().replace(
+                "quote state", "quote " + reason.replace("_", " ")), source="source-" + reason.replace("_", "-"))
+            with store.Store(fixtures.REPO, config=self.config) as db:
+                db.transition(key, "deferred", reason=reason)
+                self.assertEqual(1, db.event(key)["held"], reason)
+                db.transition(key, "ready")
+                self.assertEqual(1, db.event(key)["held"], reason)  # for good
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.transition(self.key, "deferred", reason="main_session")
+            self.assertEqual(0, db.event(self.key)["held"])
 
     def own_idea(self):
         return (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text().replace("open quote", "quote state")

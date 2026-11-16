@@ -400,9 +400,9 @@ def main(argv=None):
                 event = store.event(args.eventkey)
                 if event is None or event["state"] not in ("ready", "deferred"):
                     emit({"code": "event-not-discardable"}); return 1
-                # Dropping an event posts nothing; one that was withheld or held back stays so for its copies.
-                held = observer_publisher.held_reason(store, event, config)
-                store.transition(args.eventkey, "rejected", reason="discarded_" + held if held else "discarded")
+                # Dropping an event posts nothing; one that was held stays marked so, and its copies stay refused.
+                store.transition(args.eventkey, "rejected", reason="discarded",
+                                 held=observer_publisher.kept(store, event, config))
                 emit({"action": "discard", "eventkey": args.eventkey}); return 0
             if args.command == "holds":
                 emit({"holds": store.holds()}); return 0

@@ -19,7 +19,7 @@ import lint_drafts
 import lookup
 import observer_holds
 import observer_runtime
-from observer_store import Store, StoreError, candidate_hash
+from observer_store import Store, StoreError, candidate_hash, exact_words  # noqa: F401 (exact_words: the worker's)
 import recortex
 import record_format
 
@@ -58,10 +58,11 @@ GENERIC_USERS = frozenset(("user", "users", "admin", "root", "ubuntu", "dev", "t
                            "owner", "home", "data", "work", "code", "app"))
 STATUS_LINKS = ("replaces", "instead", "checks")  # checks= answers a question or marks an idea tried
 STATUS_AUTHORITY = ("user", "agent")  # the user's typed words, or the agent's message to the user
-# A problem of the event itself: the event is deferred with this reason and the next one is tried.
-EVENT_PROBLEMS = frozenset(("lint_failed", "invalid_target", "explicit_hold", "status_change", "outbound_markup",
-                            "outbound_mention", "outbound_address", "outbound_reference", "outbound_local",
-                            "payload_changed", "review_changed", "withheld"))
+# A problem of the event itself: the event is deferred with this reason and the next one is tried. Every reason that
+# keeps an event from posting on its own is one (observer_holds.HELD_REASONS); the queue marks such an event held.
+EVENT_PROBLEMS = frozenset(("lint_failed", "invalid_target", "outbound_markup", "outbound_mention", "outbound_address",
+                            "outbound_reference", "outbound_local", "payload_changed",
+                            "review_changed")) | frozenset(observer_holds.HELD_REASONS)
 
 
 def off_repository(target, repo):
@@ -82,58 +83,25 @@ def off_repository(target, repo):
             or not (path.lower() + "/").startswith("/%s/" % repo.lower()))
 
 
-def exact_words(body):
-    """The text of a decision's "Exact words" field: its quoted lines, joined."""
-    fields = dict(record_format.fields(body))
-    return "\n".join(line.lstrip()[1:].lstrip() for line in fields.get("Exact words", "").splitlines()
-                     if line.lstrip().startswith(">"))
-
-
-HELD = ("withheld", "status_change", "sensitive_project")  # why an event was kept from posting on its own
-
-
-def held_reason(store, event, config):
-    """Why this event is kept from posting: the session's withhold, or a reason the automatic gate holds it back
-    (HELD), or "". Recorded when the event is discarded ("discarded_withheld"), so that a copy of it stays refused."""
-    sessions = {item["metadata"].get("session_id") for item in (store.observation(sid) for sid in
-                                                                 event["candidate"]["sources"]) if item}
-    if observer_holds.publication_withheld(store.holds(), store.repo, sessions):
-        return "withheld"
-    if event.get("reason") in HELD:
-        return event["reason"]
-    reasons = held_back(store, event, config)
-    return reasons[0] if reasons else ""
-
-
-def _held_once(event):
-    """True for an event that is, or was when it was discarded, kept from posting (HELD)."""
-    return event["state"] != "rejected" or any(event.get("reason") == "discarded_" + reason for reason in HELD)
+def kept(store, event, config):
+    """True when this event is, or once was, kept from posting on its own: marked held in the queue, or held now by
+    the user (hold_reason) or by the automatic gate (held_back). Recorded when the event is discarded, so that a copy
+    of it stays refused."""
+    return bool(event.get("held")) or bool(hold_reason(store, event)) or bool(held_back(store, event, config))
 
 
 def queued_decision(store, draft):
     """An observer event that already holds the decision in `draft` (the same exact words), or None. A discarded
-    event counts only when it was withheld or held back: then the same decision is not posted around it."""
-    quoted = exact_words(draft).strip()
-    if not quoted:
-        return None
-    for event in store.events(states=["ready", "deferred", "sending", "uncertain", "verified", "rejected"], limit=10000):
-        if (event["candidate"]["kind"] == "decision" and exact_words(event["candidate"]["body"]).strip() == quoted
-                and _held_once(event)):
-            return event
-    return None
+    event counts only when it was held: then the same decision is not posted around it. The whole queue is searched
+    by digest; a search that cannot complete raises StoreError, and the post is refused."""
+    return store.decision_of(draft)
 
 
 def queued_copy(store, draft):
     """An observer event, in any state, whose reviewed body is this draft, its eventkey aside, or None. Such a draft
-    is posted with --eventkey, which keeps the event's confirmation on the user's terminal and the session's
-    withhold; a copy of a discarded event is not posted at all. A rewritten memory is the session's own."""
-    def plain(text):
-        return recortex.normalize(re.sub(r" eventkey=[0-9a-f]{32}", "", text or "", count=1))
-    wanted = plain(draft)
-    for event in store.events(limit=10000):  # every state: a discarded event's copy is refused too
-        if wanted in (plain(event["body"]), plain(event["candidate"]["body"])):
-            return event
-    return None
+    is posted with --eventkey, which keeps the event's holds and the session's withhold; a copy of a discarded event
+    is not posted at all. A rewritten memory is the session's own. Searched as queued_decision is."""
+    return store.copy_of(draft)
 
 
 def register_main(repo, config, issue, kind, comment_id):
@@ -295,7 +263,9 @@ def _command(repo, event):
     return ["issue", "comment", str(event["candidate"]["issue"]), "--repo", repo, "--body-file", "-"]
 
 
-def _hold(store, event, main_session=False):
+def hold_reason(store, event):
+    """The user's own hold on this event's comment, as a reason of observer_holds.HELD_REASONS, or None: a /recortex
+    hold that covers the command (explicit_hold), or the session kept off the record (withheld)."""
     command = recortex.show_command(_command(store.repo, event))
     observation = store.observation(event["source_id"])
     session = observation["metadata"].get("session_id") if observation else None
@@ -303,14 +273,21 @@ def _hold(store, event, main_session=False):
     answer = observer_holds.check_action(holds, store.repo, "Bash", {"command": command},
                                          session_id=session, issue=event["candidate"]["issue"])
     if answer["decision"] == "deny":
-        raise PublishError("explicit_hold")
+        return "explicit_hold"
     # The user asked in a session that its moments not be posted ("don't post", "keep this off the record"): nothing
     # of it posts, the main session's --eventkey included, until the user releases that hold in their own terminal
     # (observer.py release HOLD_ID), which is the later, explicit request.
     sessions = {item["metadata"].get("session_id") for item in (store.observation(sid) for sid in
                                                                  event["candidate"]["sources"]) if item}
     if observer_holds.publication_withheld(holds, store.repo, sessions | {session}):
-        raise PublishError("withheld")
+        return "withheld"
+    return None
+
+
+def _hold(store, event, main_session=False):
+    reason = hold_reason(store, event)
+    if reason:
+        raise PublishError(reason)
 
 
 def _remote_comment(repo, comment_id):
