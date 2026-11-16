@@ -44,8 +44,8 @@ NOTICES = {
 # value in it).
 WAITING = ("recortex observer: %d reviewed memories wait for the user's answer. Each changes the status of an earlier "
            "memory without the user's words or your message to the user. Run observer.py pending --held, and ask the "
-           "user with the multiple-choice question tool, one question per memory that names its short id and shows "
-           "its plain line, with the options Post and Drop. For each Post, run post_verified.py comment --eventkey KEY "
+           "user with the multiple-choice question tool, one question per memory that names its short id and quotes "
+           "its line as pending --held gives it, with the options Post and Drop. For each Post, run post_verified.py comment --eventkey KEY "
            "right after; for each Drop, observer.py discard KEY.")
 # Once, at the next session start after a session switched automatic mode on (the date is the only value in it).
 SWITCHED = ("recortex observer: automatic mode was switched on for this folder on %s from a session; run observer.py "
@@ -239,7 +239,7 @@ def _posted_key(data):
 
 def _grant(store, data, project_root):
     """Before post_verified.py --eventkey K: when K waits for the user's answer and the user answered "Post" to the
-    session's question naming K's short id (observer_sources.answered), a one-time grant for K, which the publisher
+    session's question naming K's short id and quoting its plain line (observer_sources.answered), a one-time grant for K, which the publisher
     consumes. Nothing else is written; without the answer the post is refused (held_unanswered)."""
     key = _posted_key(data)
     if key is None:
@@ -247,7 +247,8 @@ def _grant(store, data, project_root):
     event = store.event(key)
     if event is None or event["state"] not in ("ready", "deferred"):
         return
-    answer = observer_sources.answered(data, project_root, key[:8])
+    line = observer_store.description(event["candidate"]["kind"], event["body"])
+    answer = observer_sources.answered(data, project_root, key[:8], line)
     if answer:
         store.grant_answer(key, answer)
 

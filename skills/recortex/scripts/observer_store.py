@@ -215,6 +215,17 @@ def _held_before(reason):
     return reason in observer_holds.HELD_REASONS or reason in EARLIER_HELD
 
 
+def description(kind, body):
+    """What the session's question about a held event quotes, whitespace normalized: the memory's plain line, or, for
+    a body without one, its kind and the first 120 characters of its first paragraph (the event marker aside)."""
+    line = record_format.plain(body or "", kind)
+    if not line or not line.strip():
+        text = re.sub(r"<!--.*?-->", "", body or "", count=1, flags=re.S)
+        paragraph = next((part for part in re.split(r"\n[ \t]*\n", text) if part.strip()), "")
+        line = "%s: %s" % (kind, " ".join(paragraph.split())[:120])
+    return " ".join(line.split())
+
+
 def _with_key(body, key):
     lines = body.splitlines(keepends=True)
     first = next((n for n, line in enumerate(lines) if line.strip()), None)

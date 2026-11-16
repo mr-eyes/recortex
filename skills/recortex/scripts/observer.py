@@ -123,10 +123,11 @@ def enable(repo, config, mode, yes=False, model=None, root=None, confirm=None, g
     return dict(preview, settings=options, approved=True)
 
 
-HELD_NOTE = ("Ask the user about each with the multiple-choice question tool, one question per memory that names its "
-             "short id, with the options Post and Drop. For each Post, run post_verified.py comment --issue N --kind "
-             "KIND --body-file <its body, from pending --eventkey KEY --show-body> --eventkey KEY; for each Drop, "
-             "observer.py discard KEY. The post needs that answer, given within the last 10 minutes.")
+HELD_NOTE = ("Ask the user about each with the multiple-choice question tool, one question per memory, from the "
+             "template: Memory SHORT (KIND) on #ISSUE: \"LINE\". It would change: CHANGES. Post it, or drop it? Give "
+             "the short id and the line exactly as listed here, and the options Post and Drop. For each Post, run "
+             "post_verified.py comment --issue N --kind KIND --body-file <its body, from pending --eventkey KEY "
+             "--show-body> --eventkey KEY right after; for each Drop, observer.py discard KEY.")
 TERMINAL = ("Run observer.py release HOLD_ID yourself in a separate terminal, outside Claude Code: it asks you to "
             "confirm there. Nothing in a session releases a hold.")
 
@@ -390,7 +391,10 @@ def main(argv=None):
                     emit({"held": [{"eventkey": event["eventkey"], "short": event["eventkey"][:8],
                                     "kind": event["candidate"]["kind"],
                                     "issue": event["candidate"]["issue"], "reason": event["reason"],
-                                    "line": record_format.plain(event["body"], event["candidate"]["kind"])}
+                                    "line": observer_store.description(event["candidate"]["kind"], event["body"]),
+                                    "changes": {key: value for key, value in (record_format.parse_marker(
+                                        record_format.first_lines(event["body"])[0]) or {}).items()
+                                                if key in ("replaces", "instead", "checks")}}
                                    for event in store.waiting_for_answer()],
                           "note": HELD_NOTE}); return 0
                 if args.show_body:

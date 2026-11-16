@@ -37,7 +37,7 @@ Do this at the start of every session and again whenever the context was compact
 3. Read the hub's tables, then the newest comments of the topic issues the current focus touches.
 4. Compare with the working tree and running jobs. Where the record and reality differ, reality wins and the record is corrected with a new comment.
 5. Only then act. State in one line what was read.
-6. With the observer on, list the memories that wait for the user's answer with `observer.py pending --held`. Ask one multiple-choice question per memory that names its short id, with exactly the options "Post" and "Drop". For each "Post", run `post_verified.py comment --eventkey KEY` right after; for each "Drop", run `observer.py discard KEY`. Do the same at the end of a work stretch.
+6. With the observer on, list the memories that wait for the user's answer with `observer.py pending --held`. Ask one multiple-choice question per memory, built from this template with the list's values, the line verbatim: `Memory <short> (<kind>) on #<issue>: "<line>". It would change: <changes>. Post it, or drop it?`, with exactly the options "Post" and "Drop". For each "Post", run `post_verified.py comment --eventkey KEY` right after; for each "Drop", run `observer.py discard KEY`. Do the same at the end of a work stretch.
 
 When GitHub is unreachable, read the newest local snapshot instead and say that it is a copy with its date. Details and the end-of-stretch routine: [references/session-protocol.md](references/session-protocol.md).
 

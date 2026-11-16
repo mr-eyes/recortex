@@ -461,16 +461,21 @@ def _main_record(record, role):
             and isinstance(message.get("content"), list))
 
 
-def answered(data, project_root, short, label="Post", max_bytes=ANSWER_BYTES, seconds=TAIL_SECONDS):
+def answered(data, project_root, short, line, label="Post", max_bytes=ANSWER_BYTES, seconds=TAIL_SECONDS):
     """The id of the user's answer `label` to the newest question about `short` in the main transcript, or None.
 
     The question is an AskUserQuestion call in a main-session assistant record, one of whose questions names `short`
-    and no other short id and offers an option labeled `label`; the answer is the result Claude Code recorded for that
+    and no other short id, quotes `line` (the memory's description, observer_store.description) as it is once
+    whitespace is normalized, so that the user answered about that memory and not about a description the session
+    wrote, and offers an option labeled `label`; the answer is the result Claude Code recorded for that
     call, matched by its id: the record's structured answers, or, for a call of one question, its fixed sentence. A
     later answer of another label to a question about `short` undoes it. A tool result, a page or a subagent cannot
     make such a record; a session that writes the transcript itself can (the documented limit, as for holds). Read as
     capture reads: this project's main transcript only, through checked descriptors, within `max_bytes` and
     `seconds`."""
+    line = " ".join(line.split()) if isinstance(line, str) else ""
+    if not line:
+        return None
     session = data.get("session_id")
     path = approved_path(data.get("transcript_path"), project_root, session)
     if os.path.basename(path) != session + ".jsonl" or os.path.dirname(path) != project_directory(project_root):
@@ -488,15 +493,15 @@ def answered(data, project_root, short, label="Post", max_bytes=ANSWER_BYTES, se
             break
         position += len(chunk)
         buffer += chunk
-        lines = buffer.split(b"\n")
-        buffer = lines.pop()
-        for line in lines:
+        rows = buffer.split(b"\n")
+        buffer = rows.pop()
+        for row in rows:
             if skip:
                 skip = False
                 continue
-            if b"AskUserQuestion" in line and b'"assistant"' in line:
+            if b"AskUserQuestion" in row and b'"assistant"' in row:
                 try:
-                    record = json.loads(line)
+                    record = json.loads(row)
                 except (ValueError, UnicodeError, RecursionError):
                     continue
                 if not _main_record(record, "assistant"):
@@ -512,11 +517,12 @@ def answered(data, project_root, short, label="Post", max_bytes=ANSWER_BYTES, se
                         text = question.get("question")
                         options = question.get("options") if isinstance(question.get("options"), list) else []
                         labels = [o.get("label") for o in options if isinstance(o, dict)]
-                        if isinstance(text, str) and set(SHORT_ID.findall(text)) == {short}:
+                        if (isinstance(text, str) and set(SHORT_ID.findall(text)) == {short}
+                                and line in " ".join(text.split())):
                             asked[block["id"]] = (text, label in labels, len(questions))
-            elif asked and b'"tool_result"' in line and any(key.encode() in line for key in asked):
+            elif asked and b'"tool_result"' in row and any(key.encode() in row for key in asked):
                 try:
-                    record = json.loads(line)
+                    record = json.loads(row)
                 except (ValueError, UnicodeError, RecursionError):
                     continue
                 if not _main_record(record, "user"):

@@ -286,7 +286,9 @@ class ObserverPostingTests(unittest.TestCase):
         listed = json.loads(out.getvalue())
         self.assertEqual([(self.key, "idea", 3, "status_change")],
                          [(item["eventkey"], item["kind"], item["issue"], item["reason"]) for item in listed["held"]])
-        self.assertTrue(listed["held"][0]["line"])
+        import record_format
+        self.assertEqual(" ".join(record_format.plain(body, "idea").split()), listed["held"][0]["line"])
+        self.assertEqual({}, listed["held"][0]["changes"])  # an idea links to nothing it would change
         self.assertIn("multiple-choice question", listed["note"])
         result, output = self.post(False, 3, "idea", re.sub(r" eventkey=[0-9a-f]{32}", "", body, count=1))
         self.assertEqual(1, result, output)
