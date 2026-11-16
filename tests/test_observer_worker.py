@@ -401,6 +401,27 @@ class WorkerTests(unittest.TestCase):
         with store.Store(REPO,config=self.config) as db,patch.object(index,'sync',side_effect=worker.recortex.GhError('offline')) as sync:
             self.assertFalse(REAL_REFRESH(REPO,self.config,db,options));self.assertFalse(db.get_control('sync_ok'))
             self.assertFalse(REAL_REFRESH(REPO,self.config,db,options));self.assertEqual(1,sync.call_count)
+    def test_a_failed_refresh_is_tried_again_soon_and_a_busy_sync_is_waited_for(self):
+        # At session start the brief hook's own sync holds the index: the worker waits for it, and a refresh that
+        # still failed is tried again after worker.SYNC_RETRY seconds rather than after the full interval.
+        options=runtime.settings(self.config)
+        with store.Store(REPO,config=self.config) as db,patch.object(worker.time,'sleep') as sleep, \
+                patch.object(index,'sync',side_effect=[index.SyncBusy('busy'),{'complete':True}]) as sync:
+            self.assertTrue(REAL_REFRESH(REPO,self.config,db,options))
+            self.assertEqual((2,1),(sync.call_count,sleep.call_count))
+        with store.Store(REPO,config=self.config) as db,patch.object(worker.time,'sleep'), \
+                patch.object(index,'sync',side_effect=index.SyncBusy('busy')) as sync:
+            db.set_control('sync_last_attempt',0)
+            self.assertFalse(REAL_REFRESH(REPO,self.config,db,options))
+            self.assertEqual(len(worker.BUSY_WAITS)+1,sync.call_count)
+        self.assertLess(worker.SYNC_RETRY,options['sync_interval_seconds'])
+        with store.Store(REPO,config=self.config) as db,patch.object(index,'sync',return_value={'complete':True}) as sync:
+            db.set_control('sync_last_attempt',time.time()-worker.SYNC_RETRY+5)
+            self.assertFalse(REAL_REFRESH(REPO,self.config,db,options));self.assertEqual(0,sync.call_count)
+            db.set_control('sync_last_attempt',time.time()-worker.SYNC_RETRY-1)
+            self.assertTrue(REAL_REFRESH(REPO,self.config,db,options));self.assertEqual(1,sync.call_count)
+            db.set_control('sync_last_attempt',time.time()-worker.SYNC_RETRY-1)
+            self.assertTrue(REAL_REFRESH(REPO,self.config,db,options));self.assertEqual(1,sync.call_count)
     def test_original_restricted_strings_checked_before_json_escaping(self):
         self.config['restricted_patterns']=[{'pattern':r'^PRIVATE-SAMPLE$','name':'private'}]
         sid=self.capture('PRIVATE-SAMPLE')

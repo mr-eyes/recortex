@@ -477,18 +477,33 @@ def _process(repo, config, project_root=None, invoke_fn=None):
     return dict(report, code="ok")
 
 
+SYNC_RETRY = 30  # seconds before the next worker tries again after a refresh that failed
+BUSY_WAITS = (3, 5, 8)  # seconds to wait for another process's sync (the brief's, at session start) to finish
+
+
 def refresh_record(repo, config, store, options):
-    """Bounded incremental refresh in the worker; hooks never wait on GitHub."""
+    """Bounded incremental refresh in the worker; hooks never wait on GitHub. A refresh that failed is tried again
+    after SYNC_RETRY seconds, not after the full interval, and a sync another process holds (the brief hook's, at
+    session start) is waited for briefly."""
     now = time.time()
-    due = now - store.get_control("sync_last_attempt", 0) >= options["sync_interval_seconds"]
+    ok = store.get_control("sync_ok", False)
+    interval = options["sync_interval_seconds"] if ok else SYNC_RETRY
+    due = now - store.get_control("sync_last_attempt", 0) >= interval
     if not due and not store.get_control("sync_needed", False):
-        return store.get_control("sync_ok", False)
+        return ok
     store.set_control("sync_last_attempt", now)
-    try:
-        result = index.sync(repo, config.get("hub"), timeout=10, deadline=10, log=lambda *args: None)
-        complete = result.get("complete") is True
-    except (index.SyncBusy, index.DeadlineReached, recortex.GhError, OSError, ValueError):
-        complete = False
+    complete = False
+    for wait in BUSY_WAITS + (None,):
+        try:
+            result = index.sync(repo, config.get("hub"), timeout=10, deadline=10, log=lambda *args: None)
+            complete = result.get("complete") is True
+            break
+        except index.SyncBusy:
+            if wait is None:
+                break
+            time.sleep(wait)
+        except (index.DeadlineReached, recortex.GhError, OSError, ValueError):
+            break
     store.set_control("sync_ok", complete)
     if complete:
         store.set_control("sync_needed", False)
