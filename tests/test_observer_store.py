@@ -55,9 +55,10 @@ class ObserverStoreTests(unittest.TestCase):
             key, _, _ = self.ready(db, excerpts=["raw transcript words"])
         with mock.patch.object(observer.recortex, "load_config", return_value={"repo": REPO}), \
                 mock.patch.object(observer.recortex, "allowed_users", return_value={"octocat"}), \
-                mock.patch("sys.stdout"):
+                mock.patch.object(observer, "emit") as emitted:
             self.assertEqual(0, observer.main(["discard", key]))
             self.assertEqual(1, observer.main(["discard", key]))  # only a ready or deferred event
+        self.assertEqual({"code": "event-not-discardable"}, emitted.call_args.args[0])
         with store.Store(REPO, config={}) as db:
             self.assertEqual("rejected", db.event(key)["state"])
             db.db.execute("UPDATE events SET updated=? WHERE eventkey=?", (time.time() - 8 * 86400, key))

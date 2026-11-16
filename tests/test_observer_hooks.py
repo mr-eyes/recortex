@@ -355,7 +355,9 @@ class ObserverHookTests(unittest.TestCase):
         with Store(REPO) as store:
             store.set_control("worker_degraded", "runtime_gate")  # a changed set shows again
         self.assertIn("not yet verified", self.run_hook(event="stop")["systemMessage"])
-        self.assertEqual({}, self.run_hook(event="pre-compact"))  # Claude Code would discard it
+        with Store(REPO) as store:
+            store.set_control("capture_paused", True)  # a new line, which Claude Code would discard at compaction
+        self.assertEqual({}, self.run_hook(event="pre-compact"))
 
     def test_a_failing_queue_is_silent_on_tool_calls_and_shown_at_the_turns_edge(self):
         import fcntl
@@ -425,6 +427,8 @@ class ObserverHookTests(unittest.TestCase):
                 self.assertNotIn("hookSpecificOutput", self.run_hook(event=event), event)
             prompt = hooks.handle("prompt-submit", dict(self.data, prompt="the parser"), self.config, REPO)
             self.assertIn("CONTEXT", prompt["hookSpecificOutput"]["additionalContext"])
+        for event in ("Stop", "SubagentStop", "PreCompact"):  # the second filter, on whatever context reaches it
+            self.assertNotIn("hookSpecificOutput", hooks._output(event, context="CONTEXT"), event)
 
     def test_tool_calls_get_context_only_before_a_holdable_action_and_once_per_selection(self):
         class Empty:
