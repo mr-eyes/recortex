@@ -1,11 +1,18 @@
 """Bounded native transcript pointers. Source contents exist only in the worker's memory."""
 import datetime
+import functools
 import hashlib
 import json
 import os
 import re
 import stat
 import time
+
+try:
+    import grp
+    import pwd
+except ImportError:  # no user database: group write is never accepted
+    grp = pwd = None
 
 MAX_READ = 262144
 MAX_ROWS = 512
@@ -33,6 +40,35 @@ def _boundary(path, folder, source_file=None):
     return "ancestor"
 
 
+def private_group(uid, gid):
+    """True when `gid` is the user private group of `uid`: the owner's primary group, named after the owner, with no
+    member but the owner, and no other user's primary group. Only then is a group-writable folder as private as one
+    without group write. Default Ubuntu makes ~/.claude and ~/.claude/projects 775 in such a group."""
+    if grp is None or pwd is None or type(uid) is not int or type(gid) is not int:
+        return False
+    return _private_group(uid, gid)
+
+
+@functools.lru_cache(maxsize=16)
+def _private_group(uid, gid):
+    try:
+        owner = pwd.getpwuid(uid)
+        group = grp.getgrgid(gid)
+        if gid != owner.pw_gid or group.gr_name != owner.pw_name:
+            return False
+        if any(member != owner.pw_name for member in group.gr_mem):
+            return False
+        return not any(entry.pw_gid == gid and entry.pw_uid != uid for entry in pwd.getpwall())
+    except (KeyError, OverflowError, OSError):
+        return False
+
+
+def _writable(info):
+    """World write, or group write by any group but the owner's private group."""
+    return bool(info.st_mode & stat.S_IWOTH) or bool(info.st_mode & stat.S_IWGRP) and not private_group(
+        info.st_uid, getattr(info, "st_gid", None))
+
+
 def _component_problem(path, info, folder, source_file=None):
     """One ownership/mode policy for preflight and actual source resolution.
 
@@ -40,6 +76,7 @@ An ancestor's owner can replace its children even when group/other write bits
 are clear. Sticky mode protects entries from other users, not from that owner.
 Only sticky ancestors owned by root or the current user, outside the source
 tree, are an exception to the write-bit rule; source directories stay private.
+Group write is accepted only for the owner's user private group (private_group).
 """
     if stat.S_ISLNK(info.st_mode):
         return "source-symlink"
@@ -54,7 +91,7 @@ tree, are an exception to the write-bit rule; source directories stay private.
     trusted_owner = info.st_uid == 0 or hasattr(os, "getuid") and info.st_uid == os.getuid()
     shared_sticky = (not inside and not leaf and trusted_owner and
                      stat.S_ISDIR(info.st_mode) and bool(info.st_mode & stat.S_ISVTX))
-    if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH) and not shared_sticky:
+    if _writable(info) and not shared_sticky:
         return "source-permissions"
     return None
 
@@ -136,7 +173,7 @@ def _read(path, offset, size):
         # validation. A swapped regular file must not acquire source authority.
         if hasattr(os, "getuid") and info.st_uid != os.getuid():
             raise SourceError("source-owner")
-        if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        if _writable(info):
             raise SourceError("source-permissions")
         os.lseek(descriptor, offset, os.SEEK_SET)
         chunks, left = [], size

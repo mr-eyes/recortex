@@ -196,7 +196,8 @@ class SourceTests(unittest.TestCase):
         self.assertNotEqual(original,rows[0]['source_id'])
     def test_preflight_explains_permissions_without_changing_them(self):
         self.path.parent.parent.chmod(0o775)
-        self.assertEqual('source-permissions',sources.preflight(self.project)['code'])
+        with patch.object(sources,'private_group',return_value=False):  # a group shared with another account
+            self.assertEqual('source-permissions',sources.preflight(self.project)['code'])
         self.assertEqual(0o775,self.path.parent.parent.stat().st_mode & 0o777)
     def test_tool_provenance_matches_request_and_refuses_duplicate_ids(self):
         invoke={'message':{'role':'assistant','content':[{'type':'tool_use','id':'call1','name':'Read','input':{'file_path':'notes.txt'}}]}}
