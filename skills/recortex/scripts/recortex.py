@@ -76,8 +76,8 @@ def gh_account(timeout=GH_CHECK_SECONDS):
     Returns (state, login): "missing" (gh cannot be started), "slow" (a call took longer than `timeout` seconds),
     "signed-out" (`gh auth status` fails for github.com), "unnamed" (`gh auth status` passes, but `gh api user` fails
     or gives no login of GitHub's form: a token that is invalid or expired, or GitHub out of reach), or "ready" with the
-    login. Nothing else that gh prints is returned: its output is untrusted, and
-    the login is returned only when it fits LOGIN.
+    login. Nothing else that gh prints is returned: its output is untrusted, and the login is returned only when it
+    fits LOGIN.
     """
     try:
         gh(["auth", "status", "--hostname", "github.com"], timeout=timeout, errors="replace")
@@ -88,7 +88,9 @@ def gh_account(timeout=GH_CHECK_SECONDS):
     except GhError:
         return "signed-out", None
     try:
-        login = gh(["api", "user", "--jq", ".login"], timeout=timeout, errors="replace").strip()
+        # the host named, so that GH_HOST cannot give the login of another host
+        login = gh(["api", "user", "--hostname", "github.com", "--jq", ".login"], timeout=timeout,
+                   errors="replace").strip()
     except GhTimeout:
         return "slow", None
     except GhError:

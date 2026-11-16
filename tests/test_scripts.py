@@ -1883,7 +1883,7 @@ class HookTests(RecordSandbox):
         self.save(data)
         for event in ("session-start", "subagent-start", "prompt-submit", "pre-compact"):
             self.assertEqual(0, self.hook(event).returncode, event)
-        asked = [call for call in self.repo()["log"] if call[:1] == ["auth"] or call[:2] == ["api", "user"]]
+        asked = [call for call in self.repo()["log"] if call[:1] == ["auth"] or call[:1] == ["api"] and "user" in call]
         self.assertEqual([], asked)  # the hooks never ask gh who is signed in
         self.assertTrue(self.repo()["log"])  # while the session start did read GitHub
 
@@ -4033,8 +4033,8 @@ class SetupTests(Sandbox):
         self.assertEqual("ready: gh is signed in to github.com as octocat; Python %d.%d\n" % sys.version_info[:2],
                          result.stdout)
         self.assertEqual("", result.stderr)
-        self.assertEqual([["auth", "status", "--hostname", "github.com"], ["api", "user", "--jq", ".login"]],
-                         self.gh_log())
+        self.assertEqual([["auth", "status", "--hostname", "github.com"],
+                          ["api", "user", "--hostname", "github.com", "--jq", ".login"]], self.gh_log())
         unusual = self.setup_script("preflight", gh=FAKE, env={"FAKE_GH_LOGIN": "Octo-Cat-2"})
         self.assertEqual(0, unusual.returncode, unusual.stdout + unusual.stderr)
         self.assertIn(" as Octo-Cat-2;", unusual.stdout)
