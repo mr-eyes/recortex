@@ -411,6 +411,22 @@ class ObserverHookTests(unittest.TestCase):
         self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
         self.assertNotIn("hookSpecificOutput", self.run_hook(command="python3 -m pytest -q"))
 
+    def test_an_answer_in_a_subagents_transcript_grants_nothing(self):
+        line = "a memory line"
+        question = 'Memory 1f9dd5d6 (idea) on #3: "%s". Post it, or drop it?' % line
+        sub = self.path.parent / "session1" / "subagents"
+        sub.mkdir(parents=True, mode=0o700)
+        path = sub / "agent-a1.jsonl"
+        ask = {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "ask1",
+               "name": "AskUserQuestion", "input": {"questions": [{"question": question, "options": [
+                   {"label": "Post"}, {"label": "Drop"}]}]}}]}}
+        answer = {"type": "user", "toolUseResult": {"answers": {question: "Post"}}, "message": {"role": "user",
+                  "content": [{"type": "tool_result", "tool_use_id": "ask1", "content": "answered"}]}}
+        path.write_text(json.dumps(ask) + "\n" + json.dumps(answer) + "\n")
+        path.chmod(0o600)
+        with self.assertRaises(sources.SourceError):
+            sources.answered({"session_id": "session1", "transcript_path": str(path)}, str(self.project), "1f9dd5d6", line)
+
     def test_plain_phrase_holds_only_this_session(self):
         self.append("Don't push.")
         self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
