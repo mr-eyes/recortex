@@ -24,7 +24,7 @@ A project opts in with a `.recortex.json` file at its root (example: [templates/
 | `banned_words` | Words the linter rejects |
 | `fields` | The field sheet and the sensitive-material marks, written by `setup.py`; see [references/fields.md](references/fields.md) |
 | `board` | `{"owner": ..., "number": ...}`, the private board of the work, written by `board.py setup`; used only as the user approved it; see [references/board.md](references/board.md) |
-| `observer` | Optional local observation, independent review and event publication; separately approved on this machine; see [references/observer.md](references/observer.md) |
+| `observer` | Experimental, off by default: local observation, independent review and event publication, enabled per folder on this machine; see [references/observer.md](references/observer.md) |
 
 The scripts look for this file in one place only: the top of the git checkout that contains the current folder, or the current folder itself outside a checkout. Parent folders are never searched. (`CLAUDE_PROJECT_DIR` is used when set, but Claude Code sets it for hooks, not for commands you run.) So run the scripts from inside the project, or pass `--repo`, and read the first line each script prints, `config: <path>  repo: <owner/name>`, to confirm it is working on the intended repository. If the file is missing, ask the owner for the repository and whether to bootstrap (see below) before writing anything.
 
@@ -42,7 +42,7 @@ When GitHub is unreachable, read the newest local snapshot instead and say that 
 
 With the plugin installed, hooks do part of this for you: at every session start, resume, clear, compaction and fork a record brief (rules, hub, deliverable topics, active issues, issues that need triage, resume block) enters the context, every subagent gets a short brief, user prompts get a one-line reminder when it changed, and compaction is told what to keep. The brief is not the skill: invoke this skill before writing anything to the record. Details, the local index behind the hooks and `compile.py`: [references/hooks-and-index.md](references/hooks-and-index.md).
 
-The optional observer adds task context, durable source pointers and independent review. Only its separately authorized publisher may append reviewed event comments automatically. Check `observer.py status` and `pending`: queued work is not yet in GitHub, source availability is required, and failed runtime isolation checks disable model work. Local explicit holds cover a narrow supported action set; ordinary advice is nonblocking. Enablement, source-lag limits, budgets, holds and recovery: [references/observer.md](references/observer.md).
+The optional observer, experimental and off by default, adds task context, durable source pointers and independent review. Only its publisher may append reviewed event comments on its own, within mechanical limits, at most 25 a day. Check `observer.py status` and `pending`: queued work is not yet in GitHub, source availability is required, and failed runtime isolation checks disable model work. While it is on, post your own memories as usual: each verified post is registered in its queue so that nothing is posted twice. A memory that overturns an earlier one without the user's own words or a command that ran, and anything in a marked project, waits for you. Local explicit holds cover a narrow supported action set; only `observer.py release`, run by the user in a separate terminal, releases one. Enablement, limits, holds and recovery: [references/observer.md](references/observer.md).
 
 ## The model in brief
 
@@ -173,7 +173,7 @@ Why each rule exists, with the Mermaid and GitHub limits: [references/pitfalls.m
 | `index.py` | Local SQLite index of the record: `sync` from GitHub; `query` consistency, impact, recall (what a new memory could link to), mind, timeline, triage, brief | no (reads) |
 | `mind.py` | The mind page: one private local file that tells the project's memory in sentences | no |
 | `hooks.py`, `run_hook.sh` | The four hooks: SessionStart, SubagentStart, UserPromptSubmit, PreCompact; `hooks.py --print` shows the payloads | no |
-| `observer.py`, `observer_hooks.py`, `run_observer_hook.sh` | Optional source queue, bounded independent review, context and explicit holds; `status` and `pending` show progress | approved worker event comments only; `--dry-run` available |
+| `observer.py`, `observer_hooks.py`, `run_observer_hook.sh` | Experimental, off by default: source queue, bounded independent review, context and explicit holds; `status` and `pending` show progress | approved worker event comments only; `--dry-run` available |
 | `setup.py` | `preflight` checks that `gh` runs and is signed in, and the Python version, before the first question; `detect` suggests deliverables and fields from file names (read-only); `apply` makes the setup from confirmed answers; `fields` shows, sets and approves the field sheet | `apply` only, `--dry-run` available |
 | `catchup.py` | `inventory` and `gap` list earlier work (read-only); `event` drafts a reconstructed event comment | no |
 | `compile.py` | The deliverable by section, figure, table and source lists, the dated timeline and a manifest, from the record | no (reads) |

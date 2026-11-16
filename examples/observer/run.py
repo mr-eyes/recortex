@@ -590,7 +590,7 @@ def run_replay():
             "efficacy": {"recording_precision": {"target": 0.98, "measured": None},
                          "meaningful_recall": {"target": 0.90, "measured": None},
                          "advice_relevance": {"target": 0.90, "measured": None},
-                         "status": "pending independent human-labelled live coding and research trials"},
+                         "status": "pending independent human-labeled live coding and research trials"},
             "limitations": ["Synthetic time is not elapsed trial time.",
                             "Scripted selection and review test queue mechanics, not semantic judgment.",
                             "Worker index refresh and context availability are scripted; retrieval is separately exercised.",

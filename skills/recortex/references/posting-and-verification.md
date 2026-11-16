@@ -18,9 +18,7 @@ For a new topic body, a change to the deliverable text, a hub edit, or anything 
 
 Routine result and checkpoint comments need the source check but not always the reviewer; decide by what a wrong post would cost.
 
-In a locally approved observer project, every memory comment instead uses the independent queue review described in [the observer contract](observer.md). Selection and review finish before any new narrative source excerpt is retained.
-
-For such a project, remove memory comments from a `create_issues.py` manifest before running it. The helper refuses the whole manifest before any write when those comments are present. Create their destination issues first, then use `post_verified.py comment --eventkey KEY` with each independently reviewed queue event.
+In a folder where the observer is on, the main session posts its own memories as usual, with `post_verified.py comment` or a `create_issues.py` manifest. Each verified post is registered in the observer's queue, so that the observer does not post the same memory again, and the observer's ready events of that kind for that issue then wait for the main session. A decision the queue already holds is refused with its event key: post that event with `--eventkey KEY`, or discard it. See [the observer contract](observer.md).
 
 ## 3. Lint
 
@@ -64,7 +62,7 @@ The linter does not judge content. It cannot know whether a number is right.
 |---|---|
 | Several new issues and comments | `create_issues.py --manifest <file>` |
 | One comment | `post_verified.py comment --issue N --kind <kind> --body-file <draft>` |
-| A reviewed memory in an approved observer project | `post_verified.py comment --issue N --kind <kind> --body-file <reviewed-draft> --eventkey KEY`; the exact draft and target must match the shared queue |
+| A reviewed observer event, in automatic mode | `post_verified.py comment --issue N --kind <kind> --body-file <reviewed-draft> --eventkey KEY`; the exact draft and target must match the shared queue |
 | Replace an issue body | `post_verified.py body --issue N --kind <kind> --body-file <draft> --expected-body-file <base> --backup <file>`; for a final record it also moves the section labels to follow the headings, and removes one only with `--allow-label-removal` |
 | Convert a record body of an older form, keeping it as a comment | `convert_body.py --issue N --body-file <draft> --expected <saved live body> --note "<when and why>"` |
 | A new resume comment on the hub | `resume_block.py update --file <draft>` |

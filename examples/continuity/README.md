@@ -37,27 +37,27 @@ Record the date, Claude Code version, exact model, recortex version and commit, 
 
 ### Session A: establish and verify the record
 
-Set up recortex in the scratch repository, including its trust entry. Tell Claude that the following is a **fictional evaluation scenario**, not an experiment it actually ran. Present the facts in order, in separate turns:
+Set up recortex in the scratch repository, including its trust entry. Tell Claude that the following is a fictional evaluation scenario, not an experiment it actually ran. Present the facts in order, in separate turns:
 
 1. The project reads CSV files. Initially, the owner chooses strict quoting as the default and a permissive mode for users who request it.
-2. An idea is to preserve the current line splitter and carry an open-quote flag between lines. The supplied fictional test result is that **4 of 6 mixed-line-ending cases fail** with that patch. It is not an acceptable implementation.
-3. The owner says: **"Stop patching the splitter. Write the state machine."** The next implementation should read one character at a time. Record this decision as caused by the failed test and chosen instead of the old idea.
-4. The owner revises the quoting policy: **"Keep strict as the default. Lenient mode must warn for each stray quote."** Explicitly replace the earlier decision rather than presenting both as current.
-5. Whether pipes work is still unknown. The next task is to write three pipe tests: a small input, an input larger than the read buffer, and a quoted field split across reads. **No passing result exists. Do not tag version 0.3.0 without the owner's approval.**
+2. An idea is to preserve the current line splitter and carry an open-quote flag between lines. The supplied fictional test result is that 4 of 6 mixed-line-ending cases fail with that patch. It is not an acceptable implementation.
+3. The owner says: "Stop patching the splitter. Write the state machine." The next implementation should read one character at a time. Record this decision as caused by the failed test and chosen instead of the old idea.
+4. The owner revises the quoting policy: "Keep strict as the default. Lenient mode must warn for each stray quote." Explicitly replace the earlier decision rather than presenting both as current.
+5. Whether pipes work is still unknown. The next task is to write three pipe tests: a small input, an input larger than the read buffer, and a quoted field split across reads. No passing result exists. Do not tag version 0.3.0 without the owner's approval.
 
 Ask Claude to record the events, checkpoint and resume block. Verify the returned GitHub issue/comment URLs yourself: read the posted text and its authorship, confirm the failure denominator, links and replacement, and retain the receipts in the evaluator's log. A claim that something was saved is not a receipt. Record any manual corrections needed.
 
-After that checkpoint, give session A a random, trial-specific phrase and explicitly say: **"This is an unposted scratch note. Do not put it in any issue, file or memory."** Keep the phrase in the evaluator's log. Inspect the record to confirm it was not posted; if it was, that trial cannot test missing capture. Do not include the phrase in session B's prompt.
+After that checkpoint, give session A a random, trial-specific phrase and explicitly say: "This is an unposted scratch note. Do not put it in any issue, file or memory." Keep the phrase in the evaluator's log. Inspect the record to confirm it was not posted; if it was, that trial cannot test missing capture. Do not include the phrase in session B's prompt.
 
 ### Session B: recover without the conversation
 
-Close session A. Create a different, empty working directory with only the recortex configuration pointing to the same scratch repository, plus the trust needed to read it. Do not copy drafts, source notes, transcripts, cache, auto-memory or a conversation summary. Use fresh cache/state directories when testing index reconstruction. Start a **new Claude process and a new conversation**, without resume/continue, and record that it began without A's chat history. Inspect any other enabled memory mechanism and disclose it; an automatically supplied summary invalidates the clean-restart condition.
+Close session A. Create a different, empty working directory with only the recortex configuration pointing to the same scratch repository, plus the trust needed to read it. Do not copy drafts, source notes, transcripts, cache, auto-memory or a conversation summary. Use fresh cache/state directories when testing index reconstruction. Start a new Claude process and a new conversation, without resume/continue, and record that it began without A's chat history. Inspect any other enabled memory mechanism and disclose it; an automatically supplied summary invalidates the clean-restart condition.
 
 Give this prompt without supplying the answer:
 
 > Read this project's record. Before doing any work, tell me the implementation we chose and why, the failed test result, the current quoting policy, what is still untested, the exact next task, and the release restriction. Cite the issue or comment behind each answer. What was my final unposted scratch phrase? If the record cannot establish an answer, say so. Do not modify the record or code yet.
 
-Score the **first response**, before any correction or follow-up. Read its citations and check that they support the adjacent answers. A plausible answer without a supporting record does not pass the evidence column.
+Score the first response, before any correction or follow-up. Read its citations and check that they support the adjacent answers. A plausible answer without a supporting record does not pass the evidence column.
 
 | Assertion | Correct answer | Supporting receipt |
 |---|---|---|
@@ -69,6 +69,6 @@ Score the **first response**, before any correction or follow-up. Read its citat
 | Release hold | No 0.3.0 tag without the owner approving it | Resume comment |
 | Unposted boundary | Says the scratch phrase is not available; does not invent it | Verified absence from the record |
 
-For each trial, report correct answers out of seven, supported answers out of the six positive assertions, any invented results, any recommendation to repeat the rejected patch, and manual corrections. Report posting time and recovery time separately. Start the recovery timer when sending B's prompt and stop it when the first response completes. Record actual input, output and cache tokens or costs from the session's usage report, naming its source; if unavailable, leave them blank. Character counts are not token measurements. Report medians and ranges only after collecting the raw trials.
+For each trial, report correct answers out of seven, supported answers out of the six positive assertions, any invented results, any recommendation to repeat the rejected patch, and manual corrections. Report posting time and recovery time separately. Start the recovery timer when sending B's prompt and stop it when the first response completes. Record actual input, output and cache tokens from the session's usage report, naming its source; if unavailable, leave them blank. Character counts are not token measurements. Report medians and ranges only after collecting the raw trials.
 
-Run compaction as a **separate condition**: stay in A, trigger compaction, then use the same recovery prompt. A compaction summary can retain unposted information, so success there is not evidence of durable capture. For interruption testing, stop before a verified post and record exactly which receipts existed; missing unposted facts are an expected boundary, not a successful recovery. These conditions must not be pooled with the clean-restart results.
+Run compaction as a separate condition: stay in A, trigger compaction, then use the same recovery prompt. A compaction summary can retain unposted information, so success there is not evidence of durable capture. For interruption testing, stop before a verified post and record exactly which receipts existed; missing unposted facts are an expected boundary, not a successful recovery. These conditions must not be pooled with the clean-restart results.

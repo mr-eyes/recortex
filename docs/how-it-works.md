@@ -49,7 +49,7 @@ The rules are in [references/board.md](../skills/recortex/references/board.md).
 
 Compaction replaces a long conversation with a summary. Summaries drop detail and sometimes get numbers and decisions wrong, so this skill never treats one as a source.
 
-Only posted work is durable in GitHub. An abrupt stop before capture or publication can lose a result. The ordinary PreCompact brief supplies instructions; the separately approved [observer](../skills/recortex/references/observer.md) can queue source pointers and review events independently. That queue depends on native source availability and is local until publication. The [continuity demo](../examples/continuity/README.md) tests recorded recovery with a fresh local index and provides a separate protocol for measuring Claude's behavior across sessions.
+Only posted work is durable in GitHub. An abrupt stop before capture or publication can lose a result. The ordinary PreCompact brief supplies instructions; the [observer](../skills/recortex/references/observer.md), experimental and off unless enabled for a folder, can queue source pointers and review events independently. That queue depends on native source availability and is local until publication. The [continuity demo](../examples/continuity/README.md) tests recorded recovery with a fresh local index and provides a separate protocol for measuring Claude's behavior across sessions.
 
 | What | Where it lives | How it comes back |
 |---|---|---|
