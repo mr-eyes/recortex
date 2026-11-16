@@ -214,6 +214,8 @@ def _shell_tokens(command):
             else:
                 word.append(command[i + 1] if i + 1 < n else "")
                 i += 2
+        elif command.startswith("$'", i):
+            i += 1  # ANSI-C quoting: the quoted text follows as a single-quoted word
         elif char == "'":
             close = command.find("'", i + 1)
             if close < 0:
@@ -296,7 +298,11 @@ def _shell_tokens_word(command, i):
 
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.S)
 PREFIXES = {"command": (), "nohup": (), "exec": (), "nice": ("-n",), "time": (), "env": ("-u", "-C", "-S"),
-            "sudo": ("-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T")}
+            "sudo": ("-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"),
+            "timeout": ("-s", "-k", "--signal", "--kill-after"), "stdbuf": ("-i", "-o", "-e"),
+            "xargs": ("-I", "-L", "-n", "-P", "-d", "-E", "-a", "-s"), "doas": ("-u",), "watch": ("-n", "-d")}
+KEYWORDS = ("if", "then", "else", "elif", "do", "while", "until")  # what a compound command's part starts with
+DURATION = re.compile(r"[0-9]+(?:\.[0-9]+)?[smhd]?")  # timeout's first argument
 SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
 # For a line not taken apart: a held action whose words are all in it is taken as present (a wrong denial is
 # acceptable, since the user asked for the hold).
@@ -309,7 +315,7 @@ def _simple(words):
     words = list(words)
     while words:
         head = words[0].rsplit("/", 1)[-1] if words[0] not in ("{", "}") else words[0]
-        if ASSIGNMENT.fullmatch(words[0]) or words[0] in ("{", "}", "!"):
+        if ASSIGNMENT.fullmatch(words[0]) or words[0] in ("{", "}", "!") or words[0] in KEYWORDS:
             words.pop(0)
         elif head in PREFIXES:
             takes = PREFIXES[head]
@@ -318,13 +324,19 @@ def _simple(words):
                 option = words.pop(0)
                 if option in takes and words:
                     words.pop(0)
+            if head == "timeout" and words and DURATION.fullmatch(words[0]):
+                words.pop(0)  # its duration
         else:
             break
     return words
 
 
 def _hits(command, depth=0):
-    """[(action, target repository or None)] of the held actions in a shell line, part by part; raises Unparsed."""
+    """[(action, target repository or None)] of the held actions in a shell line, part by part; raises Unparsed. A
+    part is read for its program (git, gh, find -exec, eval, a shell's -c string), and then by the general rule: a
+    part whose own words include all of a held action's words is that action, whatever program starts it, unless it
+    is that action's known read-only form (_safe). The words inside one quoted argument are one word, so an echo or a
+    commit message that quotes them is not held."""
     words, hits, parts = _shell_tokens(command), [], [[]]
     for word in words:
         if word == ";":
@@ -335,49 +347,116 @@ def _hits(command, depth=0):
         part = _simple(part)
         if not part:
             continue
-        program = part[0].rsplit("/", 1)[-1]
-        if program in SHELLS:
-            script = next((part[n + 1] for n, word in enumerate(part[1:-1], 1)
-                           if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", word)), None)
-            if script is not None:
-                if depth >= 3:
-                    raise Unparsed("depth")
-                try:
-                    hits += _hits(script, depth + 1)
-                except Unparsed:
-                    hits += [(action, None) for action in _worded(script)]
-            continue
-        hits += _part_hits(program, part[1:])
+        found = _dispatch(part, depth)
+        hits += found
+        named = {action for action, _ in found}
+        hits += [(action, _target(part, action)) for action in _token_actions(part)
+                 if action not in named and not _safe(part, action)]
     return hits
+
+
+def _target(part, action):
+    """The repository a gh --repo after the part's gh word names, for a release; else None (this one)."""
+    names = [word.rsplit("/", 1)[-1] for word in part]
+    return _gh_command(part[names.index("gh") + 1:])[0] if action == "gh-release" and "gh" in names else None
+
+
+def _dispatch(part, depth):
+    program = part[0].rsplit("/", 1)[-1]
+    if program == "eval":
+        if depth >= 3:
+            raise Unparsed("depth")
+        try:
+            return _hits(" ".join(part[1:]), depth + 1)
+        except Unparsed:
+            return [(action, None) for action in _worded(" ".join(part[1:]))]
+    if program in SHELLS:
+        script = next((part[n + 1] for n, word in enumerate(part[1:-1], 1)
+                       if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", word)), None)
+        if script is None:
+            return []
+        if depth >= 3:
+            raise Unparsed("depth")
+        try:
+            return _hits(script, depth + 1)
+        except Unparsed:
+            return [(action, None) for action in _worded(script)]
+    return _part_hits(program, part[1:])
+
+
+def _token_actions(part):
+    """The held actions all of whose words are words of this part (a program given by an absolute path counts by its
+    name)."""
+    tokens = set(part) | {word.rsplit("/", 1)[-1] for word in part if word.startswith("/")}
+    return [action for action, needed in ACTION_WORDS.items() if set(needed) <= tokens]
+
+
+READ_RELEASE = ("view", "list", "download", "verify", "verify-asset")
+
+
+def _git_command(args):
+    """(subcommand, its arguments) of git's arguments, its global options and their values left out."""
+    args = list(args)
+    while args and args[0].startswith("-"):
+        option = args.pop(0)
+        if option in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env") and args:
+            args.pop(0)  # its argument; a path that may name this repository: a held action is taken as one
+    return (args[0], args[1:]) if args else ("", [])
+
+
+def _gh_command(args):
+    """(the repository --repo names or None, the other arguments) of gh's arguments."""
+    target, remaining, args = None, [], list(args)
+    while args:
+        word = args.pop(0)
+        if word in ("--repo", "-R") and args:
+            target = args.pop(0)
+        elif word.startswith("--repo="):
+            target = word[len("--repo="):]
+        else:
+            remaining.append(word)
+    return (target if target is None or recortex.valid_repo(target) else None), remaining
+
+
+def _safe(part, action):
+    """True for the held action's own read-only form: git push --dry-run (or -n), git tag with no argument or a
+    listing or verifying option, gh release with no subcommand or view, list, download or verify. The form is read
+    from the action's program on, whatever starts the part."""
+    names = [word.rsplit("/", 1)[-1] for word in part]
+    program = "git" if action in ("git-push", "git-tag") else "gh"
+    if program not in names:
+        return False
+    args = part[names.index(program) + 1:]
+    if program == "git":
+        sub, rest = _git_command(args)
+        if action == "git-push":
+            return sub == "push" and bool({"--dry-run", "-n"} & set(rest))
+        return sub == "tag" and (not rest or bool({"-l", "--list", "-v", "--verify"} & set(rest)))
+    if action == "gh-release":
+        remaining = _gh_command(args)[1]
+        return bool(remaining) and remaining[0] == "release" and (len(remaining) < 2 or remaining[1] in READ_RELEASE)
+    return False
 
 
 def _part_hits(program, args):
     args = list(args)
+    if program == "find":
+        for n, word in enumerate(args):
+            if word in ("-exec", "-execdir", "-ok", "-okdir") and n + 1 < len(args):
+                inner = _simple(args[n + 1:])
+                if inner:
+                    return _part_hits(inner[0].rsplit("/", 1)[-1], inner[1:])
+        return []
     if program == "git":
-        while args and args[0].startswith("-"):
-            option = args.pop(0)
-            if option in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env") and args:
-                args.pop(0)  # its argument; a path that may name this repository: a held action is taken as one
-        action, rest = (args[0], args[1:]) if args else ("", [])
+        action, rest = _git_command(args)
         if action == "push" and not ({"--dry-run", "-n"} & set(rest)):
             return [("git-push", None)]
         if action == "tag" and rest and not ({"-l", "--list", "-v", "--verify"} & set(rest)):
             return [("git-tag", None)]
         return []
     if program == "gh":
-        target, remaining = None, []
-        while args:
-            word = args.pop(0)
-            if word in ("--repo", "-R") and args:
-                target = args.pop(0)
-            elif word.startswith("--repo="):
-                target = word[len("--repo="):]
-            else:
-                remaining.append(word)
-        if target is not None and not recortex.valid_repo(target):
-            target = None  # not a repository name: taken as this one
-        if len(remaining) >= 2 and remaining[0] == "release" and remaining[1] not in (
-                "view", "list", "download", "verify", "verify-asset"):
+        target, remaining = _gh_command(args)
+        if len(remaining) >= 2 and remaining[0] == "release" and remaining[1] not in READ_RELEASE:
             return [("gh-release", target)]
     return []
 
@@ -390,8 +469,10 @@ def _worded(command):
 
 def classify_action(tool_name, tool_input):
     """The held actions a Bash line may take (git-push, git-tag, gh-release), looked for in every simple command of it:
-    split on ; && || | & and newlines, with redirections, leading assignments and the env, sudo, command, nohup, exec,
-    nice and time prefixes left out, and inside bash -c and sh -c strings. A line that is not taken apart (an
+    split on ; && || | & and newlines, with redirections, leading assignments, shell keywords and known wrappers left
+    out, and inside bash -c and sh -c strings, eval and find -exec. Then the general rule: a simple command whose own
+    words include all of a held action's words (git and push) is that action, whatever program starts it, unless it
+    is that action's read-only form (git push --dry-run); the words inside one quoted argument are one word. A line that is not taken apart (an
     unbalanced quote, a substitution, a here-document, a subshell) counts as taking every held action whose words are
     all in it: a wrong denial is acceptable, since the user asked for the hold. `hits` pairs each action with the
     repository a gh --repo names, or None for this one. Exact-command holds compare the whole line. Aliases, scripts

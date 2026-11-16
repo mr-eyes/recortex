@@ -225,6 +225,65 @@ class ObserverHoldTests(unittest.TestCase):
             self.assertEqual("allow", self.check(self.hold(), command)["decision"], command)
         self.assertFalse(holds.check_action([self.hold()], REPO, "Read", {"command": "git push"})["supported"])
 
+    def test_a_held_action_behind_a_wrapper_or_keyword_is_still_held(self):
+        held = ("timeout 120 git push", "timeout -s KILL 60 git push origin main", "stdbuf -oL git push",
+                "if git diff --quiet; then git push; fi", "for r in origin backup; do git push $r; done",
+                "while true; do git push && break; done", "echo origin | xargs git push",
+                "xargs -I{} git push {} < remotes.txt", "find . -maxdepth 0 -exec git push \\;", "eval git push",
+                "eval \"git push\"", "git $'push'")
+        for command in held:
+            self.assertEqual("deny", self.check(self.hold(), command)["decision"], command)
+        for command in ("timeout 60 python3 -m pytest -q", "if git diff --quiet; then echo clean; fi",
+                        "for f in *.py; do python3 -m py_compile $f; done", "find . -name '*.pyc' -exec rm {} \\;",
+                        "eval echo ready", "xargs echo < list.txt"):
+            self.assertEqual("allow", self.check(self.hold(), command)["decision"], command)
+
+    # The review's probe: 40 lines a model writes that push, and 15 ordinary lines (one of them held by the rule).
+    PUSH = ("git push", "git push origin main", "cd repo && git push", "git add -A && git commit -m 'x' && git push",
+            "git -c http.extraHeader=x push", "git --git-dir=.git push", "GIT_DIR=.git git push",
+            "GIT_SSH_COMMAND='ssh -i k' git push", "env -i git push", "sudo -u bob git push", "command git push",
+            "\\git push", "/usr/bin/git push", "g''it pu\\sh", "nohup git push &", "time git push", "exec git push",
+            "git push 2>&1 | tail -5", "git push > /dev/null 2>&1", "bash -c 'git push'", "bash -lc 'cd x; git push'",
+            "sh -c \"git status\ngit push\"", "echo $(git push)", "( git push )", "{ git push; }", "f() { git push; }; f",
+            "git push <<EOF\nx\nEOF", "timeout 120 git push", "timeout -s KILL 60 git push origin main",
+            "stdbuf -oL git push", "if git diff --quiet; then git push; fi",
+            "for r in origin backup; do git push $r; done", "while true; do git push && break; done",
+            "git diff --quiet || git push", "echo origin | xargs git push", "xargs -I{} git push {} < remotes.txt",
+            "find . -maxdepth 0 -exec git push \;", "eval git push", "eval \"git push\"", "git $'push'")
+    ORDINARY = ("git status", "git log --oneline -5", "git diff", "git commit -m 'fix the push button'",
+                "echo 'remember to git push'", "python3 -m pytest -q", "make test", "git push --dry-run", "ls; pwd",
+                "grep -rn push src/", "git fetch && git status", "npm test", "git tag -l", "gh release view v1")
+
+    def test_the_reviews_forty_push_lines_are_held_and_ordinary_lines_run(self):
+        self.assertEqual(40, len(self.PUSH))
+        for command in self.PUSH:
+            self.assertEqual("deny", self.check(self.hold(), command)["decision"], command)
+        for command in self.ORDINARY:
+            self.assertEqual("allow", self.check(self.hold(), command)["decision"], command)
+        # The accepted cost of the general rule: git and push as words of one command.
+        self.assertEqual("deny", self.check(self.hold(), "git log --grep push")["decision"])
+
+    def test_any_command_with_all_of_a_held_actions_words_is_held(self):
+        # No list of wrappers: a part whose own words include all of a held action's words is that action, whatever
+        # starts it, for each kind of hold. Its known read-only form, and the words inside one quoted argument, run.
+        for action, held, running in (
+                ("git-push", ("foo git push", "parallel git push ::: a", "retry git push", "ionice -c3 git push",
+                              "flock /tmp/l git push", "caffeinate git push --force"),
+                 ("timeout 5 git push --dry-run", "retry git push --dry-run", "echo 'git push'",
+                  "git commit -m 'push the parser fix'", "git status", "git log -1")),
+                ("git-tag", ("retry git tag v1.2", "foo git tag -a v2 -m 'release two'", "timeout 9 git tag v1"),
+                 ("git tag", "git tag -l", "git describe --tags", "echo 'git tag'")),
+                ("gh-release", ("retry gh release create v1", "foo gh release delete v1 --yes",
+                                "timeout 30 gh release upload v1 dist.tgz"),
+                 ("gh release view v1", "gh release list", "gh release", "gh pr view 3", "echo 'gh release'"))):
+            for command in held:
+                self.assertEqual("deny", self.check(self.hold(action), command)["decision"], (action, command))
+            for command in running:
+                self.assertEqual("allow", self.check(self.hold(action), command)["decision"], (action, command))
+        # gh --repo naming another repository stays that repository's, whatever starts it.
+        self.assertEqual("allow", self.check(self.hold("gh-release"), "retry gh release create v1 --repo octo-org/another")
+                         ["decision"])
+
     def test_exact_command_hold_can_cover_an_opaque_command_without_guessing(self):
         source = self.source("/recortex hold command python publish.py --release")
         hold = holds.make_hold(source, REPO, "command", command="python publish.py --release")
