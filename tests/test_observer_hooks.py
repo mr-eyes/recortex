@@ -243,6 +243,17 @@ class ObserverHookTests(unittest.TestCase):
             self.assertEqual(1, observer.main(["disable"]))
         self.assertIsNotNone(observer_runtime.stored_approval(str(self.project)))
 
+    def test_a_hold_typed_after_a_damaged_line_still_stops_the_command(self):
+        # A writer stopped mid-line leaves a complete line that is not JSON: capture stays before it, but the search
+        # of the unread tail before a Bash call passes over it, so a hold typed after it still applies.
+        self.append("Run the tests.")
+        self.run_hook(event="stop")
+        with self.path.open("a") as handle:
+            handle.write('{"type": "assistant", "message": {"role": "assistant", "content": "cut\n')
+        self.append("/recortex hold git-push")
+        self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
+        self.assertNotIn("hookSpecificOutput", self.run_hook(command="python3 -m pytest -q"))
+
     def test_plain_phrase_holds_only_this_session(self):
         self.append("Don't push.")
         self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])

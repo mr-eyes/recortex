@@ -138,7 +138,15 @@ def _capture(store, event, data, project_root, repo, config, capture=True, round
     until = time.monotonic() + SCAN_SECONDS
     for _ in range(rounds):
         old = store.cursor(stream)
-        rows, cursor = observer_sources.scan(scan_data, project_root, cursor=old if old is not None else start)
+        try:
+            rows, cursor = observer_sources.scan(scan_data, project_root, cursor=old if old is not None else start)
+        except observer_sources.SourceError as error:
+            if rounds != 1 or str(error) != "source-format":
+                raise
+            # A damaged line (a writer stopped mid-line): capture stays where it is, and the search of the tail below
+            # passes over that line, so a hold typed after it still applies, or the command waits (stale).
+            cursor = old if old is not None else start
+            break
         # Holds are saved first; a crash can repeat an idempotent control, but must
         # never advance a cursor past a hold that has not been compiled.
         found = _controls(store, rows, project_root, repo, config)
