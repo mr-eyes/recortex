@@ -108,7 +108,8 @@ def observer_comment(args, draft, repo, config):
                     return None
                 # A copy of a queued event goes through that event, so that its holds, the session's withhold and
                 # the user's answer to a held-back one apply; a memory the session writes itself still posts.
-                held = observer_publisher.queued_copy(store, draft) or observer_publisher.queued_decision(store, draft)
+                held = (observer_publisher.queued_copy(store, draft) or observer_publisher.queued_decision(store, draft)
+                        or store.held_change_of(draft))
                 if held is not None and held["state"] == "rejected":
                     print("not posted: this copies a memory of the observer's that was discarded (event %s). A copy "
                           "of a queued memory is posted only through its event; write the memory in your own words "
@@ -132,8 +133,9 @@ def observer_comment(args, draft, repo, config):
                 observer_publisher._bound(event, store)
         # The main session, after its own review: it may post a deferred event, and the daily cap of automatic
         # comments is not its. An event the automatic gate held back (a change of status that rests on neither the
-        # user's words nor the agent's message, a confidentiality doubt) it posts on the user's answer to its
-        # question at a session start or a pause (observer.py pending --held); the user's own holds still bind.
+        # user's words nor the agent's message) it posts on the user's "Post" answer to its question at a session
+        # start or a pause (observer.py pending --held), which the hook turns into a one-time grant; the user's own
+        # holds still bind.
         result = observer_publisher.publish(repo, args.eventkey, config, dry_run=args.dry_run, main_session=True)
     except observer_store.StoreError as error:
         if not args.eventkey and error.reason == "missing":

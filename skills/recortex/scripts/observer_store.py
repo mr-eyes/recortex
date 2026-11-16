@@ -683,6 +683,28 @@ class Store:
         words = exact_words(draft or "").strip()
         return self._lookup("words_hash=? AND (state!='rejected' OR held=1)", _digest(words)) if words else None
 
+    def held_change_of(self, draft):
+        """A held event still waiting (ready or deferred) that changes the status of a memory `draft` changes too (the
+        same replaces=, instead= or checks= target), or None: a rewrite of it goes through that event's question, as
+        a copy does. Raises StoreError as copy_of."""
+        marker = record_format.parse_marker(record_format.first_lines(draft or "")[0]) or {}
+        targets = {target for key, target in record_format.links(marker) if key in ("replaces", "instead", "checks")}
+        if not targets:
+            return None
+        if self.format != FORMAT:
+            raise StoreError("lookup_unavailable")
+        try:
+            rows = self.db.execute("SELECT eventkey,body FROM events WHERE state IN ('ready','deferred') AND held=1 "
+                                   "ORDER BY created DESC,eventkey LIMIT 1000").fetchall()
+        except sqlite3.Error as error:
+            raise StoreError("lookup_unavailable") from error
+        for row in rows:
+            theirs = record_format.parse_marker(record_format.first_lines(row["body"])[0]) or {}
+            if targets & {target for key, target in record_format.links(theirs)
+                          if key in ("replaces", "instead", "checks")}:
+                return self.event(row["eventkey"])
+        return None
+
     def _lookup(self, where, digest):
         if self.format != FORMAT:
             raise StoreError("lookup_unavailable")  # a format 1 queue, read only: the next writable open migrates it

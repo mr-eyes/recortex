@@ -339,6 +339,23 @@ class ObserverPostingTests(unittest.TestCase):
             self.assertTrue(db.take_grant(other))
             self.assertFalse(db.grant_answer(self.key, "toolu_01two"))  # the same answer never grants a memory twice
 
+    def test_a_rewrite_of_a_held_change_of_status_goes_through_its_question(self):
+        body = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text()
+        held = body.replace("-08:00 -->", "-08:00 replaces=9001 -->")
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.capture([self.metadata("source3")])
+            candidate = {"kind": "idea", "issue": 3, "body": held, "sources": ["source3"]}
+            ident = db.reserve_invocation("reviewer")
+            db.complete_invocation(ident, True, output_hash=store.candidate_hash(candidate))
+            key = db.review_complete("source3", candidate, {"reservation_id": ident, "accepted": True,
+                                                            "candidate_hash": store.candidate_hash(candidate)})
+            db.transition(key, "deferred", reason="status_change")
+        rewrite = held.replace("It is a small patch", "It is a very small patch")
+        result, output = self.post(False, 3, "idea", rewrite)
+        self.assertEqual(1, result, output)
+        self.assertIn("--eventkey %s" % key, output)
+        self.assertEqual([], [args for args in self.calls() if args[:2] == ["issue", "comment"]])
+
     def test_a_grant_is_consumed_once_and_only_by_the_post(self):
         # The grant is taken at the last step before the send: a refusal before it (here a pause) leaves it, and a
         # second held event's post needs its own.
