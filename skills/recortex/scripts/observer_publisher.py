@@ -100,6 +100,18 @@ def queued_decision(store, draft):
     return None
 
 
+def queued_copy(store, draft):
+    """An observer event whose reviewed body is this draft, its eventkey aside, or None. Such a draft is posted with
+    --eventkey, which keeps the event's confirmation on the user's terminal and the session's withhold."""
+    def plain(text):
+        return recortex.normalize(re.sub(r" eventkey=[0-9a-f]{32}", "", text or "", count=1))
+    wanted = plain(draft)
+    for event in store.events(states=["ready", "deferred", "sending", "uncertain", "verified"], limit=10000):
+        if wanted in (plain(event["body"]), plain(event["candidate"]["body"])):
+            return event
+    return None
+
+
 def register_main(repo, config, issue, kind, comment_id):
     """Record a memory the main session posted itself in the observer's queue; the keys of the events it sets
     aside are returned."""

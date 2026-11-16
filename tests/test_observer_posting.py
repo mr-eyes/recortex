@@ -49,6 +49,24 @@ class ObserverPostingTests(unittest.TestCase):
             self.assertEqual("verified", db.event(self.key)["state"])
             self.assertEqual([], db.pending())
 
+    def test_a_copy_of_a_queued_event_posts_only_through_that_event(self):
+        # The same reviewed body with its eventkey dropped, posted as the session's own memory, would pass around the
+        # event's confirmation and the session's withhold: it is refused and named. A rewritten memory still posts.
+        import re
+        import observer_holds
+        hold = observer_holds.make_hold({"source_id": "s1", "role": "user", "direct_user": True, "text": "off the record"},
+                                        fixtures.REPO, "publish", scope={"session_id": "session1"})
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.update_holds(lambda holds: holds + [hold])
+            body = db.event(self.key)["body"]
+        for copy in (re.sub(r" eventkey=[0-9a-f]{32}", "", body, count=1), body):
+            result, output = self.post(False, 3, "idea", copy)
+            self.assertEqual(1, result, output)
+            self.assertIn("--eventkey %s" % self.key, output)
+        self.assertEqual([], [args for args in self.calls() if args[:2] == ["issue", "comment"]])
+        result, output = self.post(False, 3, "idea", self.own_idea())
+        self.assertEqual(0, result, output)
+
     def own_idea(self):
         return (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text().replace("open quote", "quote state")
 
@@ -82,7 +100,7 @@ class ObserverPostingTests(unittest.TestCase):
                                                               "candidate_hash": store.candidate_hash(candidate)})
         result, output = self.post(False, 3, "decision", decision.replace("2026-03", "2026-04"))
         self.assertEqual(1, result, output)
-        self.assertIn("already holds this decision (event %s" % held, output)
+        self.assertIn("already holds this memory (event %s" % held, output)
         self.assertEqual([], self.calls())
 
     def terminal(self, answer):

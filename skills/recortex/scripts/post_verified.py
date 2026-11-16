@@ -108,9 +108,11 @@ def observer_comment(args, draft, repo, config):
             if not args.eventkey:
                 if not approved:
                     return None
-                held = observer_publisher.queued_decision(store, draft)
+                # A copy of a queued event goes through that event, so that its confirmation on the user's terminal
+                # and the session's withhold apply; a memory the session writes itself still posts.
+                held = observer_publisher.queued_copy(store, draft) or observer_publisher.queued_decision(store, draft)
                 if held is not None:
-                    print("not posted: the observer's queue already holds this decision (event %s, %s). Post that "
+                    print("not posted: the observer's queue already holds this memory (event %s, %s). Post that "
                           "event with --eventkey %s, or discard it with observer.py discard %s, so that it is not "
                           "recorded twice." % (held["eventkey"], held["state"], held["eventkey"], held["eventkey"]))
                     return 1
