@@ -443,6 +443,25 @@ class ObserverHookTests(unittest.TestCase):
         for command in ("git status", "git status 2>&1; git log -1"):
             self.assertNotIn("hookSpecificOutput", self.run_hook(command=command), command)
 
+    def test_a_sessions_first_prompt_before_its_transcript_is_nothing_yet(self):
+        # Claude Code writes the transcript after the first UserPromptSubmit hook: nothing to capture yet, no notice,
+        # nothing degraded. A hold typed in that prompt applies at the next scan, before any Bash call.
+        path = self.path.parent / "session2.jsonl"
+        data = dict(self.data, session_id="session2", transcript_path=str(path), prompt="Don't push.")
+        said = hooks.handle("prompt-submit", data, self.config, REPO).get("systemMessage", "")
+        self.assertNotIn(hooks.NOTICES["source"], said)
+        self.assertNotIn(hooks.NOTICES["capture"], said)
+        with Store(REPO) as store:
+            self.assertFalse(store.get_control("hook_degraded"))
+        path.write_text(json.dumps({"type": "user", "userType": "external",
+                                    "message": {"role": "user", "content": "Don't push."}}) + "\n")
+        path.chmod(0o600)
+        result = hooks.handle("pre-tool", dict(data, tool_name="Bash", tool_input={"command": "git push"}), self.config,
+                              REPO)
+        self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"])
+        gone = dict(self.data, session_id="session3", transcript_path=str(self.path.parent / "session3.jsonl"))
+        self.assertIn("transcript sources are unavailable", hooks.handle("stop", gone, self.config, REPO)["systemMessage"])
+
     def test_plain_phrase_holds_only_this_session(self):
         self.append("Don't push.")
         self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])

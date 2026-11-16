@@ -445,7 +445,10 @@ def _handle(event, data, config, repo, decision):
             if paused:
                 notices.append("paused")
             stale = False
-            if event in observer_sources.EVENTS:
+            transcript = data.get("transcript_path")
+            if event == "UserPromptSubmit" and isinstance(transcript, str) and not os.path.lexists(transcript):
+                pass  # a session's first prompt: Claude Code writes the transcript after this hook. Nothing yet.
+            elif event in observer_sources.EVENTS:
                 try:
                     controlled, incomplete, refused, unproven, stale = _capture(
                         store, event, data, project_root, repo, config, capture=not paused,
