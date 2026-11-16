@@ -45,7 +45,9 @@ OUTSIDE = re.compile(r"\]:|//|\\\\|(?i:www\.)|(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z
 # owner/repo#123 and owner/repo@<sha> link, and can notify, another repository; user@<sha> names a fork's commit.
 CROSS = re.compile(r"(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:#[0-9]+|@[0-9a-fA-F]{7,40}\b)")
 FORK = re.compile(r"(?<![A-Za-z0-9_.-])([A-Za-z0-9-]+)@[0-9a-fA-F]{7,40}\b")
-MARKUP = re.compile(r"!\[|<(?!/?(?:details|summary)>|!-- ghim:event )[A-Za-z!/?]")
+# Checked on the body without its first-line event marker: any other HTML comment, a second marker included, can
+# carry text that GitHub does not show.
+MARKUP = re.compile(r"!\[|<(?!/?(?:details|summary)>)[A-Za-z!/?]")
 STATUS_LINKS = ("replaces", "instead", "checks")  # checks= answers a question or marks an idea tried
 STATUS_AUTHORITY = ("user", "command")
 # A problem of the event itself: the event is deferred with this reason and the next one is tried.
@@ -97,6 +99,18 @@ def register_main(repo, config, issue, kind, comment_id):
         return store.register_main(issue, kind, comment_id)
 
 
+def _without_marker(body):
+    """The body without its event marker, when the first line is exactly one clean marker; else the body unchanged."""
+    lines = body.split("\n")
+    first = next((n for n, line in enumerate(lines) if line.strip()), None)
+    if first is not None:
+        line = lines[first].strip()
+        if (record_format.parse_marker(line) and line.count("<") == 1 and line.count(">") == 1
+                and line.count("--") == 2):
+            return "\n".join(lines[:first] + lines[first + 1:])
+    return body
+
+
 def status_change(body):
     """True for a memory that changes what an earlier one means: a correction, or a replaces=, instead= or checks= key
     (checks= closes a question or marks an idea tried)."""
@@ -111,20 +125,22 @@ def outbound_problem(body, repo, status_ok=False):
     repository on github.com. None when the body passes."""
     if status_change(body) and not status_ok:
         return "status_change"
-    if MARKUP.search(body):
+    if MARKUP.search(_without_marker(body)):
         return "outbound_markup"
-    if MENTION.search(body):
+    # GitHub decodes entities (&#64;, &commat;, &#47;) before it looks for mentions and links, so both forms are checked.
+    texts = (body, html.unescape(body))
+    if any(MENTION.search(text) for text in texts):
         return "outbound_mention"
-    targets = ADDRESS.findall(body) + LINK_TARGET.findall(body) + REFERENCE.findall(body)
+    targets = [target for text in texts for target in ADDRESS.findall(text) + LINK_TARGET.findall(text) + REFERENCE.findall(text)]
     if any(off_repository(target, repo) for target in targets):
         return "outbound_address"
     # Every address left is this repository's; the event marker is the record's own.
-    rest = ADDRESS.sub(" ", body).replace("<!-- ghim:event ", "<!-- ")
-    if OUTSIDE.search(rest):
+    rests = [ADDRESS.sub(" ", text).replace("<!-- ghim:event ", "<!-- ", 1) for text in texts]
+    if any(OUTSIDE.search(rest) for rest in rests):
         return "outbound_address"
     owner = repo.split("/")[0].lower()
-    if (any((first + "/" + second).lower() != repo.lower() for first, second in CROSS.findall(rest))
-            or any(user.lower() != owner for user in FORK.findall(rest))):
+    if any(any((first + "/" + second).lower() != repo.lower() for first, second in CROSS.findall(rest))
+           or any(user.lower() != owner for user in FORK.findall(rest)) for rest in rests):
         return "outbound_reference"
     return None
 

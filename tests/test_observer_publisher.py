@@ -116,6 +116,26 @@ class ObserverPublisherTests(unittest.TestCase):
         for text in same:
             self.assertIsNone(publisher.outbound_problem("Plain text " + text, repo), text)
 
+    def test_a_mention_written_as_an_entity_waits(self):
+        idea = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text()
+        for mention in ("&#64;hubot", "&commat;hubot", "&#x40;hubot"):
+            body = idea.replace("**What it would take:** A flag", "**What it would take:** Ask %s. A flag" % mention)
+            self.assertEqual("outbound_mention", publisher.outbound_problem(body, fixtures.REPO), mention)
+        for text in ("see &#47;&#47;collector.example.test", "data&#58;text/html,x", "other-org/other-repo&#35;12"):
+            body = idea.replace("**What it would take:** A flag", "**What it would take:** %s. A flag" % text)
+            self.assertIn(publisher.outbound_problem(body, fixtures.REPO), ("outbound_address", "outbound_reference"), text)
+
+    def test_only_the_first_line_may_be_an_html_comment(self):
+        idea = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text()
+        self.assertIsNone(publisher.outbound_problem(idea, fixtures.REPO))
+        marker = idea.splitlines()[0]
+        hidden = {"a second marker": idea + "\n" + marker + "\n",
+                  "another comment": idea + "\n<!-- hidden text -->\n",
+                  "an unterminated comment": idea + "\n<!-- hidden text\n",
+                  "a marker that closes early": idea.replace(" -->", "--><img src=x -->", 1)}
+        for case, body in hidden.items():
+            self.assertEqual("outbound_markup", publisher.outbound_problem(body, fixtures.REPO), case)
+
     def test_change_of_status_without_the_users_words_or_a_command_waits_for_the_main_session(self):
         idea = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text()
         data = self.state()
