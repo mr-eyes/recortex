@@ -24,6 +24,7 @@ A project opts in with a `.recortex.json` file at its root (example: [templates/
 | `banned_words` | Words the linter rejects |
 | `fields` | The field sheet and the sensitive-material marks, written by `setup.py`; see [references/fields.md](references/fields.md) |
 | `board` | `{"owner": ..., "number": ...}`, the private board of the work, written by `board.py setup`; used only as the user approved it; see [references/board.md](references/board.md) |
+| `observer` | Optional local observation, independent review and event publication; separately approved on this machine; see [references/observer.md](references/observer.md) |
 
 The scripts look for this file in one place only: the top of the git checkout that contains the current folder, or the current folder itself outside a checkout. Parent folders are never searched. (`CLAUDE_PROJECT_DIR` is used when set, but Claude Code sets it for hooks, not for commands you run.) So run the scripts from inside the project, or pass `--repo`, and read the first line each script prints, `config: <path>  repo: <owner/name>`, to confirm it is working on the intended repository. If the file is missing, ask the owner for the repository and whether to bootstrap (see below) before writing anything.
 
@@ -40,6 +41,8 @@ Do this at the start of every session and again whenever the context was compact
 When GitHub is unreachable, read the newest local snapshot instead and say that it is a copy with its date. Details and the end-of-stretch routine: [references/session-protocol.md](references/session-protocol.md).
 
 With the plugin installed, hooks do part of this for you: at every session start, resume, clear, compaction and fork a record brief (rules, hub, deliverable topics, active issues, issues that need triage, resume block) enters the context, every subagent gets a short brief, user prompts get a one-line reminder when it changed, and compaction is told what to keep. The brief is not the skill: invoke this skill before writing anything to the record. Details, the local index behind the hooks and `compile.py`: [references/hooks-and-index.md](references/hooks-and-index.md).
+
+The optional observer adds task context, durable source pointers and independent review. Only its separately authorized publisher may append reviewed event comments automatically. Check `observer.py status` and `pending`: queued work is not yet in GitHub, source availability is required, and failed runtime isolation checks disable model work. Local explicit holds cover a narrow supported action set; ordinary advice is nonblocking. Enablement, source-lag limits, budgets, holds and recovery: [references/observer.md](references/observer.md).
 
 ## The model in brief
 
@@ -92,10 +95,10 @@ The plain line, links, Evidence and folds in full: [references/issue-model.md](r
 
 ### Change the deliverable text
 
-1. Fetch the topic body to a file and edit it in place: the new text replaces the old, with no folded block, date or note of what changed. Text that leaves the deliverable is deleted, and a section with no text left is deleted with its heading.
-2. `python3 ${CLAUDE_SKILL_DIR}/scripts/post_verified.py body --issue N --kind final-record --body-file <draft> --backup <file> --dry-run` first, then without `--dry-run`. It refuses an issue labeled `hub` or `active`, or one without `final-record`; it lints, replaces the body, adds and removes section labels so they follow the headings, and reads both back. It prints `removes: <labels>` and removes a section label only with `--allow-label-removal`, so check that each of those sections left on purpose.
+1. Fetch the topic body to an unchanged base file, copy it to a separate draft and edit the draft: the new text replaces the old, with no folded block, date or note of what changed. Text that leaves the deliverable is deleted, and a section with no text left is deleted with its heading.
+2. `python3 ${CLAUDE_SKILL_DIR}/scripts/post_verified.py body --issue N --kind final-record --body-file <draft> --expected-body-file <base> --backup <file> --dry-run` first, then without `--dry-run`. It refuses a changed live body: read the current text and merge your changes before retrying; never refresh only the base to bypass the check. Coordinate one writer per issue because the check and write are separate GitHub calls. It refuses an issue labeled `hub` or `active`, or one without `final-record`; it lints, replaces the body, adds and removes section labels so they follow the headings, and reads both back. It prints `removes: <labels>` and removes a section label only with `--allow-label-removal`, so check that each of those sections left on purpose.
 3. Make sure the dated comment that motivated the change is posted. That comment and GitHub's edit history are the trail.
-4. Update the hub only when the list of issues per section changes (same command with `--kind hub`). When a whole topic leaves the deliverable, replace its body with one line saying that the topic is not part of the deliverable and why, pointing to the dated comment that records the reason (`post_verified.py body --issue N --kind generic --body-file <line> --backup <file>`, since a final record needs a section), remove its section labels and `final-record` with `gh issue edit N --remove-label <label>`, remove its rows from the hub, and close it as not planned (`gh issue close N --reason "not planned"`), or label it `active` if work on it continues.
+4. Update the hub only when the list of issues per section changes (same command with `--kind hub`). When a whole topic leaves the deliverable, replace its body with one line saying that the topic is not part of the deliverable and why, pointing to the dated comment that records the reason (`post_verified.py body --issue N --kind generic --body-file <line> --expected-body-file <base> --backup <file>`, since a final record needs a section), remove its section labels and `final-record` with `gh issue edit N --remove-label <label>`, remove its rows from the hub, and close it as not planned (`gh issue close N --reason "not planned"`), or label it `active` if work on it continues.
 5. Never edit a posted comment. Post a correction comment that links to the one it corrects.
 
 ### Bounded task
@@ -120,7 +123,7 @@ When the plugin arrives in a project with months of work, or after a stretch wit
 
 ### Bulk work with the agents
 
-The plugin's agents work one tier below the main session, which stays the only writer to GitHub: `record-drafter` drafts bodies in batches of about four issues to files only; `record-reviewer` reviews drafts (read-only by instruction), per batch and across all bodies; `record-auditor` checks the record for drift, untriaged issues and new deliverable signals at the end of a stretch, before a release or before compiling. Batch workflow: [references/migration.md](references/migration.md); audit: [references/session-protocol.md](references/session-protocol.md).
+The plugin's agents work one tier below the main session: `record-drafter` drafts bodies in batches of about four issues to files only; `record-reviewer` reviews drafts (read-only by instruction), per batch and across all bodies; `record-auditor` checks the record for drift, untriaged issues and new deliverable signals at the end of a stretch, before a release or before compiling. These agents never publish. The main session writes mutable record state; the separately approved observer publisher may only append reviewed event comments. Batch workflow: [references/migration.md](references/migration.md); audit: [references/session-protocol.md](references/session-protocol.md).
 
 ### The board and the sub-issues
 
@@ -170,6 +173,7 @@ Why each rule exists, with the Mermaid and GitHub limits: [references/pitfalls.m
 | `index.py` | Local SQLite index of the record: `sync` from GitHub; `query` consistency, impact, recall (what a new memory could link to), mind, timeline, triage, brief | no (reads) |
 | `mind.py` | The mind page: one private local file that tells the project's memory in sentences | no |
 | `hooks.py`, `run_hook.sh` | The four hooks: SessionStart, SubagentStart, UserPromptSubmit, PreCompact; `hooks.py --print` shows the payloads | no |
+| `observer.py`, `observer_hooks.py`, `run_observer_hook.sh` | Optional source queue, bounded independent review, context and explicit holds; `status` and `pending` show progress | approved worker event comments only; `--dry-run` available |
 | `setup.py` | `preflight` checks that `gh` runs and is signed in, and the Python version, before the first question; `detect` suggests deliverables and fields from file names (read-only); `apply` makes the setup from confirmed answers; `fields` shows, sets and approves the field sheet | `apply` only, `--dry-run` available |
 | `catchup.py` | `inventory` and `gap` list earlier work (read-only); `event` drafts a reconstructed event comment | no |
 | `compile.py` | The deliverable by section, figure, table and source lists, the dated timeline and a manifest, from the record | no (reads) |

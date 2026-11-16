@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "simulated_days": 60,
+  "start": "2026-01-01T12:00:00+00:00",
+  "domains": {
+    "coding": {
+      "routine": "Opened the reader file and checked formatting; no behavior changed.",
+      "checkpoint": "The pipe reader work is paused with three conformance cases still open.",
+      "decision": "Keep strict quoting as the default; document every lenient-mode warning.",
+      "replacement": "Keep strict quoting and require a warning with the input line and column.",
+      "failure": "The pipe reader conformance command failed on four of six mixed-ending cases.",
+      "unsupported": "The reader now passes every possible input; no command was run."
+    },
+    "research": {
+      "routine": "Opened the analysis notes and adjusted their heading spacing.",
+      "checkpoint": "The assay comparison is paused with three sensitivity analyses still open.",
+      "decision": "Report the prespecified assay comparison and retain all stated exclusions.",
+      "replacement": "Report the prespecified comparison and show a sensitivity analysis for exclusions.",
+      "failure": "The assay validation command failed on four of six control samples.",
+      "unsupported": "The assay effect is established for every population; no validation was run."
+    }
+  },
+  "schedule": {
+    "decision_days": [1, 30],
+    "checkpoint_interval": 5,
+    "failure_days": [10, 35],
+    "unsupported_days": [17, 47],
+    "extract_interrupt_day": 8,
+    "review_interrupt_day": 15,
+    "publication_interrupt_day": 20,
+    "stale_context_day": 22,
+    "fork_day": 12,
+    "backlog_day": 40,
+    "backlog_routine_sources": 24,
+    "backlog_meaningful_sources": 8,
+    "budget_day": 41,
+    "mutated_source_day": 50,
+    "hold_day": 5,
+    "release_day": 30
+  }
+}

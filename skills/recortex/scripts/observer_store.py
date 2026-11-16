@@ -1,0 +1,550 @@
+"""Private pending observations and publication receipts, separate from the disposable index.
+
+SQLite transactions keep source cursors with metadata. Raw evidence is accepted
+only with a completed independent review, bound to the exact candidate. No
+operation in this module contacts GitHub or executes source text.
+"""
+
+import contextlib
+import hashlib
+import json
+import math
+import os
+import re
+import sqlite3
+import time
+from urllib.parse import quote
+
+import recortex
+import lint_drafts
+import record_format
+import storage
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+
+DEFAULT_BYTES = 128 * 1024 * 1024
+DEFAULT_PENDING = 10000
+TERMINAL = frozenset(("verified", "ignored", "rejected"))
+STATES = frozenset(("observed", "candidate", "reviewed", "ready", "sending", "verified",
+                    "deferred", "ignored", "rejected", "uncertain"))
+TRANSITIONS = {"ready": {"sending", "deferred", "rejected"},
+               "sending": {"verified", "uncertain"}, "uncertain": {"verified"},
+               "deferred": {"ready", "rejected"}, "reviewed": {"ready", "deferred", "rejected"}}
+SOURCE_FIELDS = frozenset(("source_id", "session_id", "role", "event_type", "path", "offset", "end",
+                           "sha256", "content_sha256", "observed_at"))
+SOURCE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}")
+KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
+HEX = re.compile(r"[0-9a-f]{64}")
+EVENT_KEY = re.compile(r"[0-9a-f]{32}")
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS controls(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS cursors(stream TEXT PRIMARY KEY, position INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS observations(source_id TEXT PRIMARY KEY, metadata TEXT NOT NULL,
+ state TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', created REAL NOT NULL, updated REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS invocations(id INTEGER PRIMARY KEY AUTOINCREMENT, purpose TEXT NOT NULL,
+ created REAL NOT NULL, completed REAL, success INTEGER, output_hash TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS events(eventkey TEXT PRIMARY KEY, source_id TEXT NOT NULL, candidate TEXT NOT NULL,
+ review TEXT NOT NULL, body TEXT NOT NULL, payload_hash TEXT NOT NULL, state TEXT NOT NULL,
+ account TEXT NOT NULL DEFAULT '', receipt TEXT NOT NULL DEFAULT '{}', reason TEXT NOT NULL DEFAULT '',
+ created REAL NOT NULL, updated REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS event_sources(source_id TEXT PRIMARY KEY, eventkey TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS transitions(eventkey TEXT NOT NULL, state TEXT NOT NULL, at REAL NOT NULL);
+"""
+
+
+class StoreError(RuntimeError):
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__("observer store unavailable: " + reason)
+
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+
+
+def candidate_hash(candidate):
+    return hashlib.sha256(canonical(candidate).encode("utf-8")).hexdigest()
+
+
+def _id(value):
+    if not isinstance(value, str) or not SOURCE_ID.fullmatch(value):
+        raise StoreError("invalid_source")
+    return value
+
+
+def _reason(value):
+    if not isinstance(value, str) or not KEY.fullmatch(value):
+        raise StoreError("invalid_reason")
+    return value
+
+
+def event_key(repo, sources):
+    return hashlib.sha256(canonical([repo.lower(), sorted(set(sources))]).encode("utf-8")).hexdigest()[:32]
+
+
+@contextlib.contextmanager
+def _exclusive_lock(folder, name, wait=0):
+    if fcntl is None:
+        raise StoreError("locking_unavailable")
+    path = os.path.join(folder, name)
+    if os.path.lexists(path):
+        storage.check_path(path, "file")
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        if not storage.same_file(path, os.fstat(descriptor)):
+            raise StoreError("changed")
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as error:
+                if time.monotonic() >= deadline:
+                    raise StoreError("publisher_busy" if not wait else "store_busy") from error
+                time.sleep(0.01)
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _with_key(body, key):
+    lines = body.splitlines(keepends=True)
+    first = next((n for n, line in enumerate(lines) if line.strip()), None)
+    if first is None:
+        raise StoreError("invalid_candidate")
+    marker = record_format.parse_marker(lines[first].strip())
+    if not marker or ("eventkey" in marker and marker["eventkey"] != key):
+        raise StoreError("invalid_candidate")
+    if "eventkey" not in marker:
+        line = lines[first].rstrip("\r\n")
+        lines[first] = line[:-4] + " eventkey=" + key + " -->\n"
+    return "".join(lines)
+
+
+class Store:
+    def __init__(self, repo, create=True, max_bytes=DEFAULT_BYTES, max_pending=DEFAULT_PENDING, config=None, readonly=False):
+        if not recortex.valid_repo(repo):
+            raise StoreError("invalid_repository")
+        self.repo = repo.lower()
+        self.readonly = readonly
+        create = create and not readonly
+        self.config = recortex.load_config() if config is None else config
+        self.max_bytes = min(DEFAULT_BYTES, max(1, int(max_bytes)))
+        self.max_pending = min(DEFAULT_PENDING, max(1, int(max_pending)))
+        self.db = None
+        self.folder = storage.folder(storage.state_top(), storage.repo_folder(self.repo), "observer", create=create,
+                                     tighten=not readonly)
+        if self.folder is None:
+            raise StoreError("missing")
+        self.path = os.path.join(self.folder, "pending.sqlite")
+        if readonly:
+            self._read_only()
+            return
+        with _exclusive_lock(self.folder, "initialization.lock", wait=1):
+            self._initialize(create)
+
+    def _read_only(self):
+        before = storage.check_path(self.path, "file")
+        if not before:
+            raise StoreError("missing")
+        self._check_paths()
+        try:
+            self.db = sqlite3.connect("file:" + quote(self.path, safe="/") + "?mode=ro", uri=True,
+                                      timeout=0.2, isolation_level=None)
+            if not storage.same_file(self.path, before):
+                raise StoreError("changed")
+            self.identity = before
+            self.db.row_factory = sqlite3.Row
+            self.db.execute("PRAGMA query_only=ON")
+            self._validate_existing()
+        except sqlite3.Error as error:
+            self.close()
+            raise StoreError("corrupt") from error
+        except BaseException:
+            self.close()
+            raise
+
+    def _initialize(self, create):
+        exists = storage.check_path(self.path, "file")
+        if not exists and not create:
+            raise StoreError("missing")
+        if not exists:
+            try:
+                descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                                     getattr(os, "O_NOFOLLOW", 0), 0o600)
+                os.close(descriptor)
+            except FileExistsError:
+                storage.check_path(self.path, "file")
+        self._check_paths()
+        try:
+            before = storage.check_path(self.path, "file")
+            self.db = sqlite3.connect(self.path, timeout=0.2, isolation_level=None)
+            if not storage.same_file(self.path, before):
+                raise StoreError("changed")
+            self.identity = before
+            self.db.row_factory = sqlite3.Row
+            # Existing stores are validated before any potentially mutating pragma
+            # or schema statement. Missing tables are corruption, never an empty queue.
+            initialized = self.db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            if initialized:
+                self._validate_existing()
+            elif exists:
+                raise StoreError("corrupt")
+            self.db.execute("PRAGMA journal_mode=DELETE")
+            self.db.execute("PRAGMA synchronous=EXTRA")
+            self.db.execute("PRAGMA secure_delete=ON")
+            self.db.execute("PRAGMA foreign_keys=ON")
+            if not initialized:
+                with self.transaction():
+                    for statement in SCHEMA.split(";"):
+                        if statement.strip():
+                            self.db.execute(statement)
+                    self.db.executemany("INSERT INTO meta(key,value) VALUES (?,?)",
+                                        [("format", "1"), ("repo", self.repo),
+                                         ("mark", storage.mark(self.path, self.repo))])
+                descriptor = os.open(self.folder, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+        except (sqlite3.Error, OSError) as error:
+            self.close()
+            raise StoreError("corrupt" if isinstance(error, sqlite3.DatabaseError) else "storage") from error
+        except BaseException:
+            self.close()
+            raise
+
+    def _validate_existing(self):
+        if [row[0] for row in self.db.execute("PRAGMA quick_check")] != ["ok"]:
+            raise StoreError("corrupt")
+        actual = dict(self.db.execute("SELECT name,sql FROM sqlite_master WHERE type='table'"))
+        for statement in SCHEMA.split(";"):
+            if not statement.strip():
+                continue
+            expected = re.sub(r"\s+", " ", statement.replace(" IF NOT EXISTS", "")).strip()
+            name = expected.split("(", 1)[0].split()[-1]
+            if name not in actual or re.sub(r"\s+", " ", actual[name] or "").strip() != expected:
+                raise StoreError("corrupt")
+        meta = dict(self.db.execute("SELECT key,value FROM meta"))
+        if meta != {"format": "1", "repo": self.repo,
+                    "mark": storage.mark(self.path, self.repo, create=False, tighten=False)}:
+            raise StoreError("identity")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def close(self):
+        if self.db is not None:
+            self.db.close()
+            self.db = None
+
+    def _check_paths(self):
+        storage.check_path(self.folder)
+        storage.check_path(self.path, "file")
+        if getattr(self, "identity", None) and not storage.same_file(self.path, self.identity):
+            raise StoreError("changed")
+        for suffix in ("-journal", "-wal", "-shm"):
+            if os.path.lexists(self.path + suffix):
+                storage.check_path(self.path + suffix, "file")
+
+    @contextlib.contextmanager
+    def transaction(self):
+        if self.readonly:
+            raise StoreError("read_only")
+        self._check_paths()
+        try:
+            self.db.execute("BEGIN IMMEDIATE")
+            yield
+            pages = self.db.execute("PRAGMA page_count").fetchone()[0]
+            size = self.db.execute("PRAGMA page_size").fetchone()[0]
+            if pages * size > self.max_bytes:
+                raise StoreError("capacity")
+            self.db.execute("COMMIT")
+        except BaseException as error:
+            if self.db.in_transaction:
+                self.db.execute("ROLLBACK")
+            if isinstance(error, sqlite3.Error):
+                raise StoreError("storage") from error
+            raise
+
+    def get_control(self, key, default=None):
+        _reason(key)
+        row = self.db.execute("SELECT value FROM controls WHERE key=?", (key,)).fetchone()
+        return json.loads(row[0]) if row else default
+
+    def set_control(self, key, value):
+        _reason(key)
+        payload = canonical(value)
+        if len(payload.encode("utf-8")) > 1024 * 1024:
+            raise StoreError("capacity")
+        with self.transaction():
+            self.db.execute("INSERT OR REPLACE INTO controls VALUES (?,?)", (key, payload))
+
+    def policy(self):
+        return self.get_control("settings", {})
+
+    def cursor(self, stream):
+        row = self.db.execute("SELECT position FROM cursors WHERE stream=?", (_id(stream),)).fetchone()
+        return row[0] if row else None
+
+    def capture(self, observations, stream=None, cursor=None, expected_cursor=None):
+        if not isinstance(observations, list) or len(observations) > 1000:
+            raise StoreError("invalid_source")
+        if stream is not None:
+            _id(stream)
+            if isinstance(cursor, bool) or not isinstance(cursor, int) or cursor < 0:
+                raise StoreError("invalid_cursor")
+        prepared = []
+        for metadata in observations:
+            if not isinstance(metadata, dict) or set(metadata) - SOURCE_FIELDS:
+                raise StoreError("raw_source_refused")
+            source = _id(metadata.get("source_id"))
+            for key, value in metadata.items():
+                if key in ("offset", "end", "observed_at"):
+                    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                        raise StoreError("invalid_source")
+                elif not isinstance(value, str) or len(value) > (4096 if key == "path" else 256):
+                    raise StoreError("invalid_source")
+            for key in ("sha256", "content_sha256"):
+                if key in metadata and not HEX.fullmatch(metadata[key]):
+                    raise StoreError("invalid_source")
+            prepared.append((source, canonical(metadata)))
+        now = time.time()
+        with self.transaction():
+            if stream is not None and self.cursor(stream) != expected_cursor:
+                raise StoreError("cursor_changed")
+            pending = self.db.execute("SELECT COUNT(*) FROM observations WHERE state NOT IN ('verified','ignored','rejected')").fetchone()[0]
+            for source, metadata in prepared:
+                old = self.db.execute("SELECT metadata FROM observations WHERE source_id=?", (source,)).fetchone()
+                if old:
+                    before = json.loads(old[0])
+                    after = json.loads(metadata)
+                    before.pop("observed_at", None)
+                    after.pop("observed_at", None)
+                    if before.get("content_sha256") and (before.get("content_sha256"), before.get("role")) == \
+                            (after.get("content_sha256"), after.get("role")):
+                        # A native record copied into a fork retains its source ID.
+                        # Preserve the original pointer instead of re-reviewing or
+                        # overwriting frozen evidence with a new session wrapper.
+                        continue
+                    if before != after:
+                        raise StoreError("source_changed")
+                    continue
+                if pending >= self.max_pending:
+                    raise StoreError("capacity")
+                self.db.execute("INSERT INTO observations VALUES (?,?,'observed','',?,?)", (source, metadata, now, now))
+                pending += 1
+            if stream is not None:
+                if expected_cursor is not None and cursor < expected_cursor:
+                    raise StoreError("cursor_regressed")
+                self.db.execute("INSERT OR REPLACE INTO cursors VALUES (?,?)", (stream, cursor))
+        return [source for source, _ in prepared]
+
+    def observation(self, source_id):
+        row = self.db.execute("SELECT * FROM observations WHERE source_id=?", (_id(source_id),)).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["metadata"] = json.loads(item["metadata"])
+        return item
+
+    def pending(self, limit=100):
+        rows = self.db.execute("SELECT source_id FROM observations WHERE state NOT IN ('verified','ignored','rejected') "
+                               "ORDER BY created,source_id LIMIT ?", (max(1, min(10000, int(limit))),))
+        return [self.observation(row[0]) for row in rows]
+
+    def reserve_invocation(self, purpose, limit=60, window_seconds=86400):
+        _reason(purpose)
+        now = time.time()
+        with self.transaction():
+            window = max(86400, min(168 * 3600, int(window_seconds)))
+            count = self.db.execute("SELECT COUNT(*) FROM invocations WHERE created>?", (now - window,)).fetchone()[0]
+            if count >= min(60, max(0, int(limit))):
+                return None
+            return self.db.execute("INSERT INTO invocations(purpose,created) VALUES (?,?)", (purpose, now)).lastrowid
+
+    def complete_invocation(self, ident, success, output_hash=""):
+        if output_hash and not HEX.fullmatch(output_hash):
+            raise StoreError("invalid_review")
+        with self.transaction():
+            row = self.db.execute("SELECT completed FROM invocations WHERE id=?", (ident,)).fetchone()
+            if row is None or row[0] is not None:
+                raise StoreError("invalid_review")
+            self.db.execute("UPDATE invocations SET completed=?,success=?,output_hash=? WHERE id=?",
+                            (time.time(), int(success is True), output_hash, ident))
+
+    def _observation_state(self, source_id, state, reason=""):
+        if state not in STATES or self.observation(source_id) is None:
+            raise StoreError("invalid_state")
+        self.db.execute("UPDATE observations SET state=?,reason=?,updated=? WHERE source_id=?",
+                        (state, reason, time.time(), source_id))
+
+    def defer(self, source_id, reason):
+        with self.transaction():
+            self._observation_state(source_id, "deferred", _reason(reason))
+
+    def _overlap(self, source_id):
+        existing = self.db.execute("SELECT eventkey FROM event_sources WHERE source_id=?", (source_id,)).fetchone()
+        if existing:
+            self.db.execute("UPDATE observations SET reason='source_overlap' WHERE source_id=?", (source_id,))
+        else:
+            self._observation_state(source_id, "deferred", "source_overlap")
+
+    def mark_handled(self, source_id, state="ignored"):
+        if state not in ("ignored", "rejected"):
+            raise StoreError("invalid_state")
+        with self.transaction():
+            self._observation_state(source_id, state)
+
+    def review_complete(self, source_id, candidate, review):
+        _id(source_id)
+        if not isinstance(candidate, dict) or set(candidate) - {"kind", "issue", "body", "sources", "excerpts"}:
+            raise StoreError("invalid_candidate")
+        sources = candidate.get("sources")
+        if not isinstance(sources, list) or not sources or len(sources) > 64:
+            raise StoreError("invalid_candidate")
+        sources = sorted({_id(source) for source in sources})
+        if source_id not in sources or any(self.observation(source) is None for source in sources):
+            raise StoreError("missing_source")
+        if candidate.get("kind") not in record_format.MEMORY_TYPES:
+            raise StoreError("invalid_candidate")
+        issue = candidate.get("issue")
+        if isinstance(issue, bool) or not isinstance(issue, int) or issue < 1:
+            raise StoreError("invalid_candidate")
+        body = candidate.get("body")
+        if not isinstance(body, str) or len(body) > recortex.BODY_LIMIT:
+            raise StoreError("invalid_candidate")
+        excerpts = candidate.get("excerpts", [])
+        if not isinstance(excerpts, list) or any(not isinstance(x, str) for x in excerpts) or sum(map(len, excerpts)) > 48000:
+            raise StoreError("invalid_candidate")
+        restricted = lint_drafts.lint_text(body + "\n" + "\n".join(excerpts), kind="generic", config=self.config)
+        if any(f.level == "error" and f.code in ("secret", "restricted") for f in restricted):
+            raise StoreError("restricted")
+        if not isinstance(review, dict) or review.get("candidate_hash") != candidate_hash(candidate):
+            raise StoreError("review_changed")
+        if review.get("accepted") is not True:
+            self.mark_handled(source_id, "rejected")
+            return None
+        key = event_key(self.repo, sources)
+        posted_body = _with_key(body, key)
+        now = time.time()
+        with self.transaction():
+            invocation = self.db.execute("SELECT * FROM invocations WHERE id=?", (review.get("reservation_id"),)).fetchone()
+            if invocation is None or invocation["purpose"] not in ("review", "reviewer") or invocation["success"] != 1 \
+                    or invocation["output_hash"] != review["candidate_hash"]:
+                raise StoreError("invalid_review")
+            existing = self.event(key)
+            if existing:
+                if candidate_hash(existing["candidate"]) == candidate_hash(candidate):
+                    return key
+                self._overlap(source_id)
+                return None
+            overlap = self.db.execute("SELECT eventkey FROM event_sources WHERE source_id IN (%s)" % ",".join("?" * len(sources)), sources).fetchone()
+            if overlap:
+                self._overlap(source_id)
+                return None
+            self.db.execute("INSERT INTO events(eventkey,source_id,candidate,review,body,payload_hash,state,created,updated) "
+                            "VALUES (?,?,?,?,?,?,'ready',?,?)", (key, source_id, canonical(candidate), canonical(review),
+                            posted_body, hashlib.sha256(posted_body.encode("utf-8")).hexdigest(), now, now))
+            self.db.executemany("INSERT INTO event_sources VALUES (?,?)", [(source, key) for source in sources])
+            for state in ("candidate", "reviewed", "ready"):
+                self.db.execute("INSERT INTO transitions VALUES (?,?,?)", (key, state, now))
+            for source in sources:
+                self._observation_state(source, "ready")
+        return key
+
+    def event(self, key):
+        if not isinstance(key, str) or not EVENT_KEY.fullmatch(key):
+            raise StoreError("invalid_event")
+        row = self.db.execute("SELECT * FROM events WHERE eventkey=?", (key,)).fetchone()
+        if row is None:
+            return None
+        value = dict(row)
+        for name in ("candidate", "review", "receipt"):
+            value[name] = json.loads(value[name])
+        return value
+
+    def review_valid(self, event):
+        review = event.get("review", {})
+        row = self.db.execute("SELECT purpose,success,output_hash FROM invocations WHERE id=?",
+                              (review.get("reservation_id"),)).fetchone()
+        return (row is not None and row["purpose"] in ("review", "reviewer") and row["success"] == 1
+                and row["output_hash"] == review.get("candidate_hash") == candidate_hash(event["candidate"]))
+
+    def events(self, states=None, limit=100):
+        states = tuple(states or sorted(STATES))
+        if any(state not in STATES for state in states):
+            raise StoreError("invalid_state")
+        rows = self.db.execute("SELECT eventkey FROM events WHERE state IN (%s) ORDER BY created,eventkey LIMIT ?" %
+                               ",".join("?" * len(states)), states + (max(1, min(10000, int(limit))),))
+        return [self.event(row[0]) for row in rows]
+
+    def transition(self, key, state, **fields):
+        if set(fields) - {"account", "receipt", "reason"}:
+            raise StoreError("invalid_state")
+        with self.transaction():
+            event = self.event(key)
+            if event is None or state not in TRANSITIONS.get(event["state"], set()):
+                raise StoreError("invalid_transition")
+            account = fields.get("account", event["account"])
+            if account and (not isinstance(account, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", account)):
+                raise StoreError("invalid_account")
+            if event["account"] and event["account"] != account:
+                raise StoreError("account_changed")
+            reason = fields.get("reason", "")
+            if reason:
+                _reason(reason)
+            receipt = fields.get("receipt", event["receipt"])
+            if state == "verified" and (not isinstance(receipt, dict) or not receipt.get("comment_id")):
+                raise StoreError("invalid_receipt")
+            self.db.execute("UPDATE events SET state=?,account=?,receipt=?,reason=?,updated=? WHERE eventkey=?",
+                            (state, account, canonical(receipt), reason, time.time(), key))
+            self.db.execute("INSERT INTO transitions VALUES (?,?,?)", (key, state, time.time()))
+            for row in self.db.execute("SELECT source_id FROM event_sources WHERE eventkey=?", (key,)):
+                self._observation_state(row[0], state, reason)
+
+    def holds(self):
+        return self.get_control("holds", [])
+
+    def save_holds(self, holds):
+        if not isinstance(holds, list):
+            raise StoreError("invalid_holds")
+        self.set_control("holds", holds)
+
+    def update_holds(self, transform):
+        with self.transaction():
+            changed = transform(self.holds())
+            if not isinstance(changed, list) or len(canonical(changed).encode("utf-8")) > 1024 * 1024:
+                raise StoreError("invalid_holds")
+            self.db.execute("INSERT OR REPLACE INTO controls VALUES ('holds',?)", (canonical(changed),))
+        return changed
+
+    def status(self):
+        return {"observations": dict(self.db.execute("SELECT state,COUNT(*) FROM observations GROUP BY state")),
+                "events": dict(self.db.execute("SELECT state,COUNT(*) FROM events GROUP BY state")),
+                "invocations_24h": self.db.execute("SELECT COUNT(*) FROM invocations WHERE created>?", (time.time() - 86400,)).fetchone()[0],
+                "bytes": os.path.getsize(self.path), "max_bytes": self.max_bytes, "max_pending": self.max_pending}
+
+    def expire_handled(self, days=7):
+        cutoff = time.time() - max(1, min(7, int(days))) * 86400
+        with self.transaction():
+            rows = self.db.execute("SELECT eventkey,candidate FROM events WHERE state IN ('verified','ignored','rejected') AND updated<?", (cutoff,)).fetchall()
+            for row in rows:
+                candidate = json.loads(row["candidate"])
+                if candidate.pop("excerpts", None) is not None:
+                    # Keep the original reviewed hash in review; verified receipts remain immutable.
+                    self.db.execute("UPDATE events SET candidate=? WHERE eventkey=?", (canonical(candidate), row["eventkey"]))
+        return len(rows)
+
+    @contextlib.contextmanager
+    def publication_lock(self):
+        with _exclusive_lock(self.folder, "publication.lock"):
+            yield

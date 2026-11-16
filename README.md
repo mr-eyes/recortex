@@ -7,9 +7,11 @@
 
 <p align="center">Project memory that survives every session.</p>
 
-recortex is a Claude Code plugin. It keeps what a project knows in GitHub issues, not in a chat: what was found,
-what was decided and why, what failed, and the current text of the paper, release notes or report. A new session, or
-one whose context was compacted, starts from that record.
+recortex is a Claude Code plugin. It keeps findings, decisions, failures and deliverable text in GitHub issues.
+New and compacted sessions start from that record.
+
+Posted work is recoverable from GitHub. The optional observer reviews queued source pointers for publication,
+with separate approval and a runtime check. Queued work depends on its transcript and is not yet in GitHub.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works-dark.svg">
@@ -18,12 +20,13 @@ one whose context was compacted, starts from that record.
 
 ## What you get
 
-- A session that starts where the last one stopped. A short brief of the record opens every session and every subagent.
+- A session that starts from the last recorded state. A short brief of the record opens every session and every subagent.
 - A record you can read on GitHub. One pinned hub, one issue per topic, and a dated memory for each result, decision, failure, idea and question.
 - The mind page. One private local page that tells the memory in sentences: where things stand, how each thread got there, what went wrong, what is settled, what is open.
 - The finished work, compiled. Topic bodies hold the deliverable's current text, so the paper or the release notes are assembled from the issues.
 - Helpers that know your field. A short field sheet tells every subagent what counts as proof in your work and what must never be written down.
 - A board that keeps itself current. Sub-issues and a private GitHub Projects board follow the record; you do not drag a card to keep it honest.
+- Optional observation. Context follows recorded decisions and failures; independent checks select events, and explicit holds stop supported actions. [Controls and limits](skills/recortex/references/observer.md).
 
 ## Quick start
 
@@ -88,13 +91,14 @@ Before it writes about the undated pages, it reads that thread: the failure and 
   <img src="assets/board-light.svg" alt="A board with the columns Todo, In Progress, Waiting for a yes and Done. A task's card names its thread, and the memory that put it in its column when there is one.">
 </picture>
 
-Optional, off unless you choose it at setup, and private. The record decides which column a card is in, and the board is brought up to date at each pause. (The picture shows four of the seven columns.) If you move a card by hand, the session asks what the move means before it changes anything, then records your answer or puts the card back. Setup and the `project` scope it needs are in [How the record works](docs/how-it-works.md#sub-issues-and-the-board).
+Optional, private, and off unless chosen at setup. The record determines each card's column; each pause updates the board. A manual move prompts the session to ask what changed before updating anything. Setup and the required `project` scope are in [How the record works](docs/how-it-works.md#sub-issues-and-the-board).
 
 ## Read more
 
 | If you want to | Read |
 |---|---|
 | See how the issues are laid out | [How the record works](docs/how-it-works.md) |
+| Test recovery and measure a fresh Claude session | [Continuity demo](examples/continuity/README.md) |
 | Install as a plain skill, trust a shared repository, upgrade from before 0.5.0 | [Install and upgrade](docs/install.md) |
 | Start from months of work or an older tracker | [Starting from existing work](docs/existing-work.md) |
 | Know what the plugin will and will not do with untrusted text | [Safety and security](docs/security.md) |

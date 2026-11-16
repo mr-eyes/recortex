@@ -52,6 +52,7 @@ import names  # noqa: E402
 import recortex  # noqa: E402
 import lint_drafts  # noqa: E402
 import lookup as record_lookup  # noqa: E402
+import record_format  # noqa: E402
 import sub_issues  # noqa: E402
 
 STUB = "This issue is being created. Its full text follows within minutes."
@@ -132,6 +133,39 @@ def lint_all(manifest, config):
     return errors
 
 
+def observer_comments_allowed(manifest, config, repo):
+    """Refuse uncoordinated memory comments before creating any manifest issue."""
+    raw = config.get("observer", {})
+    if not isinstance(raw, dict) or raw.get("enabled") is not True:
+        return True
+    import observer_runtime
+    import observer_store
+    import storage
+
+    repositories = set()
+    for item in manifest["comments"]:
+        marker = record_format.parse_marker(record_format.first_lines(recortex.read_text(item["_path"]))[0]) or {}
+        if item["kind"] in record_format.MEMORY_TYPES or marker.get("type") in record_format.MEMORY_TYPES:
+            repositories.add(item.get("repo", repo))
+    for target in sorted(repositories):
+        try:
+            with observer_store.Store(target, config=config, create=False, readonly=True) as store:
+                if observer_runtime.approval_valid(target, config, store.get_control("observer_approval")):
+                    print("nothing posted: this manifest contains memory comments for a locally approved observer. "
+                          "Create the issues without those comments, then use the shared reviewed queue and "
+                          "post_verified.py comment --eventkey KEY after their destination issues exist.")
+                    return False
+        except observer_store.StoreError as error:
+            if error.reason == "missing":
+                continue
+            print("nothing posted: the observer queue could not be validated; run observer.py status.")
+            return False
+        except (storage.StorageError, OSError, ValueError, KeyError, TypeError):
+            print("nothing posted: the observer queue could not be validated; run observer.py status.")
+            return False
+    return True
+
+
 def final_lint(text, item, repo, numbers, config, checked, number=None):
     def checker(number):
         if number in numbers.values() and repo == item.get("_home"):
@@ -193,6 +227,8 @@ def main(argv=None):
           % (args.manifest, repo, len(manifest["issues"]), len(manifest["comments"])))
     if lint_all(manifest, config):
         print("nothing posted: fix the lint errors above")
+        return 1
+    if not observer_comments_allowed(manifest, config, repo):
         return 1
     print("lint: all %d drafts pass" % (len(manifest["issues"]) + len(manifest["comments"])))
 

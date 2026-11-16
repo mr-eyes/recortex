@@ -2,7 +2,7 @@
 
 > Commands on this page write `scripts/<name>` for short. That is the `scripts` folder of this skill, next to `SKILL.md`; call it by its full path.
 
-The plugin keeps every session, resumed or compacted session and subagent aware of the record without anyone asking. Four hooks print a short brief; a local index lets them do that in a fraction of a second; `compile.py` turns the record into the finished deliverable and its history. GitHub stays the record throughout: the index is a copy that can be deleted and rebuilt at any time.
+The plugin keeps every session, resumed or compacted session and subagent aware of the record without anyone asking. Four brief hooks print a short brief; a local index lets them do that in a fraction of a second; `compile.py` turns the record into the finished deliverable and its history. GitHub stays the record throughout: the index is a copy that can be deleted and rebuilt at any time. The optional [observer](observer.md) adds local capture, task context and explicit holds through separate handlers; its pending queue is durable state, not part of this disposable index. This page describes the original brief handlers.
 
 ## The four hooks
 

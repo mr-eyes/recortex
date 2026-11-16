@@ -815,7 +815,10 @@ class PostVerifiedTests(Sandbox):
         args = ["body", "--repo", REPO, "--issue", "3", "--kind", "active", "--body-file", draft]
         dry = self.run_script("post_verified.py", *args, "--dry-run")
         self.assertIn("-Task body.", dry.stdout)
+        self.assertIn("a real replacement requires --expected-body-file", dry.stdout)
         self.assertEqual([], self.calls("issue edit"))
+        expected = self.write("task.base.md", "Task body.\r\n")
+        args += ["--expected-body-file", expected]
         refused = self.run_script("post_verified.py", *args)
         self.assertNotEqual(0, refused.returncode)
         done = self.run_script("post_verified.py", *args, "--backup", backup)
@@ -824,6 +827,10 @@ class PostVerifiedTests(Sandbox):
         self.assertIn("## Destination topic", self.repo()["issues"]["3"]["body"])
         again = self.run_script("post_verified.py", *args, "--backup", backup)
         self.assertIn("no change", again.stdout)
+        self.assertEqual(0, again.returncode, again.stdout + again.stderr)  # the old baseline is safe on a no-op
+        without = self.run_script("post_verified.py", *args[:-2])
+        self.assertEqual(0, without.returncode, without.stdout + without.stderr)
+        self.assertIn("no change", without.stdout)
 
 
     def test_final_record_edit_moves_section_labels(self):
@@ -839,7 +846,7 @@ class PostVerifiedTests(Sandbox):
         fixed = re.sub(r"## Known issues\n.*?(?=## Sources)", "", fixed, flags=re.S)
         draft = self.write("reader.md", fixed)
         args = ["body", "--repo", REPO, "--issue", "11", "--kind", "final-record", "--body-file", draft,
-                "--profile", "software,research"]
+                "--profile", "software,research", "--expected-body-file", self.write("reader.base.md", text)]
         dry = self.run_script("post_verified.py", *args, "--dry-run")
         self.assertEqual(0, dry.returncode, dry.stdout + dry.stderr)
         self.assertIn("removes: rel:known-issues", dry.stdout)
@@ -861,6 +868,7 @@ class PostVerifiedTests(Sandbox):
         history = self.write("history.md", fixed.replace("## Fixed\n", "## Fixed\n\nAs of 2026-03-09 10:00 PST.\n"))
         refused = self.run_script("post_verified.py", "body", "--repo", REPO, "--issue", "11", "--kind", "final-record",
                                   "--profile", "software,research", "--body-file", history,
+                                  "--expected-body-file", self.write("fixed.base.md", fixed),
                                   "--backup", os.path.join(self.dir, "b2.md"))
         self.assertEqual(1, refused.returncode)
         self.assertIn("[as-of]", refused.stdout)
@@ -874,8 +882,121 @@ class PostVerifiedTests(Sandbox):
                                 "labels": labels or ["final-record", "rel:changed", "rel:fixed", "topic:reader"]}
         with open(self.state, "w") as handle:
             json.dump(data, handle)
-        return ["body", "--repo", REPO, "--issue", "11", "--kind", "final-record", "--profile", "software,research",
+        return ["body", "--repo", REPO, "--issue", "11", "--kind", "final-record",
+                "--expected-body-file", self.write("reader.base.md", text), "--profile", "software,research",
                 "--body-file", self.write("reader.md", text + "\nOne more line in the sources.\n")]
+
+    def test_body_replacement_requires_the_saved_baseline(self):
+        args = self.reader_issue()
+        start = args.index("--expected-body-file")
+        del args[start:start + 2]
+        backup = os.path.join(self.dir, "before.md")
+        before = self.repo()["issues"]["11"]
+        result = self.run_script("post_verified.py", *args, "--backup", backup)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn("--expected-body-file FILE is required", result.stdout)
+        self.assertEqual(before, self.repo()["issues"]["11"])
+        self.assertEqual([], self.calls("issue edit"))
+        self.assertFalse(os.path.exists(backup))
+
+    def test_stale_baseline_stops_real_and_dry_run_before_body_or_label_writes(self):
+        args = self.reader_issue()
+        data = self.repo()
+        data["issues"]["11"]["body"] += "\nA collaborator's new result.\n"
+        with open(self.state, "w") as handle:
+            json.dump(data, handle)
+        before = data["issues"]["11"]
+        backup = os.path.join(self.dir, "before.md")
+        for extra in ([], ["--dry-run"]):
+            with self.subTest(extra=extra):
+                result = self.run_script("post_verified.py", *args, "--backup", backup, *extra)
+                self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                self.assertIn("differs from --expected-body-file", result.stdout)
+                self.assertEqual(before, self.repo()["issues"]["11"])
+                self.assertEqual([], self.calls("issue edit"))
+                self.assertFalse(os.path.exists(backup))
+
+    def test_change_after_baseline_check_stops_before_backup_and_write(self):
+        text = recortex.substitute_placeholders(recortex.read_text(os.path.join(self.drafts, "task-newlines.md")),
+                                                {"reader": 1}, REPO, REPO)
+        draft = self.write("task.md", text)
+        expected = self.write("task.base.md", self.repo()["issues"]["3"]["body"])
+        backup = os.path.join(self.dir, "before.md")
+        # First read checks #1 in the draft, second reads #3's baseline, third is the prewrite check.
+        result = self.run_script("post_verified.py", "body", "--repo", REPO, "--issue", "3", "--kind", "active",
+                                 "--body-file", draft, "--expected-body-file", expected, "--backup", backup,
+                                 env={"FAKE_GH_CHANGE_ON_READ": "3"})
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn("changed during this run", result.stdout)
+        self.assertIn("Edited by someone else meanwhile.", self.repo()["issues"]["3"]["body"])
+        self.assertEqual([], self.calls("issue edit"))
+        self.assertFalse(os.path.exists(backup))
+
+    def test_body_dry_run_offline_needs_no_baseline_or_network(self):
+        args = self.reader_issue()
+        start = args.index("--expected-body-file")
+        del args[start:start + 2]
+        before = self.repo()["issues"]["11"]
+        result = self.run_script("post_verified.py", *args, "--dry-run", "--offline", gh="false")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("expected body not checked", result.stdout)
+        self.assertIn("would run: gh issue edit 11", result.stdout)
+        self.assertEqual(before, self.repo()["issues"]["11"])
+
+    def test_backup_created_during_the_final_read_is_not_overwritten(self):
+        import io
+        import post_verified
+        old = "The live body."
+        draft = self.write("replacement.md", "The replacement body.")
+        expected = self.write("baseline.md", old)
+        for kind in ("file", "dangling-symlink"):
+            with self.subTest(kind=kind):
+                backup = os.path.join(self.dir, "backup-" + kind + ".md")
+                target = os.path.join(self.dir, "missing-target.md")
+                reads = []
+
+                def read_body(repo, number):
+                    reads.append((repo, number))
+                    if len(reads) == 2:  # after the early exists() check, during the final network read
+                        if kind == "file":
+                            self.write(os.path.basename(backup), "Another process's backup.")
+                        else:
+                            os.symlink(target, backup)
+                    return old
+
+                with mock.patch.object(recortex, "load_config", return_value={}), \
+                        mock.patch.object(post_verified, "lint", return_value=0), \
+                        mock.patch.object(recortex, "read_issue_body", side_effect=read_body), \
+                        mock.patch.object(recortex, "gh") as gh, mock.patch("sys.stdout", new_callable=io.StringIO):
+                    with self.assertRaises(SystemExit) as error:
+                        post_verified.main(["body", "--repo", REPO, "--issue", "3", "--kind", "active",
+                                            "--body-file", draft, "--expected-body-file", expected, "--backup", backup])
+                    self.assertIn("backup file exists and is not overwritten", str(error.exception))
+                    gh.assert_not_called()
+                self.assertEqual(2, len(reads))
+                if kind == "file":
+                    self.assertEqual("Another process's backup.", recortex.read_text(backup))
+                else:
+                    self.assertTrue(os.path.islink(backup))
+                    self.assertEqual(target, os.readlink(backup))
+                    self.assertFalse(os.path.exists(target))
+
+    def test_changed_body_stops_a_labels_only_retry(self):
+        args = self.reader_issue()
+        broken = self.run_script("post_verified.py", *args, "--backup", os.path.join(self.dir, "before.md"),
+                                 env={"FAKE_GH_FAIL_ON_LABELS": "1"})
+        self.assertNotEqual(0, broken.returncode)
+        data = self.repo()
+        before_edits = len(self.calls("issue edit"))
+        labels = data["issues"]["11"]["labels"]
+        # The retry reads the issue for the label plan and baseline, then checks again before writing labels.
+        read_at_guard = data["reads"] + 3
+        result = self.run_script("post_verified.py", *args,
+                                 env={"FAKE_GH_CHANGE_ON_READ": str(read_at_guard)})
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn("section labels were not changed", result.stdout)
+        self.assertEqual(labels, self.repo()["issues"]["11"]["labels"])
+        self.assertEqual(before_edits, len(self.calls("issue edit")))
 
     def test_label_change_that_fails_is_finished_by_a_rerun(self):
         args = self.reader_issue()
@@ -9964,7 +10085,7 @@ class PackagingTests(unittest.TestCase):
         self.assertNotIn("forceRemoveDeletedPlugins", market)
         hooks = self.read_json("hooks", "hooks.json")["hooks"]
         commands = [h["command"] for entries in hooks.values() for entry in entries for h in entry["hooks"]]
-        self.assertEqual(4, len(commands))
+        self.assertEqual(13, len(commands))
         for command in commands:
             relative = re.search(r"^\"\$\{CLAUDE_PLUGIN_ROOT\}\"/(skills/recortex/scripts/[a-z_]+\.sh)( [a-z-]+)?$",
                                  command).group(1)
@@ -10031,7 +10152,10 @@ class PackagingTests(unittest.TestCase):
     def test_each_hook_is_stopped_before_its_timeout(self):
         hooks = self.read_json("hooks", "hooks.json")["hooks"]
         timeouts = {event: entries[0]["hooks"][0]["timeout"] for event, entries in hooks.items()}
-        self.assertEqual({"SessionStart": 20, "SubagentStart": 10, "UserPromptSubmit": 5, "PreCompact": 10}, timeouts)
+        self.assertEqual({"SessionStart": 20, "SubagentStart": 10, "UserPromptSubmit": 5, "PreCompact": 10,
+                          "PreToolUse": 5, "PostToolUse": 5, "PostToolUseFailure": 5, "Stop": 5, "SubagentStop": 5}, timeouts)
+        observer = recortex.read_text(os.path.join(SCRIPTS, "run_observer_hook.sh"))
+        self.assertIn('timeout 4 python3 "$here/observer.py"', observer)
         runner = recortex.read_text(os.path.join(SCRIPTS, "run_hook.sh"))
         self.assertIn("session-start) hard=$((limit + 3))", runner)  # limit is at most 15, so at most 18
         self.assertIn("prompt-submit) hard=4", runner)

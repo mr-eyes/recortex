@@ -267,7 +267,7 @@ def event_at(event, created_at):
 
 LINK_KINDS = ("because", "replaces", "instead", "checks")
 LINK_VALUE = re.compile(r"[1-9][0-9]{0,18}(?:,[1-9][0-9]{0,18}){0,3}")  # one to four comment ids; use fullmatch
-MARKER_KEYS = ("type", "at", "recorded", "source") + LINK_KINDS
+MARKER_KEYS = ("type", "at", "recorded", "source", "eventkey") + LINK_KINDS
 LINKABLE = ("result", "decision", "failure", "correction", "idea", "question")  # a checkpoint never links
 # key -> the kind of the memory that carries it -> the kinds it may point at
 LINK_RULES = {

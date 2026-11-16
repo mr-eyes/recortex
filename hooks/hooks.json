@@ -1,5 +1,5 @@
 {
-  "description": "Inject the project's record brief from GitHub issues: at session start, resume, clear, compaction and fork; into every subagent; as one line on user prompts when it changed; and as instructions for the compaction summary. Silent unless the project has a .recortex.json file and the user has trusted its repository, except for one fixed line at session start, once per project, in the top folder of a git checkout with a GitHub remote and no setup, offering to set up the record.",
+  "description": "Inject the project's record brief from GitHub issues: at session start, resume, clear, compaction and fork; into every subagent; as one line on user prompts when it changed; and as instructions for the compaction summary. Silent unless the project has a .recortex.json file and the user has trusted its repository, except for one fixed line at session start, once per project, in the top folder of a git checkout with a GitHub remote and no setup, offering to set up the record. Optional observer hooks capture bounded transcript pointers and check explicit local holds; independent work requires separate approval.",
   "hooks": {
     "SessionStart": [
       {
@@ -9,6 +9,11 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/skills/recortex/scripts/session_start_hook.sh",
             "timeout": 20
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/skills/recortex/scripts/run_observer_hook.sh session-start",
+            "timeout": 5
           }
         ]
       }
@@ -21,6 +26,11 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/skills/recortex/scripts/run_hook.sh subagent-start",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/skills/recortex/scripts/run_observer_hook.sh subagent-start",
+            "timeout": 5
           }
         ]
       }
@@ -31,6 +41,11 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/skills/recortex/scripts/run_hook.sh prompt-submit",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/skills/recortex/scripts/run_observer_hook.sh prompt-submit",
             "timeout": 5
           }
         ]
@@ -44,6 +59,66 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/skills/recortex/scripts/run_hook.sh pre-compact",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/skills/recortex/scripts/run_observer_hook.sh pre-compact",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/skills/recortex/scripts/run_observer_hook.sh pre-tool",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/skills/recortex/scripts/run_observer_hook.sh post-tool",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/skills/recortex/scripts/run_observer_hook.sh tool-failure",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/skills/recortex/scripts/run_observer_hook.sh stop",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/skills/recortex/scripts/run_observer_hook.sh subagent-stop",
+            "timeout": 5
           }
         ]
       }

@@ -537,6 +537,9 @@ def check_marker_links(text, kind, add):
             % (key, ", ".join(k + "=" for k in record_format.MARKER_KEYS)))
     for key in sorted({key for key in names if names.count(key) > 1}):
         add("error", "marker-key", 1, "the marker key %s= appears more than once; write each key once" % key)
+    for key, value in pairs:
+        if key == "eventkey" and not re.fullmatch(r"[0-9a-f]{32}", value):
+            add("error", "event-key", 1, "eventkey= is exactly 32 lowercase hexadecimal characters")
     under = {}
     for key, value in pairs:
         if key not in record_format.LINK_KINDS:
