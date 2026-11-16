@@ -551,10 +551,39 @@ class ObserverCliTests(unittest.TestCase):
         self.assertEqual(1,result.returncode);self.assertEqual('observer-unavailable',value['code'])
         self.assertEqual('observer_model',value['reason'])
         self.assertEqual(before,self.config.read_bytes());self.assertFalse((self.base/'state').exists())
+    def on_terminal(self,args,word):
+        """observer.py with a pseudo-terminal of its own, answering `word` when it asks."""
+        import pty
+        pid,fd=pty.fork()
+        if pid==0:
+            try:
+                os.chdir(self.project)
+                os.execve(sys.executable,[sys.executable,str(ROOT/'skills/recortex/scripts/observer.py')]+list(args),self.env)
+            finally:
+                os._exit(127)
+        seen=b''
+        try:
+            while b'to confirm' not in seen:
+                seen+=os.read(fd,4096)
+            os.write(fd,word+b'\n')
+            while True:
+                try:
+                    chunk=os.read(fd,4096)
+                except OSError:
+                    break
+                if not chunk:break
+                seen+=chunk
+        finally:
+            os.close(fd)
+        return os.waitpid(pid,0)[1],seen
     def test_publication_pause_survives_process_restart(self):
         self.cli('enable','--model','sonnet','--yes');self.cli('pause','publication')
         _,status=self.cli('status');self.assertTrue(status['publication_paused']);self.assertFalse(status['capture_paused'])
-        self.cli('resume','publication');_,status=self.cli('status');self.assertFalse(status['publication_paused'])
+        result,value=self.cli('resume','publication')  # from a pipe, as Claude Code's Bash tool runs it: refused
+        self.assertEqual((1,'terminal-required'),(result.returncode,value['code']))
+        _,status=self.cli('status');self.assertTrue(status['publication_paused'])
+        code,seen=self.on_terminal(('resume','publication'),b'resume')
+        self.assertEqual(0,code,seen);_,status=self.cli('status');self.assertFalse(status['publication_paused'])
     def test_automatic_enable_refused_without_runtime_proof(self):
         result,value=self.cli('enable','--mode','automatic','--model','sonnet','--yes')
         self.assertEqual(1,result.returncode);self.assertFalse(value['approved']);self.assertEqual('runtime-gate',value['code'])

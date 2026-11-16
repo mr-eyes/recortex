@@ -74,9 +74,10 @@ NOTES = {
 }
 
 
-def enable(repo, config, mode, yes=False, model=None, root=None):
+def enable(repo, config, mode, yes=False, model=None, root=None, confirm=None):
     """Preview, or with yes=True record, this machine's settings for this project folder. Nothing is written to the
-    project's shared configuration file, and nothing is created before every check has passed."""
+    project's shared configuration file, and nothing is created before every check has passed. `confirm`, when given,
+    is asked last, before anything is written; a code it returns stops the write."""
     root = runtime.folder_key(root)
     problem = runtime.folder_problem(root)
     if problem:
@@ -112,6 +113,9 @@ def enable(repo, config, mode, yes=False, model=None, root=None):
             gate = None
         if not runtime.gate_valid(gate, options):
             return dict(preview, code="runtime-gate")
+    refused = confirm() if confirm is not None else None
+    if refused:
+        return dict(preview, code=refused)
     options["publisher_id"] = runtime.publisher_id(create=True)
     with observer_store.Store(repo, config=dict(config, observer=options), max_bytes=options["max_pending_bytes"],
                               max_pending=options["max_pending_observations"]):
@@ -156,6 +160,34 @@ def terminal():
         return Terminal(os.open("/dev/tty", os.O_RDWR | getattr(os, "O_NOCTTY", 0)))
     except OSError:
         return None
+
+
+def entry_holds():
+    """The active holds of the repository this folder's entry names: [] without an entry, [None] when the approvals
+    or the holds cannot be read, since those holds may be active."""
+    try:
+        entry = runtime.stored_approval()
+    except (ValueError, storage.StorageError, OSError):
+        return [None]
+    if entry is None:
+        return []
+    name = entry.get("repo") if isinstance(entry, dict) else None
+    if not recortex.valid_repo(name):
+        return [None]
+    try:
+        return [hold for hold in observer_store.read_holds(name) if hold.get("state") == "active"]
+    except (observer_store.StoreError, storage.StorageError, OSError, ValueError, KeyError, TypeError):
+        return [None]
+
+
+def confirmed(word, question):
+    """None when the user typed `word` on their own terminal; else the code that stops the action. A command run by
+    Claude Code's Bash tool has no terminal, so it is refused."""
+    tty = terminal()
+    if tty is None:
+        return "terminal-required"
+    with tty:
+        return None if tty.ask(question + " Type %s to confirm: " % word) == word else "not-confirmed"
 
 
 def release(store, hold_id, tty):
@@ -287,7 +319,19 @@ def main(argv=None):
             emit({"code": "repository-not-trusted"}); return 1
         options = runtime.settings(config)
         if args.command == "enable":
-            result = enable(repo, loaded, args.mode, args.yes, args.model); emit(result)
+            # Like disable and release, these change what the user set up, so they are asked on the user's own
+            # terminal: automatic mode, and replacing this folder's entry while its repository's holds apply.
+            questions = []
+            if args.mode == "automatic":
+                questions.append("The observer will post reviewed memories to %s on its own." % repo)
+            if entry_holds():
+                questions.append("This replaces this folder's settings while holds apply.")
+            confirm = (lambda: confirmed("enable", " ".join(questions))) if questions else None
+            result = enable(repo, loaded, args.mode, args.yes, args.model, confirm=confirm)
+            if result.get("code") == "terminal-required":
+                result["note"] = ("Run this enable yourself in a separate terminal, outside Claude Code: it asks you to "
+                                  "confirm there.")
+            emit(result)
             return int(args.yes and not result["approved"])
         if args.command == "context":
             db = index.connect(repo, create=False)
@@ -354,6 +398,15 @@ def main(argv=None):
                 emit({"holds": store.holds()}); return 0
             if args.command in ("pause", "resume"):
                 scopes = ("capture", "publication") if args.scope == "all" else (args.scope,)
+                if args.command == "resume" and any(store.get_control(scope + "_paused", False) for scope in scopes):
+                    # A pause is the user's control; undoing it is asked on the user's own terminal, like disable.
+                    refused = confirmed("resume", "Resume %s for %s?" % (" and ".join(scopes), repo))
+                    if refused:
+                        out = {"code": refused}
+                        if refused == "terminal-required":
+                            out["note"] = ("Run observer.py resume yourself in a separate terminal, outside Claude Code: "
+                                           "it asks you to confirm there.")
+                        emit(out); return 1
                 for scope in scopes:
                     store.set_control(scope + "_paused", args.command == "pause")
                 emit({"action": args.command, "scope": args.scope}); return 0

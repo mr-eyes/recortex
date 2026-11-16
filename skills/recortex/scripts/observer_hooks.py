@@ -177,9 +177,9 @@ def _unchecked(data):
     return None if observer_holds.read_only(tool_name, tool_input) else UNCHECKED
 
 
-SELF_RELEASE = {"reason": "recortex observer: only the user releases a hold or switches the observer off, in a separate "
-                          "terminal outside Claude Code."}
-UNDO = re.compile(r"observer(?:\.py)?\b.*\b(?:release|disable)\b")
+SELF_RELEASE = {"reason": "recortex observer: only the user releases a hold, switches the observer off, resumes it or "
+                          "turns on automatic posting, in a separate terminal outside Claude Code."}
+UNDO = re.compile(r"observer(?:\.py)?\b.*\b(?:release|disable|resume|automatic)\b")
 
 
 def _held(repo, data):
