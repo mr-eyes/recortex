@@ -18,9 +18,9 @@ class ObserverProvenanceTests(unittest.TestCase):
     run_worker = fixtures.WorkerTests.run_worker
 
     def tool_pair(self, name="Bash", command="python bench/run.py --repeat 5", output="Observed benchmark output"):
-        request = {"message": {"role": "assistant", "content": [
+        request = {"type": "assistant", "message": {"role": "assistant", "content": [
             {"type": "tool_use", "id": "call-1", "name": name, "input": {"command": command}}]}}
-        result = {"message": {"role": "user", "content": [
+        result = {"type": "user", "message": {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "call-1", "is_error": False, "content": output}]}}
         self.path.write_text(json.dumps(request) + "\n" + json.dumps(result) + "\n")
         rows, _ = sources.scan(self.hook, self.project)

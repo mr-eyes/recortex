@@ -25,8 +25,10 @@ PHRASES = {
 
 
 def _source(source):
+    """A hold comes from a user message: one the user typed, or one of the forms a typed control is stored in (a
+    /recortex command's wrapper). It only denies, so the looser rule (control_user) is enough."""
     sid = source.get("source_id") or source.get("id")
-    if (source.get("role") != "user" or source.get("direct_user") is not True or
+    if (source.get("role") != "user" or True not in (source.get("control_user"), source.get("direct_user")) or
             not isinstance(sid, str) or not SOURCE_ID.fullmatch(sid) or not isinstance(source.get("text"), str)):
         raise ValueError("a hold requires a resolved original user message")
     if len(source["text"]) > 8192:

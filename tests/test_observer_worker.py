@@ -86,7 +86,7 @@ class WorkerTests(unittest.TestCase):
         p=patch.object(worker,'refresh_record',return_value=True);p.start();self.addCleanup(p.stop)
         self.calls=[]
     def capture(self,text=QUOTE,role='user'):
-        with self.path.open('a') as f:f.write(json.dumps({'message':{'role':role,'content':text},'timestamp':'2026-03-01T12:00:00Z'})+'\n')
+        with self.path.open('a') as f:f.write(json.dumps({'type':role,'userType':'external','message':{'role':role,'content':text},'timestamp':'2026-03-01T12:00:00Z'})+'\n')
         rows,cursor=sources.scan(self.hook,self.project)
         with store.Store(REPO,config=self.config) as db:db.capture(rows)
         return rows[-1]['source_id']
@@ -135,8 +135,8 @@ class WorkerTests(unittest.TestCase):
             with store.Store(REPO, config=self.config) as db:
                 self.assertEqual(reason, db.observation(sid)['reason'])
     def bash_run(self,output):
-        invocation={'message':{'role':'assistant','content':[{'type':'tool_use','id':'run1','name':'Bash','input':{'command':'python3 bench.py'}}]}}
-        result={'message':{'role':'user','content':[{'type':'tool_result','tool_use_id':'run1','content':output,'is_error':False}]}}
+        invocation={'type':'assistant','message':{'role':'assistant','content':[{'type':'tool_use','id':'run1','name':'Bash','input':{'command':'python3 bench.py'}}]}}
+        result={'type':'user','message':{'role':'user','content':[{'type':'tool_result','tool_use_id':'run1','content':output,'is_error':False}]}}
         with self.path.open('a') as f:f.write(json.dumps(invocation)+'\n'+json.dumps(result)+'\n')
         rows,_=sources.scan(self.hook,self.project)
         with store.Store(REPO,config=self.config) as db:db.capture(rows)
@@ -342,8 +342,8 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(worker.source_privacy_problem({'tool_results':[{'input':{'command':'PRIVATE\tSAMPLE'}}]},
                         {'restricted_patterns':[{'pattern':r'PRIVATE\s+SAMPLE','name':'private'}]}))
     def test_secret_tool_argument_never_reaches_either_model(self):
-        invocation={'message':{'role':'assistant','content':[{'type':'tool_use','id':'call1','name':'Bash','input':{'command':'echo ghp_'+'A'*36}}]}}
-        result={'message':{'role':'user','content':[{'type':'tool_result','tool_use_id':'call1','content':'Safe output','is_error':False}]}}
+        invocation={'type':'assistant','message':{'role':'assistant','content':[{'type':'tool_use','id':'call1','name':'Bash','input':{'command':'echo ghp_'+'A'*36}}]}}
+        result={'type':'user','message':{'role':'user','content':[{'type':'tool_result','tool_use_id':'call1','content':'Safe output','is_error':False}]}}
         self.path.write_text(json.dumps(invocation)+'\n'+json.dumps(result)+'\n')
         rows,_=sources.scan(self.hook,self.project)
         with store.Store(REPO,config=self.config) as db:db.capture(rows)

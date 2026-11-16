@@ -58,7 +58,7 @@ class ObserverHookTests(unittest.TestCase):
         self.addCleanup(patch.stop)
 
     def append(self, text, role="user", **extra):
-        record = dict(type=role, message={"role": role, "content": text}, **extra)
+        record = dict(dict(type=role, userType="external", message={"role": role, "content": text}), **extra)
         with self.path.open("a") as handle:
             handle.write(json.dumps(record) + "\n")
 
@@ -697,7 +697,7 @@ class FastPathTests(unittest.TestCase):
             observer_runtime.approve(REPO, {"observer": settings}, str(project))
         transcript = self.base / "claude" / "session1.jsonl"
         transcript.parent.mkdir(mode=0o700)
-        transcript.write_text(json.dumps({"message": {"role": "user", "content": "Ordinary work."}}) + "\n")
+        transcript.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "Ordinary work."}}) + "\n")
         data = {"session_id": "session1", "transcript_path": str(transcript), "cwd": str(project), "prompt": "x",
                 "tool_name": "Bash", "tool_input": {"command": "ls"}, "agent_transcript_path": str(transcript)}
         for event in EVENT_NAMES:

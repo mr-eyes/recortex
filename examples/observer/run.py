@@ -150,7 +150,7 @@ class Replay:
         content = [{"type": "tool_result", "tool_use_id": tool_id, "content": text,
                     "is_error": label == "failure"}] if role == "tool" else text
         record = {"uuid": identity, "timestamp": datetime.datetime.fromtimestamp(self.now, datetime.timezone.utc).isoformat(),
-                  "type": "user" if role == "tool" else role,
+                  "type": "user" if role == "tool" else role, "userType": "external",
                   "message": {"role": "user" if role == "tool" else role, "content": content}}
         with path.open("a", encoding="utf-8") as handle:
             if role == "tool":

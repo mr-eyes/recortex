@@ -78,7 +78,7 @@ class SourcePermissionTests(unittest.TestCase):
         for directory in (self.folder, self.folder.parent, self.native):
             directory.chmod(0o700)
         self.path = self.folder / "session-1.jsonl"
-        self.path.write_text('{"message":{"role":"user","content":"Choose blue."}}\n')
+        self.path.write_text('{"type":"user","message":{"role":"user","content":"Choose blue."}}\n')
         self.path.chmod(0o600)
 
     def altered_owner(self, path, mode, owner):
@@ -218,7 +218,7 @@ class SourcePermissionTests(unittest.TestCase):
             subagent.mkdir(parents=True, mode=0o775)
             (subagent.parent).chmod(0o775)
             report = subagent / "agent-a1.jsonl"
-            report.write_text('{"message":{"role":"assistant","content":"done"}}\n')
+            report.write_text('{"type":"assistant","message":{"role":"assistant","content":"done"}}\n')
             report.chmod(0o660)
             with self.assertRaisesRegex(sources.SourceError, "source-permissions"):
                 sources.approved_path(str(report), str(self.project), "session-1")

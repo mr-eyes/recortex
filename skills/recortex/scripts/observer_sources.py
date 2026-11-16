@@ -227,13 +227,44 @@ def _read(path, offset, size):
         os.close(descriptor)
 
 
+# Records that are not part of the conversation: a copy of what was sent to the API (api-request-blob, which repeats
+# messages and carries system reminders), attachments, the skill text Claude Code adds (isMeta), a compaction summary
+# (model text in a user record) and lines shown only in the transcript.
+HIDDEN = ("isMeta", "isCompactSummary", "isVisibleInTranscriptOnly")
+# A user record counts as the user's own words only when it is an ordinary typed prompt: none of these is set, its
+# userType is the standard one, it holds text only, and no harness wrapper, quote or pasted block is in it.
+NOT_TYPED = ("isMeta", "isSidechain", "isCompactSummary", "isVisibleInTranscriptOnly", "toolUseResult",
+             "sourceToolUseID", "sourceToolAssistantUUID")
+HARNESS = re.compile(r"<(?:command-[a-z]+|local-command-[a-z]+|bash-[a-z]+|system-reminder|task-notification|"
+                     r"user-prompt-submit-hook|pasted_content|tool_result|tool_use_error)\b|\[Pasted text|"
+                     r"\[Request interrupted|(?m:^Caveat: )|(?m:^[ \t]*(?:>|```|~~~))")
+REMINDER = re.compile(r"<system-reminder>(?:.*?</system-reminder>|.*\Z)[ \t\r\n]*", re.S)
+
+
+def typed_prompt(record, content, text):
+    """True only for a prompt the user typed (an allowlist): a "user" record of userType "external" whose content is
+    text only, with none of NOT_TYPED set, no harness wrapper (a command, a reminder, a notification), no quoted line,
+    code fence or pasted block. Anything else (a tool result, a compaction summary, a skill's text, a command wrapper
+    or a subagent's prompt) is never the user's own words for a decision or a change of status."""
+    if record.get("type") != "user" or record.get("userType") != "external":
+        return False
+    if any(key in record and record[key] is not False for key in NOT_TYPED):
+        return False
+    if isinstance(content, list) and not all(isinstance(block, dict) and block.get("type") == "text"
+                                             for block in content):
+        return False
+    return bool(text.strip()) and not HARNESS.search(text)
+
+
 def _content(record):
+    """(role, text, typed, control). typed: the user's own words (typed_prompt); control: a user message that may set
+    a hold, by the looser earlier rule, since a hold only denies. Text in system reminders never reaches a model."""
     message = record.get("message")
-    if not isinstance(message, dict):
-        return "unknown", "", False
-    role = message.get("role") or record.get("type")
-    if role not in ("user", "assistant"):
-        return "unknown", "", False
+    if not isinstance(message, dict) or record.get("type") not in ("user", "assistant"):
+        return "unknown", "", False, False
+    role = message.get("role")
+    if role != record["type"] or any(record.get(key) for key in HIDDEN):
+        return "unknown", "", False, False
     content = message.get("content")
     if isinstance(content, str):
         text = content
@@ -263,10 +294,11 @@ def _content(record):
         text = "\n".join(parts)
     else:
         text = ""
-    direct = role == "user" and not record.get("isMeta") and not record.get("isSidechain")
+    control = role == "user" and not record.get("isMeta") and not record.get("isSidechain")
     if re.search(r"(?m)^\s*>|<pasted_content\b|<system-reminder\b|<tool_result\b", text):
-        direct = False
-    return role, text, direct
+        control = False
+    typed = role == "user" and typed_prompt(record, content, text)
+    return role, REMINDER.sub("", text), typed, control
 
 
 def _content_hash(record, role, subagent=False):
@@ -325,7 +357,7 @@ def scan(data, project_root, cursor=0, max_bytes=MAX_READ):
             record = json.loads(line)
         except (ValueError, UnicodeError):
             raise SourceError("source-format")
-        role, text, _ = _content(record) if isinstance(record, dict) else ("unknown", "", False)
+        role, text, _, _ = _content(record) if isinstance(record, dict) else ("unknown", "", False, False)
         if text:
             digest = hashlib.sha256(line).hexdigest()
             rows.append({"source_id": _identity(session, role, line, record, subagent), "session_id": session, "role": role,
@@ -377,7 +409,9 @@ matching descriptor is metadata only and its input is read transiently.
             offset = end
             continue
         message = prior.get("message") if isinstance(prior, dict) else None
-        if isinstance(message, dict) and message.get("role") == "assistant" and isinstance(message.get("content"), list):
+        # Only the conversation's own assistant records: a copy sent to the API repeats the call under the same id.
+        if (isinstance(message, dict) and prior.get("type") == "assistant" and message.get("role") == "assistant"
+                and isinstance(message.get("content"), list)):
             for block in message["content"]:
                 if (isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(block.get("id"), str) and block["id"] in wanted
                         and isinstance(block.get("name"), str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", block["name"])
@@ -420,7 +454,7 @@ def resolve(descriptor, project_root):
         record = json.loads(raw)
     except (ValueError, UnicodeError):
         raise SourceError("source-format")
-    role, text, direct = _content(record)
+    role, text, typed, control = _content(record)
     if role != descriptor.get("role") or _identity(descriptor["session_id"], role, raw, record, subagent) != descriptor.get("source_id"):
         raise SourceError("source-identity")
     if descriptor.get("content_sha256") and descriptor["content_sha256"] != _content_hash(record, role, subagent):
@@ -430,7 +464,8 @@ def resolve(descriptor, project_root):
     subagent = os.sep + "subagents" + os.sep in path
     provenance, invocations = _tool_provenance(path, start, record, descriptor["session_id"], descriptor["observed_at"]) if role == "tool" else ([], [])
     out = {"id": descriptor["source_id"], "source_id": descriptor["source_id"], "role": role, "origin": role,
-            "text": text, "direct_user": bool(direct and not subagent), "session_id": descriptor["session_id"],
+            "text": text, "direct_user": bool(typed and not subagent), "control_user": bool(control and not subagent),
+            "session_id": descriptor["session_id"],
             "at": record.get("timestamp") if isinstance(record.get("timestamp"), str) else datetime.datetime.fromtimestamp(descriptor["observed_at"], datetime.timezone.utc).isoformat(),
             "sha256": descriptor["sha256"], "message_id": record.get("uuid"), "subagent": subagent,
             "tool_results": provenance, "invocation_descriptors": invocations}

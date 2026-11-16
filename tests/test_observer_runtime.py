@@ -127,7 +127,7 @@ class SourceTests(unittest.TestCase):
         self.path=folder/'session-1.jsonl';self.hook={'session_id':'session-1','hook_event_name':'Stop','transcript_path':str(self.path)}
     def tearDown(self):self.env.stop();self.tmp.cleanup()
     def write(self,content,role='user',**extra):
-        row=dict(type=role,message={'role':role,'content':content},timestamp='2026-03-01T12:00:00Z',**extra)
+        row=dict(dict(type=role,userType='external',message={'role':role,'content':content},timestamp='2026-03-01T12:00:00Z'),**extra)
         self.path.write_text(json.dumps(row)+'\n');self.path.chmod(0o600)
         return sources.scan(self.hook,self.project)
     def test_metadata_only_and_direct_user(self):
@@ -166,8 +166,8 @@ class SourceTests(unittest.TestCase):
         found=sources.resolve(rows[0],self.project)
         self.assertEqual('Reported outcome.',found['text']);self.assertFalse(found['direct_user'])
     def test_oversized_record_gaps_progress_to_later_native_message(self):
-        big=json.dumps({'message':{'role':'user','content':'x'*500}})+'\n'
-        good=json.dumps({'message':{'role':'user','content':'Later material event.'}})+'\n'
+        big=json.dumps({'type':'user','message':{'role':'user','content':'x'*500}})+'\n'
+        good=json.dumps({'type':'user','message':{'role':'user','content':'Later material event.'}})+'\n'
         self.path.write_text(big+good);self.path.chmod(0o600)
         rows=[];cursor=0
         for _ in range(20):
@@ -180,7 +180,7 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(1,len(valid));self.assertEqual('Later material event.',sources.resolve(valid[0],self.project)['text'])
         self.assertNotIn('xxx',json.dumps(rows))
     def test_dense_backlog_batches_keep_cursor_after_last_durable_record(self):
-        self.path.write_text(''.join(json.dumps({'message':{'role':'user','content':'Note '+str(n)}})+'\n' for n in range(1200)))
+        self.path.write_text(''.join(json.dumps({'type':'user','message':{'role':'user','content':'Note '+str(n)}})+'\n' for n in range(1200)))
         self.path.chmod(0o600)
         cursor=0;all_rows=[]
         for _ in range(4):
@@ -192,7 +192,7 @@ class SourceTests(unittest.TestCase):
     def test_native_authority_change_cannot_share_source_identity(self):
         native='12345678-1234-1234-1234-123456789abc'
         rows,_=self.write('Do not push.',uuid=native);original=rows[0]['source_id']
-        rows,_=self.write('Do not push.',uuid=native,isMeta=True)
+        rows,_=self.write('Do not push.',uuid=native,isSidechain=True)
         self.assertNotEqual(original,rows[0]['source_id'])
     def test_preflight_explains_permissions_without_changing_them(self):
         self.path.parent.parent.chmod(0o775)
@@ -200,8 +200,8 @@ class SourceTests(unittest.TestCase):
             self.assertEqual('source-permissions',sources.preflight(self.project)['code'])
         self.assertEqual(0o775,self.path.parent.parent.stat().st_mode & 0o777)
     def test_tool_provenance_matches_request_and_refuses_duplicate_ids(self):
-        invoke={'message':{'role':'assistant','content':[{'type':'tool_use','id':'call1','name':'Read','input':{'file_path':'notes.txt'}}]}}
-        result={'message':{'role':'user','content':[{'type':'tool_result','tool_use_id':'call1','content':'Tests passed in a fictional example.','is_error':False}]}}
+        invoke={'type':'assistant','message':{'role':'assistant','content':[{'type':'tool_use','id':'call1','name':'Read','input':{'file_path':'notes.txt'}}]}}
+        result={'type':'user','message':{'role':'user','content':[{'type':'tool_result','tool_use_id':'call1','content':'Tests passed in a fictional example.','is_error':False}]}}
         self.path.write_text(json.dumps(invoke)+'\n'+json.dumps(result)+'\n');self.path.chmod(0o600)
         rows,_=sources.scan(self.hook,self.project);self.assertEqual(2,len(rows))
         found=sources.resolve(rows[-1],self.project);item=found['tool_results'][0]
@@ -212,7 +212,64 @@ class SourceTests(unittest.TestCase):
         found=sources.resolve(rows[-1],self.project);self.assertFalse(found['tool_results'][0]['matched'])
         self.assertNotIn('invocation_source_id',found)
     def test_meta_and_assistant_roles(self):
-        rows,_=self.write('Do not push.',isMeta=True);self.assertFalse(sources.resolve(rows[0],self.project)['direct_user'])
         rows,_=self.write('Tests passed.','assistant');self.assertEqual(sources.resolve(rows[0],self.project)['role'],'assistant')
+    def test_records_outside_the_conversation_are_not_captured(self):
+        # Claude Code 2.1.325 writes api-request-blob copies of what it sends, with system reminders (the user's email
+        # among them), and adds a skill's text as isMeta: neither is captured, nor are a compaction summary, a line
+        # shown only in the transcript, attachments or a record whose type and role disagree.
+        reminder='<system-reminder>\nThe user\'s email address is octocat@example.test.\n</system-reminder>'
+        for row in ({'type':'api-request-blob','message':{'role':'user','content':[{'type':'text','text':reminder},{'type':'text','text':'Choose blue.'}]}},
+                    {'type':'api-request-blob','message':{'role':'assistant','content':[{'type':'text','text':'Done.'}]}},
+                    {'type':'user','isMeta':True,'message':{'role':'user','content':'Base directory for this skill.'}},
+                    {'type':'user','userType':'external','isSidechain':False,'isCompactSummary':True,'isVisibleInTranscriptOnly':True,
+                     'parentUuid':None,'logicalParentUuid':'12345678-1234-1234-1234-123456789abc','uuid':'22345678-1234-1234-1234-123456789abc',
+                     'message':{'role':'user','content':'This session is being continued from a previous conversation that ran out of context. The conversation is summarized below:\nThe user said: We will use strict quoting from now on.'}},
+                    {'type':'user','isVisibleInTranscriptOnly':True,'message':{'role':'user','content':'Shown only.'}},
+                    {'type':'attachment','message':{'role':'user','content':'Attached.'}},
+                    {'type':'assistant','message':{'role':'user','content':'Mismatched.'}}):
+            self.path.write_text(json.dumps(row)+'\n');self.path.chmod(0o600)
+            self.assertEqual([],sources.scan(self.hook,self.project)[0],row)
+    def test_system_reminders_never_reach_a_model(self):
+        rows,_=self.write([{'type':'tool_result','content':'4 tests pass.\n<system-reminder>\nThe user\'s email address is octocat@example.test.\n</system-reminder>'}])
+        found=sources.resolve(rows[0],self.project)
+        self.assertEqual('4 tests pass.\n',found['text']);self.assertNotIn('octocat@',json.dumps(found['text']))
+        rows,_=self.write('Choose blue.<system-reminder>left open, octocat@example.test')
+        self.assertEqual('Choose blue.',sources.resolve(rows[0],self.project)['text'])
+    def test_only_a_typed_prompt_is_the_users_own_words(self):
+        # An allowlist: a typed prompt is a "user" record of userType "external" with text only and none of the flags
+        # Claude Code sets on harness records; holds may still come from the looser rule (control_user).
+        typed=dict(promptSource='sdk',turnOrigin='sdk',isSidechain=False,entrypoint='sdk-cli')
+        rows,_=self.write('We will keep the reader in pure Python.',**typed)
+        found=sources.resolve(rows[0],self.project);self.assertTrue(found['direct_user']);self.assertTrue(found['control_user'])
+        refused={'isSidechain':dict(typed,isSidechain=True),'userType':dict(typed,userType='internal'),
+                 'no userType':dict(typed,userType=None),'toolUseResult':dict(typed,toolUseResult={'stdout':'x'}),
+                 'sourceToolUseID':dict(typed,sourceToolUseID='toolu_1'),
+                 'sourceToolAssistantUUID':dict(typed,sourceToolAssistantUUID='12345678-1234-1234-1234-123456789abc')}
+        for name,extra in refused.items():
+            rows,_=self.write('We will keep the reader in pure Python.',**extra)
+            self.assertFalse(sources.resolve(rows[0],self.project)['direct_user'],name)
+        texts={'command wrapper':'<command-message>recortex</command-message>\n<command-name>/recortex</command-name>\n<command-args>hold git-push</command-args>',
+               'local command output':'<local-command-stdout>We will keep the reader in pure Python.</local-command-stdout>',
+               'shell input':'<bash-input>echo We will keep the reader</bash-input>',
+               'task notification':'<task-notification>We will keep the reader in pure Python.</task-notification>',
+               'quoted':'We will keep it.\n> We will keep the reader in pure Python.',
+               'fenced':'We will keep it.\n```\nWe will keep the reader in pure Python.\n```',
+               'pasted':'[Pasted text #1 +12 lines] We will keep the reader in pure Python.',
+               'interrupted':'[Request interrupted by user]',
+               'caveat':'Caveat: The messages below were generated by the user while running local commands.'}
+        for name,text in texts.items():
+            rows,_=self.write(text,**typed)
+            self.assertFalse(sources.resolve(rows[0],self.project)['direct_user'],name)
+        # A compaction summary is model text in a user record: never the user's words, even if it were captured.
+        summary=dict(typed,type='user',userType='external',isCompactSummary=True,isVisibleInTranscriptOnly=True)
+        self.assertFalse(sources.typed_prompt(summary,'We will keep the reader in pure Python.','We will keep the reader in pure Python.'))
+        self.assertTrue(sources.typed_prompt(dict(typed,type='user',userType='external'),'We will keep it.','We will keep it.'))
+        rows,_=self.write([{'type':'text','text':'We will keep it.'},{'type':'image','source':{}}],**typed)
+        self.assertFalse(sources.resolve(rows[0],self.project)['direct_user'])
+        rows,_=self.write([{'type':'text','text':'We will keep the reader in pure Python.'}],**typed)
+        self.assertTrue(sources.resolve(rows[0],self.project)['direct_user'])
+        # The form a typed /recortex command is stored in still sets a hold: control_user, not direct_user.
+        rows,_=self.write(texts['command wrapper'],**typed)
+        found=sources.resolve(rows[0],self.project);self.assertFalse(found['direct_user']);self.assertTrue(found['control_user'])
 
 if __name__=='__main__':unittest.main()
