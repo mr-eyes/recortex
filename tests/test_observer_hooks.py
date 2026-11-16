@@ -539,6 +539,49 @@ class ObserverHookTests(unittest.TestCase):
         self.assertNotIn("hookSpecificOutput", self.run_hook(command="git push"))
         self.assertNotIn("hookSpecificOutput", self.run_hook(command="gh issue comment 3 --body-file note.md"))
 
+    def test_a_held_action_is_denied_in_time_however_long_the_transcript(self):
+        # The hold decision comes before any capture work, and before a Bash call capture makes one bounded scan, so
+        # a transcript far beyond what the hook can read in its time cannot let a held action through.
+        import observer_runtime, time as clock
+        self.entry_and_hold()
+        with self.path.open("a") as handle:
+            for n in range(300):
+                handle.write(json.dumps({"type": "user", "userType": "external",
+                                         "message": {"role": "user", "content": "note %d " % n + "x" * 20000}}) + "\n")
+        started = clock.monotonic()
+        with mock.patch.object(sources, "scan", wraps=sources.scan) as scan:
+            result = self.run_hook()
+        took = clock.monotonic() - started
+        self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"])
+        self.assertEqual(1, scan.call_count)  # one bounded scan before a Bash call, never a catch-up loop
+        self.assertLess(took, 1.5)
+        with mock.patch.object(sources, "scan", wraps=sources.scan) as scan, \
+                mock.patch.object(hooks, "SCAN_SECONDS", 0):  # at the edges of a turn, bounded by time as well
+            self.run_hook(event="stop")
+        self.assertEqual(1, scan.call_count)
+
+    def test_a_deadline_during_capture_or_the_hold_check_still_stops_a_held_action(self):
+        import contextlib, io, observer
+        self.entry_and_hold()
+        with mock.patch.object(hooks, "_capture", side_effect=TimeoutError("deadline")):
+            result = self.run_hook()
+            self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"])
+            self.assertEqual("The user has asked that this action not be taken.",
+                             result["hookSpecificOutput"]["permissionDecisionReason"])
+        # Out of time before the holds were decided: every command but the plainest reads is stopped.
+        with mock.patch.object(hooks, "_held", side_effect=TimeoutError("deadline")):
+            for command, denied in (("git push", True), ("python3 run.py", True), ("ls", False)):
+                result = self.run_hook(command=command)
+                self.assertEqual(denied, "hookSpecificOutput" in result, command)
+        data = dict(self.data, tool_name="Bash", tool_input={"command": "git push"})
+        for failing in ("_entry_repo", "handle"):
+            out = io.StringIO()
+            with mock.patch.object(observer.recortex, "load_config", return_value={"repo": REPO, "hub": 1}), \
+                    mock.patch.object(hooks, failing, side_effect=TimeoutError("deadline")), \
+                    mock.patch.object(observer.sys, "stdin", io.StringIO(json.dumps(data))), contextlib.redirect_stdout(out):
+                self.assertEqual(0, observer.hook("pre-tool"))
+            self.assertEqual("deny", json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"], failing)
+
     def test_the_denial_says_the_user_asked_and_invites_no_release(self):
         # The first live test's denial ("release that hold explicitly before this action") led the session to try a
         # release. The denial now says only that the user has asked that this action not be taken.

@@ -43,7 +43,8 @@ NOTICES = {
     "release-refused": "recortex observer: nothing in a session releases a hold; run observer.py release HOLD_ID in a separate terminal, outside Claude Code. Run observer.py holds.",
 }
 TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure")
-SCAN_ROUNDS = 16  # bounded scans one hook makes to catch up with its transcript
+SCAN_ROUNDS = 16  # bounded scans one hook makes to catch up with its transcript, at the edges of a turn
+SCAN_SECONDS = 1.0  # and the time they may take; before a Bash call one scan only, so that the hold check is never late
 STALE = 900  # seconds after which new captured work that no worker has taken up is worth a notice
 UNCHECKED = {"reason": "recortex observer: this machine's holds could not be checked, so every command but pwd, ls and "
                        "cat is stopped. The user can see why with observer.py status, in a separate terminal outside "
@@ -113,7 +114,7 @@ def _controls(store, rows, project_root, repo, config):
     return True, refused, unproven
 
 
-def _capture(store, event, data, project_root, repo, config, capture=True):
+def _capture(store, event, data, project_root, repo, config, capture=True, rounds=SCAN_ROUNDS):
     # PreToolUse rescans the persisted transcript synchronously: never wait for a
     # model/worker to compile a recognized original-user hold before an action.
     scan_data = dict(data, hook_event_name=event)
@@ -126,8 +127,9 @@ def _capture(store, event, data, project_root, repo, config, capture=True):
         stream = "controls_" + stream
     controlled = refused = unproven = False
     # Each scan is bounded; a few in a row catch up with a transcript that grew by a large turn (attachments alone
-    # can pass a scan's 256 KiB), so that lag is not reported as a problem.
-    for _ in range(SCAN_ROUNDS):
+    # can pass a scan's 256 KiB), so that lag is not reported as a problem. They stop at SCAN_SECONDS too.
+    until = time.monotonic() + SCAN_SECONDS
+    for _ in range(rounds):
         old = store.cursor(stream)
         rows, cursor = observer_sources.scan(scan_data, project_root, cursor=old if old is not None else start)
         # Holds are saved first; a crash can repeat an idempotent control, but must
@@ -135,7 +137,8 @@ def _capture(store, event, data, project_root, repo, config, capture=True):
         found = _controls(store, rows, project_root, repo, config)
         controlled, refused, unproven = controlled or found[0], refused or found[1], unproven or found[2]
         store.capture(rows if capture else [], stream=stream, cursor=cursor, expected_cursor=old)
-        if cursor == (old if old is not None else start) or os.stat(path, follow_symlinks=False).st_size <= cursor:
+        if (cursor == (old if old is not None else start) or os.stat(path, follow_symlinks=False).st_size <= cursor
+                or time.monotonic() > until):
             break
     # What is left is a line Claude Code is still writing, or a backlog the next hook goes on with.
     return controlled, os.stat(path, follow_symlinks=False).st_size > cursor, refused, unproven
@@ -278,12 +281,32 @@ def handle(event, data, config, repo):
 
 The CLI must call this before model/worker dispatch. Inputs are native Claude
 hook JSON; they do not confer authority to stored quotes or arbitrary files.
+Before a Bash call the hold decision comes first, from holds read without a
+lock; capture and context follow. When they fail or run out of time, the
+decision made is still returned, and a call whose holds were never decided is
+stopped as when they cannot be read (fail_closed).
 """
     if names.env(observer_runtime.GUARD, ""):
         return {}
     event = EVENTS.get(event, event)
     if event not in EVENTS.values() or not isinstance(data, dict) or not isinstance(config, dict):
         return {}
+    decision = {}
+    try:
+        return _handle(event, data, config, repo, decision)
+    except TimeoutError:
+        if event != "PreToolUse":
+            raise
+        return _output(event, denial=decision["held"] if "held" in decision else _unchecked(data))
+
+
+def fail_closed(data):
+    """The output before a Bash call whose holds could not be decided in time: as for unreadable holds, every command
+    but the plainest reads is stopped."""
+    return _output("PreToolUse", denial=_unchecked(data) if isinstance(data, dict) else UNCHECKED)
+
+
+def _handle(event, data, config, repo, decision):
     # A hold stays in force while this folder has an entry on this machine, whatever the project file says (its
     # repository, its trust, or "observer": false): one edit of a shared file must not lift what the user held. The
     # holds of the repository the project file names apply too, whether or not this folder's approval holds.
@@ -297,6 +320,7 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
             held, checked = (_held(held_repo, data) if held_repo else _unchecked(data)), True
             if not held and recortex.valid_repo(repo) and repo.lower() != held_repo:
                 held = _held(repo.lower(), data)
+            decision["held"] = held
     if not recortex.valid_repo(repo) or repo.lower() not in recortex.trusted_repos():
         return _output(event, denial=held) if held else {}
     raw = config.get("observer", {})
@@ -311,7 +335,7 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
             # that no longer validate). Nothing is created, and the line shows at session start only.
             return _output(event, notices=["approval"] if event == "SessionStart" else [], denial=held)
         if event == "PreToolUse" and not checked:
-            denial = _held(repo, data)
+            denial = decision["held"] = _held(repo, data)
         with observer_store.Store(repo, max_bytes=settings["max_pending_bytes"], wait=0.1,
                                   max_pending=settings["max_pending_observations"], config=config) as store:
             paused = store.get_control("capture_paused", False)
@@ -319,8 +343,9 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
                 notices.append("paused")
             if event in observer_sources.EVENTS:
                 try:
-                    controlled, incomplete, refused, unproven = _capture(store, event, data, project_root, repo,
-                                                                         config, capture=not paused)
+                    controlled, incomplete, refused, unproven = _capture(
+                        store, event, data, project_root, repo, config, capture=not paused,
+                        rounds=1 if event == "PreToolUse" else SCAN_ROUNDS)
                     if controlled:
                         notices.append("control")
                     # A transcript still being written, or a backlog the next hook goes on with, is not worth a line;

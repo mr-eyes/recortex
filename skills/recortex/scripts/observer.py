@@ -217,6 +217,7 @@ def hook(event, config=None, repo=None):
     signal.setitimer(signal.ITIMER_REAL, 3.5)
     trusted = unreadable = False
     holds = event == "pre-tool"  # the holds follow this folder's private entry, whatever the project file says
+    data = None
     try:
         if config is None:
             try:
@@ -252,7 +253,14 @@ def hook(event, config=None, repo=None):
         if result:
             emit(result)
         return 0
-    except (TimeoutError, OSError, ValueError, observer_store.StoreError, storage.StorageError):
+    except (TimeoutError, OSError, ValueError, observer_store.StoreError, storage.StorageError) as error:
+        if holds and isinstance(error, TimeoutError):
+            # Out of time before the holds were decided: stopped as when they cannot be read, never let through.
+            import observer_hooks
+            result = observer_hooks.fail_closed(data)
+            if result:
+                emit(result)
+            return 0
         raw_settings = (config or {}).get("observer", {})
         enabled = unreadable or isinstance(raw_settings, dict) and raw_settings.get("enabled") is True
         if (event not in TOOL_EVENTS and enabled and recortex.valid_repo(repo)
@@ -287,9 +295,9 @@ def _status(repo, config, loaded, store, options, details):
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if args.command == "hook":
+        return hook(args.event, repo=args.repo)
     try:
-        if args.command == "hook":
-            return hook(args.event, repo=args.repo)
         loaded = recortex.load_config()
         if args.command == "disable":
             # The holds to check are those of the repository this folder's private entry names, never the project
