@@ -10165,6 +10165,20 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual([], found)
         self.assertEqual(sorted(allowed), sorted(used))  # every entry of the allowlist is still needed
 
+    def test_the_contributing_commands_hold_every_test_file(self):
+        """Every tests/test_*.py file is in a command of CONTRIBUTING.md, so that no test is outside the batches."""
+        text = recortex.read_text(os.path.join(ROOT, "CONTRIBUTING.md"))
+        patterns = re.findall(r"^python3 -m unittest discover -s tests -p '?([^'\s]+)'?$", text, re.M)
+        import fnmatch
+        files = sorted(os.path.basename(path) for path in glob.glob(os.path.join(ROOT, "tests", "test_*.py")))
+        self.assertIn("test_scripts.py", files)
+        missing = [name for name in files if name != "test_scripts.py"
+                   and not any(fnmatch.fnmatch(name, pattern) for pattern in patterns)]
+        self.assertEqual([], missing)
+        workflow = recortex.read_text(os.path.join(ROOT, ".github", "workflows", "tests.yml"))
+        self.assertIn("python -m unittest discover -s tests -v", workflow)
+        self.assertIn("timeout-minutes: 45", workflow)
+
     def test_each_hook_is_stopped_before_its_timeout(self):
         hooks = self.read_json("hooks", "hooks.json")["hooks"]
         timeouts = {event: entries[0]["hooks"][0]["timeout"] for event, entries in hooks.items()}
