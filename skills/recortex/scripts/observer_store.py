@@ -112,6 +112,65 @@ def _exclusive_lock(folder, name, wait=0):
         os.close(descriptor)
 
 
+COMMAND_HOLDS = "command-holds.json"
+
+
+def _command_digest(command):
+    return hashlib.sha256(command.strip().encode("utf-8")).hexdigest()
+
+
+def read_holds(repo, tries=3):
+    """The holds, for the check before a tool call: read through a read-only connection with a short retry, without
+    the initialization lock or a write, so that a busy queue does not keep a hold from being checked. [] when this
+    machine has no queue for the repository. Raises StoreError when they cannot be read."""
+    folder = storage.folder(storage.state_top(), storage.repo_folder(repo.lower()), "observer", create=False,
+                            tighten=False)
+    if folder is None:
+        return []
+    path = os.path.join(folder, "pending.sqlite")
+    before = storage.check_path(path, "file")
+    if not before:
+        return []
+    for attempt in range(tries):
+        db = None
+        try:
+            db = sqlite3.connect("file:" + quote(path, safe="/") + "?mode=ro", uri=True, timeout=0.1,
+                                 isolation_level=None)
+            if not storage.same_file(path, before):
+                raise StoreError("changed")
+            meta = dict(db.execute("SELECT key,value FROM meta"))
+            if meta.get("repo") != repo.lower() or meta.get("mark") != storage.mark(path, repo.lower(), create=False,
+                                                                                      tighten=False):
+                raise StoreError("identity")
+            row = db.execute("SELECT value FROM controls WHERE key='holds'").fetchone()
+            holds = json.loads(row[0]) if row else []
+            if not isinstance(holds, list):
+                raise StoreError("invalid_holds")
+            return holds
+        except (sqlite3.Error, ValueError) as error:
+            if attempt + 1 == tries:
+                raise StoreError("unreadable") from error
+            time.sleep(0.05)
+        finally:
+            if db is not None:
+                db.close()
+
+
+def held_commands(repo):
+    """The digests of the commands under active exact-command holds, from the file update_holds keeps beside the
+    queue: what is still known about them when the queue itself cannot be read. Raises StoreError when unknown."""
+    try:
+        folder = storage.folder(storage.state_top(), storage.repo_folder(repo.lower()), "observer", create=False,
+                                tighten=False)
+        text = storage.read_file(os.path.join(folder, COMMAND_HOLDS)) if folder else None
+        digests = json.loads(text) if text is not None else []
+    except (storage.StorageError, OSError, ValueError) as error:
+        raise StoreError("unreadable") from error
+    if not isinstance(digests, list) or not all(isinstance(item, str) and HEX.fullmatch(item) for item in digests):
+        raise StoreError("unreadable")
+    return set(digests)
+
+
 def _with_key(body, key):
     lines = body.splitlines(keepends=True)
     first = next((n for n, line in enumerate(lines) if line.strip()), None)
@@ -555,6 +614,15 @@ class Store:
             if not isinstance(changed, list) or len(canonical(changed).encode("utf-8")) > 1024 * 1024:
                 raise StoreError("invalid_holds")
             self.db.execute("INSERT OR REPLACE INTO controls VALUES ('holds',?)", (canonical(changed),))
+        # Beside the queue, the digests of the held exact commands: a call can still be stopped when the queue
+        # cannot be read (held_commands).
+        digests = sorted({_command_digest(hold["command"]) for hold in changed if isinstance(hold, dict)
+                          and hold.get("state") == "active" and hold.get("action") == "command"
+                          and isinstance(hold.get("command"), str)})
+        try:
+            storage.write_file(os.path.join(self.folder, COMMAND_HOLDS), json.dumps(digests))
+        except (storage.StorageError, OSError):
+            pass  # the queue holds the holds; this copy only serves when the queue cannot be read
         return changed
 
     def status(self):

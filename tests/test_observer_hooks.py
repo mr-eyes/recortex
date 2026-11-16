@@ -196,6 +196,47 @@ class ObserverHookTests(unittest.TestCase):
             self.assertIn("capture is incomplete", result["systemMessage"])
             self.assertNotIn("SECRET", json.dumps(result))
 
+    def test_unreadable_holds_stop_only_what_a_hold_could_stop(self):
+        self.append("/recortex hold command python publish.py")
+        self.run_hook()
+        with Store(REPO) as store:
+            path = Path(store.path)
+        path.write_bytes(b"not a database" * 100)  # a damaged queue: neither read nor opened
+        for command in ("git push", "git tag v1", "gh release create v1", "git -C ../other push", "python publish.py"):
+            result = self.run_hook(command=command)
+            self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"], command)
+            self.assertIn("could not be checked", result["hookSpecificOutput"]["permissionDecisionReason"])
+        for command in ("ls", "git status", "python other.py"):
+            self.assertNotIn("hookSpecificOutput", self.run_hook(command=command), command)
+        self.assertNotIn("hookSpecificOutput", hooks.handle("pre-tool", dict(self.data, tool_name="Read",
+                                                                            tool_input={"file_path": "x"}), self.config, REPO))
+
+    def test_a_busy_queue_does_not_keep_a_hold_from_being_checked(self):
+        import fcntl
+        import sqlite3
+        self.append("/recortex hold git-push")
+        self.run_hook()
+        with Store(REPO) as store:
+            folder, path = store.folder, store.path
+        holder = os.open(os.path.join(folder, "initialization.lock"), os.O_RDWR)
+        self.addCleanup(os.close, holder)
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        writer = sqlite3.connect(path, isolation_level=None)
+        self.addCleanup(writer.close)
+        writer.execute("BEGIN IMMEDIATE")  # another process in the middle of a write
+        result = self.run_hook(command="git push")
+        self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"])
+        self.assertNotIn("could not be checked", result["hookSpecificOutput"]["permissionDecisionReason"])
+        writer.execute("ROLLBACK")
+
+    def test_an_observer_that_is_off_gives_no_decision(self):
+        self.append("/recortex hold git-push")
+        self.run_hook()
+        with mock.patch("observer_hooks.observer_store.read_holds", side_effect=StoreError("unreadable")):
+            self.assertEqual({}, hooks.handle("pre-tool", dict(self.data, tool_name="Bash",
+                                                              tool_input={"command": "git push"}),
+                                              dict(self.config, observer={"enabled": False}), REPO))
+
     def test_daily_cap_has_its_own_line(self):
         with Store(REPO) as store:
             store.set_control("worker_degraded", "publish_daily_cap")

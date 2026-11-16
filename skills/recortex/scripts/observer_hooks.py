@@ -19,6 +19,7 @@ import observer_runtime
 import observer_sources
 import observer_store
 import recortex
+import storage
 
 EVENTS = {"session-start": "SessionStart", "subagent-start": "SubagentStart",
           "prompt-submit": "UserPromptSubmit", "pre-compact": "PreCompact",
@@ -40,6 +41,8 @@ NOTICES = {
     "release-refused": "recortex observer: nothing in a session releases a hold; run observer.py release HOLD_ID in a separate terminal, outside Claude Code. Run observer.py holds.",
 }
 TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure")
+UNCHECKED = {"reason": "recortex observer: the holds could not be checked, so this kind of action, which a hold can "
+                       "stop, is stopped too. Run observer.py status."}
 # Lines that answer something the user just did (a hold, a release); each arises once, so it is never held back.
 ANSWERS = frozenset(("control", "control-refused", "release-refused"))
 
@@ -147,6 +150,27 @@ def _notices(store, notices, data, event):
     return notices
 
 
+def _held(repo, data):
+    """The decision before a tool call, from holds read without any lock (observer_store.read_holds). When they cannot
+    be read, a call a hold could stop (a push, a tag, a release, or a command under an exact-command hold) is denied
+    with one fixed reason; every other call goes on."""
+    tool_name, tool_input = data.get("tool_name"), data.get("tool_input")
+    try:
+        holds = observer_store.read_holds(repo)
+    except (observer_store.StoreError, storage.StorageError, OSError, ValueError, KeyError, TypeError):
+        classified = observer_holds.classify_action(tool_name, tool_input)
+        if classified["actions"] or classified.get("target_unknown"):
+            return UNCHECKED
+        try:
+            held = observer_store.held_commands(repo)
+        except observer_store.StoreError:
+            held = set()
+        command = tool_input.get("command") if isinstance(tool_input, dict) else None
+        return UNCHECKED if isinstance(command, str) and observer_store._command_digest(command) in held else None
+    result = observer_holds.check_action(holds, repo, tool_name, tool_input, session_id=data.get("session_id"))
+    return result if result["decision"] == "deny" else None
+
+
 def _degraded(store, reason):
     try:
         store.set_control("hook_degraded", reason)
@@ -216,12 +240,10 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
             # This machine's entry for the folder does not hold (another repository or machine key, or settings
             # that no longer validate). Nothing is created, and the line shows at session start only.
             return _output(event, notices=["approval"]) if event == "SessionStart" else {}
+        if event == "PreToolUse":
+            denial = _held(repo, data)
         with observer_store.Store(repo, max_bytes=settings["max_pending_bytes"], wait=0.1,
                                   max_pending=settings["max_pending_observations"], config=config) as store:
-            if event == "PreToolUse":
-                result = observer_holds.check_action(store.holds(), repo, data.get("tool_name"),
-                                                     data.get("tool_input"), session_id=data.get("session_id"))
-                denial = result if result["decision"] == "deny" else None
             paused = store.get_control("capture_paused", False)
             if paused:
                 notices.append("paused")
