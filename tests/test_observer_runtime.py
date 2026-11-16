@@ -73,13 +73,16 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.fake(output={'ok':True,'secret':'reject'})['code'],'invalid-output')
         self.assertFalse(runtime.validate(True,{'type':'integer'}))
     def test_gate_and_guard_prevent_launch(self):
-        with patch.object(runtime.subprocess,'Popen') as launch:
+        # A claude on PATH, so the gate and the guard are what stop the launch (CI machines have no claude).
+        with patch.object(runtime.subprocess,'Popen') as launch, \
+                patch.object(runtime.shutil,'which',return_value=sys.executable):
             self.assertEqual(runtime.invoke({},SCHEMA,'extract',{})['code'],'runtime-gate')
             with patch.dict(os.environ,{'RECORTEX_OBSERVER':'1'}):
                 self.assertEqual(runtime.invoke({},SCHEMA,'smoke',{})['code'],'recursion')
             launch.assert_not_called()
     def test_total_input_limit(self):
-        with patch.object(runtime.subprocess,'Popen') as launch:
+        with patch.object(runtime.subprocess,'Popen') as launch, \
+                patch.object(runtime.shutil,'which',return_value=sys.executable):
             self.assertEqual(runtime.invoke({},SCHEMA,'smoke',{'max_input_chars':10})['code'],'input-limit')
             launch.assert_not_called()
     def test_deadline(self):
