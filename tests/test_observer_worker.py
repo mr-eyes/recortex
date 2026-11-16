@@ -286,6 +286,37 @@ class WorkerTests(unittest.TestCase):
             worker.run_once(REPO, self.config, self.project, lambda *args: {'ok': False})
         self.assertEqual([1], calls)
 
+    def test_a_session_kept_off_the_record_is_not_selected_from(self):
+        # A publish hold on a session: its sources are set aside before any call, and are not offered again; another
+        # session's are selected as usual. A withheld event at publication is not a degraded worker.
+        import observer_holds
+        import observer_publisher
+        hold = observer_holds.make_hold({'source_id': 's1', 'role': 'user', 'direct_user': True,
+                                         'text': 'off the record'}, REPO, 'publish', scope={'session_id': 'session-1'})
+        with store.Store(REPO, config=self.config) as db:
+            db.update_holds(lambda holds: holds + [hold])
+        withheld = [self.capture(QUOTE + ' Number %d.' % n) for n in range(3)]
+        report = self.run_worker(self.invoke(self.candidate(withheld[0])))
+        self.assertEqual([], self.calls)
+        self.assertEqual(3, report['deferred'])
+        with store.Store(REPO, config=self.config) as db:
+            self.assertEqual({'withheld'}, {db.observation(sid)['reason'] for sid in withheld})
+        self.run_worker(self.invoke(self.candidate(withheld[0])))
+        self.assertEqual([], self.calls)  # not offered again
+        self.hook = dict(self.hook, session_id='session-2', transcript_path=str(self.folder / 'session-2.jsonl'))
+        self.path = self.folder / 'session-2.jsonl'
+        self.path.write_text('')
+        self.path.chmod(0o600)
+        other = self.capture()
+        self.config['observer']['mode'] = 'automatic'
+        runtime.approve(REPO, self.config)
+        with patch.object(observer_publisher, 'publish', side_effect=observer_publisher.PublishError('withheld')):
+            ready = self.run_worker(self.invoke(self.candidate(other)))['ready']
+        self.assertEqual(['extract', 'review'], [purpose for purpose, _ in self.calls])
+        with store.Store(REPO, config=self.config) as db:
+            self.assertEqual(('deferred', 'withheld'), (db.event(ready[0])['state'], db.event(ready[0])['reason']))
+            self.assertFalse(db.get_control('worker_degraded'))
+
     def test_unbound_candidates_never_reach_the_reviewer(self):
         cases = {'excerpt_binding': dict(excerpts=['words that are not in the source']),
                  'destination': dict(issue=99),

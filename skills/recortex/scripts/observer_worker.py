@@ -8,6 +8,7 @@ import time
 import index
 import mind_model
 import observer_context
+import observer_holds
 import observer_publisher
 import lint_drafts
 import names
@@ -334,6 +335,15 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 - len(runtime.canonical(templates)) - RECORD_ROOM - 1000)
         supplied, offered, length = {}, [], 0
         queued, half = _queued(store)
+        holds, kept = store.holds(), []
+        for item in queued:
+            if observer_holds.publication_withheld(holds, repo, {item["metadata"].get("session_id")}):
+                # The user kept that session off the record: nothing of it is selected, and no call is spent on it.
+                # As a "withheld" review, it is not offered again.
+                store.defer(item["source_id"], "withheld"); report["deferred"] += 1
+            else:
+                kept.append(item)
+        queued = kept
         if not half and len(queued) < ENOUGH and all(time.time() - item["created"] < PATIENCE for item in queued):
             return dict(report, code="no-sources")  # wait for a stretch of the session
         for item in queued:
@@ -615,7 +625,9 @@ def run_once(repo, config, project_root=None, invoke_fn=None, settle_first=False
                             # One event's own problem defers that event and the next one is tried; anything else
                             # (the daily cap, a marked project, GitHub unavailable) stops the pass. Both are kept.
                             reason = getattr(error, "reason", "github_unavailable")
-                            store.set_control("worker_degraded", "publish_" + reason)
+                            if reason not in observer_holds.HELD_REASONS:
+                                # A hold or a held-back event is what the user asked for, not a fault: no "pending".
+                                store.set_control("worker_degraded", "publish_" + reason)
                             if reason in observer_publisher.EVENT_PROBLEMS:
                                 store.transition(event["eventkey"], "deferred", reason=reason)
                                 continue
