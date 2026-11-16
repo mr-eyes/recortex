@@ -24,7 +24,7 @@ A project opts in with a `.recortex.json` file at its root (example: [templates/
 | `banned_words` | Words the linter rejects |
 | `fields` | The field sheet and the sensitive-material marks, written by `setup.py`; see [references/fields.md](references/fields.md) |
 | `board` | `{"owner": ..., "number": ...}`, the private board of the work, written by `board.py setup`; used only as the user approved it; see [references/board.md](references/board.md) |
-| `observer` | Experimental, off by default: local observation, independent review and event publication, enabled per folder on this machine; see [references/observer.md](references/observer.md) |
+| `observer` | Only `false`, which switches the experimental observer off for this project on every machine; its settings and approval stay private per machine and folder (`observer.py enable`); see [references/observer.md](references/observer.md) |
 
 The scripts look for this file in one place only: the top of the git checkout that contains the current folder, or the current folder itself outside a checkout. Parent folders are never searched. (`CLAUDE_PROJECT_DIR` is used when set, but Claude Code sets it for hooks, not for commands you run.) So run the scripts from inside the project, or pass `--repo`, and read the first line each script prints, `config: <path>  repo: <owner/name>`, to confirm it is working on the intended repository. If the file is missing, ask the owner for the repository and whether to bootstrap (see below) before writing anything.
 
