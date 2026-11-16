@@ -6,9 +6,12 @@ does not promise exactly-once physical comments across machines.
 """
 
 import hashlib
+import html
 import json
+import posixpath
 import re
 import time
+from urllib.parse import unquote, urljoin, urlsplit
 
 import field_sheet
 import lint_drafts
@@ -26,14 +29,39 @@ class PublishError(RuntimeError):
         super().__init__("observer publication deferred: " + reason)
 
 
-MENTION = re.compile(r"(?<![\w`/@.])@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\b")
+# Checked on the raw body, code included: GitHub's own rules for code spans (backslash escapes, backtick runs of equal
+# length) decide what renders as a live mention, so nothing is taken for code here. An @ after a word character is an
+# email address or a path, never a mention.
+MENTION = re.compile(r"(?<!\w)@[A-Za-z0-9]")
 ADDRESS = re.compile(r"(?i)\b(?:[a-z][a-z0-9+.-]*://|www\.)[^\s<>()\]]+")
+# Targets of inline links and images, and of reference definitions; each is resolved as a browser would.
+LINK_TARGET = re.compile(r"\]\(\s*<?([^\s)>]*)")
+REFERENCE = re.compile(r"(?m)^ {0,3}\[[^\]\n]+\]:[ \t]*\n?[ \t]*<?([^\s>]+)")
+ESCAPED = re.compile(r"\\([!-/:-@\[-`{-~])")
 MARKUP = re.compile(r"!\[|<(?!/?(?:details|summary)>|!-- ghim:event )[A-Za-z!/?]")
 STATUS_LINKS = ("replaces", "instead")
 STATUS_AUTHORITY = ("user", "command")
 # A problem of the event itself: the event is deferred with this reason and the next one is tried.
 EVENT_PROBLEMS = frozenset(("lint_failed", "invalid_target", "explicit_hold", "status_change", "outbound_markup",
                             "outbound_mention", "outbound_address", "payload_changed", "review_changed"))
+
+
+def off_repository(target, repo):
+    """True unless `target`, decoded as Markdown decodes a link destination and resolved against the repository's page
+    as a browser resolves it, is a page of this repository on github.com."""
+    value = ESCAPED.sub(r"\1", html.unescape(target)).replace("\\", "/")
+    if any(ord(char) < 32 or char.isspace() for char in value):
+        return True
+    home = "https://github.com/%s/" % repo.lower()
+    if value.lower().startswith("www."):
+        value = "https://" + value
+    try:
+        parts = urlsplit(urljoin(home, value))
+    except ValueError:
+        return True
+    path = posixpath.normpath(unquote(parts.path) or "/")
+    return (parts.scheme.lower() != "https" or parts.netloc.lower() != "github.com"
+            or not (path.lower() + "/").startswith("/%s/" % repo.lower()))
 
 
 def status_change(body):
@@ -51,10 +79,10 @@ def outbound_problem(body, repo, status_ok=False):
         return "status_change"
     if MARKUP.search(body):
         return "outbound_markup"
-    if MENTION.search("\n".join(lint_drafts.strip_inline_code(line) for line in body.splitlines())):
+    if MENTION.search(body):
         return "outbound_mention"
-    home = "https://github.com/%s/" % repo.lower()
-    if any(not address.lower().startswith(home) for address in ADDRESS.findall(body)):
+    targets = ADDRESS.findall(body) + LINK_TARGET.findall(body) + REFERENCE.findall(body)
+    if any(off_repository(target, repo) for target in targets):
         return "outbound_address"
     return None
 

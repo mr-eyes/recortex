@@ -102,7 +102,7 @@ def template_context():
     return templates
 
 
-MIN_QUOTE = 12  # characters an excerpt needs before it counts as the user's own words
+MIN_WORDS = 6  # a shorter quote ("go ahead", "this is fine") cannot back a change of status
 
 
 def _executed(candidate, supplied):
@@ -114,17 +114,29 @@ def _executed(candidate, supplied):
                for item in supplied[source].get("tool_results", []))
 
 
+def _users(candidate, supplied):
+    return [supplied[source]["text"] for source in candidate["sources"]
+            if supplied[source].get("direct_user") is True and supplied[source]["role"] == "user"]
+
+
+def exact_words(body):
+    """The text of a decision's "Exact words" field: its quoted lines, joined."""
+    fields = dict(record_format.fields(body))
+    return "\n".join(line.lstrip()[1:].lstrip() for line in fields.get("Exact words", "").splitlines()
+                     if line.lstrip().startswith(">"))
+
+
 def status_authority(candidate, supplied):
-    """What a memory that overturns or sets aside an earlier one rests on: "user" for the user's own words in this
-    session (a decision's exact words, checked before this, or an excerpt from a direct user message), "command" for a
-    Bash call that ran, "" for tool output, a web page or a file alone. Without one it waits for the main session."""
+    """What a memory that overturns or sets aside an earlier one rests on. "user": a decision whose own "Exact words"
+    field quotes at least MIN_WORDS words of one direct user message, and at least half of that message, so that a
+    short or generic phrase cannot back it. "command": a Bash call that ran, among its own sources. "" otherwise,
+    including every other kind that cites the user, since no field of theirs carries the user's words: it then
+    waits for the main session."""
     if candidate["kind"] == "decision":
-        return "user"
-    users = [supplied[source]["text"] for source in candidate["sources"]
-             if supplied[source].get("direct_user") is True and supplied[source]["role"] == "user"]
-    if any(len(excerpt.strip()) >= MIN_QUOTE and any(excerpt in text for text in users)
-           for excerpt in candidate["excerpts"]):
-        return "user"
+        quoted = exact_words(candidate["body"]).strip()
+        if len(quoted.split()) >= MIN_WORDS and any(quoted in text and 2 * len(quoted) >= len(text.strip())
+                                                   for text in _users(candidate, supplied)):
+            return "user"
     return "command" if _executed(candidate, supplied) else ""
 
 
@@ -149,10 +161,8 @@ def candidate_problem(candidate, supplied, context, config, repo=None):
     if any(not any(excerpt in supplied[source]["text"] for source in selected) for excerpt in candidate["excerpts"]):
         return "excerpt-binding"
     if candidate["kind"] == "decision":
-        original = [supplied[source]["text"] for source in selected if supplied[source].get("direct_user") is True and supplied[source]["role"] == "user"]
-        fields = dict(record_format.fields(candidate["body"]))
-        quoted = "\n".join(line.lstrip()[1:].lstrip() for line in fields.get("Exact words", "").splitlines() if line.lstrip().startswith(">"))
-        if not quoted or not any(quoted in text for text in original):
+        quoted = exact_words(candidate["body"])
+        if not quoted or not any(quoted in text for text in _users(candidate, supplied)):
             return "decision-authority"
     if candidate["kind"] in ("result", "failure") and not _executed(candidate, supplied):
         return "observed-evidence"

@@ -76,6 +76,25 @@ class ObserverPublisherTests(unittest.TestCase):
                 publisher.publish(fixtures.REPO, key, self.config, main_session=main_session)
         self.assertEqual([], [a for a in self.calls() if a[:2] == ["issue", "comment"]])
 
+    def test_hidden_mentions_and_outside_targets_are_refused(self):
+        repo = fixtures.REPO
+        mentions = ["see \\`@hubot\\` now", "``a` @hubot `b``", "```\n@hubot\n```", "`@hubot`", "(@hubot)",
+                    "x/@hubot", "\\@hubot"]
+        for text in mentions:
+            self.assertEqual("outbound_mention", publisher.outbound_problem("Plain text " + text, repo), text)
+        self.assertIsNone(publisher.outbound_problem("Mail octocat@example.test about it.", repo))
+        addresses = ["[status][1]\n\n[1]: https://collector.example.test/p.png",
+                     "[status][1]\n\n[1]:\n  //collector.example.test/p",
+                     "[x](//collector.example.test/x)", "[x](\\\\collector.example.test/x)",
+                     "[x](javascript:alert(1))", "[x](data:text/html;base64,PHA+)", "[x](&#47;&#47;collector.example.test)",
+                     "[x](\\/\\/collector.example.test)", "[x](../../other/repo)", "[x](https://github.com@collector.example.test/)",
+                     "[x](https://github.com/%s/../../other)" % repo, "[x]( <//collector.example.test> )"]
+        for text in addresses:
+            self.assertIn(publisher.outbound_problem("Plain text " + text, repo), ("outbound_address", "outbound_markup"), text)
+        self.assertEqual("outbound_markup", publisher.outbound_problem("![s][1]\n\n[1]: https://collector.example.test/p", repo))
+        for text in ("[x](https://github.com/%s/issues/3)" % repo, "[x](issues/3)", "[x](#fold)", "As in #3."):
+            self.assertIsNone(publisher.outbound_problem("Plain text " + text, repo), text)
+
     def test_change_of_status_without_the_users_words_or_a_command_waits_for_the_main_session(self):
         idea = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text()
         data = self.state()
