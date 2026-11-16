@@ -391,6 +391,27 @@ class WorkerTests(unittest.TestCase):
         self.run_worker(call)
         self.assertEqual(left,shown[1][:len(left)])  # the deferred ones first, still in order
         self.assertEqual(('ignored',''),self.state(left[0]))
+    def test_one_agent_message_that_tells_two_moments_backs_both(self):
+        # The agent's summary told the user of a result and of the idea it raised; the second candidate drops the
+        # message the first event already holds and keeps its own source.
+        import observer_publisher
+        idea = (ROOT / 'examples/octo-repo/chain/1-idea.md').read_text()
+        said = self.capture('Idea for later: try one regular expression for the whole text.')
+        told = self.capture('Saved two things: the decision, and the regular-expression idea for later.', role='assistant')
+        decided = self.capture()
+        first = self.candidate(decided, sources=[decided, told], excerpts=[QUOTE])
+        second = {'kind': 'idea', 'issue': 2, 'body': idea, 'sources': [said, told], 'excerpts': []}
+        def call(payload, schema, purpose, config):
+            self.calls.append((purpose, payload))
+            if purpose == 'extract':
+                return {'ok': True, 'structured': {'candidates': [first, second], 'ignored': []}}
+            return {'ok': True, 'structured': {'candidate_hash': payload['candidate_hash'], 'accepted': True,
+                                               'reason': 'supported'}}
+        report = self.run_worker(call)
+        self.assertEqual(2, len(report['ready']))
+        with store.Store(REPO, config=self.config) as db:
+            events = [db.event(key) for key in report['ready']]
+        self.assertEqual([sorted([decided, told]), [said]], [sorted(e['candidate']['sources']) for e in events])
     def test_a_candidate_for_an_issue_that_is_not_a_target_is_tried_once_more(self):
         sid=self.capture()
         self.run_worker(self.invoke(self.candidate(sid,issue=99)))

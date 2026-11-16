@@ -412,7 +412,14 @@ def _process(repo, config, project_root=None, invoke_fn=None):
         for sid in handled:
             if store.observation(sid)["state"] in ("observed", "deferred"):
                 store.mark_handled(sid); report["ignored"] += 1
+        used = set()  # the sources of this pass's events
         for candidate in candidates:
+            # One agent message often tells several moments (a result and the idea it raised). A source backs one
+            # event: a candidate whose other sources remain drops the ones an event already holds.
+            taken = [sid for sid in candidate["sources"] if sid in used or store.db.execute(
+                "SELECT 1 FROM event_sources WHERE source_id=?", (sid,)).fetchone()]
+            if taken and len(taken) < len(candidate["sources"]):
+                candidate = dict(candidate, sources=[sid for sid in candidate["sources"] if sid not in taken])
             primary = next((sid for sid in candidate["sources"] if sid in supplied), None)
             problem = candidate_problem(candidate, supplied, context, config, repo)
             if problem or not primary or set(candidate["sources"]) & handled:
@@ -472,6 +479,7 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 continue
             report["ready"].append(eventkey)
             handled.update(candidate["sources"])
+            used.update(candidate["sources"])
         # What the selector neither used nor set aside is offered again, a bounded number of times.
         leftover = "candidate_limit" if len(candidates) == options["max_candidates"] else "uncertain"
         for item in offered:
