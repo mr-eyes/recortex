@@ -462,6 +462,44 @@ class ObserverHookTests(unittest.TestCase):
         gone = dict(self.data, session_id="session3", transcript_path=str(self.path.parent / "session3.jsonl"))
         self.assertIn("transcript sources are unavailable", hooks.handle("stop", gone, self.config, REPO)["systemMessage"])
 
+    def queued(self, text, **changes):
+        """What Claude Code 2.1.325 writes for a message typed while a turn runs, as the live test found it."""
+        item = dict({"type": "queued_command", "prompt": text, "source_uuid": "d3a0fc45-b874-428e-a353-1be5d7f01c0c",
+                     "delivery_id": "63ed5f0f-6377-4f82-a89b-11339c109367", "commandMode": "prompt",
+                     "origin": {"kind": "human"}, "timestamp": "2026-11-16T17:09:55.601Z", "humanTurn": True},
+                    **changes.pop("attachment", {}))
+        records = [{"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-11-16T17:09:55.738Z",
+                    "sessionId": "session1", "content": text},
+                   {"type": "queue-operation", "operation": "remove", "timestamp": "2026-11-16T17:10:16.634Z",
+                    "sessionId": "session1", "content": text, "reason": "absorbed_mid_turn",
+                    "commandUuid": "d3a0fc45-b874-428e-a353-1be5d7f01c0c"},
+                   dict({"parentUuid": "e8aa7023-a832-4504-bcb5-1d97722c9fb2", "isSidechain": False, "attachment": item,
+                         "type": "attachment", "uuid": "57d99f01-d988-453b-af06-7908adf94d%02d" % len(text),
+                         "timestamp": "2026-11-16T17:09:55.601Z",
+                         "rendered": [{"content": "<system-reminder>\nThe user sent a new message while you were "
+                                                  "working:\n%s\n</system-reminder>" % text}],
+                         "renderedRole": "system", "session_id": "session1", "userType": "external",
+                         "entrypoint": "cli", "cwd": str(self.project), "sessionId": "session1", "version": "2.1.325",
+                         "gitBranch": "master"}, **changes)]
+        with self.path.open("a") as handle:
+            handle.write("".join(json.dumps(record) + "\n" for record in records))
+
+    def test_a_message_typed_while_a_turn_runs_is_the_users_own(self):
+        # "Don't push." typed mid-turn is stored only as a queued_command attachment: it holds, and it is a source of
+        # the user's own words. Another shape does not.
+        for changes in ({"attachment": {"origin": {"kind": "agent"}}}, {"attachment": {"humanTurn": False}},
+                        {"attachment": {"commandMode": "bash"}}, {"isSidechain": True}, {"isMeta": True},
+                        {"userType": "internal"}):
+            self.queued("Don't push.", **changes)
+            self.assertNotIn("hookSpecificOutput", self.run_hook(), changes)
+        self.queued("Don't push.")
+        self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
+        self.queued("Use the strict parser for every import from now on.")
+        rows, _ = sources.scan(dict(self.data, hook_event_name="Stop"), str(self.project))
+        said = [sources.resolve(row, str(self.project)) for row in rows if row["role"] == "user"]
+        self.assertEqual([("Don't push.", True), ("Use the strict parser for every import from now on.", True)],
+                         [(item["text"], item["direct_user"]) for item in said])
+
     def test_plain_phrase_holds_only_this_session(self):
         self.append("Don't push.")
         self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
@@ -802,6 +840,16 @@ class ObserverHookTests(unittest.TestCase):
         with Store(REPO) as store:
             self.assertGreater(Path(self.path).stat().st_size,
                                store.cursor(__import__("hashlib").sha256(str(self.path).encode()).hexdigest()))
+
+    def test_a_hold_typed_mid_turn_in_the_unread_tail_stops_the_next_command(self):
+        import observer_runtime
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+                                                     "publisher_id": observer_runtime.publisher_id(create=True)}},
+                                 str(self.project))
+        self.run_hook(event="stop")
+        self.big_turn()
+        self.queued("Don't push.")
+        self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
 
     def test_an_unread_tail_without_a_hold_lets_commands_through_and_one_not_searched_in_time_does_not(self):
         self.run_hook(event="stop")

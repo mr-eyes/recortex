@@ -256,12 +256,32 @@ def typed_prompt(record, content, text):
     return bool(text.strip()) and not HARNESS.search(text)
 
 
+def _queued(record):
+    """(role, text, typed, control) of a message the user typed while a turn ran. Claude Code stores it as a
+    queued_command attachment, with no user record, when the running turn takes it in. Only the strict shape counts:
+    an attachment of the main session (no sidechain, meta, compaction or transcript-only mark) with userType
+    "external", origin {"kind": "human"}, humanTurn true, the prompt command mode and a prompt; its text then goes
+    through the typed prompt's checks."""
+    item = record.get("attachment")
+    if (not isinstance(item, dict) or item.get("type") != "queued_command" or item.get("humanTurn") is not True
+            or item.get("origin") != {"kind": "human"} or item.get("commandMode", "prompt") != "prompt"
+            or not isinstance(item.get("prompt"), str) or record.get("userType") != "external"
+            or any(record.get(key) for key in HIDDEN) or record.get("isSidechain")):
+        return "unknown", "", False, False
+    text = item["prompt"]
+    typed = bool(text.strip()) and not HARNESS.search(text)
+    control = not re.search(r"(?m)^\s*>|<pasted_content\b|<system-reminder\b|<tool_result\b", text)
+    return "user", REMINDER.sub("", text), typed, control
+
+
 def _content(record):
     """(role, text, typed, control) of one transcript record. The observer is a note-taker of the conversation: it reads
     the user's prompts and the text the agent writes to the user, nothing else. A tool result has role "tool" and no
     text; an assistant record gives its text blocks only, not its thinking or its tool calls. typed: the user's own
     words (typed_prompt); control: a user message that may set a hold, by the looser earlier rule, since a hold only
     denies. Text in system reminders never reaches a model."""
+    if record.get("type") == "attachment":
+        return _queued(record)
     message = record.get("message")
     if not isinstance(message, dict) or record.get("type") not in ("user", "assistant"):
         return "unknown", "", False, False
@@ -289,7 +309,8 @@ def _content(record):
 
 
 def _content_hash(record, role, subagent=False):
-    content = (record.get("message") or {}).get("content")
+    content = ((record.get("attachment") or {}).get("prompt") if record.get("type") == "attachment"
+               else (record.get("message") or {}).get("content"))
     canonical = json.dumps([role, content, bool(record.get("isMeta")), bool(record.get("isSidechain")), subagent], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -428,7 +449,8 @@ def control_tail(data, project_root, start, max_bytes=None, seconds=None):
                 skip = False
                 continue
             low = line.lower()
-            if b'"user"' not in low or not any(word in low for word in CONTROL_WORDS):
+            if ((b'"user"' not in low and b'"queued_command"' not in low)
+                    or not any(word in low for word in CONTROL_WORDS)):
                 continue
             try:
                 record = json.loads(line)
