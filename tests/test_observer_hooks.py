@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -9,6 +10,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skills" / "recortex" / "scripts"))
+import names
 import observer_hooks as hooks
 import observer_sources as sources
 from observer_store import Store, StoreError
@@ -310,6 +312,94 @@ class SharedProjectFileTests(unittest.TestCase):
             # Even the project file's own entry, were it ever passed unchecked, finds no approval and creates nothing.
             self.assertNotIn("hookSpecificOutput", hooks.handle(event, data, shared, REPO), event)
         self.assertFalse((self.base / "state").exists())
+
+
+SCRIPT = ROOT / "skills" / "recortex" / "scripts" / "run_observer_hook.sh"
+EVENT_NAMES = ("session-start", "subagent-start", "prompt-submit", "pre-compact", "pre-tool", "post-tool",
+               "tool-failure", "stop", "subagent-stop")
+
+
+class FastPathTests(unittest.TestCase):
+    """run_observer_hook.sh starts no Python unless this machine enabled the observer for this very folder."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="observer-fast-", dir="/tmp")
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(tmp.name)
+        self.shim = self.base / "shim"
+        self.shim.mkdir()
+        self.marker = self.base / "python-started"
+        (self.shim / "python3").write_text("#!/bin/sh\ntouch '%s'\ncat >/dev/null\nexit 0\n" % self.marker)
+        (self.shim / "python3").chmod(0o755)
+        self.state = self.base / "state"
+        self.env = {key: value for key, value in os.environ.items()
+                    if not key.startswith((names.ENV_PREFIX, names.OLD_ENV_PREFIX, "CLAUDE_", "XDG_"))}
+        self.env.update(PATH=str(self.shim) + os.pathsep + os.environ["PATH"], HOME=str(self.base / "home"),
+                        XDG_STATE_HOME=str(self.state))
+
+    def run_all(self, project):
+        env = dict(self.env, CLAUDE_PROJECT_DIR=str(project))
+        for event in EVENT_NAMES:
+            done = subprocess.run(["bash", str(SCRIPT), event], input="{}", capture_output=True, text=True, env=env)
+            self.assertEqual((0, ""), (done.returncode, done.stdout), (project, event))
+
+    def test_no_python_starts_without_this_folders_entry(self):
+        bare = self.base / "bare"
+        configured = self.base / "configured"
+        for folder in (bare, configured):
+            folder.mkdir()
+        # A shared project file that names the observer cannot start it on this machine.
+        (configured / ".recortex.json").write_text(json.dumps({"repo": REPO, "observer": {"enabled": True}}))
+        approvals = self.state / "recortex" / "private" / "observer-approvals.json"
+        for case in ("no state", "another folder"):
+            if case == "another folder":
+                approvals.parent.mkdir(parents=True)
+                elsewhere = str(self.base / "elsewhere")
+                approvals.write_text(json.dumps({"form": 1, "folders": {elsewhere: {"root": elsewhere}}}))
+            for project in (bare, configured):
+                self.run_all(project)
+                self.assertFalse(self.marker.exists(), (case, project))
+        # A symlinked path to an enabled folder is found by its real path: Python decides.
+        link = self.base / "link"
+        link.symlink_to(configured)
+        approvals.write_text(json.dumps({"form": 1, "folders": {os.path.realpath(configured): {}}}, indent=1))
+        self.run_all(link)
+        self.assertTrue(self.marker.exists())
+
+    def test_every_event_on_an_enabled_folder_ends_cleanly_with_hook_json(self):
+        import observer_runtime
+        project = self.base / "enabled"
+        project.mkdir(mode=0o700)
+        (project / ".recortex.json").write_text(json.dumps({"repo": REPO, "hub": 1}))
+        trusted = self.base / "trusted"
+        trusted.write_text(REPO + " octocat\n")
+        env = dict(self.env, PATH=os.environ["PATH"], CLAUDE_PROJECT_DIR=str(project), RECORTEX_TRUSTED_FILE=str(trusted),
+                   XDG_CACHE_HOME=str(self.base / "cache"), XDG_CONFIG_HOME=str(self.base / "config"),
+                   CLAUDE_CONFIG_DIR=str(self.base / "claude"))
+        with mock.patch.dict(os.environ, env, clear=True):
+            settings = {"enabled": True, "model": "sonnet", "publisher_id": observer_runtime.publisher_id(create=True)}
+            observer_runtime.approve(REPO, {"observer": settings}, str(project))
+        transcript = self.base / "claude" / "session1.jsonl"
+        transcript.parent.mkdir(mode=0o700)
+        transcript.write_text(json.dumps({"message": {"role": "user", "content": "Ordinary work."}}) + "\n")
+        data = {"session_id": "session1", "transcript_path": str(transcript), "cwd": str(project), "prompt": "x",
+                "tool_name": "Bash", "tool_input": {"command": "ls"}, "agent_transcript_path": str(transcript)}
+        for event in EVENT_NAMES:
+            done = subprocess.run(["bash", str(SCRIPT), event], input=json.dumps(data), capture_output=True,
+                                  text=True, env=env, timeout=10)
+            self.assertEqual(0, done.returncode, event)
+            if done.stdout:
+                out = json.loads(done.stdout)
+                self.assertTrue(set(out) <= {"systemMessage", "hookSpecificOutput"}, (event, out))
+                if event in ("stop", "subagent-stop", "pre-compact"):
+                    self.assertNotIn("hookSpecificOutput", out, event)
+
+    def test_without_a_place_for_the_state_python_decides(self):
+        project = self.base / "project"
+        project.mkdir()
+        env = dict(self.env, CLAUDE_PROJECT_DIR=str(project), HOME="relative", XDG_STATE_HOME="")
+        subprocess.run(["bash", str(SCRIPT), "stop"], input="{}", capture_output=True, text=True, env=env)
+        self.assertTrue(self.marker.exists())
 
 
 if __name__ == "__main__":

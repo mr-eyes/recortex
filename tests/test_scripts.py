@@ -10156,6 +10156,8 @@ class PackagingTests(unittest.TestCase):
                           "PreToolUse": 5, "PostToolUse": 5, "PostToolUseFailure": 5, "Stop": 5, "SubagentStop": 5}, timeouts)
         observer = recortex.read_text(os.path.join(SCRIPTS, "run_observer_hook.sh"))
         self.assertIn('timeout 4 python3 "$here/observer.py"', observer)
+        # Without this folder's entry in this machine's observer approvals, no Python starts (about 3 ms a hook).
+        self.assertIn('grep -qsF -e "\\"$PWD\\"" -- "$state"/*/private/observer-approvals.json || exit 0', observer)
         runner = recortex.read_text(os.path.join(SCRIPTS, "run_hook.sh"))
         self.assertIn("session-start) hard=$((limit + 3))", runner)  # limit is at most 15, so at most 18
         self.assertIn("prompt-submit) hard=4", runner)
