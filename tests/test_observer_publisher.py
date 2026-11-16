@@ -139,6 +139,20 @@ class ObserverPublisherTests(unittest.TestCase):
                 publisher.publish(fixtures.REPO, key, self.config, main_session=main_session)
         self.assertEqual([], [a for a in self.calls() if a[:2] == ["issue", "comment"]])
 
+    def test_local_details_hidden_by_markdown_escapes_or_entities_are_refused(self):
+        # GitHub drops Markdown's backslash escapes and decodes entities, so \/home\/x shows as /home/x: each form is
+        # checked as written, decoded and as shown.
+        repo = fixtures.REPO
+        with mock.patch.object(publisher, "local_names", return_value=({"/home/octo-dev"}, {"octo-dev"})):
+            for text in ("Ran in \\/home\\/octo-dev\\/work.", "Ran in \\/var\\/tmp\\/run.", "See \\~\\/notes\\/run.txt.",
+                         "Mail octo.dev\\@example.test.", "Mail octo.dev&#64;example.test.", "Ran in &#47;srv&#47;run&#47;x.",
+                         "Ran by octo\\-dev.", "Ran in /home/octo&#45;dev/w."):
+                self.assertTrue(publisher.local_problem("Plain text " + text), text)
+                self.assertIsNotNone(publisher.outbound_problem("Plain text " + text, repo), text)
+            for text in ("Ran `python3 -m unittest` in the project; 4 of 4 pass.", "Escaped \\* and \\_ stay text."):
+                self.assertFalse(publisher.local_problem("Plain text " + text), text)
+                self.assertIsNone(publisher.outbound_problem("Plain text " + text, repo), text)
+
     def test_the_local_names_come_from_the_account_and_the_environment(self):
         import pwd
         account = pwd.getpwuid(os.getuid())

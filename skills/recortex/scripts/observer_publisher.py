@@ -141,8 +141,10 @@ def local_names():
 
 
 def local_problem(body):
-    """True when the body holds an email address, an absolute local path, the home folder or the local user name."""
-    texts = (body, html.unescape(body))
+    """True when the body holds an email address, an absolute local path, the home folder or the local user name, as
+    written, with entities decoded, or as GitHub shows it once Markdown's backslash escapes are dropped (\\/home\\/x)."""
+    shown = html.unescape(body)
+    texts = (body, shown, ESCAPED.sub(r"\1", shown))
     homes, users = local_names()
     if any(EMAIL.search(text) or LOCAL_PATH.search(ADDRESS.sub(" ", text)) for text in texts):
         return True
