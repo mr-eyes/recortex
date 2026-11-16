@@ -583,7 +583,7 @@ class Page:
                 label, to = [text_of(conn.get("phrase"))], conn.get("to") or {}
                 if integer(to.get("id")) in self.m:
                     label.append(E("a", {"href": anchor("m-%d" % to["id"]), "data-m": to["id"]}, text_of(to.get("day"))))
-                elif integer(to.get("thread")) in self.threads:
+                elif "thread" in to and integer(to["thread"]) in self.threads:  # the loose thread is number 0
                     label.append(self.thread_link(to["thread"]))
                 items.append(E("li", {"class": "conn time" if conn.get("time") else "conn"}, *label))
             if step.get("note"):
@@ -911,7 +911,7 @@ class Page:
                                E("ol", None, *story)) if story else "",
                              E("p", {"class": "quiet"}, "First explained on %s" % text_of(first.get("day")),
                                J(", in the thread ", self.thread_link(first["thread"]))
-                               if integer(first.get("thread")) in self.threads else "", ".")))
+                               if "thread" in first and integer(first["thread"]) in self.threads else "", ".")))
         return E("div", {"id": "words", "hidden": "hidden"}, *entries)
 
     def issue_store(self):

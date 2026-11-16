@@ -8815,6 +8815,23 @@ class MindPageTests(MindSandbox):
         model = self.model()
         self.assertEqual(mind.render(model), mind.render(json.loads(json.dumps(model))))
 
+    def test_a_memory_outside_every_topic_does_not_break_the_chains(self):
+        """The loose thread is number 0, so a step's link that names no thread must not be read as a link to it."""
+        self.add_chain()
+        self.put(9700, 4, memory_draft("decision", "2026-03-13T10:00-08:00", plain="keep the hub short"))
+        self.ready()
+        model = self.model()
+        self.assertIn(0, [t["n"] for t in model["threads"]])
+        built = self.build()
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        text = recortex.read_text(self.page_file())
+        self.assertEqual([], page_problems(text))
+        self.assertIn("These memories belong to no thread of what we deliver.", " ".join(PageReader(text).texts))
+        mind = self.mind()
+        for word in model.get("words", []):
+            word.get("first", {}).pop("thread", None)  # a first use that names no thread
+        self.assertEqual([], page_problems(mind.render(model)))
+
     def test_what_names_nothing_told_gets_words_and_no_anchor(self):
         """The page's own second check of every reference."""
         self.add_chain()
