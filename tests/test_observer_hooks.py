@@ -75,7 +75,11 @@ class ObserverHookTests(unittest.TestCase):
                     tool_input={"command": "git push"})
         self.assertNotIn("hookSpecificOutput", hooks.handle("pre-tool", data, self.config, REPO))
 
-    def test_typed_recortex_command_in_its_stored_form_holds_and_releases(self):
+    def release(self, hold_id, prompt=None):
+        text = "/recortex release " + hold_id
+        return hooks.handle("prompt-submit", dict(self.data, prompt=prompt or text), self.config, REPO)
+
+    def test_typed_recortex_command_in_its_stored_form_holds_for_the_repository(self):
         stored = ("<command-message>recortex</command-message>\n<command-name>/recortex</command-name>\n"
                   "<command-args>%s</command-args>")
         self.append(stored % "hold git-push")
@@ -86,10 +90,44 @@ class ObserverHookTests(unittest.TestCase):
         data = dict(self.data, session_id="session2", transcript_path=str(later), tool_name="Bash",
                     tool_input={"command": "git push"})
         self.assertEqual("deny", hooks.handle("pre-tool", data, self.config, REPO)["hookSpecificOutput"]["permissionDecision"])
+
+    def test_release_never_comes_from_the_transcript_or_a_model_command_call(self):
+        stored = ("<command-message>recortex</command-message>\n<command-name>/recortex</command-name>\n"
+                  "<command-args>%s</command-args>")
+        self.append("/recortex hold git-push")
+        self.run_hook()
         with Store(REPO) as store:
             hold_id = store.holds()[0]["id"]
-        self.append(stored % ("release " + hold_id))
-        self.assertNotIn("hookSpecificOutput", self.run_hook())
+        # The wrapper a model's SlashCommand call can produce, and plain transcript text, release nothing.
+        for text in (stored % ("release " + hold_id), "/recortex release " + hold_id):
+            self.append(text)
+            result = self.run_hook()
+            self.assertEqual("deny", result["hookSpecificOutput"]["permissionDecision"], text)
+            if "command-name" in text:  # the session is told once; the same set of lines is not repeated
+                self.assertIn("released only when you type", result["systemMessage"])
+        # A typed release whose id a model's Skill or SlashCommand call named in this session is refused too.
+        self.append([{"type": "tool_use", "id": "t1", "name": "Skill",
+                      "input": {"skill": "recortex", "args": "release " + hold_id}}], role="assistant")
+        self.assertIn("nothing was released", self.release(hold_id)["systemMessage"])
+        self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
+
+    def test_release_typed_by_the_user_works(self):
+        self.append("/recortex hold git-push")
+        self.run_hook()
+        with Store(REPO) as store:
+            hold_id = store.holds()[0]["id"]
+        said = self.release(hold_id, prompt="please /recortex release " + hold_id).get("systemMessage", "")
+        self.assertNotIn("recorded", said)
+        self.assertNotIn("nothing was released", said)  # ordinary conversation, not a release attempt
+        self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])  # not the whole message
+        self.assertIn("nothing was released", self.release("a" * 24)["systemMessage"])  # no such hold
+        self.assertIn("hold or release was recorded", self.release(hold_id)["systemMessage"])
+        self.append("/recortex release " + hold_id)  # its own transcript line, written after the hook
+        result = self.run_hook()
+        self.assertNotIn("hookSpecificOutput", result)
+        self.assertNotIn("nothing was released", result.get("systemMessage", ""))
+        with Store(REPO) as store:
+            self.assertEqual(("released", "prompt:session1"), (store.holds()[0]["state"], store.holds()[0]["released_by"]))
 
     def test_original_hold_is_enforced_before_worker_or_inference(self):
         self.append("/recortex hold git-push")
@@ -119,7 +157,7 @@ class ObserverHookTests(unittest.TestCase):
             hold_id = store.holds()[0]["id"]
         self.append("/recortex release " + hold_id, role="assistant")
         self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
-        self.append("/recortex release " + hold_id)
+        self.release(hold_id)
         self.assertNotIn("hookSpecificOutput", self.run_hook())
         with Store(REPO) as store:
             self.assertEqual("released", store.holds()[0]["state"])
@@ -203,7 +241,7 @@ class ObserverHookTests(unittest.TestCase):
         self.assertIn("capture is paused", result["systemMessage"])
         with Store(REPO) as store:
             hold_id = store.holds()[0]["id"]
-        self.append("/recortex release " + hold_id)
+        self.release(hold_id)
         self.assertNotIn("hookSpecificOutput", self.run_hook())
 
     def test_exact_control_containing_restricted_text_is_refused_before_storage(self):

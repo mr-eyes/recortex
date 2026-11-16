@@ -279,6 +279,16 @@ class Replay:
         self.capture(data, hooks=True)
         return identity
 
+    def release(self, hold_id, session="owner-controls"):
+        """A release the user typed: the hook's own prompt, then its transcript line, as Claude Code writes them."""
+        text = "/recortex release " + hold_id
+        data, identity = self.append(session, text, "control", role="user")
+        with self.store() as store:
+            require(observer_hooks._prompt_release(store, dict(data, prompt=text), str(self.project), REPO) is True,
+                    "a release typed as the user's own prompt must release the hold")
+        self.capture(data, hooks=True)
+        return identity
+
     def hold_checks(self, released=False):
         with self.store() as store:
             records = store.holds()
@@ -335,7 +345,7 @@ class Replay:
             if self.day == schedule["release_day"]:
                 with self.store() as store:
                     hold_id = next(item["id"] for item in store.holds() if item["action"] == "git-push")
-                self.control("/recortex release " + hold_id)
+                self.release(hold_id)
             if self.day >= schedule["hold_day"]:
                 self.control("Continue with the current task.")
                 self.hold_checks(released=self.day >= schedule["release_day"])

@@ -38,10 +38,26 @@ NATIVE = re.compile(r"<command-message>[^<\n]*</command-message>\n<command-name>
                     r"<command-args>([^<\n]*)</command-args>")
 
 
+RELEASE = re.compile(r"/(?:recortex:)?recortex release ([a-f0-9]{24})")
+
+
+def release_from_prompt(prompt):
+    """The hold id when the prompt of UserPromptSubmit, the text the user submitted, is exactly a release; else None.
+    This is the only way a hold is released: text in the transcript, and the slash-command wrapper that a model's
+    tool call can also produce, never release one."""
+    match = RELEASE.fullmatch(prompt.strip()) if isinstance(prompt, str) else None
+    return match.group(1) if match else None
+
+
 def _control(text):
     native = NATIVE.fullmatch(text)
     if native:
-        text = ("/recortex " + native.group(1).strip()).strip()  # how Claude Code stores a typed /recortex command
+        # How Claude Code stores a typed /recortex command. A model's tool call can produce the same wrapper, so it
+        # may only add a hold (which only denies), never release one.
+        text = ("/recortex " + native.group(1).strip()).strip()
+        if text.startswith("/recortex release"):
+            match = re.fullmatch(r"/recortex release ([a-f0-9]{24})", text)
+            return {"operation": "release", "hold_id": match.group(1), "native": True} if match else None
     if "\n" in text or "\r" in text:
         return None
     if text.lower().rstrip(".! ") in PHRASES:

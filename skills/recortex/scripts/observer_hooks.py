@@ -37,7 +37,11 @@ NOTICES = {
     "budget": "recortex observer: the model budget is exhausted; captured work remains queued. Run observer.py status.",
     "control-refused": "recortex observer: an explicit control could not be stored safely; that control is not active. Run observer.py status.",
     "cap": "recortex observer: today's limit of automatic comments is reached; reviewed memories wait in the queue. Run observer.py pending.",
+    "release-refused": "recortex observer: a hold is released only when you type /recortex release HOLD_ID as your own whole message; nothing was released. Run observer.py holds.",
 }
+# Lines that answer something the user just did (a hold, a release); each arises once, so it is never held back.
+ANSWERS = frozenset(("control", "control-refused", "release-refused"))
+TAIL = 262144  # bytes of the transcript searched for a model's command call before a typed release is accepted
 
 
 def _output(event, context="", notices=(), denial=None):
@@ -64,33 +68,77 @@ def launch_worker(project_root):
 
 
 def _controls(store, rows, project_root, repo, config):
-    controls, refused = [], False
+    """Holds from the user's messages in the transcript. A release found there is never applied (see _prompt_release);
+    when it names a hold that is still active, the third value says so."""
+    controls, refused, unproven = [], False, False
     for row in rows:
         if row.get("role") != "user":
             continue
         source = observer_sources.resolve(row, project_root)
         control = observer_holds.compile_prompt_control(source["text"], source, repo)
+        if control and control["operation"] == "release":
+            unproven = unproven or any(hold.get("id") == control["hold_id"] and hold.get("state") == "active"
+                                       for hold in store.holds())
+            continue
         if control:
             if any(f.code in ("secret", "restricted") for f in lint_drafts.lint_text(source["text"], config=config)):
                 refused = True
                 continue
             controls.append((control, source))
     if not controls:
-        return False, refused
+        return False, refused, unproven
 
     def change(holds):
         changed = list(holds)
         for control, source in controls:
-            if control["operation"] == "hold":
-                hold = control["hold"]
-                if not any(item.get("id") == hold["id"] for item in changed):
-                    changed.append(hold)
-            elif any(item.get("id") == control["hold_id"] for item in changed):
-                changed = observer_holds.apply_release(changed, source, control["hold_id"])
+            hold = control["hold"]
+            if not any(item.get("id") == hold["id"] for item in changed):
+                changed.append(hold)
         return changed
 
     store.update_holds(change)
-    return True, refused
+    return True, refused, unproven
+
+
+def _model_invoked(data, project_root, hold_id):
+    """True when the end of this session's transcript holds a model's SlashCommand or Skill call that names the hold;
+    raises SourceError when the transcript cannot be read, so that an unproven release does not happen."""
+    path = observer_sources.approved_path(data.get("transcript_path"), project_root, data.get("session_id"))
+    size = os.stat(path, follow_symlinks=False).st_size
+    start = max(0, size - TAIL)
+    for line in observer_sources._read(path, start, size - start).decode("utf-8", "replace").splitlines():
+        if hold_id not in line:
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        content = (record.get("message") or {}).get("content") if isinstance(record, dict) else None
+        for block in content if isinstance(content, list) else []:
+            if (isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") in ("SlashCommand", "Skill")
+                    and hold_id in json.dumps(block.get("input"))):
+                return True
+    return False
+
+
+def _prompt_release(store, data, project_root, repo):
+    """A release the user typed: the prompt of UserPromptSubmit is exactly /recortex release HOLD_ID, read from the
+    hook's own input, not from the transcript, and no model command call in the transcript names the hold. None when
+    the prompt is no release; True when the hold was released; False when it was not (the session is told)."""
+    hold_id = observer_holds.release_from_prompt(data.get("prompt"))
+    if hold_id is None:
+        return None
+    session = data.get("session_id")
+    try:
+        if not isinstance(session, str) or not observer_sources.SESSION.fullmatch(session):
+            return False
+        if _model_invoked(data, project_root, hold_id):
+            return False
+        source = {"source_id": "prompt:" + session, "role": "user", "direct_user": True, "text": data["prompt"].strip()}
+        store.update_holds(lambda holds: observer_holds.apply_release(holds, source, hold_id))
+        return True
+    except (ValueError, OSError, observer_sources.SourceError):
+        return False
 
 
 def _capture(store, event, data, project_root, repo, config, capture=True):
@@ -108,12 +156,12 @@ def _capture(store, event, data, project_root, repo, config, capture=True):
     rows, cursor = observer_sources.scan(scan_data, project_root, cursor=old if old is not None else start)
     # Holds are saved first; a crash can repeat an idempotent control, but must
     # never advance a cursor past a hold that has not been compiled.
-    controlled, refused = _controls(store, rows, project_root, repo, config)
+    controlled, refused, unproven = _controls(store, rows, project_root, repo, config)
     store.capture(rows if capture else [], stream=stream, cursor=cursor, expected_cursor=old)
     # Bounded scans may lag or end on a partially written line. Do not claim
     # complete capture or complete enforcement of newly submitted controls.
     incomplete = any(row.get("event_type") == "source_gap" for row in rows) or os.stat(path, follow_symlinks=False).st_size > cursor
-    return controlled, incomplete, refused
+    return controlled, incomplete, refused, unproven
 
 
 def _notices(store, notices, data, event):
@@ -129,7 +177,7 @@ def _notices(store, notices, data, event):
     digest = hashlib.sha256(json.dumps(sorted(set(notices))).encode()).hexdigest()
     old = previous.get(key, {})
     if (old.get("digest") == digest and now - old.get("at", 0) < 60
-            and event not in ("Stop", "SubagentStop", "PreCompact")):
+            and event not in ("Stop", "SubagentStop", "PreCompact") and not set(notices) & ANSWERS):
         return []
     previous[key] = {"digest": digest, "at": now}
     previous = dict(sorted(previous.items(), key=lambda pair: pair[1].get("at", 0))[-50:])
@@ -206,18 +254,25 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
                 result = observer_holds.check_action(store.holds(), repo, data.get("tool_name"),
                                                      data.get("tool_input"), session_id=data.get("session_id"))
                 denial = result if result["decision"] == "deny" else None
+            if event == "UserPromptSubmit":
+                released = _prompt_release(store, data, project_root, repo)
+                if released is not None:
+                    notices.append("control" if released else "release-refused")
             paused = store.get_control("capture_paused", False)
             if paused:
                 notices.append("paused")
             if event in observer_sources.EVENTS:
                 try:
-                    controlled, incomplete, refused = _capture(store, event, data, project_root, repo, config,
-                                                               capture=not paused)
+                    controlled, incomplete, refused, unproven = _capture(store, event, data, project_root, repo,
+                                                                         config, capture=not paused)
                     if controlled:
                         notices.append("control")
                     if event == "UserPromptSubmit" and not controlled and isinstance(data.get("prompt"), str):
-                        if observer_holds._control(data["prompt"].strip()):
+                        if (observer_holds._control(data["prompt"].strip())
+                                and not observer_holds.release_from_prompt(data["prompt"])):
                             incomplete = True
+                    if unproven:
+                        notices.append("release-refused")
                     if incomplete:
                         notices.append("source")
                         _degraded(store, "source-incomplete")
