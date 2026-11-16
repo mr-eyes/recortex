@@ -179,79 +179,235 @@ def read_only(tool_name, tool_input):
     return all(PLAIN.fullmatch(word) and not word.startswith("-") for word in words[1:])
 
 
-def classify_action(tool_name, tool_input):
-    """Recognize direct shell git-tag/git-push/gh-release operations only.
+class Unparsed(ValueError):
+    """A shell line this module does not take apart: an unbalanced quote, a command or process substitution, a
+    here-document, a subshell."""
 
-Exact-command holds work even when family classification is unsupported. Shell
-expansion, scripts, aliases, compound commands and non-shell tools are not claimed
-to be covered. The result never itself authorizes an action.
-"""
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    if tool_name not in ("Bash", "bash") or not isinstance(command, str):
-        return {"supported": False, "actions": [], "command": None}
-    if len(command) > 32768:
-        return {"supported": False, "actions": [], "command": command}
-    # Refuse to interpret shell execution syntax instead of guessing its effect.
-    if any(char in command for char in ("\n", "\r", ";", "&", "|", "`", "$", "(", ")", "<", ">")):
-        return {"supported": False, "actions": [], "command": command}
-    try:
-        words = shlex.split(command)
-    except ValueError:
-        return {"supported": False, "actions": [], "command": command}
-    if not words:
-        return {"supported": True, "actions": [], "command": command}
-    if words[0] == "command":
-        words = words[1:]
-    if not words:
-        return {"supported": False, "actions": [], "command": command}
-    executable, args = words[0], words[1:]
-    target_repo = None
-    if executable not in ("git", "/usr/bin/git", "/bin/git", "gh", "/usr/bin/gh", "/bin/gh"):
-        return {"supported": False, "actions": [], "command": command}
-    if executable.endswith("git"):
-        while args and args[0] in ("-C", "--git-dir", "--work-tree", "--no-pager", "--literal-pathspecs"):
-            option = args.pop(0)
-            if option in ("-C", "--git-dir", "--work-tree"):
-                if not args:
-                    return {"supported": False, "actions": [], "command": command}
-                # This pure module cannot establish which repository that path
-                # names. A hold on the current repository must not block another.
-                return {"supported": False, "actions": [], "command": command, "target_unknown": True}
-        action = args[0] if args else ""
-        rest = args[1:]
-        if action == "push":
-            actions = [] if "--dry-run" in rest or "-n" in rest else ["git-push"]
-        elif action == "tag":
-            read_only = not rest or any(flag in rest for flag in ("-l", "--list", "-v", "--verify"))
-            actions = [] if read_only else ["git-tag"]
+
+OPERATORS = (";;", "&&", "||", "|&", ";", "&", "|")
+REDIRECT = re.compile(r"(?:[0-9]*|&)(?:>>|>&|>\||<<<|<<-?|<>|<&|>|<)")
+
+
+def _shell_tokens(command):
+    """The words of a shell line, with ";" for every command separator (; && || | & and newlines), redirections and
+    comments dropped. Raises Unparsed for what is not taken apart here."""
+    out, word, quoted, i, n = [], [], False, 0, len(command)
+
+    def end():
+        nonlocal word, quoted
+        if word or quoted:
+            out.append("".join(word))
+        word, quoted = [], False
+
+    while i < n:
+        char = command[i]
+        if char in " \t":
+            end()
+            i += 1
+        elif char in "\r\n":
+            end()
+            out.append(";")
+            i += 1
+        elif char == "\\":
+            if i + 1 < n and command[i + 1] == "\n":
+                i += 2  # a line continuation
+            else:
+                word.append(command[i + 1] if i + 1 < n else "")
+                i += 2
+        elif char == "'":
+            close = command.find("'", i + 1)
+            if close < 0:
+                raise Unparsed("quote")
+            word.append(command[i + 1:close])
+            quoted, i = True, close + 1
+        elif char == '"':
+            i += 1
+            while True:
+                if i >= n:
+                    raise Unparsed("quote")
+                if command[i] == '"':
+                    break
+                if command[i] == "`" or command.startswith("$(", i):
+                    raise Unparsed("substitution")
+                if command[i] == "\\" and i + 1 < n and command[i + 1] in '"\\$`\n':
+                    i += 1
+                word.append(command[i])
+                i += 1
+            quoted, i = True, i + 1
+        elif char == "`" or command.startswith("$(", i) or command.startswith("<(", i) or command.startswith(">(", i):
+            raise Unparsed("substitution")
+        elif char in "()":
+            raise Unparsed("subshell")
+        elif char == "#" and not word and not quoted:
+            while i < n and command[i] not in "\r\n":
+                i += 1
         else:
-            return {"supported": False, "actions": [], "command": command}
-    else:
-        remaining = []
+            match = REDIRECT.match(command, i) if char in "0123456789&<>" else None
+            if match and (char in "<>&" or not word):  # a descriptor number starts its own word
+                operator = match.group(0)
+                if "<<" in operator and "<<<" not in operator:
+                    raise Unparsed("here-document")
+                end()
+                i = match.end()
+                while i < n and command[i] in " \t":
+                    i += 1
+                if operator.endswith("&") and i < n and (command[i].isdigit() or command[i] == "-"):
+                    while i < n and (command[i].isdigit() or command[i] == "-"):
+                        i += 1
+                    continue
+                i = _shell_tokens_word(command, i)  # the target: one word, dropped
+                continue
+            operator = next((op for op in OPERATORS if command.startswith(op, i)), None)
+            if operator:
+                end()
+                out.append(";")
+                i += len(operator)
+            else:
+                word.append(char)
+                i += 1
+    end()
+    return out
+
+
+def _shell_tokens_word(command, i):
+    """The index after the shell word that starts at `i` (a redirection's target)."""
+    n = len(command)
+    while i < n and command[i] not in " \t\r\n;&|<>()":
+        if command[i] == "'":
+            close = command.find("'", i + 1)
+            if close < 0:
+                raise Unparsed("quote")
+            i = close + 1
+        elif command[i] == '"':
+            i += 1
+            while i < n and command[i] != '"':
+                if command[i] == "`" or command.startswith("$(", i):
+                    raise Unparsed("substitution")
+                i += 2 if command[i] == "\\" else 1
+            if i >= n:
+                raise Unparsed("quote")
+            i += 1
+        elif command[i] == "`" or command.startswith("$(", i):
+            raise Unparsed("substitution")
+        else:
+            i += 2 if command[i] == "\\" else 1
+    return i
+
+
+ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.S)
+PREFIXES = {"command": (), "nohup": (), "exec": (), "nice": ("-n",), "time": (), "env": ("-u", "-C", "-S"),
+            "sudo": ("-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T")}
+SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
+# For a line not taken apart: a held action whose words are all in it is taken as present (a wrong denial is
+# acceptable, since the user asked for the hold).
+ACTION_WORDS = {"git-push": ("git", "push"), "git-tag": ("git", "tag"), "gh-release": ("gh", "release")}
+
+
+def _simple(words):
+    """The words of one simple command without its leading assignments and wrapper prefixes (env, sudo, command,
+    nohup, exec, nice, time, a { group), each prefix's own options included."""
+    words = list(words)
+    while words:
+        head = words[0].rsplit("/", 1)[-1] if words[0] not in ("{", "}") else words[0]
+        if ASSIGNMENT.fullmatch(words[0]) or words[0] in ("{", "}", "!"):
+            words.pop(0)
+        elif head in PREFIXES:
+            takes = PREFIXES[head]
+            words.pop(0)
+            while words and (words[0].startswith("-") or head == "env" and ASSIGNMENT.fullmatch(words[0])):
+                option = words.pop(0)
+                if option in takes and words:
+                    words.pop(0)
+        else:
+            break
+    return words
+
+
+def _hits(command, depth=0):
+    """[(action, target repository or None)] of the held actions in a shell line, part by part; raises Unparsed."""
+    words, hits, parts = _shell_tokens(command), [], [[]]
+    for word in words:
+        if word == ";":
+            parts.append([])
+        else:
+            parts[-1].append(word)
+    for part in parts:
+        part = _simple(part)
+        if not part:
+            continue
+        program = part[0].rsplit("/", 1)[-1]
+        if program in SHELLS:
+            script = next((part[n + 1] for n, word in enumerate(part[1:-1], 1)
+                           if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", word)), None)
+            if script is not None:
+                if depth >= 3:
+                    raise Unparsed("depth")
+                try:
+                    hits += _hits(script, depth + 1)
+                except Unparsed:
+                    hits += [(action, None) for action in _worded(script)]
+            continue
+        hits += _part_hits(program, part[1:])
+    return hits
+
+
+def _part_hits(program, args):
+    args = list(args)
+    if program == "git":
+        while args and args[0].startswith("-"):
+            option = args.pop(0)
+            if option in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env") and args:
+                args.pop(0)  # its argument; a path that may name this repository: a held action is taken as one
+        action, rest = (args[0], args[1:]) if args else ("", [])
+        if action == "push" and not ({"--dry-run", "-n"} & set(rest)):
+            return [("git-push", None)]
+        if action == "tag" and rest and not ({"-l", "--list", "-v", "--verify"} & set(rest)):
+            return [("git-tag", None)]
+        return []
+    if program == "gh":
+        target, remaining = None, []
         while args:
             word = args.pop(0)
-            if word in ("--repo", "-R"):
-                if not args or target_repo is not None:
-                    return {"supported": False, "actions": [], "command": command, "target_unknown": True}
-                target_repo = args.pop(0)
+            if word in ("--repo", "-R") and args:
+                target = args.pop(0)
             elif word.startswith("--repo="):
-                if target_repo is not None:
-                    return {"supported": False, "actions": [], "command": command, "target_unknown": True}
-                target_repo = word[len("--repo="):]
+                target = word[len("--repo="):]
             else:
                 remaining.append(word)
-        args = remaining
-        if target_repo is not None and not recortex.valid_repo(target_repo):
-            return {"supported": False, "actions": [], "command": command, "target_unknown": True}
-        if len(args) < 2 or args[0] != "release":
-            return {"supported": False, "actions": [], "command": command}
-        if args[1] in ("create", "edit", "delete", "upload", "delete-asset"):
-            actions = ["gh-release"]
-        elif args[1] in ("view", "list", "download", "verify", "verify-asset"):
-            actions = []
-        else:
-            return {"supported": False, "actions": [], "command": command}
-    return {"supported": True, "actions": actions, "command": command, "target_repo": target_repo}
+        if target is not None and not recortex.valid_repo(target):
+            target = None  # not a repository name: taken as this one
+        if len(remaining) >= 2 and remaining[0] == "release" and remaining[1] not in (
+                "view", "list", "download", "verify", "verify-asset"):
+            return [("gh-release", target)]
+    return []
+
+
+def _worded(command):
+    """The held actions whose words are all in a line that is not taken apart."""
+    found = set(re.findall(r"[A-Za-z][A-Za-z-]*", command))
+    return sorted(action for action, words in ACTION_WORDS.items() if set(words) <= found)
+
+
+def classify_action(tool_name, tool_input):
+    """The held actions a Bash line may take (git-push, git-tag, gh-release), looked for in every simple command of it:
+    split on ; && || | & and newlines, with redirections, leading assignments and the env, sudo, command, nohup, exec,
+    nice and time prefixes left out, and inside bash -c and sh -c strings. A line that is not taken apart (an
+    unbalanced quote, a substitution, a here-document, a subshell) counts as taking every held action whose words are
+    all in it: a wrong denial is acceptable, since the user asked for the hold. `hits` pairs each action with the
+    repository a gh --repo names, or None for this one. Exact-command holds compare the whole line. Aliases, scripts
+    and programs run by other programs are not covered. The result never itself authorizes an action."""
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if tool_name not in ("Bash", "bash") or not isinstance(command, str):
+        return {"supported": False, "actions": [], "hits": [], "command": None}
+    try:
+        if len(command) > 32768:
+            raise Unparsed("length")
+        hits = _hits(command)
+        supported = True
+    except Unparsed:
+        hits, supported = [(action, None) for action in _worded(command)], False
+    return {"supported": supported, "actions": sorted({action for action, _ in hits}), "hits": hits,
+            "command": command}
 
 
 def _valid(hold):
@@ -274,8 +430,9 @@ def check_action(holds, repo, tool_name, tool_input, session_id=None, issue=None
             continue
         exact = (hold["action"] == "command" and classified["command"] is not None and
                  classified["command"].strip() == hold["command"].strip())
-        target_matches = not classified.get("target_unknown") and (classified.get("target_repo") or repo).lower() == hold["repo"]
-        if exact or (target_matches and hold["action"] in classified["actions"]):
+        held = any(action == hold["action"] and (target or repo).lower() == hold["repo"]
+                   for action, target in classified["hits"])
+        if exact or held:
             blocking.append(hold["id"])
     return {"decision": "deny" if blocking else "allow", "hold_ids": sorted(set(blocking)),
             "reason": "The user has asked that this action not be taken." if blocking else "",

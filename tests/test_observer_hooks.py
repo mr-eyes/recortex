@@ -432,6 +432,17 @@ class ObserverHookTests(unittest.TestCase):
         with self.assertRaises(sources.SourceError):
             sources.answered({"session_id": "session1", "transcript_path": str(path)}, str(self.project), "1f9dd5d6", line)
 
+    def test_a_push_hold_stops_every_form_of_a_push_and_lets_status_run(self):
+        # The live test's lines: before a Bash call every simple command of the line is checked, redirections,
+        # prefixes and shell strings included; a line that is not taken apart is stopped when it holds the words.
+        self.append("Don't push.")
+        for command in ("git push origin HEAD 2>&1", "git status; git push", "cd x && git push",
+                        'git remote -v && git push origin HEAD 2>&1; echo "exit=$?"', "bash -c 'git push'",
+                        "FOO=1 git push", "git -C . push", "git push 'origin"):
+            self.assertEqual("deny", self.run_hook(command=command)["hookSpecificOutput"]["permissionDecision"], command)
+        for command in ("git status", "git status 2>&1; git log -1"):
+            self.assertNotIn("hookSpecificOutput", self.run_hook(command=command), command)
+
     def test_plain_phrase_holds_only_this_session(self):
         self.append("Don't push.")
         self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])

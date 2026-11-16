@@ -198,18 +198,31 @@ class ObserverHoldTests(unittest.TestCase):
         for action, command, denied in cases:
             self.assertEqual(denied, self.check(self.hold(action), command)["decision"] == "deny", command)
 
-    def test_repository_override_never_applies_current_repository_hold_blindly(self):
-        result = self.check(self.hold(), "git -C another-project push origin main")
-        self.assertEqual("allow", result["decision"])
-        self.assertFalse(result["supported"])
+    def test_a_named_other_repository_is_not_held_and_a_path_may_be_this_one(self):
+        # gh --repo names another repository: its release is not this hold's. git -C names a path, which may be this
+        # repository: the push is taken as held (a wrong denial is acceptable, since the user asked for the hold).
+        self.assertEqual("deny", self.check(self.hold(), "git -C another-project push origin main")["decision"])
         for option in ("--repo octo-org/another", "-R octo-org/another", "--repo=octo-org/another"):
             self.assertEqual("allow", self.check(self.hold("gh-release"), "gh release create v0.3.0 " + option)["decision"])
         self.assertEqual("deny", self.check(self.hold("gh-release"), "gh release create v0.3.0 --repo " + REPO)["decision"])
 
-    def test_scripts_shell_expansion_and_other_tools_are_not_claimed_supported(self):
-        for command in ("./publish.sh", "bash -c 'git push'", "git push && echo done", "echo $(git push)"):
-            result = self.check(self.hold(), command)
-            self.assertFalse(result["supported"], command)
+    def test_every_simple_command_of_a_line_is_checked(self):
+        held = ("git push origin HEAD 2>&1", "git status; git push", "cd x && git push",
+                'git remote -v && git push origin HEAD 2>&1; echo "exit=$?"', "bash -c 'git push'", "FOO=1 git push",
+                "git -C . push", "sudo -u ci git push", "env -i A=1 git push", "nohup git push >log &", "time git push",
+                "{ git push; }", "git push 2>&1 | tee push.log", "sh -lc \"git push origin main\"",
+                "2>/dev/null git push", ">push.log git push origin main")
+        for command in held:
+            self.assertEqual("deny", self.check(self.hold(), command)["decision"], command)
+            self.assertTrue(holds.classify_action("Bash", {"command": command})["supported"], command)
+        # A line that is not taken apart is held when it holds the action's words; otherwise it is not.
+        for command in ("git push 'unbalanced", "echo $(git push)", "(git push)", "cat <<EOF\ngit push\nEOF",
+                        "x=`date` git push"):
+            self.assertEqual("deny", self.check(self.hold(), command)["decision"], command)
+            self.assertFalse(holds.classify_action("Bash", {"command": command})["supported"], command)
+        for command in ("git status", "git log > out.txt 2>&1", "git push --dry-run", "echo 'git push'",
+                        "git commit -m 'push it' && git status", "./publish.sh", "echo $(git status)", "git pushx"):
+            self.assertEqual("allow", self.check(self.hold(), command)["decision"], command)
         self.assertFalse(holds.check_action([self.hold()], REPO, "Read", {"command": "git push"})["supported"])
 
     def test_exact_command_hold_can_cover_an_opaque_command_without_guessing(self):
