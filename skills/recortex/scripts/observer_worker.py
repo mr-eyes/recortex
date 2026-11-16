@@ -114,6 +114,30 @@ def _executed(candidate, supplied):
                for item in supplied[source].get("tool_results", []))
 
 
+READERS = frozenset(("cat", "head", "tail", "less", "more", "curl", "wget"))  # runs that only show a file or a page
+
+
+def _own_sources(candidate, supplied):
+    """True when every source the candidate cites is a direct user message, a Bash call, or that call's matched result
+    (other than a call that only shows a file or fetches a page): no page, file or other tool output stands behind
+    it, whatever else the selector read."""
+    calls = {item.get("invocation_source_id") for sid in candidate["sources"]
+             for item in supplied[sid].get("tool_results") or []
+             if item.get("matched") is True and item.get("tool_name") == "Bash"}
+    for sid in candidate["sources"]:
+        source = supplied[sid]
+        if sid in calls or source.get("role") == "user" and source.get("direct_user") is True:
+            continue
+        results = source.get("tool_results") or []
+        if source.get("role") == "tool" and results and all(
+                item.get("matched") is True and item.get("tool_name") == "Bash" and os.path.basename(
+                    (((item.get("input") or {}).get("command") or "").split() or [""])[0]) not in READERS
+                for item in results):
+            continue
+        return False
+    return True
+
+
 def _users(candidate, supplied):
     return [supplied[source]["text"] for source in candidate["sources"]
             if supplied[source].get("direct_user") is True and supplied[source]["role"] == "user"]
@@ -124,7 +148,9 @@ def status_authority(candidate, supplied):
     field quotes at least MIN_WORDS words of one direct user message, and at least half of that message, so that a
     short or generic phrase cannot back it. "command": a Bash call that ran, among its own sources. "" otherwise,
     including every other kind that cites the user, since no field of theirs carries the user's words: it then
-    waits for the main session."""
+    waits for the main session. Every source it cites must be the user's own message or such a run (_own_sources)."""
+    if not _own_sources(candidate, supplied):
+        return ""
     if candidate["kind"] == "decision":
         quoted = observer_publisher.exact_words(candidate["body"]).strip()
         if len(quoted.split()) >= MIN_WORDS and any(quoted in text and 2 * len(quoted) >= len(text.strip())

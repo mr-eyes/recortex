@@ -98,6 +98,29 @@ class WorkerTests(unittest.TestCase):
             if purpose=='extract':return {'ok':True,'structured':{'candidates':[candidate],'ignored':[]}}
             return {'ok':True,'structured':{'candidate_hash':'0'*64 if bad_hash else payload['candidate_hash'],'accepted':accepted,'reason':'supported' if accepted else 'unsupported'}}
         return call
+    def test_a_status_change_rests_only_on_the_users_words_or_a_run(self):
+        def tool(name, call, command=None):
+            return {'role': 'tool', 'tool_results': [{'matched': True, 'tool_name': name, 'invocation_source_id': call,
+                                                      'input': {'command': command} if command else {}}]}
+        supplied = {'run': tool('Bash', 'call', 'python bench/run.py'), 'call': {'role': 'assistant'},
+                    'page': tool('WebFetch', 'fetch'), 'fetch': {'role': 'assistant'},
+                    'shown': tool('Bash', 'call2', 'cat notes.md'), 'call2': {'role': 'assistant'},
+                    'user': {'role': 'user', 'direct_user': True, 'text': QUOTE}}
+        correction = {'kind': 'correction', 'body': ''}
+        decision = {'kind': 'decision', 'body': BODY}
+        self.assertEqual('command', worker.status_authority(dict(correction, sources=['run', 'call']), supplied))
+        self.assertEqual('', worker.status_authority(dict(correction, sources=['page', 'run', 'call']), supplied))
+        self.assertEqual('', worker.status_authority(dict(correction, sources=['shown', 'call2']), supplied))
+        self.assertEqual('user', worker.status_authority(dict(decision, sources=['user']), supplied))
+        self.assertEqual('', worker.status_authority(dict(decision, sources=['user', 'page']), supplied))
+    def test_checks_closing_a_question_is_a_change_of_status(self):
+        import observer_publisher
+        closing = BODY.replace('at=2026-03-01T12:00:00Z -->', 'at=2026-03-01T12:00:00Z checks=123 -->')
+        self.assertTrue(observer_publisher.status_change(closing))
+        self.assertEqual('status_change', observer_publisher.outbound_problem(closing, REPO))
+        short = closing.replace('> For the parser, use strict quoting and keep the warning.', '> ok')
+        supplied = {'user': {'role': 'user', 'direct_user': True, 'text': 'ok'}}
+        self.assertEqual('', worker.status_authority({'kind': 'decision', 'body': short, 'sources': ['user']}, supplied))
     def run_worker(self,invoke):return worker.run_once(REPO,self.config,self.project,invoke)
     def test_model_text_cannot_reach_outside_the_record(self):
         cases = {'outbound_markup': '![s](https://collector.example.test/p.png?d=6768)',

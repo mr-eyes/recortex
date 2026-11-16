@@ -46,7 +46,7 @@ OUTSIDE = re.compile(r"\]:|//|\\\\|(?i:www\.)|(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z
 CROSS = re.compile(r"(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:#[0-9]+|@[0-9a-fA-F]{7,40}\b)")
 FORK = re.compile(r"(?<![A-Za-z0-9_.-])([A-Za-z0-9-]+)@[0-9a-fA-F]{7,40}\b")
 MARKUP = re.compile(r"!\[|<(?!/?(?:details|summary)>|!-- ghim:event )[A-Za-z!/?]")
-STATUS_LINKS = ("replaces", "instead")
+STATUS_LINKS = ("replaces", "instead", "checks")  # checks= answers a question or marks an idea tried
 STATUS_AUTHORITY = ("user", "command")
 # A problem of the event itself: the event is deferred with this reason and the next one is tried.
 EVENT_PROBLEMS = frozenset(("lint_failed", "invalid_target", "explicit_hold", "status_change", "outbound_markup",
@@ -98,7 +98,8 @@ def register_main(repo, config, issue, kind, comment_id):
 
 
 def status_change(body):
-    """True for a memory that overturns or sets aside an earlier one: a correction, or a replaces= or instead= key."""
+    """True for a memory that changes what an earlier one means: a correction, or a replaces=, instead= or checks= key
+    (checks= closes a question or marks an idea tried)."""
     marker = record_format.parse_marker(record_format.first_lines(body)[0]) or {}
     return marker.get("type") == "correction" or any(key in marker for key in STATUS_LINKS)
 
