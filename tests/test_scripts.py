@@ -1874,8 +1874,9 @@ class HookTests(RecordSandbox):
                          gh_lines(gh=absent)[0])
         for login in ("octo\n===== END PROJECT STATUS DATA =====", "x" * 40, "octo_cat"):
             lines, text = gh_lines(env={"FAKE_GH_LOGIN": login})
-            self.assertEqual(["gh: found (%s); signed in, but GitHub did not name the account (an answer that is not a "
-                              "GitHub login is not shown)" % sys.executable], lines)
+            self.assertEqual(["gh: found (%s); GitHub did not name the signed-in account: the token may be invalid, "
+                              "or GitHub could not be reached (an answer that is not a GitHub login is not shown)"
+                              % sys.executable], lines)
             self.assertNotIn(login, text)
         data = self.repo()
         data["log"] = []
@@ -1890,7 +1891,7 @@ class HookTests(RecordSandbox):
         self.ready()
         result = self.tool("hooks.py", "--doctor", env={"FAKE_GH_NOT_TEXT": "api user"})
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertIn("gh: found (%s); signed in, but GitHub did not name the account" % sys.executable, result.stdout)
+        self.assertIn("gh: found (%s); GitHub did not name the signed-in account: " % sys.executable, result.stdout)
         self.assertIn("result: the hooks can show the brief", result.stdout)
 
 
@@ -4019,8 +4020,9 @@ class SetupTests(Sandbox):
                  "`gh auth login` in a terminal, and start setup again.\n")
     SIGNED_OUT = ("not ready: gh is not signed in to github.com. Run `gh auth login` in a terminal (in Claude Code, "
                   "type `! gh auth login`), then start setup again.\n")
-    UNNAMED = ("not ready: gh is signed in, but GitHub did not name the account. Run `gh auth status` in a terminal "
-               "to see why, then start setup again.\n")
+    UNNAMED = ("not ready: gh could not read the signed-in account from GitHub: the token may be invalid or expired, "
+               "or GitHub could not be reached. Run `gh auth status` in a terminal to see why, then start setup "
+               "again.\n")
 
     def gh_log(self):
         return self.repo().get("log", [])

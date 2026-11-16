@@ -128,8 +128,9 @@ NOT_READY = {
                   "type `! gh auth login`), then start setup again.",
     "slow": "not ready: gh did not answer within %d seconds. Check the network, or run `gh auth status` in a terminal "
             "to see why, then start setup again." % recortex.GH_CHECK_SECONDS,
-    "unnamed": "not ready: gh is signed in, but GitHub did not name the account. Run `gh auth status` in a terminal "
-               "to see why, then start setup again.",
+    "unnamed": "not ready: gh could not read the signed-in account from GitHub: the token may be invalid or "
+               "expired, or GitHub could not be reached. Run `gh auth status` in a terminal to see why, then start "
+               "setup again.",
 }
 READY = "ready: gh is signed in to github.com as %s; Python %d.%d"
 

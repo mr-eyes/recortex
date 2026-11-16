@@ -579,7 +579,8 @@ GH_STATES = {
     "ready": "signed in to github.com as %s",
     "signed-out": "not signed in to github.com; run `gh auth login` in a terminal",
     "slow": "no answer within %d seconds" % recortex.GH_CHECK_SECONDS,
-    "unnamed": "signed in, but GitHub did not name the account (an answer that is not a GitHub login is not shown)",
+    "unnamed": "GitHub did not name the signed-in account: the token may be invalid, or GitHub could not be reached "
+               "(an answer that is not a GitHub login is not shown)",
 }
 
 

@@ -74,8 +74,9 @@ def gh_account(timeout=GH_CHECK_SECONDS):
     """Whether gh can be run and is signed in to github.com, for `setup.py preflight` and `hooks.py --doctor`.
 
     Returns (state, login): "missing" (gh cannot be started), "slow" (a call took longer than `timeout` seconds),
-    "signed-out" (`gh auth status` fails for github.com), "unnamed" (signed in, but `gh api user` gave no login of
-    GitHub's form), or "ready" with the login. Nothing else that gh prints is returned: its output is untrusted, and
+    "signed-out" (`gh auth status` fails for github.com), "unnamed" (`gh auth status` passes, but `gh api user` fails
+    or gives no login of GitHub's form: a token that is invalid or expired, or GitHub out of reach), or "ready" with the
+    login. Nothing else that gh prints is returned: its output is untrusted, and
     the login is returned only when it fits LOGIN.
     """
     try:
