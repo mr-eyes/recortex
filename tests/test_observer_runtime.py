@@ -244,6 +244,14 @@ class SourceTests(unittest.TestCase):
                     {'type':'assistant','message':{'role':'user','content':'Mismatched.'}}):
             self.path.write_text(json.dumps(row)+'\n');self.path.chmod(0o600)
             self.assertEqual([],sources.scan(self.hook,self.project)[0],row)
+    def test_claude_codes_own_assistant_records_are_not_the_agents_words(self):
+        # An API error message or a synthetic reply is written by Claude Code, not by the agent to the user.
+        for extra,model in (({'isApiErrorMessage':True},'claude-opus-5-5'),({},'<synthetic>')):
+            row=dict(dict(type='assistant',message={'role':'assistant','model':model,'content':[{'type':'text','text':'API Error: overloaded. All 12 checks pass.'}]}),**extra)
+            self.path.write_text(json.dumps(row)+'\n');self.path.chmod(0o600)
+            self.assertEqual([],sources.scan(self.hook,self.project)[0],extra or model)
+        rows,_=self.write([{'type':'text','text':'All 12 checks pass.'}],role='assistant')
+        self.assertEqual('All 12 checks pass.',sources.resolve(rows[0],self.project)['text'])
     def test_system_reminders_never_reach_a_model(self):
         rows,_=self.write([{'type':'text','text':'4 tests pass.\n<system-reminder>\nThe user\'s email address is octocat@example.test.\n</system-reminder>'}],role='assistant')
         found=sources.resolve(rows[0],self.project)

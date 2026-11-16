@@ -268,6 +268,8 @@ def _content(record):
     role = message.get("role")
     if role != record["type"] or any(record.get(key) for key in HIDDEN) or record.get("isSidechain"):
         return "unknown", "", False, False  # a sidechain (a subagent's turn) is not the conversation with the user
+    if role == "assistant" and (record.get("isApiErrorMessage") or message.get("model") == "<synthetic>"):
+        return "unknown", "", False, False  # Claude Code's own records (an API error, "No response requested.")
     content = message.get("content")
     if isinstance(content, list) and any(isinstance(block, dict) and block.get("type") == "tool_result"
                                          for block in content):
