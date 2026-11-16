@@ -9913,6 +9913,13 @@ class DocsTests(unittest.TestCase):
 
     PAGES = ("how-it-works.md", "install.md", "existing-work.md", "security.md", "reference.md")
 
+    def test_the_light_and_dark_drawings_show_the_same_observer(self):
+        """The observer is drawn in both pictures of a pair, or in neither."""
+        light, dark = (recortex.read_text(os.path.join(ROOT, "assets", "how-it-works-%s.svg" % mode))
+                       for mode in ("light", "dark"))
+        self.assertEqual("observer" in light, "observer" in dark)
+        self.assertIn("if enabled", light)
+
     def test_every_body_replacement_the_skill_names_carries_its_saved_base(self):
         """post_verified.py body refuses a real replacement without --expected-body-file; the skill never says less."""
         missing = []

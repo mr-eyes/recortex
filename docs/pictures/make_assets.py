@@ -22,8 +22,11 @@ def arrow(x1, y1, x2, y2, p, color="brand"):
 def frame(w, h, p, body, label):
     return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-label="%s">'
             '<defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+            '<path d="M0,0 L10,5 L0,10 Z" fill="%s"/></marker>'
+            '<marker id="q" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
             '<path d="M0,0 L10,5 L0,10 Z" fill="%s"/></marker></defs>'
-            '<rect width="%d" height="%d" rx="18" fill="%s"/>%s</svg>\n') % (w, h, w, h, html.escape(label), p["brand"], w, h, p["bg"], "".join(body))
+            '<rect width="%d" height="%d" rx="18" fill="%s"/>%s</svg>\n') % (w, h, w, h, html.escape(label), p["brand"], p["quiet"],
+                                                                         w, h, p["bg"], "".join(body))
 
 def how(p):
     b = []
@@ -34,6 +37,9 @@ def how(p):
         b += ['<circle cx="68" cy="%d" r="6" fill="%s"/>' % (y - 5, p["brand"]), T(86, y, line, 16, serif=True, p=p)]
     # arrow 1
     b += [arrow(282, 164, 352, 164, p), T(317, 150, "memories", 12, "deep", 600, "middle", p=p)]
+    # the optional observer: a quiet dashed path under arrow 1
+    b += ['<line x1="282" y1="236" x2="352" y2="236" stroke="%s" stroke-width="2" stroke-dasharray="5 5" marker-end="url(#q)"/>' % p["quiet"],
+          T(317, 224, "observer", 11.5, "quiet", 600, "middle", p=p), T(317, 256, "if enabled", 10.5, "quiet", anchor="middle", p=p)]
     # column 2: the record
     b += [T(366, 44, "GITHUB ISSUES: THE RECORD", 12, "quiet", 600, p=p), box(366, 60, 250, 208, p)]
     b += [box(384, 76, 214, 44, p, fill="wash", stroke="brand", r=9), T(398, 103, "Hub", 15, weight=600, p=p), T(584, 103, "pinned", 12, "quiet", anchor="end", p=p)]
@@ -53,7 +59,7 @@ def how(p):
     # the loop back
     b += ['<path d="M816,284 C816,322 640,326 480,326 C320,326 155,322 155,280" fill="none" stroke="%s" stroke-width="2.5" stroke-dasharray="6 6" marker-end="url(#a)"/>' % p["brand"],
           T(480, 316, "so the next session starts where this one stopped", 13.5, "deep", anchor="middle", serif=True, italic=True, p=p)]
-    return frame(960, 348, p, b, "How recortex works: a session writes memories to GitHub issues, and the record gives back a brief, the mind page, the finished text and a board")
+    return frame(960, 348, p, b, "How recortex works: a session writes memories to GitHub issues, and the record gives back a brief, the mind page, the finished text and a board; an optional observer, off unless enabled, can also queue and post reviewed memories")
 
 def board(p):
     b = [T(32, 42, "sample-project record", 17, weight=600, p=p), T(928, 42, "Private", 12, "quiet", anchor="end", p=p),

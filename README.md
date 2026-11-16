@@ -10,12 +10,11 @@
 recortex is a Claude Code plugin. It keeps findings, decisions, failures and deliverable text in GitHub issues.
 New and compacted sessions start from that record.
 
-Posted work is recoverable from GitHub. The optional observer reviews queued source pointers for publication,
-with separate approval and a runtime check. Queued work depends on its transcript and is not yet in GitHub.
+The optional observer, experimental in 1.1.0, can queue and post reviewed memories; it is off unless you enable it.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works-dark.svg">
-  <img src="assets/how-it-works-light.svg" alt="A session writes memories to GitHub issues. The record gives back a brief at every session start, the mind page, the finished text and a board.">
+  <img src="assets/how-it-works-light.svg" alt="A session writes memories to GitHub issues. The record gives back a brief at every session start, the mind page, the finished text and a board; an optional observer, off unless enabled, can also queue and post reviewed memories.">
 </picture>
 
 ## What you get
