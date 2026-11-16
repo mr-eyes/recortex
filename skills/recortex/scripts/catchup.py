@@ -67,7 +67,7 @@ def commit_time_problem(root, source, at):
     if not committed:
         return "commit %s is not in the git history of %s" % (match.group(1), root)
     try:
-        then = datetime.datetime.fromisoformat(committed)
+        then = datetime.datetime.fromisoformat(committed.replace("Z", "+00:00"))
         given = datetime.datetime.fromisoformat(at.replace("Z", "+00:00"))
     except ValueError:
         return "the time of commit %s could not be read" % match.group(1)
