@@ -357,6 +357,27 @@ class ObserverPostingTests(unittest.TestCase):
         self.assertIn("--eventkey %s" % key, output)
         self.assertEqual([], [args for args in self.calls() if args[:2] == ["issue", "comment"]])
 
+    def test_only_a_held_event_still_waiting_takes_a_rewrite(self):
+        body = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text().replace("-08:00 -->", "-08:00 replaces=9001 -->")
+        keys = []
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            for n, text in enumerate((body, body.replace("small patch", "small fix"), body.replace("small patch", "tiny patch"))):
+                source = "route%d" % n
+                db.capture([self.metadata(source)])
+                candidate = {"kind": "idea", "issue": 3, "body": text, "sources": [source]}
+                ident = db.reserve_invocation("reviewer")
+                db.complete_invocation(ident, True, output_hash=store.candidate_hash(candidate))
+                keys.append(db.review_complete(source, candidate, {"reservation_id": ident, "accepted": True,
+                                                                   "candidate_hash": store.candidate_hash(candidate)}))
+            rewrite = body.replace("It is a small patch", "It is a very small patch")
+            self.assertIsNone(db.held_change_of(rewrite))  # ready and not held: posts on its own, takes nothing
+            db.transition(keys[1], "deferred", reason="status_change")
+            db.transition(keys[2], "deferred", reason="status_change")
+            db.transition(keys[2], "rejected", reason="discarded", held=True)
+            self.assertEqual(keys[1], db.held_change_of(rewrite)["eventkey"])
+            db.transition(keys[1], "rejected", reason="discarded", held=True)
+            self.assertIsNone(db.held_change_of(rewrite))  # a discarded held event stays out, as decided
+
     def test_a_held_change_is_found_among_more_than_a_thousand_held_events(self):
         # The memories a held event changes are looked up by target in an indexed table, with no cap: the held change
         # is the oldest of 1,201 held events. A format 2 queue gets the table, back-filled, on its next writable open.
