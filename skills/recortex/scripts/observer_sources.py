@@ -7,6 +7,12 @@ import re
 import stat
 import time
 
+try:
+    import grp
+    import pwd
+except ImportError:  # no user database: group write on a folder is never accepted
+    grp = pwd = None
+
 MAX_READ = 262144
 MAX_ROWS = 512
 SESSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
@@ -35,21 +41,29 @@ def _boundary(path, folder, source_file=None):
 
 PASSWD = "/etc/passwd"
 GROUP = "/etc/group"
+ACCOUNTS_CAP = 4 * 1024 * 1024
+NUMBER = re.compile(r"[0-9]{1,10}")
 
 
-def _local(path, fields):
-    """The entries of a local account file as lists of fields; None when it cannot be read."""
+def _local(path, fields, numbers):
+    """The entries of a local account file, with the fields at `numbers` as integers; None, which counts as "not
+    private", when the file is larger than ACCOUNTS_CAP, cannot be read, or holds any line that is a NIS compat entry
+    (+ or -), has another number of fields or a field at `numbers` that is not a number. Nothing is skipped."""
     try:
-        with open(path, encoding="utf-8", errors="replace") as handle:
-            text = handle.read(4 * 1024 * 1024)
+        with open(path, "rb") as handle:
+            raw = handle.read(ACCOUNTS_CAP + 1)
     except OSError:
         return None
+    if len(raw) > ACCOUNTS_CAP:
+        return None
     entries = []
-    for line in text.splitlines():
-        parts = line.split(":")
-        if line.startswith("#") or len(parts) != fields:
+    for line in raw.decode("utf-8", "replace").split("\n"):
+        if line == "":
             continue
-        entries.append(parts)
+        parts = line.split(":")
+        if line[0] in "+-" or len(parts) != fields or not all(NUMBER.fullmatch(parts[n]) for n in numbers):
+            return None
+        entries.append([int(part) if n in numbers else part for n, part in enumerate(parts)])
     return entries
 
 
@@ -57,21 +71,29 @@ def private_group(uid, gid):
     """True when `gid` is the user private group of `uid`, established from the local account files and never from
     an enumeration that a network directory can leave incomplete: the owner and the group are each defined once in
     /etc/passwd and /etc/group, the group is the owner's primary group and is named after the owner, it has no member
-    but the owner, and no other local account has it as its primary group. A network account or group is refused.
-    Default Ubuntu makes ~/.claude and ~/.claude/projects 775 in such a group."""
-    if type(uid) is not int or type(gid) is not int:
+    but the owner, and no other local account has it as its primary group. The system's own lookup (NSS) must agree.
+    A network account or group, or a file that does not parse cleanly, is refused. Default Ubuntu makes ~/.claude
+    and ~/.claude/projects 775 in such a group."""
+    if type(uid) is not int or type(gid) is not int or grp is None or pwd is None:
         return False
-    users, groups = _local(PASSWD, 7), _local(GROUP, 4)
+    users, groups = _local(PASSWD, 7, (2, 3)), _local(GROUP, 4, (2,))
     if users is None or groups is None:
         return False
-    owners = [entry for entry in users if entry[2] == str(uid)]
-    named = [entry for entry in groups if entry[2] == str(gid)]
+    owners = [entry for entry in users if entry[2] == uid]
+    named = [entry for entry in groups if entry[2] == gid]
     if len(owners) != 1 or len(named) != 1:
         return False
     owner, group = owners[0], named[0]
     members = [member for member in group[3].split(",") if member]
-    return (owner[3] == str(gid) and group[0] == owner[0] and all(member == owner[0] for member in members)
-            and not any(entry[3] == str(gid) and entry[0] != owner[0] for entry in users))
+    if not (owner[3] == gid and group[0] == owner[0] and all(member == owner[0] for member in members)
+            and not any(entry[3] == gid and entry[0] != owner[0] for entry in users)):
+        return False
+    try:
+        looked_up, account = grp.getgrgid(gid), pwd.getpwuid(uid)
+    except (KeyError, OverflowError, OSError):
+        return False
+    return (looked_up.gr_name == owner[0] and all(member == owner[0] for member in looked_up.gr_mem)
+            and account.pw_gid == gid and account.pw_name == owner[0])
 
 
 def _writable(info, leaf=False):

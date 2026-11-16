@@ -24,21 +24,38 @@ def changed_stat(info, **changes):
 
 
 def account_files(folder, gid, group_name="octocat", members="", other_primary=False, user="octocat", primary=None,
-                  in_passwd=True, in_group=True):
-    """Fake /etc/passwd and /etc/group in `folder`, patched in: the current user `user` whose primary group is `gid`
-    (or `primary`)."""
+                  in_passwd=True, in_group=True, extra_user=None, extra_group=None, nss=None):
+    """Fake /etc/passwd and /etc/group in `folder`, and a system lookup (NSS) that agrees with them unless `nss`
+    changes it, patched in: the current user `user` whose primary group is `gid` (or `primary`)."""
+    primary = gid if primary is None else primary
     users = ["root:x:0:0:root:/root:/bin/bash"]
     if in_passwd:
-        users.append("%s:x:%d:%d::/home/%s:/bin/bash" % (user, os.getuid(), gid if primary is None else primary, user))
+        users.append("%s:x:%d:%d::/home/%s:/bin/bash" % (user, os.getuid(), primary, user))
     if other_primary:
         users.append("hubot:x:%d:%d::/home/hubot:/bin/bash" % (os.getuid() + 1, gid))
+    users += [extra_user] if extra_user else []
     groups = ["root:x:0:"] + (["%s:x:%d:%s" % (group_name, gid, members)] if in_group else [])
+    groups += [extra_group] if extra_group else []
     passwd, group = os.path.join(folder, "passwd"), os.path.join(folder, "group")
     with open(passwd, "w") as handle:
         handle.write("\n".join(users) + "\n")
     with open(group, "w") as handle:
         handle.write("\n".join(groups) + "\n")
-    return mock.patch.multiple(sources, PASSWD=passwd, GROUP=group)
+    answer = dict(gr_name=group_name, gr_mem=[m for m in members.split(",") if m], pw_gid=primary, pw_name=user)
+    answer.update(nss or {})
+
+    def getgrgid(number):
+        if number != gid:
+            raise KeyError(number)
+        return SimpleNamespace(gr_name=answer["gr_name"], gr_mem=answer["gr_mem"])
+
+    def getpwuid(number):
+        if number != os.getuid():
+            raise KeyError(number)
+        return SimpleNamespace(pw_name=answer["pw_name"], pw_gid=answer["pw_gid"])
+
+    return mock.patch.multiple(sources, PASSWD=passwd, GROUP=group, grp=SimpleNamespace(getgrgid=getgrgid),
+                               pwd=SimpleNamespace(getpwuid=getpwuid))
 
 
 class SourcePermissionTests(unittest.TestCase):
@@ -137,6 +154,36 @@ class SourcePermissionTests(unittest.TestCase):
             self.assertEqual("source-permissions", sources._component_problem(str(self.folder), world, str(self.folder)))
         with mock.patch.multiple(sources, PASSWD=str(files / "missing"), GROUP=str(files / "missing")):
             self.assertEqual("source-permissions", sources._component_problem(str(self.folder), info, str(self.folder)))
+
+    def test_account_files_that_do_not_parse_cleanly_or_disagree_with_the_system_count_as_shared(self):
+        gid, files = 4242, self.base / "etc"
+        files.mkdir()
+        with account_files(str(files), gid):
+            self.assertTrue(sources.private_group(os.getuid(), gid))  # the clean case
+            with mock.patch.object(sources, "ACCOUNTS_CAP", 40):
+                self.assertFalse(sources.private_group(os.getuid(), gid), "oversized")
+        # A file over the cap is refused whole, even where the cap falls between two clean lines.
+        lines = ["user%d:x:%d:%d::/home/user%d:/bin/sh" % (n, 2000 + n, 2000 + n, n) for n in range(10)]
+        big = files / "big"
+        big.write_text("\n".join(lines) + "\n")
+        with mock.patch.object(sources, "ACCOUNTS_CAP", len(("\n".join(lines[:5]) + "\n").encode())):
+            self.assertIsNone(sources._local(str(big), 7, (2, 3)))
+        self.assertEqual(10, len(sources._local(str(big), 7, (2, 3))))
+        cases = {"malformed line": dict(extra_user="broken:x:5000"),
+                 "non-number id": dict(extra_user="odd:x:5001:abc::/home/odd:/bin/sh"),
+                 "NIS compat line": dict(extra_user="+::::::"),
+                 "NIS compat group": dict(extra_group="-octocat"),
+                 "another user's primary gid written 0%d" % gid: dict(extra_user="hubot:x:5002:0%d::/home/hubot:/bin/sh" % gid),
+                 "NSS lists a member": dict(nss={"gr_mem": ["hubot"]}),
+                 "NSS names the group otherwise": dict(nss={"gr_name": "staff"}),
+                 "NSS gives another primary group": dict(nss={"pw_gid": gid + 1})}
+        for case, change in cases.items():
+            with account_files(str(files), gid, **change):
+                self.assertFalse(sources.private_group(os.getuid(), gid), case)
+        with mock.patch.object(sources, "grp", None):
+            with account_files(str(files), gid):
+                pass
+            self.assertFalse(sources.private_group(os.getuid(), gid))
 
     def test_default_ubuntu_layout_is_ready_and_a_transcript_stays_writable_by_the_user_alone(self):
         # ~/.claude, ~/.claude/projects and the project's folder 775 in the user's private group; transcripts 600.
