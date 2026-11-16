@@ -16,7 +16,7 @@ The six commands hold every test between them; each takes under five minutes. Th
 
 [CI](.github/workflows/tests.yml) runs complete test discovery on every pull request and push to `main`, with Python 3.8 on Ubuntu 22.04 and Python 3.14 on Ubuntu 24.04. Discovery includes new test classes and `test*.py` files automatically; the six commands above are the local batches. The job's limit is 45 minutes. The workflow has read-only repository permissions, does not retain checkout credentials, and puts a failing `gh` command ahead of the real CLI during tests so accidental live GitHub calls fail. Its actions are pinned to release commit hashes.
 
-The tests run the scripts against `tests/fake_gh.py`, a local stand-in for `gh` selected with the `RECORTEX_GH` environment variable. They work in temporary folders under `.tmp/` and remove them afterwards; set `RECORTEX_TEST_KEEP=1` to keep them for inspection. No test may contact GitHub.
+The tests run the scripts against `tests/fake_gh.py`, a local stand-in for `gh` selected with the `RECORTEX_GH` environment variable. They work in temporary folders under `.tmp/` and remove them afterwards; set `RECORTEX_TEST_KEEP=1` to keep them for inspection. The observer's tests that read native transcripts use the system's temporary folder instead, because the observer refuses a transcript below a group-writable folder, which a checkout made with a loose umask is; on macOS `/tmp` is a symlink, which the same checks refuse. No test may contact GitHub.
 
 The suite passes on Python 3.14 on Linux. The lock race test starts its workers with the `fork` start method and is skipped where that method does not exist.
 
