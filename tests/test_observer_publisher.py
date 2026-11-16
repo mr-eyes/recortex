@@ -91,6 +91,28 @@ class ObserverPublisherTests(unittest.TestCase):
         self.assertEqual("verified", publisher.publish(fixtures.REPO, command, self.config)["state"])
         self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config, main_session=True)["state"])
 
+    def test_daily_cap_counts_automatic_comments_only(self):
+        self.config["observer"]["max_posts"] = 1
+        runtime.approve(fixtures.REPO, self.config)
+        self.assertEqual("verified", self.publish()["state"])
+        body = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text().replace("open quote", "open quote again")
+        key = self._second(body)
+        with self.assertRaisesRegex(publisher.PublishError, "daily_cap"):
+            publisher.publish(fixtures.REPO, key, self.config)
+        self.assertEqual(1, len([a for a in self.calls() if a[:2] == ["issue", "comment"]]))
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            self.assertEqual("ready", db.event(key)["state"])
+        self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config, main_session=True)["state"])
+        self.assertEqual(25, runtime.settings({"observer": {"max_posts": 900}})["max_posts"])
+
+    def test_deferred_event_waits_for_the_main_session(self):
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.transition(self.key, "deferred", reason="status_change")
+        with self.assertRaisesRegex(publisher.PublishError, "not_ready"):
+            self.publish()
+        self.assertEqual([], self.calls())
+        self.assertEqual("verified", self.publish(main_session=True)["state"])
+
     def test_marked_project_waits_for_the_main_session(self):
         self.config["fields"] = {"sensitive": ["people"]}
         with self.assertRaisesRegex(publisher.PublishError, "sensitive_project"):

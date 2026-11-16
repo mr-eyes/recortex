@@ -49,6 +49,21 @@ class ObserverStoreTests(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
 
+    def test_discarded_event_loses_its_excerpts_after_the_retention(self):
+        import observer
+        with store.Store(REPO, config={}) as db:
+            key, _, _ = self.ready(db, excerpts=["raw transcript words"])
+        with mock.patch.object(observer.recortex, "load_config", return_value={"repo": REPO}), \
+                mock.patch.object(observer.recortex, "allowed_users", return_value={"octocat"}), \
+                mock.patch("sys.stdout"):
+            self.assertEqual(0, observer.main(["discard", key]))
+            self.assertEqual(1, observer.main(["discard", key]))  # only a ready or deferred event
+        with store.Store(REPO, config={}) as db:
+            self.assertEqual("rejected", db.event(key)["state"])
+            db.db.execute("UPDATE events SET updated=? WHERE eventkey=?", (time.time() - 8 * 86400, key))
+            db.expire_handled()
+            self.assertNotIn("excerpts", db.event(key)["candidate"])
+
     def metadata(self, source="source1"):
         return {"source_id": source, "session_id": "session1", "role": "assistant", "event_type": "stop",
                 "path": "/example/session.jsonl", "offset": 0, "end": 10,

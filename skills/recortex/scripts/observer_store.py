@@ -33,7 +33,7 @@ STATES = frozenset(("observed", "candidate", "reviewed", "ready", "sending", "ve
                     "deferred", "ignored", "rejected", "uncertain"))
 TRANSITIONS = {"ready": {"sending", "deferred", "rejected"},
                "sending": {"verified", "uncertain"}, "uncertain": {"verified"},
-               "deferred": {"ready", "rejected"}, "reviewed": {"ready", "deferred", "rejected"}}
+               "deferred": {"ready", "rejected", "sending"}, "reviewed": {"ready", "deferred", "rejected"}}
 SOURCE_FIELDS = frozenset(("source_id", "session_id", "role", "event_type", "path", "offset", "end",
                            "sha256", "content_sha256", "observed_at"))
 SOURCE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}")

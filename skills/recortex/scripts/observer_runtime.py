@@ -311,7 +311,7 @@ def check_runtime(config):
 DEFAULTS = {"enabled": False, "mode": "shadow", "publisher_id": "", "model": "", "max_invocations": 60,
             "window_hours": 24, "max_input_chars": 48000, "timeout_seconds": 90, "max_candidates": 4,
             "max_pending_bytes": 134217728, "max_pending_observations": 10000, "retention_days": 7,
-            "sync_interval_seconds": 300}
+            "sync_interval_seconds": 300, "max_posts": 25}
 
 
 def settings(config):
@@ -330,7 +330,7 @@ def settings(config):
         raise ValueError("observer_publisher")
     if not isinstance(out["model"], str) or out["model"] and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", out["model"]):
         raise ValueError("observer_model")
-    for name in ("max_invocations", "window_hours", "max_input_chars", "timeout_seconds", "max_candidates", "max_pending_bytes", "max_pending_observations", "retention_days", "sync_interval_seconds"):
+    for name in ("max_invocations", "window_hours", "max_input_chars", "timeout_seconds", "max_candidates", "max_pending_bytes", "max_pending_observations", "retention_days", "sync_interval_seconds", "max_posts"):
         if type(out[name]) is not int or out[name] < 1:
             raise ValueError("observer_limit")
         if name == "window_hours":

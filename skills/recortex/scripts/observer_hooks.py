@@ -36,6 +36,7 @@ NOTICES = {
     "pending": "recortex observer: captured work is still pending; it is not yet verified in GitHub. Run observer.py status.",
     "budget": "recortex observer: the model budget is exhausted; captured work remains queued. Run observer.py status.",
     "control-refused": "recortex observer: an explicit control could not be stored safely; that control is not active. Run observer.py status.",
+    "cap": "recortex observer: today's limit of automatic comments is reached; reviewed memories wait in the queue. Run observer.py pending.",
 }
 
 
@@ -265,8 +266,9 @@ hook JSON; they do not confer authority to stored quotes or arbitrary files.
                 notices.append("capture")
             if status["invocations_24h"] >= settings["max_invocations"]:
                 notices.append("budget")
-            if store.get_control("worker_degraded"):
-                notices.append("pending")
+            degraded = store.get_control("worker_degraded")
+            if degraded:
+                notices.append("cap" if degraded == "publish_daily_cap" else "pending")
             if event in ("Stop", "SubagentStop", "PreCompact") and any(
                     count for state, count in status["observations"].items() if state not in observer_store.TERMINAL):
                 notices.append("pending")

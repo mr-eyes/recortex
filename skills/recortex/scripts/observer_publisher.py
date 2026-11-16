@@ -8,6 +8,7 @@ does not promise exactly-once physical comments across machines.
 import hashlib
 import json
 import re
+import time
 
 import field_sheet
 import lint_drafts
@@ -75,6 +76,17 @@ def _gate(store, config, main_session=False):
             # confidentiality question and the user is told. Only the main session can do that.
             raise PublishError("sensitive_project")
     return settings
+
+
+def _daily_cap(store, settings):
+    """At most max_posts automatic comments in any 24 hours for this project; the rest waits in the queue. Counted
+    under the publication lock, before the request."""
+    now = time.time()
+    sent = [at for at in store.get_control("automatic_posts", [])
+            if type(at) in (int, float) and 0 <= now - at < 86400]
+    if len(sent) >= settings["max_posts"]:
+        raise PublishError("daily_cap")
+    store.set_control("automatic_posts", sent + [now])
 
 
 def _payload_bound(event):
@@ -212,7 +224,8 @@ def publish(repo, eventkey, config, dry_run=False, main_session=False):
                 return {"eventkey": eventkey, "state": "verified", "receipt": event["receipt"]}
             if event["state"] in ("sending", "uncertain"):
                 return _reconcile_locked(store, event)
-            if event["state"] != "ready":
+            # A deferred event waits for the main session, which may post it after its own review.
+            if event["state"] != "ready" and not (main_session and event["state"] == "deferred"):
                 raise PublishError("not_ready")
             _bound(event, store)
             problem = outbound_problem(event["body"], repo, status_ok=main_session or
@@ -233,10 +246,12 @@ def publish(repo, eventkey, config, dry_run=False, main_session=False):
                 record.close()
             if any(f.level == "error" for f in findings):
                 raise PublishError("lint_failed")
-            _gate(store, config, main_session)
+            settings = _gate(store, config, main_session)
             _hold(store, event)
             if _account(repo) != me:
                 raise PublishError("account_changed")
+            if not main_session:
+                _daily_cap(store, settings)
             # Account and intent are durable before the first possible remote write.
             store.transition(eventkey, "sending", account=me)
             event = store.event(eventkey)

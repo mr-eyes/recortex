@@ -150,6 +150,37 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(['extract'], [x[0] for x in self.calls], reason)
             with store.Store(REPO, config=self.config) as db:
                 self.assertEqual(reason, db.observation(sid)['reason'])
+    def test_one_failing_event_does_not_stop_the_queue(self):
+        import observer_publisher
+        self.config['observer']['mode'] = 'automatic'
+        runtime.approve(REPO, self.config)
+        first, second = self.capture(), self.capture(QUOTE + ' Again.')
+        def call(payload, schema, purpose, config):
+            if purpose == 'extract':
+                return {'ok': True, 'structured': {'candidates': [self.candidate(first), self.candidate(second)], 'ignored': []}}
+            return {'ok': True, 'structured': {'candidate_hash': payload['candidate_hash'], 'accepted': True, 'reason': 'supported'}}
+        with patch.object(observer_publisher, 'publish', side_effect=[observer_publisher.PublishError('lint_failed'),
+                                                                     {'state': 'verified'}]) as publish:
+            ready = self.run_worker(call)['ready']
+        self.assertEqual(2, publish.call_count)
+        with store.Store(REPO, config=self.config) as db:
+            self.assertEqual(('deferred', 'lint_failed'), (db.event(ready[0])['state'], db.event(ready[0])['reason']))
+            self.assertEqual('publish_lint_failed', db.get_control('worker_degraded'))
+    def test_daily_cap_stops_the_pass_and_the_rest_waits_in_the_queue(self):
+        import observer_publisher
+        self.config['observer']['mode'] = 'automatic'
+        runtime.approve(REPO, self.config)
+        first, second = self.capture(), self.capture(QUOTE + ' Again.')
+        def call(payload, schema, purpose, config):
+            if purpose == 'extract':
+                return {'ok': True, 'structured': {'candidates': [self.candidate(first), self.candidate(second)], 'ignored': []}}
+            return {'ok': True, 'structured': {'candidate_hash': payload['candidate_hash'], 'accepted': True, 'reason': 'supported'}}
+        with patch.object(observer_publisher, 'publish', side_effect=observer_publisher.PublishError('daily_cap')) as publish:
+            ready = self.run_worker(call)['ready']
+        self.assertEqual(1, publish.call_count)
+        with store.Store(REPO, config=self.config) as db:
+            self.assertEqual(['ready', 'ready'], [db.event(key)['state'] for key in ready])
+            self.assertEqual('publish_daily_cap', db.get_control('worker_degraded'))
     def test_two_independent_passes_bind_review_before_persistence(self):
         sid=self.capture();candidate=self.candidate(sid)
         report=self.run_worker(self.invoke(candidate))

@@ -367,7 +367,17 @@ def run_once(repo, config, project_root=None, invoke_fn=None):
                         and options["mode"] == "automatic" and not store.get_control("publication_paused", False)):
                     # Includes reviewed events left ready by a previous interrupted worker.
                     for event in store.events(states=["ready"], limit=4):
-                        observer_publisher.publish(repo, event["eventkey"], config)
+                        try:
+                            observer_publisher.publish(repo, event["eventkey"], config)
+                        except (observer_publisher.PublishError, recortex.GhError) as error:
+                            # One event's own problem defers that event and the next one is tried; anything else
+                            # (the daily cap, a marked project, GitHub unavailable) stops the pass. Both are kept.
+                            reason = getattr(error, "reason", "github_unavailable")
+                            store.set_control("worker_degraded", "publish_" + reason)
+                            if reason in observer_publisher.EVENT_PROBLEMS:
+                                store.transition(event["eventkey"], "deferred", reason=reason)
+                                continue
+                            break
                     if store.get_control("sync_needed", False) and not refresh_record(repo, config, store, options):
                         store.set_control("worker_degraded", "record_unavailable")
                 return report

@@ -49,6 +49,8 @@ def parser():
             command.add_argument("--source", required=True, help="retry a known deferred source through independent review")
         if name == "reconcile":
             command.add_argument("eventkey")
+    discard = sub.add_parser("discard", help="drop a reviewed event that will not be posted; its excerpts then expire")
+    discard.add_argument("eventkey")
     context = sub.add_parser("context")
     context.add_argument("--query", default="")
     context.add_argument("--issue", type=int)
@@ -250,6 +252,12 @@ def main(argv=None):
                 emit({"sources": [{key: row[key] for key in ("source_id", "state", "reason", "created", "updated")}
                                   for row in store.pending(limit=100)],
                       "events": [{key: row[key] for key in ("eventkey", "state", "reason")} for row in store.events(limit=100)]}); return 0
+            if args.command == "discard":
+                event = store.event(args.eventkey)
+                if event is None or event["state"] not in ("ready", "deferred"):
+                    emit({"code": "event-not-discardable"}); return 1
+                store.transition(args.eventkey, "rejected", reason="discarded")
+                emit({"action": "discard", "eventkey": args.eventkey}); return 0
             if args.command == "holds":
                 emit({"holds": store.holds()}); return 0
             if args.command in ("pause", "resume"):

@@ -138,6 +138,13 @@ class ObserverHookTests(unittest.TestCase):
             self.assertIn("capture is incomplete", result["systemMessage"])
             self.assertNotIn("SECRET", json.dumps(result))
 
+    def test_daily_cap_has_its_own_line(self):
+        with Store(REPO) as store:
+            store.set_control("worker_degraded", "publish_daily_cap")
+        result = self.run_hook(event="stop")
+        self.assertIn("limit of automatic comments", result["systemMessage"])
+        self.assertNotIn("not yet verified", result["systemMessage"])
+
     def test_worker_launch_only_after_local_gate_and_approval(self):
         with mock.patch("observer_hooks.observer_runtime.gate_valid", return_value=True):
             self.run_hook(event="stop")
