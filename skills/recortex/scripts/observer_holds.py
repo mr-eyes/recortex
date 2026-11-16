@@ -68,6 +68,8 @@ def _source(source):
 
 NATIVE = re.compile(r"<command-message>[^<\n]*</command-message>\n<command-name>/(?:recortex:)?recortex</command-name>\n"
                     r"<command-args>([^<\n]*)</command-args>")
+# How a chat channel delivers a message: it can set a hold, since a hold only denies, and is never typed words.
+CHANNEL = re.compile(r'<channel(?: [a-z_]+="[^"\n]*")*>[ \t]*\n?([^<\n]*)\n?[ \t]*</channel>')
 
 
 def _control(text):
@@ -76,6 +78,9 @@ def _control(text):
         # How Claude Code stores a typed /recortex command. A model's tool call can produce the same wrapper, which
         # can only add a hold (a hold only denies); no text in a session ever releases one (see release).
         text = ("/recortex " + native.group(1).strip()).strip()
+    channel = CHANNEL.fullmatch(text)
+    if channel:
+        text = channel.group(1).strip()
     if "\n" in text or "\r" in text:
         return None
     if text.lower().rstrip(".! ") in PHRASES:

@@ -235,8 +235,10 @@ HIDDEN = ("isMeta", "isCompactSummary", "isVisibleInTranscriptOnly")
 # userType is the standard one, it holds text only, and no harness wrapper, quote or pasted block is in it.
 NOT_TYPED = ("isMeta", "isSidechain", "isCompactSummary", "isVisibleInTranscriptOnly", "toolUseResult",
              "sourceToolUseID", "sourceToolAssistantUUID")
+# A chat channel's message (<channel source=...>) is among them: another person can write in a channel, so it counts
+# for holds only (the looser rule), never as the user's words for a decision or a change of status.
 HARNESS = re.compile(r"<(?:command-[a-z]+|local-command-[a-z]+|bash-[a-z]+|system-reminder|task-notification|"
-                     r"user-prompt-submit-hook|pasted_content|tool_result|tool_use_error)\b|\[Pasted text|"
+                     r"user-prompt-submit-hook|pasted_content|tool_result|tool_use_error|channel)\b|\[Pasted text|"
                      r"\[Request interrupted|(?m:^Caveat: )|(?m:^[ \t]*(?:>|```|~~~))")
 REMINDER = re.compile(r"<system-reminder>(?:.*?</system-reminder>|.*\Z)[ \t\r\n]*", re.S)
 

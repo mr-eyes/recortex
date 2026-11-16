@@ -516,6 +516,20 @@ class ObserverHookTests(unittest.TestCase):
         self.assertEqual([("Don't push.", True), ("Use the strict parser for every import from now on.", True)],
                          [(item["text"], item["direct_user"]) for item in said])
 
+    def test_a_chat_channels_message_holds_but_is_never_the_users_words(self):
+        # Another person can write in a channel: its message sets a hold, which only denies, and is never a source of
+        # the user's own words for a decision or a change of status.
+        wrap = '<channel source="plugin:telegram:telegram" chat_id="1001" message_id="%d" user="owner" ' \
+               'ts="2026-11-16T10:00:00Z">\n%s\n</channel>'
+        self.append(wrap % (7, "We decided to keep strict quoting as the default for every import."))
+        self.assertNotIn("hookSpecificOutput", self.run_hook())
+        self.append(wrap % (8, "Don't push."))
+        self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
+        rows, _ = sources.scan(dict(self.data, hook_event_name="Stop"), str(self.project))
+        said = [sources.resolve(row, str(self.project)) for row in rows if row["role"] == "user"]
+        self.assertEqual(2, len(said))
+        self.assertEqual([(False, True), (False, True)], [(item["direct_user"], item["control_user"]) for item in said])
+
     def test_plain_phrase_holds_only_this_session(self):
         self.append("Don't push.")
         self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])

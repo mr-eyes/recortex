@@ -347,6 +347,16 @@ class WorkerTests(unittest.TestCase):
             self.run_worker(self.invoke(self.candidate(sid)))
         self.assertEqual([], dict(self.calls)['review']['recent_on_issue'])  # judged without it
 
+    def test_a_chat_channels_message_is_not_a_source(self):
+        # A channel's message counts for holds only: the worker sets it aside before any call.
+        sid = self.capture('<channel source="plugin:telegram:telegram" chat_id="1001" message_id="9" user="owner" '
+                           'ts="2026-11-16T10:00:00Z">\nWe decided to keep strict quoting for every import.\n</channel>')
+        report = self.run_worker(self.invoke(self.candidate(sid)))
+        self.assertEqual([], self.calls)
+        self.assertEqual(1, report['ignored'])
+        with store.Store(REPO, config=self.config) as db:
+            self.assertEqual(('ignored', 'not_typed'), (db.observation(sid)['state'], db.observation(sid)['reason']))
+
     def test_unbound_candidates_never_reach_the_reviewer(self):
         cases = {'excerpt_binding': dict(excerpts=['words that are not in the source']),
                  'destination': dict(issue=99),
