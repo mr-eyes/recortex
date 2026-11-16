@@ -223,6 +223,19 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(('deferred','withheld'),(db.observation(sid)['state'],db.observation(sid)['reason']))
             self.assertEqual([],db.events())
         self.calls=[];self.run_worker(call);self.assertEqual([],self.calls)
+    def test_the_reviewer_sees_the_rest_of_the_stretch_as_context(self):
+        # The cited messages are the evidence; what else was said around them in the session is context, so that a
+        # command the user named or a commit the agent gave supports the candidate too. Authority rests on the cited
+        # messages alone.
+        asked = self.capture('Run python3 bench.py at commit 4f2a9c1 and tell me the median.')
+        told = self.capture('The median was 1.31 s over 5 runs.', role='assistant')
+        sid = self.capture()
+        self.run_worker(self.invoke(self.candidate(sid)))
+        review = [payload for purpose, payload in self.calls if purpose == 'review'][0]
+        self.assertEqual([sid], [item['id'] for item in review['sources']])
+        self.assertEqual([asked, told], [item['id'] for item in review['context']])
+        self.assertIn('the other messages of the same stretch', runtime.PROMPTS['review'])
+        self.assertIn("the agent's account of such a request withholds nothing", runtime.PROMPTS['review'])
     def test_never_write_down_reaches_both_model_calls(self):
         sheet = {'state': 'approved', 'entry': {'brief': {'never': 'names of client sites'}}, 'marks': []}
         sid = self.capture()

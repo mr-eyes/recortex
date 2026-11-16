@@ -191,6 +191,7 @@ def candidate_problem(candidate, supplied, context, config, repo=None):
 MAX_SOURCES = 16  # queued observations offered to one selection call
 SOURCE_TEXT = 6000  # characters of one source a model sees; a longer one keeps its start and its end
 RECORD_ROOM = 18000  # what the record context may take of a call (destinations, the task packet and their quoting)
+REVIEW_CONTEXT = 12000  # characters of the rest of the stretch a reviewer is shown beside a candidate's cited messages
 # Deferrals tried again at the next pass, up to this many attempts in all: the pass was full (input_limit,
 # candidate_limit); the selector neither used nor set aside the source (uncertain), often because what it belongs with
 # had not happened yet; or the selector's draft failed a mechanical check. Each attempt is counted in the reason
@@ -280,6 +281,24 @@ def _view(source):
         text = text[:4000] + "\n[... %d characters left out ...]\n" % (len(text) - 5500) + text[-1500:]
     return {"id": source["id"], "message_id": source.get("message_id"), "role": source["role"], "at": source.get("at"),
             "direct_user": source.get("direct_user"), "text": text}
+
+
+def _stretch(candidate, supplied, order):
+    """The other messages of the candidate's sessions in this pass, in order, as the reviewer's context: what else was
+    said around the cited messages (the command the user named, the commit the agent gave). Bounded by REVIEW_CONTEXT;
+    status_authority still rests on the cited messages alone."""
+    cited = set(candidate["sources"])
+    sessions = {supplied[sid].get("session_id") for sid in cited}
+    out, used = [], 0
+    for sid in sorted(supplied, key=lambda key: order[key]):
+        if sid in cited or supplied[sid].get("session_id") not in sessions:
+            continue
+        view = _view(supplied[sid])
+        size = len(runtime.canonical(view))
+        if used + size <= REVIEW_CONTEXT:
+            out.append(view)
+            used += size
+    return out
 
 
 def _account(repo):
@@ -424,7 +443,8 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 continue
             digest = runtime.candidate_hash(candidate)
             reviewed = invoke({"candidate": candidate, "candidate_hash": digest,
-                               "sources": [_view(supplied[sid]) for sid in candidate["sources"]], "record": context,
+                               "sources": [_view(supplied[sid]) for sid in candidate["sources"]],
+                               "context": _stretch(candidate, supplied, order), "record": context,
                                "never_write_down": never, "account": account}, REVIEW, "review", options)
             answer = reviewed.get("structured")
             valid = reviewed.get("ok") is True and runtime.validate(answer, REVIEW) and answer["candidate_hash"] == digest
