@@ -297,11 +297,50 @@ class ObserverPostingTests(unittest.TestCase):
         self.assertIn("refused this event (publication_paused)", output)  # a refusal names its real reason
         with store.Store(fixtures.REPO, config=self.config) as db:
             db.set_control("publication_paused", False)
+        before = len(self.calls())
+        result, output = self.post()  # no answer yet: refused before any request, and it stays listed
+        self.assertEqual(1, result, output)
+        self.assertIn("refused this event (held_unanswered)", output)
+        self.assertIn("options Post and Drop", output)
+        self.assertEqual(before, len(self.calls()))
+        now = __import__("time").time()
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            self.assertEqual([self.key], [event["eventkey"] for event in db.waiting_for_answer()])
+            db.grant_answer(self.key, "toolu_01old", now=now - store.GRANT_SECONDS - 1)  # expired
+            self.assertFalse(db.has_grant(self.key))
+            db.grant_answer(self.key, "toolu_01old2", now=now - store.GRANT_SECONDS - 1)
+            self.assertFalse(db.take_grant(self.key))  # taken, and refused: it had expired
+            db.grant_answer(self.key, "toolu_01old3", now=now - store.GRANT_SECONDS - 1)
+            db.grant_answer("f" * 32, "toolu_01else")  # another event's
+        result, output = self.post()
+        self.assertIn("refused this event (held_unanswered)", output)
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.grant_answer(self.key, "toolu_01post")
         with mock.patch.object(observer, "terminal", side_effect=AssertionError("no terminal step")):
             result, output = self.post()
         self.assertEqual(0, result, output)
         self.assertIn("memory id: 9100", output)
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            self.assertFalse(db.has_grant(self.key))  # consumed by the post
+            self.assertFalse(db.take_grant(self.key))
+            self.assertFalse(db.grant_answer(self.key, "toolu_01post"))  # that answer is used
+        self.assertEqual(0, self.post()[0])  # the verified receipt: no second comment
         self.assertEqual(1, len([args for args in self.calls() if args[:2] == ["issue", "comment"]]))
+
+    def test_a_grant_is_consumed_once_and_only_by_the_post(self):
+        # The grant is taken at the last step before the send: a refusal before it (here a pause) leaves it, and a
+        # second held event's post needs its own.
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.transition(self.key, "deferred", reason="status_change")
+            db.grant_answer(self.key, "toolu_01post")
+            db.set_control("publication_paused", True)
+        self.assertIn("publication_paused", self.post()[1])
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            self.assertTrue(db.has_grant(self.key))
+            db.set_control("publication_paused", False)
+        self.assertEqual(0, self.post()[0])
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            self.assertFalse(db.take_grant(self.key))
 
     def test_an_event_the_gate_did_not_hold_back_needs_no_terminal(self):
         import observer

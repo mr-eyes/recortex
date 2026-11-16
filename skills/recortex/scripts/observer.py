@@ -123,9 +123,10 @@ def enable(repo, config, mode, yes=False, model=None, root=None, confirm=None, g
     return dict(preview, settings=options, approved=True)
 
 
-HELD_NOTE = ("Ask the user about each with the multiple-choice question tool: post it, or drop it. Post each one kept "
-             "with post_verified.py comment --issue N --kind KIND --body-file <its body, from pending --eventkey KEY "
-             "--show-body> --eventkey KEY, and drop the others with observer.py discard KEY.")
+HELD_NOTE = ("Ask the user about each with the multiple-choice question tool, one question per memory that names its "
+             "short id, with the options Post and Drop. For each Post, run post_verified.py comment --issue N --kind "
+             "KIND --body-file <its body, from pending --eventkey KEY --show-body> --eventkey KEY; for each Drop, "
+             "observer.py discard KEY. The post needs that answer, given within the last 10 minutes.")
 TERMINAL = ("Run observer.py release HOLD_ID yourself in a separate terminal, outside Claude Code: it asks you to "
             "confirm there. Nothing in a session releases a hold.")
 
@@ -386,7 +387,8 @@ def main(argv=None):
             if args.command == "pending":
                 if args.held:
                     import record_format
-                    emit({"held": [{"eventkey": event["eventkey"], "kind": event["candidate"]["kind"],
+                    emit({"held": [{"eventkey": event["eventkey"], "short": event["eventkey"][:8],
+                                    "kind": event["candidate"]["kind"],
                                     "issue": event["candidate"]["issue"], "reason": event["reason"],
                                     "line": record_format.plain(event["body"], event["candidate"]["kind"])}
                                    for event in store.waiting_for_answer()],

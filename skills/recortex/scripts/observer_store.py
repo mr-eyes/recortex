@@ -124,6 +124,9 @@ def _exclusive_lock(folder, name, wait=0):
 
 
 COMMAND_HOLDS = "command-holds.json"
+GRANTS = "answer-grants.json"  # one-time grants to post a held event, from the user's answer (observer_hooks)
+GRANT_SECONDS = 600
+ANSWER_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 def _command_digest(command):
@@ -677,6 +680,60 @@ class Store:
             return self.event(row[0]) if row else None
         except (sqlite3.Error, ValueError, TypeError) as error:
             raise StoreError("lookup_unavailable") from error
+
+    def _grants(self):
+        """{"grants": {eventkey: {"expires", "answer"}}, "used": [answer ids]}; anything not of that form counts as
+        no grant (an unreadable grant never posts)."""
+        empty = {"grants": {}, "used": []}
+        try:
+            data = json.loads(storage.read_file(os.path.join(self.folder, GRANTS)) or "null")
+        except (storage.StorageError, OSError, ValueError, RecursionError):
+            return empty
+        if not isinstance(data, dict) or set(data) != {"grants", "used"} or not isinstance(data["grants"], dict) \
+                or not isinstance(data["used"], list):
+            return empty
+        grants = {key: grant for key, grant in data["grants"].items()
+                  if isinstance(key, str) and EVENT_KEY.fullmatch(key) and isinstance(grant, dict)
+                  and set(grant) == {"expires", "answer"} and type(grant["expires"]) in (int, float)
+                  and math.isfinite(grant["expires"]) and isinstance(grant["answer"], str)
+                  and ANSWER_ID.fullmatch(grant["answer"])}
+        used = [item for item in data["used"] if isinstance(item, str) and ANSWER_ID.fullmatch(item)]
+        return {"grants": grants, "used": used[-200:]}
+
+    def grant_answer(self, key, answer, now=None):
+        """Record the user's answer `answer` (an AskUserQuestion call's id) as a one-time grant to post the held event
+        `key`, valid for GRANT_SECONDS. An answer already used grants nothing again. True when granted."""
+        if not isinstance(key, str) or not EVENT_KEY.fullmatch(key) or not isinstance(answer, str) \
+                or not ANSWER_ID.fullmatch(answer):
+            raise StoreError("invalid_grant")
+        now = time.time() if now is None else now
+        with _exclusive_lock(self.folder, "grants.lock", wait=0.2):
+            data = self._grants()
+            if answer in data["used"]:
+                return False
+            data["grants"] = {k: g for k, g in data["grants"].items() if g["expires"] > now}
+            data["grants"][key] = {"expires": now + GRANT_SECONDS, "answer": answer}
+            storage.write_file(os.path.join(self.folder, GRANTS), canonical(data))
+        return True
+
+    def has_grant(self, key, now=None):
+        """True while a grant for `key` is valid: not expired, and not set further ahead than GRANT_SECONDS."""
+        now = time.time() if now is None else now
+        grant = self._grants()["grants"].get(key)
+        return bool(grant) and now < grant["expires"] <= now + GRANT_SECONDS
+
+    def take_grant(self, key, now=None):
+        """Consume the grant for `key`: True when it was valid. Taken or expired, it is gone, and its answer is marked
+        used, so that the same answer never grants again."""
+        now = time.time() if now is None else now
+        with _exclusive_lock(self.folder, "grants.lock", wait=0.2):
+            data = self._grants()
+            grant = data["grants"].pop(key, None)
+            if grant is None:
+                return False
+            data["used"] = (data["used"] + [grant["answer"]])[-200:]
+            storage.write_file(os.path.join(self.folder, GRANTS), canonical(data))
+        return now < grant["expires"] <= now + GRANT_SECONDS
 
     def waiting_for_answer(self):
         """The events the automatic gate held back for the user's answer (observer_holds.ANSWER_REASONS), oldest

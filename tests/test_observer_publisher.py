@@ -203,7 +203,12 @@ class ObserverPublisherTests(unittest.TestCase):
         run = self._second(body.replace("again", "after a run"), source="source9", review={"status_authority": "command"})
         with self.assertRaisesRegex(publisher.PublishError, "status_change"):
             publisher.publish(fixtures.REPO, run, self.config)
-        # The main session posts the held-back event on the user's answer to its question: no terminal step.
+        # The main session posts the held-back event on the user's answer to its question, no terminal step: only
+        # with the grant the hook writes from that answer.
+        with self.assertRaisesRegex(publisher.PublishError, "held_unanswered"):
+            publisher.publish(fixtures.REPO, key, self.config, main_session=True)
+        with store.Store(fixtures.REPO, config=self.config) as db:
+            db.grant_answer(key, "toolu_01post")
         self.assertEqual("verified", publisher.publish(fixtures.REPO, key, self.config, main_session=True)["state"])
 
     def test_daily_cap_counts_automatic_comments_only(self):
@@ -222,7 +227,7 @@ class ObserverPublisherTests(unittest.TestCase):
 
     def test_deferred_event_waits_for_the_main_session(self):
         with store.Store(fixtures.REPO, config=self.config) as db:
-            db.transition(self.key, "deferred", reason="status_change")
+            db.transition(self.key, "deferred", reason="main_session")  # not held: no answer needed
         with self.assertRaisesRegex(publisher.PublishError, "not_ready"):
             self.publish()
         self.assertEqual([], self.calls())

@@ -43,9 +43,10 @@ NOTICES = {
 # At session start, for the main session, while reviewed memories wait for the user's answer (the number is the only
 # value in it).
 WAITING = ("recortex observer: %d reviewed memories wait for the user's answer. Each changes the status of an earlier "
-           "memory without the user's words or your message to the user. Run observer.py pending --held, show the user each one's plain line, and ask with "
-           "the multiple-choice question tool, one question per memory: post it, or drop it. Post each one kept with "
-           "post_verified.py comment --eventkey KEY, and drop the others with observer.py discard KEY.")
+           "memory without the user's words or your message to the user. Run observer.py pending --held, and ask the "
+           "user with the multiple-choice question tool, one question per memory that names its short id and shows "
+           "its plain line, with the options Post and Drop. For each Post, run post_verified.py comment --eventkey KEY "
+           "right after; for each Drop, observer.py discard KEY.")
 # Once, at the next session start after a session switched automatic mode on (the date is the only value in it).
 SWITCHED = ("recortex observer: automatic mode was switched on for this folder on %s from a session; run observer.py "
             "disable in your own terminal to turn it off.")
@@ -218,6 +219,37 @@ def _switched(store):
         return ""
     store.set_control("switch_told", at)
     return SWITCHED % time.strftime("%Y-%m-%d", time.gmtime(at))
+
+
+def _posted_key(data):
+    """The eventkey of a Bash call that runs post_verified.py with --eventkey, read as the shell splits it, or None."""
+    command = (data.get("tool_input") or {}).get("command") if isinstance(data.get("tool_input"), dict) else None
+    if data.get("tool_name") not in ("Bash", "bash") or not isinstance(command, str) or "post_verified" not in command:
+        return None
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    if not any(os.path.basename(word) == "post_verified.py" for word in words):
+        return None
+    keys = [words[n + 1] for n, word in enumerate(words[:-1]) if word == "--eventkey"]
+    keys += [word.split("=", 1)[1] for word in words if word.startswith("--eventkey=")]
+    return keys[0] if len(keys) == 1 and observer_store.EVENT_KEY.fullmatch(keys[0]) else None
+
+
+def _grant(store, data, project_root):
+    """Before post_verified.py --eventkey K: when K waits for the user's answer and the user answered "Post" to the
+    session's question naming K's short id (observer_sources.answered), a one-time grant for K, which the publisher
+    consumes. Nothing else is written; without the answer the post is refused (held_unanswered)."""
+    key = _posted_key(data)
+    if key is None:
+        return
+    event = store.event(key)
+    if event is None or event["state"] not in ("ready", "deferred"):
+        return
+    answer = observer_sources.answered(data, project_root, key[:8])
+    if answer:
+        store.grant_answer(key, answer)
 
 
 def _entry_repo():
@@ -447,6 +479,14 @@ def _handle(event, data, config, repo, decision):
                 if not denial and stale:
                     denial = _unchecked(data, BEHIND)  # holds typed in the part not read may apply
                 decision["held"] = denial
+                if not denial:
+                    try:
+                        _grant(store, data, project_root)
+                    except TimeoutError:
+                        raise
+                    except (observer_sources.SourceError, observer_store.StoreError, storage.StorageError, OSError,
+                            ValueError):
+                        pass  # no grant: the publisher refuses the held event (held_unanswered)
             try:
                 context = _context(store, event, data, repo, recortex.allowed_users(repo))
             except TimeoutError:

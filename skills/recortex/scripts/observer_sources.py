@@ -445,6 +445,106 @@ def control_tail(data, project_root, start, max_bytes=None, seconds=None):
     return rows, True
 
 
+SHORT_ID = re.compile(r"(?<![0-9a-f])[0-9a-f]{8}(?![0-9a-f])")
+ANSWER_BYTES = 8 * 1024 * 1024  # how much of the end of the main transcript is searched for the user's answer
+TOOL_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+ANSWERED = re.compile(r'User has answered your questions: "(.*)"="([^"\n]*)"\.(?: .*)?', re.S)
+
+
+def _main_record(record, role):
+    """True for a record of the main conversation by `role`: not a sidechain (a subagent's turn), not one Claude Code
+    adds (meta, a compaction summary, a line shown only in the transcript, an API error)."""
+    message = record.get("message") if isinstance(record, dict) else None
+    return (isinstance(message, dict) and record.get("type") == role and message.get("role") == role
+            and not any(record.get(key) for key in HIDDEN) and not record.get("isSidechain")
+            and not record.get("isApiErrorMessage") and message.get("model") != "<synthetic>"
+            and isinstance(message.get("content"), list))
+
+
+def answered(data, project_root, short, label="Post", max_bytes=ANSWER_BYTES, seconds=TAIL_SECONDS):
+    """The id of the user's answer `label` to the newest question about `short` in the main transcript, or None.
+
+    The question is an AskUserQuestion call in a main-session assistant record, one of whose questions names `short`
+    and no other short id and offers an option labeled `label`; the answer is the result Claude Code recorded for that
+    call, matched by its id: the record's structured answers, or, for a call of one question, its fixed sentence. A
+    later answer of another label to a question about `short` undoes it. A tool result, a page or a subagent cannot
+    make such a record; a session that writes the transcript itself can (the documented limit, as for holds). Read as
+    capture reads: this project's main transcript only, through checked descriptors, within `max_bytes` and
+    `seconds`."""
+    session = data.get("session_id")
+    path = approved_path(data.get("transcript_path"), project_root, session)
+    if os.path.basename(path) != session + ".jsonl" or os.path.dirname(path) != project_directory(project_root):
+        raise SourceError("source-project")  # the main conversation only, never a subagent's transcript
+    size = os.stat(path, follow_symlinks=False).st_size
+    position = max(0, size - max_bytes)
+    skip = position > 0 and _read(path, position - 1, 1) != b"\n"
+    until = time.monotonic() + seconds
+    asked, found, buffer = {}, None, b""
+    while position < size:
+        if time.monotonic() > until:
+            raise SourceError("source-incomplete")
+        chunk = _read(path, position, min(MAX_READ, size - position))
+        if not chunk:
+            break
+        position += len(chunk)
+        buffer += chunk
+        lines = buffer.split(b"\n")
+        buffer = lines.pop()
+        for line in lines:
+            if skip:
+                skip = False
+                continue
+            if b"AskUserQuestion" in line and b'"assistant"' in line:
+                try:
+                    record = json.loads(line)
+                except (ValueError, UnicodeError, RecursionError):
+                    continue
+                if not _main_record(record, "assistant"):
+                    continue
+                for block in record["message"]["content"]:
+                    if not (isinstance(block, dict) and block.get("type") == "tool_use"
+                            and block.get("name") == "AskUserQuestion" and isinstance(block.get("id"), str)
+                            and TOOL_ID.fullmatch(block["id"]) and isinstance(block.get("input"), dict)):
+                        continue
+                    questions = block["input"].get("questions")
+                    questions = [q for q in questions if isinstance(q, dict)] if isinstance(questions, list) else []
+                    for question in questions:
+                        text = question.get("question")
+                        options = question.get("options") if isinstance(question.get("options"), list) else []
+                        labels = [o.get("label") for o in options if isinstance(o, dict)]
+                        if isinstance(text, str) and set(SHORT_ID.findall(text)) == {short}:
+                            asked[block["id"]] = (text, label in labels, len(questions))
+            elif asked and b'"tool_result"' in line and any(key.encode() in line for key in asked):
+                try:
+                    record = json.loads(line)
+                except (ValueError, UnicodeError, RecursionError):
+                    continue
+                if not _main_record(record, "user"):
+                    continue
+                for block in record["message"]["content"]:
+                    if not (isinstance(block, dict) and block.get("type") == "tool_result"
+                            and block.get("tool_use_id") in asked):
+                        continue
+                    text, offered, count = asked[block["tool_use_id"]]
+                    result = record.get("toolUseResult")
+                    answers = result.get("answers") if isinstance(result, dict) else None
+                    if isinstance(answers, dict):
+                        given = answers.get(text)
+                    else:
+                        content = block.get("content")
+                        if isinstance(content, list):
+                            content = "\n".join(part.get("text", "") for part in content
+                                                 if isinstance(part, dict) and isinstance(part.get("text"), str))
+                        match = ANSWERED.fullmatch(content) if isinstance(content, str) and count == 1 else None
+                        given = match.group(2) if match and match.group(1) == text else None
+                    if block.get("is_error") or not isinstance(given, str):
+                        continue
+                    found = block["tool_use_id"] if offered and given == label else None
+        if len(buffer) > MAX_READ:  # an oversized line is no answer
+            skip, buffer = True, b""
+    return found
+
+
 def capture_descriptors(data, project_root, event_type=None):
     """Compatibility helper for a bounded tail; scan+atomic cursor is preferred by hooks."""
     selected = dict(data)

@@ -379,6 +379,11 @@ def publish(repo, eventkey, config, dry_run=False, main_session=False):
             waiting = held_back(store, event, config)
             if waiting and not main_session:
                 raise PublishError(waiting[0])  # deferred and marked held: it waits for the user's answer
+            # The main session posts a held event only on the user's own answer, which the hook before its Bash call
+            # found in the transcript and turned into a one-time grant (observer_hooks._grant).
+            answer_needed = main_session and bool(waiting or event["reason"] in observer_holds.ANSWER_REASONS)
+            if answer_needed and not store.has_grant(eventkey):
+                raise PublishError("held_unanswered")
             _bound(event, store)
             problem = outbound_problem(event["body"], repo, status_ok=main_session or
                                        event["review"].get("status_authority") in STATUS_AUTHORITY)
@@ -404,6 +409,8 @@ def publish(repo, eventkey, config, dry_run=False, main_session=False):
                 raise PublishError("account_changed")
             if not main_session:
                 _daily_cap(store, settings)
+            if answer_needed and not store.take_grant(eventkey):
+                raise PublishError("held_unanswered")  # consumed at the last step: one answer, one post
             # Account and intent are durable before the first possible remote write.
             store.transition(eventkey, "sending", account=me)
             event = store.event(eventkey)
