@@ -41,6 +41,8 @@ When `post_verified.py` prints "This thread feeds N planned parts and this resul
 
 `plan.py status` before a deliverable is assembled, and a plan update when a part is in doubt or has moved. `compile.py` prints the gap counts and never refuses.
 
+The mind page's "Read the manuscript" shows the plan beside the text as the user reads the paper: how many planned parts each section has backed, and, in dashed boxes under the part they name, the planned parts the text does not say yet ([mind.md](mind.md)).
+
 ## Turning planning off
 
 `plan.py off` writes `"planning": false` in the project file, or the user's own `settings.json` can hold `"planning": false`; the hooks then say nothing about the plan. `plan.py on` removes the key. A project file can switch planning off; it can never switch the plugin's writing on (that is a setting of the user's machine, see `writing.md`).

@@ -159,7 +159,7 @@ A project can carry a field sheet that the user approved: how its field of work 
 
 ### Show the mind page
 
-When the user asks to see, browse or open the project's memory, its history or "the mind": run `python3 ${CLAUDE_SKILL_DIR}/scripts/index.py sync`, then `python3 ${CLAUDE_SKILL_DIR}/scripts/mind.py --open`, and give the user the address it prints. The page is for a person. Do not read `mind.html` yourself: to answer a question about the history, use `index.py query recall`, `query timeline` and the issues. What the page shows and leaves out: [references/mind.md](references/mind.md).
+When the user asks to see, browse or open the project's memory, its history or "the mind": run `python3 ${CLAUDE_SKILL_DIR}/scripts/index.py sync`, then `python3 ${CLAUDE_SKILL_DIR}/scripts/mind.py --open`, and give the user the address it prints. The page is for a person. For a project with a plan, to read the paper as a paper (the changes since an earlier version, who wrote each paragraph, what the plan says that the text does not yet), run `python3 ${CLAUDE_SKILL_DIR}/scripts/mind.py --versions --open` and say that the way in is "Read the manuscript". Do not read `mind.html` yourself: to answer a question about the history, use `index.py query recall`, `query timeline` and the issues. What the page shows and leaves out: [references/mind.md](references/mind.md).
 
 ### Migrate an older tracker
 
@@ -195,7 +195,8 @@ Why each rule exists, with the Mermaid and GitHub limits: [references/pitfalls.m
 | `resume_block.py` | `show` prints the newest resume comment by an allowed account, for trusted repositories only; `update` posts a new resume comment and reads it back | `update` only, `--dry-run` available |
 | `snapshot.py` | Save all issues and comments as local Markdown with an index | no |
 | `index.py` | Local SQLite index of the record: `sync` from GitHub; `query` consistency, impact, recall (what a new memory could link to), mind, timeline, triage, brief | no (reads) |
-| `mind.py` | The mind page: one private local file that tells the project's memory in sentences | no |
+| `mind.py` | The mind page: one private local file that tells the project's memory in sentences; with a plan, "Read the manuscript" shows the paper as a paper | no |
+| `mind_sheet.py` | The model of the manuscript view: numbered versions, what each marks, who wrote each paragraph, the planned parts not yet in the text; pure, reads the index and the version cache | no |
 | `mind_figures.py` | Fetches, checks and keeps the pictures of figure blocks for the mind page, at build time only and never from a hook | no |
 | `mind_text.py` | Reads the text of a topic and of a memory as blocks and runs, and converts common LaTeX to MathML trees, for the mind page; pure, no index and no network | no |
 | `hooks.py`, `run_hook.sh` | The four hooks: SessionStart, SubagentStart, UserPromptSubmit, PreCompact; `hooks.py --print` shows the payloads | no |
