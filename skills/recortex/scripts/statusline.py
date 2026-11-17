@@ -124,8 +124,7 @@ def read_state(path):
         return None
     try:
         info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 \
-                or info.st_size > MAX_BYTES:
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             return None
         raw = os.read(descriptor, MAX_BYTES + 1)
     except OSError:

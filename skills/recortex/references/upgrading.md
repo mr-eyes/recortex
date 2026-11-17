@@ -17,6 +17,10 @@ The marketplace lists the plugin under its new name and maps the old one to it (
 
 A copy of the plugin installed another way (a folder under `~/.claude/skills/` with hooks from `templates/settings-hook-snippet.json`, or a second plugin entry) stays as it is. Copy the new `skills/recortex` folder in, remove the old folder, and change the four hook commands to `$HOME/.claude/skills/recortex/scripts/`. Two copies enabled at once print two briefs, so disable or uninstall the other one.
 
+## Version 1.2.0: the manuscript profile and the mind page
+
+The `manuscript` profile gains two section labels, `ms:introduction` (`## Introduction`) and `ms:discussion` (`## Discussion`), and its order becomes Introduction, Background, Methods, Results, Discussion, Limitations, Supplement. An existing manuscript project gets the two labels when it runs `setup_labels.py` again; the descriptions of `ms:background` and `ms:limitations` change too, and `setup_labels.py` leaves a label whose description differs alone unless `--update` is given. Nothing moves text: a body that holds its introduction under `## Background` stays valid. Update every machine of the team before a body uses the two new headings: an older version's linter reports `## Introduction` or `## Discussion` as a heading the profile does not define, and its `compile.py` leaves the two sections out. The index and the record's format do not change, so versions 1.1.x and 1.2.0 can sync the same index in any order; an older version reads an idea that a decision took up as not tested yet.
+
 ## What keeps working with no action
 
 | Thing | Current name | Earlier name, still read | When both are there |

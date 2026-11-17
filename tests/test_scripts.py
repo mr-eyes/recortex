@@ -1907,6 +1907,7 @@ class HookTests(RecordSandbox):
         self.tool("index.py", "sync")
         self.start(env={"RECORTEX_NOTICE": "off"})  # takes the once-only offer of the field sheet
         plain = self.start(env={"RECORTEX_NOTICE": "off"})
+        self.assertFalse(plain.startswith("{"))  # the variable switches the line off
         settings = os.path.join(self.dir, "xdg-config", "recortex")
         os.makedirs(settings)
         with open(os.path.join(settings, "settings.json"), "w") as handle:
@@ -1980,7 +1981,8 @@ class HookTests(RecordSandbox):
                 self.assertRegex(line, hooks_module.NOTICE_FORM.pattern)
                 self.assertNotIn("recortex: off", line)
                 self.assertNotIn("\n", line)
-        for stamp in ("2026-03-04", "2026-03-04T10:00:00Z\n", "2026-03-04T10:00:00+00:00", "x" * 50, None, 5):
+        for stamp in ("2026-03-04", "2026-03-04T10:00:00Z\n", "2026-03-04T10:00:00+00:00", "x" * 50, None, 5,
+                      "2026-3-4T1:2:3Z"):  # the last one is read by strptime; only the strict pattern refuses it
             line = hooks_module.notice({"state": "on", "repo": "octo-org/octo-repo", "synced_at": stamp, "fresh": None})
             self.assertEqual("recortex: on. Record octo-org/octo-repo, read at an unknown time.", line)
         for reason in ("not-trusted", "no-hub", "storage", "no-index", "error", "HOSTILE", None):
@@ -8860,6 +8862,7 @@ class MindModelTests(MindSandbox):
         cited = {c["n"]: c for c in model["cited"]}
         self.assertEqual(("an issue someone else opened", None), (cited[8]["title"], cited[8]["author"]))
         self.assertEqual("an issue someone else opened", cited[7]["title"])
+        self.assertIsNone({t["issue"]: t for t in model["open"]["tasks"]}[7]["title"])  # a task's title: the same rule
         thread = [t for t in model["threads"] if 9600 in t["memories"]][0]
         self.assertEqual(("a thread", "fixed"), (thread["name"], thread["name_from"]))
         text = self.page()
@@ -10818,13 +10821,14 @@ class StatusLineTests(RecordSandbox):
         self.assertEqual(fallback, self.line())  # access for others
         elsewhere = os.path.join(self.dir, "elsewhere.json")
         os.rename(self.path, elsewhere)
+        os.chmod(elsewhere, 0o600)  # a good file, so that only the symlink is wrong
         os.symlink(elsewhere, self.path)
         self.assertEqual(fallback, self.line())  # a symlink
         os.unlink(self.path)
-        with open(self.path, "w") as handle:
-            handle.write(" " * 3000 + json.dumps({"v": 1}))
-        os.chmod(self.path, 0o600)
-        self.assertEqual(fallback, self.line())  # over 2 KB
+        self.put()
+        with open(self.path, "a") as handle:
+            handle.write(" " * 3000)  # a good state followed by spaces: over 2 KB
+        self.assertEqual(fallback, self.line())
         for text in ("{not json", "[]", '"x"', "null", '{"v": 1}', "\x00\x01"):
             with open(self.path, "w") as handle:
                 handle.write(text)

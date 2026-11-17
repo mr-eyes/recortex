@@ -63,6 +63,8 @@ What the text may and may not hold:
 
 The linter enforces what it can see: no "As of" line followed by a date, month or year, no date and time in the text, no `<details>` block, no heading for decisions, open work, provenance, next steps or the other sections of the older record form, no dated heading outside "Sources", "Sources" last, no line that looks like a section heading but is not one, and section headings that agree with the issue's labels. It cannot see a job identifier, a missing denominator or a commit outside "Sources"; review catches those.
 
+The mind page draws the body as it is written: `###` sub-headings inside a section, nested and numbered lists, bold and italic, pipe tables, HTML tables in the subset the page reads (`table`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td`, `caption`, `rowspan`, `colspan`, `align`, and the inline tags `b`, `strong`, `i`, `em`, `code`, `sup`, `sub`), figure and table blocks where they stand, and formulas in common LaTeX between `$` or `$$` (`references/mind.md`, "How the text is drawn"). The linter does not check any of this; `compile.py` passes the Markdown through unchanged.
+
 In a project whose profiles define no section labels, the body is still the current text of the topic and nothing else, under plain `## ` headings of your choice, followed by "Sources".
 
 The test for a body: someone who has read nothing else can paste it into the deliverable, and it is right. If the text says "as discussed", "see chat" or "as of", it fails the test.
