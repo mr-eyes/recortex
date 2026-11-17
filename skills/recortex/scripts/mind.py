@@ -218,7 +218,6 @@ def anchor(name):
 ISSUE_NUMBER = re.compile(r"[0-9]{1,10}")
 COMMENT_ID = re.compile(r"[0-9]{1,19}")
 LINE_NUMBER = re.compile(r"[0-9]{1,7}")
-RUN_ID = re.compile(r"[1-9][0-9]{0,14}")
 COMMIT = re.compile(r"[0-9a-f]{7,40}")
 TAG_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 PATH = re.compile(r"[A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)*")
@@ -267,9 +266,6 @@ def github_url(kind, repo, *parts):
                 and ref not in (".", "..") and good_path(path)):
             return None
         return Href("%s/blob/%s/%s" % (base, ref, path))
-    if kind == "run":   # the latest build of the paper (references/versions.md): the only address that is not an issue's
-        n = number(parts[0], RUN_ID)
-        return Href("%s/actions/runs/%d" % (base, n)) if n else None
     raise ValueError("no address of kind %s" % kind)
 
 
@@ -1083,7 +1079,7 @@ class Page:
 
     def versions_block(self):
         """"Versions of the paper": each named version with its day and the author's words, under it what changed since the
-        name before (a fold per part that changed, and a count of the parts that did not), and the line of the latest build."""
+        name before (a fold per part that changed, and a count of the parts that did not)."""
         data = self.model.get("versions")
         if not isinstance(data, dict) or data.get("kept") is not True:
             return ""
@@ -1094,11 +1090,6 @@ class Page:
                        mind_model.PHRASES["ver.named"] % text_of(entry.get("day")))]
             if text_of(entry.get("words")):
                 lines.append(E("p", {"class": "quiet"}, "\u201c" + text_of(entry.get("words")) + "\u201d"))
-            build = entry.get("build") if isinstance(entry.get("build"), dict) else None
-            address = github_url("run", self.repo, build.get("run")) if build else None
-            if address:
-                lines.append(E("p", {"class": "quiet"}, mind_model.PHRASES["ver.build.name"] % text_of(build.get("day")), "  ",
-                               E("a", {"class": "inl", "href": address}, mind_model.PHRASES["ver.build.open"])))
             since = entry.get("since") if isinstance(entry.get("since"), dict) else None
             if since is not None:
                 inner = []
@@ -1118,13 +1109,8 @@ class Page:
                                    mind_model.PHRASES["ver.same"] % same))
                 lines.append(self.show(mind_model.PHRASES["ver.since"] % text_of(since.get("name")), *inner))
             items.append(E("li", {"class": "hist"}, *lines))
-        build = data.get("build") if isinstance(data.get("build"), dict) else None
-        address = github_url("run", self.repo, build.get("run")) if build else None
-        latest = E("p", {"class": "quiet"}, mind_model.PHRASES["ver.build"] % text_of(build.get("day")), "  ",
-                   E("a", {"class": "inl", "href": address}, mind_model.PHRASES["ver.build.open"])) if address else ""
         return E("section", {"class": "versions", "id": "versions-of-the-paper"}, E("h3", None, mind_model.PHRASES["ver.title"]),
-                 E("ol", {"class": "histlist"}, *items) if items else E("p", {"class": "quiet"}, mind_model.PHRASES["ver.none"]),
-                 latest)
+                 E("ol", {"class": "histlist"}, *items) if items else E("p", {"class": "quiet"}, mind_model.PHRASES["ver.none"]))
 
     def open_plan_group(self, key, title, hint, rows, empty):
         return E("section", {"class": "ogroup", "id": "open-%s" % key}, E("h3", None, title),

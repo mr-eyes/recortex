@@ -28,7 +28,6 @@ OLD_WORKFLOW = "ghim-triage.yml"
 WRITING_MODES = "writing-modes.json"
 OWN_PAPER = "own-paper.json"
 MANUSCRIPT_BRANCH = "recortex-manuscript"
-MANUSCRIPT_WORKFLOW = "recortex-manuscript.yaml"
 # The plugin's environment variables, without the prefix. The three before the last are read only by the tests.
 # LINK_PAUSE is the seconds create_issues.py waits after each sub-issue link it writes (default 1, at most 10);
 # the tests set it to 0.

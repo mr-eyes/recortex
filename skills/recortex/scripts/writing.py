@@ -29,7 +29,6 @@ MODES = ("review", "autonomous", "off")
 FILE_CAP = 20000
 LOCK = "writing-modes.lock"
 DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
-BUILD_MINUTES = None   # the minutes of one build, once the live check has measured them; None says "a few minutes"
 NOT_READABLE = {"storage": "the folder or the file is not safe to read", "form": "the file is not in the form the plugin "
                 "writes", "large": "the file is larger than the plugin writes"}
 
@@ -126,11 +125,7 @@ def sentence(repo, found=None):
 
 
 def consent_lines(repo):
-    """The plain lines that end the mode question and are printed by setup.py writing set: what review or autonomous
-    also does (versions and builds). Fixed wording."""
-    minutes = "about %d minutes" % BUILD_MINUTES if BUILD_MINUTES else "a few minutes"
+    """The plain lines that end the mode question and are printed by setup.py writing set: what review or autonomous also
+    does (it keeps the versions). Fixed wording."""
     return ["With review or autonomous, recortex also keeps every version of the manuscript for you in %s, and shows "
-            "them on the mind page." % repo,
-            "It adds one workflow there that builds the paper as HTML, PDF and Word for each version you name, and at "
-            "most once a day when the text changed. A build takes %s of the repository's GitHub Actions allowance, and "
-            "its files stay private to people who can read the repository." % minutes]
+            "them on the mind page. Nothing is built or run there." % repo]

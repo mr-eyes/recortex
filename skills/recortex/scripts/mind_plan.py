@@ -59,8 +59,6 @@ PHRASES = {
     "ver.named": "Named on %s.", "ver.since": "What changed since %s",
     "ver.same.one": "1 part did not change.", "ver.same": "%d parts did not change.",
     "ver.unfetched": "The text of some versions has not been fetched yet; build the page again with --sync.",
-    "ver.build": "The paper was last built on %s (HTML, PDF and Word).", "ver.build.name": "Built on %s.",
-    "ver.build.open": "Open the build on GitHub.",
 }
 
 STATE_CSS = {"dropped": "aside", "revised": "replaced", "doubt": "open", "moved": "open", "waits": "open",
@@ -391,7 +389,7 @@ class PlanMixin:
     # ------------------------------------------------------------ the versions of the paper
 
     def versions_model(self, outline):
-        """The versions block: {"kept", "names": [{"name", "day", "id", "words", "build", "since"}], "build", "unfetched"} or
+        """The versions block: {"kept", "names": [{"name", "day", "id", "words", "since"}], "unfetched"} or
         None when the project has no plan. "since" is, for a name after the first, what changed in each part of the text
         between the name before and this one: {"name", "parts": [{"thread", "ordinal", "label", "diff", "no_diff"}], "same": n}."""
         if self.plan_state is None:
@@ -399,16 +397,6 @@ class PlanMixin:
         kept = self.writing != "off"
         names = self.version_names() if kept else []
         commits = {t["version"] for t in self.texts if t["version"]} | {n["commit"] for n in names}
-        builds = {"branch": None, "names": {}}
-        if kept:
-            try:
-                import versions  # noqa: E402
-                builds = versions.read_builds(self.repo)
-            except Exception:  # noqa: BLE001 - a build line is never worth a page that fails
-                builds = {"branch": None, "names": {}}
-        branch = builds["branch"] if builds["branch"] and builds["branch"]["commit"] in commits else None
-        if branch:
-            branch = dict(branch, day=self.full(branch["day"]))
         out, unfetched = [], 0
         parts = []
         for group in outline.get("deliverables", []):
@@ -419,8 +407,7 @@ class PlanMixin:
         topic_of = {m["n"]: m.get("topic") for m in self.threads_for_versions}
         previous = None
         for number, row in enumerate(names):
-            entry = {"name": row["name"], "day": row["day"], "id": row["id"], "words": row["words"], "since": None,
-                     "build": self.name_build(builds, row, commits)}
+            entry = {"name": row["name"], "day": row["day"], "id": row["id"], "words": row["words"], "since": None}
             if previous is not None:
                 changed, same = [], 0
                 for thread, ordinal, label in parts:
@@ -444,7 +431,7 @@ class PlanMixin:
                 entry["since"] = {"name": previous["name"], "parts": changed, "same": same}
             out.append(entry)
             previous = row
-        return {"kept": kept, "names": list(reversed(out)), "build": branch, "unfetched": unfetched}
+        return {"kept": kept, "names": list(reversed(out)), "unfetched": unfetched}
 
     @staticmethod
     def after_name(text, row):
@@ -456,10 +443,6 @@ class PlanMixin:
         """True when no told text change of the topic stands at or before the name: the text before that name is not a
         version this record vouches for."""
         return not [t for t in self.texts if t["issue"] == topic and not self.after_name(t, row) and t["version"]]
-
-    def name_build(self, builds, row, commits):
-        found = builds["names"].get(row["name"])
-        return dict(found, day=self.full(found["day"])) if found and found["commit"] in commits else None
 
     def text_at_name(self, topic, heading, row):
         """(body, state) of a topic as it stood at a named version: the file of the newest told change of the topic up to the

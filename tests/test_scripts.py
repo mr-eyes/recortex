@@ -9123,7 +9123,7 @@ PAGE_VALUE = re.compile(r"[A-Za-z0-9 _.,:;#/()'+=?-]*")
 PAGE_FREE = ("content", "aria-label", "placeholder")
 PAGE_ADDRESS = re.compile(
     r"https://github\.com/[A-Za-z0-9][A-Za-z0-9_-]{0,38}/[A-Za-z0-9._-]{1,100}/(?:issues/[1-9][0-9]{0,9}"
-    r"(?:#issuecomment-[1-9][0-9]{0,18})?|pull/[1-9][0-9]{0,9}|actions/runs/[1-9][0-9]{0,14}|"
+    r"(?:#issuecomment-[1-9][0-9]{0,18})?|pull/[1-9][0-9]{0,9}|"
     r"blob/[0-9A-Za-z][0-9A-Za-z._-]{0,99}/"
     r"[A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)*(?:#L[1-9][0-9]{0,6}(?:-L[1-9][0-9]{0,6})?)?)")
 PAGE_DATA = re.compile(r"data:image/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}")
@@ -10561,7 +10561,7 @@ class MindTextTests(unittest.TestCase):
                     base + "/blob/v1/a.png?raw=false", base + "/blob/v1/a.py#L5-L3", base + "/blob/v1/a.py#L1",
                     base + "/blob/9c3e1ab/a.py?raw=true#L1", base + "/blob/9c3e1ab/" + "a/" * 150 + "b.py",
                     base + "/tree/main/a", base + "/issues", "https://github.com/o/../issues/1",
-                    base + "/actions/runs/5",   # the page makes this address for the latest build, and reads none from the record
+                    base + "/actions/runs/5",   # the page makes no address of an Actions run
                     "https://github.com/octo org/r/issues/1", "https://github.com/o/r\x00/issues/1"):
             self.assertIsNone(parts(bad), repr(bad))
 

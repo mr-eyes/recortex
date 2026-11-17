@@ -31,7 +31,7 @@ Fault switches:
 `auth status` answers as a gh signed in to github.com, and `api user` with the login.
 A state "date" (YYYY-MM-DD) moves the stamps the fake gives to what it creates (default 2026-04-02 for issues and edits,
 2026-04-01 for comments), so that a record whose own comments are dated later is still synced incrementally.
-Git data, contents at a commit or a branch, pull requests and workflow runs (tests/fake_git.py answers them, and lists its
+Git data, contents at a commit or a branch and pull requests (tests/fake_git.py answers them, and lists its
 own fault switches).
 Projects and sub-issues (tests/fake_projects.py answers them, and lists its own fault switches): a closed issue has
 "closed_at", a merged pull request "merged_at", a sub-issue "parent" (the parent's number).

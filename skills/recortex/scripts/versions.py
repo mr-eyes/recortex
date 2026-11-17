@@ -20,8 +20,7 @@ diff          A B [--issue N]: the difference between two versions (commits or n
 name          NAME --words-file F: names the paper as it stands (a decision on the plan issue, then a tag)
 restore       --issue N --to A [--section H] --out DIR: prepares a restore of the text of a topic (write.py takes it on)
 fetch         [--issue N]: brings the vouched versions' files into the private cache (the mind page calls it)
-doctor        the mode, the permission, the branch, the workflow, the last refusal with its reason
-build-status  [--name NAME]: the newest successful build, for the branch or for a name's tag
+doctor        the mode, the permission, the branch, the last refusal with its reason
 meta          [--authors "A; B"] [--keywords "x, y"] --yes: the authors and keywords of the paper's metadata
 
 Examples:
@@ -51,7 +50,6 @@ import write_rules  # noqa: E402
 import writing  # noqa: E402
 
 BRANCH = names.MANUSCRIPT_BRANCH
-WORKFLOW_PATH = ".github/workflows/" + names.MANUSCRIPT_WORKFLOW
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(os.path.dirname(HERE), "templates")
 STATE_FILE = "state.json"
@@ -68,8 +66,6 @@ LINES = {
     "rule": "versions: a branch rule of %s refused the write to " + BRANCH + ", so this version was not kept as a file. The "
             "text itself is saved. Run versions.py doctor.",
     "moved": "versions: the branch changed while writing; run versions.py sync.",
-    "workflow": "builds: this sign-in may not add a workflow to %s, so the paper is not built on GitHub; its versions are "
-                "kept. Run versions.py doctor.",
 }
 REASON = {"push": record_format.NOT_KEPT[0], "rule": record_format.NOT_KEPT[1], "moved": record_format.NOT_KEPT[2],
           "off": record_format.NOT_KEPT[3]}
@@ -301,11 +297,6 @@ def refuse(repo, kind):
     return REASON.get(kind, "")
 
 
-def shipped_workflow():
-    with open(os.path.join(TEMPLATES, names.MANUSCRIPT_WORKFLOW), encoding="utf-8") as handle:
-        return handle.read()
-
-
 def shipped_front_matter():
     with open(os.path.join(TEMPLATES, "manubot-front-matter.md"), encoding="utf-8") as handle:
         return handle.read()
@@ -379,7 +370,7 @@ def paper_bodies(db, config, repo, hub, allowed, plan, replace, head_versions=No
 
 
 def layout_files(db, config, repo, hub, allowed, plan, bodies, metadata=None, texts=None, held=None, order=None):
-    """{path: text} of the whole branch except the workflow: topics/, content/ and VERSION.json. `held` ({issue: entry}) are
+    """{path: text} of the whole branch: topics/, content/ and VERSION.json. `held` ({issue: entry}) are
     the topics whose file and entry stay as the branch has them; `order` ([(label, heading, [issues])]) is the outline to
     lay out (a named version's own, from its VERSION.json), else the outline as the index has it now."""
     profiles = recortex.shipped_profiles(config.get("profiles"))
@@ -434,7 +425,7 @@ def version_at(repo, ref):
 # ---------------------------------------------------------------- ensure and commit
 
 def ensure(config, repo):
-    """Make the branch when it is missing (with the first commit of the current text and the workflow). Only with a mode of
+    """Make the branch when it is missing (with the first commit of the current text). Only with a mode of
     review or autonomous, only when the account can write, and never with force. Prints one line. Returns "off", "kept",
     "refused" or "made". A repository that is not in the trusted list is never written to, whoever calls: the check is here
     and not only in the commands that call this, because setup and the writers call it directly."""
@@ -457,7 +448,7 @@ def ensure(config, repo):
             refuse(repo, "push")
             return "refused"
         if head is not None:
-            return add_workflow(config, repo, head)
+            return "kept"
         rows = told_texts(db, config, allowed, plan)
         texts = {row["issue"]: write_rules.newest_text(rows, row["issue"])["id"] for row in rows}
 
@@ -466,47 +457,16 @@ def ensure(config, repo):
                                         rows)
             return layout_files(db, config, repo, hub, allowed, plan, bodies, metadata_at(repo, now) if now else None, texts,
                                 held)
-        message = "Start the versions of the manuscript"
         try:
-            commit_files(repo, lambda now: dict(files(now), **{WORKFLOW_PATH: shipped_workflow()}), message)
-            say("versions: recortex keeps every version of the manuscript in %s from now on." % repo)
-            keep_state(repo, refusal=None, workflow_refused=False)
-            return "made"
-        except Refused as first:
-            if first.kind == "moved":
-                refuse(repo, "moved")
-                return "refused"
-        try:  # the workflow may be what was refused (the sign-in lacks the permission to add a workflow)
-            commit_files(repo, files, message)
-        except Refused as second:
-            refuse(repo, second.kind)
+            commit_files(repo, files, "Start the versions of the manuscript")
+        except Refused as error:
+            refuse(repo, error.kind)
             return "refused"
         say("versions: recortex keeps every version of the manuscript in %s from now on." % repo)
-        say(LINES["workflow"] % repo)
-        keep_state(repo, refusal=None, workflow_refused=True)
+        keep_state(repo, refusal=None)
         return "made"
     finally:
         db.close()
-
-
-def add_workflow(config, repo, head):
-    """The branch exists: add the workflow in its own commit when it is missing (it was refused before, or the branch was
-    made without it). A file that exists and differs is reported by status and never replaced here."""
-    try:
-        present = file_at(repo, head, WORKFLOW_PATH)
-    except GitError:
-        return "kept"
-    if present is not None:
-        return "kept"
-    try:
-        commit_files(repo, {WORKFLOW_PATH: shipped_workflow()}, "Add the workflow that builds the manuscript", delete_stale=False)
-    except Refused:
-        say(LINES["workflow"] % repo)
-        keep_state(repo, workflow_refused=True)
-        return "kept"
-    keep_state(repo, workflow_refused=False)
-    say("versions: the workflow that builds the manuscript was added to %s." % BRANCH)
-    return "kept"
 
 
 def commit(config, repo, issue, text):
@@ -683,10 +643,6 @@ def status_command(args):
                 "kept yet"}[how]))
         for row in named_versions(db, items):
             say("name %s: commit %s (decision %d)" % (row["name"], row["commit"][:12], row["id"]))
-        present = file_at(repo, head, WORKFLOW_PATH)
-        say("workflow: %s" % ("missing" if present is None else "as shipped" if present == shipped_workflow() else
-                              "differs from the one shipped with the plugin (it is not replaced without the author's yes; "
-                              "no build is linked while it differs)"))
         return 0
     finally:
         db.close()
@@ -1019,8 +975,8 @@ def name_command(args):
         say("versions: the decision %d names the version, but the tag paper-%s could not be made (the account may not write "
             "tags here); the name still works for compile.py and the page" % (cid, args.name))
         return 1
-    say("versions: named %s (decision %d, tag paper-%s). The built paper of this name appears on GitHub when the build ends; "
-        "versions.py build-status --name %s says where." % (args.name, cid, args.name, args.name))
+    say("versions: named %s (decision %d, tag paper-%s). mind.py --paper --version %s writes that version as a page." % (
+        args.name, cid, args.name, args.name))
     return 0
 
 
@@ -1196,7 +1152,6 @@ FETCH_BYTES = 300 * 1024
 FETCH_FILES = 200
 FETCH_TOTAL = 20 * 1024 * 1024
 FETCH_SECONDS = 60
-BUILD_FILE = "build.json"
 
 
 def cached_version(repo, commit, issue):
@@ -1209,46 +1164,8 @@ def cached_version(repo, commit, issue):
         return None
 
 
-def run_entry(found):
-    """{"run": int, "day": "YYYY-MM-DD", "commit": 40 hex} from a value read back from the cache, or None."""
-    if isinstance(found, dict) and type(found.get("run")) is int and 0 < found["run"] < 10 ** 15 \
-            and isinstance(found.get("day"), str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", found["day"]) \
-            and isinstance(found.get("commit"), str) and SHA40.fullmatch(found["commit"]):
-        return {"run": found["run"], "day": found["day"], "commit": found["commit"]}
-    return None
-
-
-def read_builds(repo):
-    """{"branch": run entry or None, "names": {name: run entry}} kept by fetch; every value is checked against its pattern."""
-    try:
-        found = json.loads(storage.read_cached(repo, (storage.VERSIONS,), BUILD_FILE) or "")
-    except (storage.StorageError, OSError, ValueError, UnicodeDecodeError, RecursionError):
-        return {"branch": None, "names": {}}
-    if not isinstance(found, dict):
-        return {"branch": None, "names": {}}
-    named = found.get("names") if isinstance(found.get("names"), dict) else {}
-    return {"branch": run_entry(found.get("branch")),
-            "names": {k: run_entry(v) for k, v in named.items() if isinstance(k, str) and NAME.fullmatch(k) and run_entry(v)}}
-
-
-def read_build(repo):
-    return read_builds(repo)["branch"]
-
-
-def newest_run(repo, ref):
-    """The newest successful run of the workflow for a branch or a tag name: {"run", "day", "commit"} or None."""
-    found = api(repo, "GET", "actions/workflows/%s/runs?branch=%s&status=success&per_page=1" % (names.MANUSCRIPT_WORKFLOW, ref))
-    runs = found.get("workflow_runs") if isinstance(found, dict) else None
-    row = runs[0] if isinstance(runs, list) and runs and isinstance(runs[0], dict) else None
-    if row is None or type(row.get("id")) is not int or not isinstance(row.get("head_sha"), str) or not SHA40.fullmatch(row["head_sha"]):
-        return None
-    day = str(row.get("updated_at") or row.get("created_at") or "")[:10]
-    return {"run": row["id"], "day": day, "commit": row["head_sha"]} if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", day) else None
-
-
 def fetch(config, repo, issue=None, clock=None):
-    """Bring the vouched versions' files into the private cache, newest first, inside the budgets; and note the newest
-    successful build. Only the file topics/<issue>.md at a commit that a told text change of that issue names is asked for,
+    """Bring the vouched versions' files into the private cache, newest first, inside the budgets. Only the file topics/<issue>.md at a commit that a told text change of that issue names is asked for,
     and a file is kept only when its hash is that change's "after" value. Returns {"fetched", "cached", "left", "failed"}."""
     import time
     clock = clock or time.monotonic
@@ -1299,15 +1216,6 @@ def fetch(config, repo, issue=None, clock=None):
             continue
         counts["fetched"] += 1
         total += len(data)
-    try:
-        builds = {"branch": newest_run(repo, BRANCH), "names": {}}
-        for row in reversed(names_now[-10:]):   # the newest ten names, one request each
-            run = newest_run(repo, "paper-%s" % row["name"])
-            if run is not None:
-                builds["names"][row["name"]] = run
-        storage.write_cached(repo, (storage.VERSIONS,), BUILD_FILE, json.dumps(builds, sort_keys=True))
-    except (GitError, storage.StorageError, OSError):
-        pass
     if counts["left"] or counts["failed"]:
         say("versions: %d version%s not fetched (%d past the budget, %d failed); build the page again with --sync." % (
             counts["left"] + counts["failed"], " was" if counts["left"] + counts["failed"] == 1 else "s were", counts["left"], counts["failed"]))
@@ -1319,35 +1227,6 @@ def fetch_command(args):
     print(recortex.describe(config, repo))
     counts = fetch(config, repo, args.issue)
     say("versions: fetched %(fetched)d, already kept %(cached)d." % counts)
-    return 0
-
-
-def build_status_command(args):
-    config, repo, hub, plan, allowed, mode = load()
-    print(recortex.describe(config, repo))
-    ref = "paper-%s" % args.name if args.name else BRANCH
-    if args.name and not NAME.fullmatch(args.name):
-        sys.exit("error: a name is 1 to 40 characters of a-z, 0-9, . and -")
-    try:
-        run = newest_run(repo, ref)
-    except GitError:
-        say("builds: GitHub could not be read just now.")
-        return 1
-    if run is None:
-        say("builds: no successful build of %s yet. A build starts when a version is kept or named, at most once a day for the "
-            "branch." % (args.name or "the paper"))
-        return 0
-    say("builds: the newest successful build of %s finished on %s: https://github.com/%s/actions/runs/%d" % (
-        args.name or "the paper", run["day"], repo, run["run"]))
-    if args.rerun:
-        if not args.yes:
-            sys.exit("error: pass --yes once the author said to build it again")
-        try:
-            api(repo, "POST", "actions/runs/%d/rerun" % run["run"])
-        except GitError:
-            say("builds: GitHub did not start the build again.")
-            return 1
-        say("builds: the build was started again.")
     return 0
 
 
@@ -1364,10 +1243,6 @@ def doctor_command(args):
     try:
         head = head_of(repo)
         say("branch: %s" % ("%s at %s" % (BRANCH, head[:12]) if head else "%s does not exist" % BRANCH))
-        if head:
-            present = file_at(repo, head, WORKFLOW_PATH)
-            say("workflow: %s" % ("missing" if present is None else "as shipped" if present == shipped_workflow() else
-                                  "differs from the one shipped with the plugin"))
     except GitError:
         say("branch: GitHub could not be read just now")
     state = read_state(repo)
@@ -1377,8 +1252,6 @@ def doctor_command(args):
                                       LINES[refusal["kind"]]))
     else:
         say("last refusal: none")
-    if state.get("workflow_refused"):
-        say("builds: the sign-in could not add the workflow. To grant it, run: gh auth refresh -s workflow")
     return 0
 
 
@@ -1466,11 +1339,6 @@ def main(argv=None):
     p = sub.add_parser("fetch")
     p.add_argument("--issue", type=int)
     p.set_defaults(run=fetch_command)
-    p = sub.add_parser("build-status")
-    p.add_argument("--name")
-    p.add_argument("--rerun", action="store_true", help="start the build of that run again (needs --yes)")
-    p.add_argument("--yes", action="store_true")
-    p.set_defaults(run=build_status_command)
     p = sub.add_parser("meta")
     p.add_argument("--authors")
     p.add_argument("--keywords")

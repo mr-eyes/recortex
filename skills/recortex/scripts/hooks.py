@@ -742,8 +742,8 @@ def writing_doctor_lines(db, config, repo):
 
 
 def versions_doctor_lines(repo):
-    """For --doctor: the last refusal of a version and whether the workflow was refused, in the plugin's fixed words (the
-    key and the time were kept by versions.py and are checked here). The hooks never contact the branch, so nothing here is
+    """For --doctor: the last refusal of a version, in the plugin's fixed words (the key and the time were kept by versions.py
+    and are checked here). The hooks never contact the branch, so nothing here is
     about the branch itself: versions.py doctor asks GitHub."""
     import versions
     state = versions.read_state(repo)
@@ -752,8 +752,6 @@ def versions_doctor_lines(repo):
     if refusal and refusal.get("kind") in versions.LINES and re.fullmatch(r"[0-9T:Z-]{1,20}", str(refusal.get("at", ""))):
         line = versions.LINES[refusal["kind"]]
         lines.append("versions: last refusal on %s: %s" % (refusal["at"][:10], line % repo if "%s" in line else line))
-    if state.get("workflow_refused") is True:
-        lines.append("builds: the workflow was refused on the branch; run versions.py doctor")
     return lines
 
 

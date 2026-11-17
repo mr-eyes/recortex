@@ -1,15 +1,13 @@
-"""The part of the fake gh that answers GitHub's git data, contents, pull request and Actions endpoints (used by fake_gh.py).
+"""The part of the fake gh that answers GitHub's git data, contents and pull request endpoints (used by fake_gh.py).
 
 The fake follows GitHub's REST documentation as it was read for 1.3.0 (the git data API, the contents API with the raw
-media type, pull requests, workflow runs). What the documentation does not say is marked below and fixed by a test.
+media type, pull requests). What the documentation does not say is marked below and fixed by a test.
 
 The state lives in the fake repository's JSON file:
   state["git"]   {"refs": {"heads/<branch>" or "tags/<tag>": commit sha}, "commits": {sha: {"tree", "parents", "message"}},
                   "trees": {sha: {path: text}}, "updates": [[ref, sha, force], ...] (what each ref update asked for)}
   state["issues"][n]  a pull request is an issue with "pull_request": true, "head": {"ref", "sha"}, "base": {"ref"},
                   "merged": bool, "merged_by": login or None, "merge_commit_sha"
-  state["runs"]  the workflow runs the Actions listing answers: dicts with id, head_branch, head_sha, status, conclusion,
-                 event, created_at, updated_at, html_url; state["reruns"] lists the run ids that were asked to run again
 A request that has a body gets it as JSON on standard input (`gh api --input -`).
 Fault switches (environment):
   FAKE_GH_GIT_NO_PUSH=403|404    the account may not write: every write of the git data API is refused with this status;
@@ -21,8 +19,6 @@ Fault switches (environment):
                                  fast forward: 422 "Update is not a fast forward" (observed, not documented), once or every time
   FAKE_GH_MOVE_HEAD_FILES=json   the files ({path: text}) that the other commit of FAKE_GH_MOVE_HEAD also writes, as another
                                  session that kept a version of another topic would have
-  FAKE_GH_NO_WORKFLOW=1          the account lacks the permission to add a workflow: a ref that would carry a workflow file
-                                 it did not have is refused (403; the documentation names no status)
   FAKE_GH_LOGIN=name             the login that merges a pull request and opens one (default octocat)
 """
 
@@ -34,7 +30,6 @@ import re
 import sys
 
 ME = "octocat"
-WORKFLOWS = ".github/workflows/"
 
 
 class Refused(Exception):
@@ -133,7 +128,6 @@ def handle(args, path, state, repo, login):
             raise Refused(422, "Reference already exists")
         if key.startswith("heads/") and os.environ.get("FAKE_GH_BRANCH_RULE"):
             raise Refused(422, "Repository rule violations found")
-        check_workflow(store, sha, None)
         store["refs"][key] = sha
         store["updates"].append([key, sha, False])
         print(json.dumps({"ref": ref, "object": {"type": "commit", "sha": sha}}))
@@ -162,7 +156,6 @@ def handle(args, path, state, repo, login):
         store["updates"].append([key, sha, force])
         if not force and not descends(store, sha, store["refs"][key]):
             raise Refused(422, "Update is not a fast forward")
-        check_workflow(store, sha, store["refs"][key])
         store["refs"][key] = sha
         print(json.dumps({"ref": "refs/" + key, "object": {"type": "commit", "sha": sha}}))
         return True
@@ -298,32 +291,4 @@ def handle(args, path, state, repo, login):
                 "base": {"ref": issue["base"]["ref"]}}))
             return True
 
-    if re.fullmatch(r"repos/[^/]+/[^/]+/actions/(?:workflows/[^/]+/)?runs(\?.*)?", path) and method == "GET":
-        query = dict(re.findall(r"[?&]([a-z_]+)=([^&]*)", path))
-        runs = [r for r in state.get("runs", []) if all(
-            not query.get(k) or str(r.get(name)) == query[k] for k, name in
-            (("branch", "head_branch"), ("event", "event"), ("head_sha", "head_sha")))
-            and (not query.get("status") or query["status"] in (r.get("status"), r.get("conclusion")))]
-        runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
-        runs = runs[:int(query.get("per_page", 30))]
-        print(json.dumps({"total_count": len(runs), "workflow_runs": runs}))
-        return True
-
-    found = re.fullmatch(r"repos/[^/]+/[^/]+/actions/runs/([0-9]+)/rerun", path)
-    if found and method == "POST":
-        if str(found.group(1)) not in {str(r.get("id")) for r in state.get("runs", [])}:
-            raise Refused(404, "Not Found")
-        state.setdefault("reruns", []).append(int(found.group(1)))
-        print("{}")
-        return True
     return False
-
-
-def check_workflow(store, sha, old):
-    """A ref that would carry a workflow file the account may not add is refused (FAKE_GH_NO_WORKFLOW)."""
-    if not os.environ.get("FAKE_GH_NO_WORKFLOW"):
-        return
-    before = flat_of(store, old) if old else {}
-    for name, text in flat_of(store, sha).items():
-        if name.startswith(WORKFLOWS) and before.get(name) != text:
-            raise Refused(403, "Resource not accessible by personal access token")

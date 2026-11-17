@@ -1,6 +1,6 @@
 # The versions of the paper
 
-For a project with a plan (the manuscript profile) whose author chose review or autonomous writing ([writing.md](writing.md)). The topic bodies stay the paper's text and the issues stay the record. A copy of the text is kept as files on one branch of the record's repository, `recortex-manuscript`, one commit per change, so that every version, the difference between any two versions and the exact paper back are one command away. Nothing is cloned, the project's working tree is never touched, and the plugin never asks the author to run a git command: the mind page and the chat are the two places versions are seen and used.
+For a project with a plan (the manuscript profile) whose author chose review or autonomous writing ([writing.md](writing.md)). The topic bodies stay the paper's text and the issues stay the record. A copy of the text is kept as files on one branch of the record's repository, `recortex-manuscript`, one commit per change, so that every version, the difference between any two versions and the exact paper back are one command away. Nothing is built or run on GitHub: the files are a copy, and the paper's own export is `mind.py --paper` (below). Nothing is cloned, the project's working tree is never touched, and the plugin never asks the author to run a git command: the mind page and the chat are the two places versions are seen and used.
 
 The files are a copy, as the board is. Nothing is read from them into the record except through the two checked paths below: a merged proposal and a restore.
 
@@ -19,7 +19,6 @@ The branch has no parent in the project's history, so it holds none of the proje
 | `content/90.back-matter.md` | the fixed "References" heading and Manubot's `<div id="refs"></div>` |
 | `content/manual-references.json` | `[]` |
 | `content/images.tsv` | per figure: its id, the repository, the commit or tag and the path of its image, from the figure block; the images are fetched by the workflow |
-| `.github/workflows/recortex-manuscript.yaml` | the workflow below, the plugin's fixed text |
 | `VERSION.json` | repository, hub, and per topic the body's SHA-256 and the id of its newest text change at that commit |
 
 A figure block becomes `![Title. Caption](images/<id>.<ext>){#fig:<id>}`, a table block its table followed by `Table: Title. Caption {#tbl:<id>}`; formulas, citations and `@fig:`, `@tbl:` and `@eq:` references pass through unchanged; "Sources" stays in `topics/`. `paper_layout.py` does this, one way only: nothing is ever read back from `content/`. Manubot reads `content/` as Jinja2 templates, so the layout writes each `{` of the text that would open one (`{{`, `{%` or `{##`) as `{{ '{' }}`: nothing in the record is read as a template, and a formula or a topic name with double braces reaches the build as it was written.
@@ -38,7 +37,6 @@ Every write goes through `recortex.gh()` to the git data endpoints: read the bra
 | `versions.py restore --issue N --to A [--section H] --out DIR` | prepares a restore | no |
 | `versions.py put-back --issue N --yes` | puts a file that was changed on the branch alone back to the text, as a new commit | yes |
 | `versions.py fetch [--issue N]` | brings the vouched versions' files into the private cache for the mind page (`mind.py --sync` and `--versions` call it) | no |
-| `versions.py build-status [--name NAME] [--rerun --yes]` | the newest successful build, for the branch or for a name's tag; with `--rerun` and the author's yes the build is started again | rerun only |
 | `versions.py meta --authors A --keywords K --yes` | the authors and keywords of the paper's metadata | yes |
 | `versions.py doctor` | the mode, the permission, the branch, the workflow, the last refusal with its reason | no |
 | `compile.py --version NAME [--layout manubot] --out DIR` | the deliverable of a named version; `--layout manubot` also writes `content/` | no |
@@ -86,25 +84,15 @@ The text is written first and stays written; the copy can lag and never blocks t
 | The sign-in may not write contents (a 403 or 404 on the write) | `versions: this account may not write files to (repository), so this version was not kept as a file. The text itself is saved. Run versions.py doctor.` |
 | A rule protects the branch | `versions: a branch rule of (repository) refused the write to recortex-manuscript, so this version was not kept as a file. The text itself is saved. Run versions.py doctor.` |
 | The branch moved twice while writing | `versions: the branch changed while writing; run versions.py sync.` |
-| The sign-in may not add a workflow | `builds: this sign-in may not add a workflow to (repository), so the paper is not built on GitHub; its versions are kept. Run versions.py doctor.` |
 
-`versions.py sync` later makes the missing commit. While GitHub refuses, the history of a part is its text changes without differences, and `name`, `restore`, `diff` and the GitHub approval path stop with the refusal's line. `doctor` prints the one command that grants the workflow permission (`gh auth refresh -s workflow`), for the author to run or not. The hooks never contact the branch.
+`versions.py sync` later makes the missing commit. While GitHub refuses, the history of a part is its text changes without differences, and `name`, `restore`, `diff` and the GitHub approval path stop with the refusal's line. The hooks never contact the branch.
 
-## The builds
+## The files for Manubot
 
-Nothing of Manubot or Pandoc is installed or run on the user's machine, and nothing of the plugin depends on a build. `templates/recortex-manuscript.yaml` is written to the branch as it is, with no value filled in from the project, and builds the paper with `manubot/rootstock` (pinned to a commit) as HTML, PDF and Word:
-
-- Triggers: a push to the branch `recortex-manuscript` and a push of a tag `paper-*`. Nothing else. A branch push builds at most once a day.
-- Permissions: `contents: read` and `actions: read`; no other permission, no secret but the default token. It deploys nothing, makes no Pages site and writes nothing to the repository.
-- Four actions, each pinned to the commit a tag pointed at on 16 November 2026 (checkout v6, cache v5, setup-miniconda v3, upload-artifact v6).
-- The files are kept as an artifact for 30 days (a branch push) or 90 days (a tag push); GitHub caps this at the repository's limit. The files are private to people who can read the repository.
-
-What a build sends out: the identifiers of cited works go to the services Manubot asks for their details, the conda packages are downloaded, and WeasyPrint draws formulas through an outside service, as Manubot's build does, so the formulas of the text leave the runner. A build takes a few minutes of the repository's GitHub Actions allowance.
-
-`versions.py status` compares the workflow on the branch with the shipped text. A file that differs is reported, never replaced without the author's yes, and no build is linked on the page while it differs. `versions.py build-status [--name NAME]` prints the day and the address of the newest successful run; an expired build is made again with `--rerun` and the author's yes.
+The Manubot-format files stay on the branch (`content/`, `metadata.yaml`, citations in Manubot's forms), so that anyone who needs a journal's format can run Manubot on them themselves. The plugin runs none of it: there is no workflow on the branch, no build, and no Pages site. Manubot reads `content/` as Jinja2 templates; the layout writes each `{` of the text that would open one as `{{ '{' }}` (above).
 
 ## On the mind page
 
-Each part of the text carries a History fold: every version, newest first, with its day, how it came about, the reason, the names on it, and "What changed", the difference from the version before drawn on the page (unchanged paragraphs collapse to a count, a removed or added paragraph is marked, inside a changed paragraph removed words are struck through and added words underlined). Above the parts, "Versions of the paper" lists the named versions with the author's words, what changed since the name before, and the latest build with one address of the form `https://github.com/<repository>/actions/runs/<number>`, shown only for a run whose commit a told text change or a told naming decision names. The page links to no commit, branch or tag and changes nothing: to go back to a version the author asks in the chat.
+Each part of the text carries a History fold: every version, newest first, with its day, how it came about, the reason, the names on it, and "What changed", the difference from the version before drawn on the page (unchanged paragraphs collapse to a count, a removed or added paragraph is marked, inside a changed paragraph removed words are struck through and added words underlined). Above the parts, "Versions of the paper" lists the named versions with the author's words, and what changed since the name before. The page links to no commit, branch or tag and changes nothing: to go back to a version the author asks in the chat.
 
 The page reads what `versions.py fetch` kept in the private cache (`mind.py --sync` and `mind.py --versions` call it) and contacts nothing at view time. Only the file `topics/<issue>.md` at a commit that a told text change of that issue names is asked for, and a file is used only when its SHA-256 is that change's "after" value; otherwise the entry stays and says "The text of this version could not be checked, so it is not shown." Budgets: 300 KB per file, 200 files and 20 MB per fetch inside 60 seconds, newest first; at most 30 differences per part and 3 MB of differences per page, older versions keep their entries. With the mode off the fold holds only the days the text changed.

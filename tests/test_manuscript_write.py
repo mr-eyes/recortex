@@ -110,11 +110,10 @@ class WritingModeTests(WritingBox):
         for mode, lines in (("review", True), ("autonomous", True), ("off", False)):
             out = self.cmd("setup.py", "writing", "set", "--mode", mode, "--yes").stdout
             self.assertEqual(lines, "With review or autonomous, recortex also keeps every version of the manuscript for "
-                             "you in octo-org/sample-project, and shows them on the mind page." in out, mode)
-            self.assertEqual(lines, "It adds one workflow there that builds the paper as HTML, PDF and Word for each "
-                             "version you name, and at most once a day when the text changed. A build takes a few minutes of "
-                             "the repository's GitHub Actions allowance, and its files stay private to people who can read "
-                             "the repository." in out, mode)
+                             "you in octo-org/sample-project, and shows them on the mind page. Nothing is built or run there."
+                             in out, mode)
+            for gone in ("workflow", "Actions", "allowance", "minutes", "PDF"):   # spec section 20: nothing is built
+                self.assertNotIn(gone, out, (mode, gone))
 
     def test_a_choice_needs_the_users_yes_and_a_valid_mode(self):
         self.assertNotEqual(0, self.cmd("setup.py", "writing", "set", "--mode", "review").returncode)

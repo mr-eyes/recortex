@@ -1,4 +1,4 @@
-"""Tests of the versions of the paper's text (1.3.0): the branch of versions, its layout, the workflow that builds it, the
+"""Tests of the versions of the paper's text (1.3.0): the branch of versions, its layout, the
 names, the restore, the pull request path of an approval and the History on the mind page. Nothing here reaches GitHub; the
 scripts run against tests/fake_gh.py and its git endpoints (tests/fake_git.py)."""
 
@@ -30,7 +30,6 @@ def recortex_reason(key):
     return versions.REASON[key]
 
 
-WORKFLOW = ".github/workflows/recortex-manuscript.yaml"
 
 
 class VersionBox(tw.WritingBox):
@@ -222,7 +221,7 @@ class VersionTests(VersionBox):
         first = git["commits"][self.head()]
         self.assertEqual([], first["parents"])
         files = self.files_at()
-        self.assertIn(WORKFLOW, files)
+        self.assertNotIn(".github/workflows/recortex-manuscript.yaml", files)
         self.assertIn("topics/5.md", files)
         self.assertIn("VERSION.json", files)
         self.assertEqual(self.body(5).rstrip("\n") + "\n", files["topics/5.md"])
@@ -253,7 +252,7 @@ class VersionTests(VersionBox):
         self.draft(folder)
         outputs.append(self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words("Approve")))
         self.ready()
-        for args in (("status",), ("log",), ("doctor",), ("sync",), ("fetch",), ("build-status",)):
+        for args in (("status",), ("log",), ("doctor",), ("sync",), ("fetch",)):
             outputs.append(self.cmd("versions.py", *args))
         outputs.append(self.cmd("versions.py", "name", "submitted", "--words-file", self.words("name it")))
         outputs.append(self.cmd("setup.py", "writing", "set", "--mode", "review", "--yes"))
@@ -266,7 +265,7 @@ class VersionTests(VersionBox):
     def test_a_mode_of_off_or_none_makes_no_branch_and_a_body_edit_makes_no_commit(self):
         self.ready()
         folder = os.path.join(self.dir, "text.md")
-        open(folder, "w").write("## Results\n\ntext\n")
+        open(folder, "w").write(self.body(5))   # the live body: the command keeps the version of the text that stands
         done = self.cmd("versions.py", "commit", "--issue", "5", "--body-file", folder)   # no mode chosen yet
         self.assertEqual(1, done.returncode)
         self.assertIn("Not kept: versions are not kept here", done.stdout)
@@ -278,18 +277,14 @@ class VersionTests(VersionBox):
 
     def test_the_doctor_of_the_hooks_says_the_last_refusal_in_fixed_words_only(self):
         self.ready()
-        chosen = self.cmd("setup.py", "writing", "set", "--mode", "autonomous", "--yes", env={"FAKE_GH_NO_WORKFLOW": "1"})
-        self.assertEqual(0, chosen.returncode)
-        doctor = self.cmd("hooks.py", "--doctor").stdout
-        self.assertIn("builds: the workflow was refused on the branch; run versions.py doctor", doctor)
+        self.mode("autonomous")
         cache = os.path.join(self.data, "private", self.slug(), "versions", "state.json")
         os.chmod(cache, 0o600)
         with open(cache, "w") as handle:   # what a hostile project folder or a stray write could leave there
-            json.dump({"refusal": {"kind": "push; rm -rf /", "at": "2026-12-01T10:00Z"}, "workflow_refused": "yes"}, handle)
+            json.dump({"refusal": {"kind": "push; rm -rf /", "at": "2026-12-01T10:00Z"}}, handle)
         doctor = self.cmd("hooks.py", "--doctor").stdout
         self.assertNotIn("rm -rf", doctor)
         self.assertNotIn("last refusal", doctor)
-        self.assertNotIn("builds: the workflow was refused", doctor)
         with open(cache, "w") as handle:
             json.dump({"refusal": {"kind": "rule", "at": "2026-12-01T10:00Z"}}, handle)
         doctor = self.cmd("hooks.py", "--doctor").stdout
@@ -326,7 +321,6 @@ class VersionTests(VersionBox):
         status = self.cmd("versions.py", "status")
         self.assertIn("#5", status.stdout)
         self.assertIn("in step with its file", status.stdout)
-        self.assertIn("workflow: as shipped", status.stdout)
         self.ready()
         log = self.cmd("versions.py", "log", "--issue", "5", "--json")
         rows = json.loads(log.stdout)
@@ -777,40 +771,18 @@ class NameAndRefusalTests(VersionBox):
         self.refused_line({"FAKE_GH_BRANCH_RULE": "1"}, "rule")
         self.assertEqual({}, self.git()["refs"])
 
-    def test_a_sign_in_that_may_not_add_a_workflow_keeps_the_versions_without_it(self):
-        self.ready()
-        done = self.cmd("setup.py", "writing", "set", "--mode", "autonomous", "--yes", env={"FAKE_GH_NO_WORKFLOW": "1"})
-        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
-        self.assertIn("builds: this sign-in may not add a workflow to octo-org/sample-project, so the paper is not built on "
-                      "GitHub; its versions are kept. Run versions.py doctor.", done.stdout)
-        self.assertNotIn(WORKFLOW, self.files_at())
-        self.assertIn("topics/5.md", self.files_at())
-        doctor = self.cmd("versions.py", "doctor", env={"FAKE_GH_NO_WORKFLOW": "1"}).stdout
-        self.assertIn("gh auth refresh -s workflow", doctor)
-        self.assertIn("workflow: missing", doctor)
-        # the permission is granted: setting the mode again adds the workflow in its own commit
-        before = len(self.history())
-        again = self.cmd("setup.py", "writing", "set", "--mode", "autonomous", "--yes")
-        self.assertIn(WORKFLOW, self.files_at())
-        self.assertEqual(before + 1, len(self.history()))
-
-    def test_a_workflow_that_differs_is_reported_and_never_replaced(self):
-        self.ready()
-        self.mode("autonomous")
-        data = self.repo()
-        git = data["git"]
-        head = git["refs"]["heads/" + BRANCH]
-        files = dict(git["trees"][git["commits"][head]["tree"]])
-        files[WORKFLOW] = files[WORKFLOW] + "\n# changed by hand\n"
-        tree = "d" * 40
-        git["trees"][tree] = files
-        git["commits"]["e" * 40] = {"tree": tree, "parents": [head], "message": "by hand"}
-        git["refs"]["heads/" + BRANCH] = "e" * 40
-        self.save(data)
-        self.assertIn("differs from the one shipped with the plugin", self.cmd("versions.py", "status").stdout)
-        self.cmd("setup.py", "writing", "set", "--mode", "autonomous", "--yes")
-        self.assertIn("# changed by hand", self.files_at()[WORKFLOW])
-        self.assertEqual("e" * 40, self.head())
+    def test_the_branch_holds_no_workflow_and_nothing_is_built(self):
+        """Owner decision of 16 November 2026 (spec section 20): no GitHub Actions workflow, no build, no build link."""
+        self.written()
+        self.assertEqual([], [path for path in self.files_at() if path.startswith(".github")])
+        self.assertTrue(any(path.startswith("content/") for path in self.files_at()))   # the Manubot files stay
+        self.assertEqual(0, self.cmd("versions.py", "doctor").returncode)
+        gone = self.cmd("versions.py", "build-status")
+        self.assertNotEqual(0, gone.returncode)
+        self.assertIn("invalid choice", gone.stderr)
+        self.assertNotIn("workflow", self.cmd("versions.py", "status").stdout.lower())
+        self.assertNotIn("workflow", self.cmd("versions.py", "doctor").stdout.lower())
+        self.assertNotIn("actions", json.dumps([entry for entry in self.repo().get("log", [])]).lower())
 
 
 class RestoreTests(VersionBox):
@@ -1448,34 +1420,6 @@ class FetchTests(VersionBox):
         self.assertIn("'left': 1", ran.stdout)
         self.assertIn("1 version was not fetched (1 past the budget, 0 failed); build the page again with --sync.", ran.stdout)
 
-    def test_the_newest_build_is_kept_for_the_branch_and_for_a_name(self):
-        self.written()
-        self.assertEqual(0, self.cmd("versions.py", "name", "submitted", "--words-file", self.words("name it")).returncode)
-        self.ready()
-        head = self.head()
-        data = self.repo()
-        data["runs"] = [{"id": 4242, "head_branch": BRANCH, "head_sha": head, "status": "completed", "conclusion": "success",
-                         "event": "push", "created_at": "2026-12-03T10:00:00Z", "updated_at": "2026-12-03T10:05:00Z"},
-                        {"id": 4343, "head_branch": "paper-submitted", "head_sha": head, "status": "completed",
-                         "conclusion": "success", "event": "push", "created_at": "2026-12-04T10:00:00Z",
-                         "updated_at": "2026-12-04T10:05:00Z"}]
-        self.save(data)
-        done = self.cmd("versions.py", "build-status")
-        self.assertIn("finished on 2026-12-03: https://github.com/octo-org/sample-project/actions/runs/4242", done.stdout)
-        named = self.cmd("versions.py", "build-status", "--name", "submitted")
-        self.assertIn("finished on 2026-12-04: https://github.com/octo-org/sample-project/actions/runs/4343", named.stdout)
-        self.assertIn("no successful build", self.cmd("versions.py", "build-status", "--name", "nothing").stdout)
-        self.cmd("versions.py", "fetch")
-        built = json.load(open(os.path.join(self.versions_cache(), "build.json")))
-        self.assertEqual({"run": 4242, "day": "2026-12-03", "commit": head}, built["branch"])
-        self.assertEqual({"run": 4343, "day": "2026-12-04", "commit": head}, built["names"]["submitted"])
-        rerun = self.cmd("versions.py", "build-status", "--name", "submitted", "--rerun")
-        self.assertNotEqual(0, rerun.returncode)   # the author's yes is needed
-        self.assertEqual([], self.repo().get("reruns", []))
-        self.assertEqual(0, self.cmd("versions.py", "build-status", "--name", "submitted", "--rerun", "--yes").returncode)
-        self.assertEqual([4343], self.repo()["reruns"])
-
-
 class DryRunTests(VersionBox):
     """Every command of write.py, versions.py and own_paper.py that writes has --dry-run: the checks run, the commands it would
     make are printed, and nothing is written (the fake repository, the project file and the author's file stay as they were)."""
@@ -1705,7 +1649,7 @@ class VersionPageTests(VersionBox):
         self.assertNotIn("<ins>", text)
         self.assertNotIn("Versions of the paper", words)
 
-    def test_named_versions_say_what_changed_since_the_name_before_and_the_build_line_needs_a_vouched_commit(self):
+    def test_named_versions_say_what_changed_since_the_name_before(self):
         self.written()
         self.assertEqual(0, self.cmd("versions.py", "name", "first", "--words-file", self.words_file("Call this first")).returncode)
         data = self.repo()
@@ -1719,11 +1663,6 @@ class VersionPageTests(VersionBox):
         self.ready()
         self.assertEqual(0, self.cmd("versions.py", "name", "second", "--words-file", self.words_file("And this second")).returncode)
         self.ready()
-        head = self.head()
-        data = self.repo()
-        data["runs"] = [{"id": 4242, "head_branch": BRANCH, "head_sha": head, "status": "completed", "conclusion": "success",
-                         "event": "push", "created_at": "2026-12-03T10:00:00Z", "updated_at": "2026-12-03T10:05:00Z"}]
-        self.save(data)
         self.assertEqual(0, self.cmd("versions.py", "fetch").returncode)
         text = self.page()
         words = self.words(text)
@@ -1731,7 +1670,7 @@ class VersionPageTests(VersionBox):
         self.assertIn("Versions of the paper", words)
         self.assertRegex(words, r"first Named on [A-Z][a-z]+ [0-9]+\.")
         self.assertRegex(words, r"second Named on [A-Z][a-z]+ [0-9]+\.")
-        self.assertIn("The paper was last built on December 3, 2026 (HTML, PDF and Word).", words)
+        self.assertNotIn("built", words.lower())   # no build is made or linked
         self.assertIn("“Call this first”", words)
         self.assertIn("What changed since first", words)
         self.assertIn("<ins>A second look, by hand.</ins>", text)
@@ -1739,21 +1678,12 @@ class VersionPageTests(VersionBox):
         self.assertIn("<ins>A second look, by hand.</ins>", since)   # drawn in the block of the names, not only in the part's fold
         self.assertRegex(self.words(since), r"[0-9]+ parts? did not change")
         self.assertRegex(words, r"[0-9]+ parts? did not change\.")
-        self.assertIn("The paper was last built on", words)
-        self.assertIn('href="https://github.com/octo-org/sample-project/actions/runs/4242"', text)
         # nothing of the branch, a commit or a tag is linked
         for form in ("/commit/", "/tree/", recortex_branch(), "paper-first", "paper-second"):
             self.assertNotIn(form, text, form)
         self.assertEqual([], [m for m in re.findall(r'href="(https://github\.com/[^"]+)"', text)
                               if re.search(r"/blob/[0-9a-f]{40}|/tree/|/commit/", m)])
-        # a run of a commit no told memory names is never linked
-        data = self.repo()
-        data["runs"][0]["head_sha"] = "9" * 40
-        self.save(data)
-        self.cmd("versions.py", "fetch")
-        again = self.page()
-        self.assertNotIn("/actions/runs/", again)
-        self.assertNotIn("The paper was last built on", self.words(again))
+        self.assertNotIn("/actions/", text)
 
     def words_file(self, text):
         return self.words(text) if False else tw.WritingBox.words(self, text)
@@ -1799,9 +1729,8 @@ class VersionPageTests(VersionBox):
                         entry["no_diff"] = None
                         found.append(entry)
         self.assertTrue(found)
-        model["versions"] = {"kept": True, "build": {"run": "5/../x", "day": hostile, "commit": "z"}, "unfetched": hostile,
+        model["versions"] = {"kept": True, "unfetched": hostile,
                              "names": [{"name": hostile, "day": hostile, "words": hostile, "id": hostile,
-                                        "build": {"run": 1.5, "day": hostile},
                                         "since": {"name": hostile, "same": hostile, "parts": [
                                             {"thread": hostile, "ordinal": hostile, "label": hostile, "diff": [{"op": "add", "runs": [
                                                 {"t": "add", "text": hostile}]}], "no_diff": None}, "x"]}}]}
@@ -1810,7 +1739,7 @@ class VersionPageTests(VersionBox):
         self.assertEqual([], ts.page_problems(text))
         self.assertNotIn("<script>x", text)
         self.assertNotIn("onclick", text.replace("&lt;ins onclick", "").replace("onclick=alert(1)&gt;", ""))
-        self.assertNotIn("actions/runs/5", text)
+        self.assertNotIn("actions/", text)
         # the only ins and del elements are the ones made from a run of type add or del of a known operation: two runs of the
         # add operation and one del run of the change operation per entry, and one add run of the versions block
         self.assertEqual(2 * len(found) + 1, text.count("<ins>"))
@@ -1926,181 +1855,3 @@ class LayoutTests(unittest.TestCase):
     def test_the_figure_is_never_made_by_the_layout(self):
         files, _ = self.lay()
         self.assertFalse([name for name in files if name.startswith("content/images/")])
-
-
-# ---------------------------------------------------------------- the workflow file
-
-PINNED = {"actions/checkout": "d23441a48e516b6c34aea4fa41551a30e30af803",
-          "actions/cache": "caa296126883cff596d87d8935842f9db880ef25",
-          "conda-incubator/setup-miniconda": "fc2d68f6413eb2d87b895e92f8584b5b94a10167",
-          "actions/upload-artifact": "b7c566a772e6b6bfb58ed0dc250532a479d7789f"}
-ROOTSTOCK = "f44f9bbe35441a8acd51a5898e6e739acaf54c1c"
-
-
-def top_block(lines, key):
-    """The (indent-stripped) child lines of a top-level key."""
-    out, inside = [], False
-    for line in lines:
-        if re.match(r"^%s:\s*$" % re.escape(key), line):
-            inside = True
-            continue
-        if inside:
-            if line.strip() == "" or line.lstrip().startswith("#"):
-                continue
-            if not line.startswith(" "):
-                break
-            out.append(line)
-    return out
-
-
-def step_blocks(lines):
-    blocks, current = [], None
-    started = False
-    for line in lines:
-        if re.match(r"^    steps:\s*$", line):
-            started = True
-            continue
-        if not started:
-            continue
-        if re.match(r"^      - ", line):
-            current = [line]
-            blocks.append(current)
-        elif current is not None:
-            current.append(line)
-    return blocks
-
-
-def run_blocks(block):
-    """The text of each `run:` of a step."""
-    out, lines = [], block
-    for number, line in enumerate(lines):
-        found = re.match(r"^(\s*)(?:- )?run:\s*(.*)$", line)
-        if not found:
-            continue
-        indent, rest = len(found.group(1)), found.group(2)
-        if rest and not rest.startswith(("|", ">")):
-            out.append(rest)
-            continue
-        body = []
-        for following in lines[number + 1:]:
-            if following.strip() and len(following) - len(following.lstrip()) <= indent + 1:
-                break
-            body.append(following)
-        out.append("\n".join(body))
-    return out
-
-
-def workflow_problems(text):
-    """What is wrong with a workflow file for the manuscript branch, by the rules of references/versions.md; [] when nothing."""
-    problems = []
-    lines = text.split("\n")
-    permissions = {}
-    for line in top_block(lines, "permissions"):
-        found = re.match(r"^\s+([a-z-]+):\s*(\S+)\s*$", line)
-        if found:
-            permissions[found.group(1)] = found.group(2)
-    if permissions != {"contents": "read", "actions": "read"}:
-        problems.append("the top-level permissions are not exactly contents: read and actions: read")
-    if len(re.findall(r"^\s*permissions:", text, re.M)) != 1:
-        problems.append("a job or a step sets permissions of its own")
-    if re.search(r":\s*write\b", text):
-        problems.append("the word write is a permission")
-    for key in ("pages", "id-token", "deployments", "environment"):
-        if re.search(r"^\s*%s\s*:" % re.escape(key), text, re.M):
-            problems.append("the key %s is set" % key)
-    for name in re.findall(r"secrets\.([A-Za-z_]+)", text):
-        if name != "GITHUB_TOKEN":
-            problems.append("a secret other than GITHUB_TOKEN is read: %s" % name)
-    triggers = top_block(lines, "on")
-    keys = [re.match(r"^(\s*)([a-z_]+):", line) for line in triggers]
-    top = [k.group(2) for k in keys if k and len(k.group(1)) == 2]
-    if top != ["push"]:
-        problems.append("the triggers are not only a push: %s" % ", ".join(top))
-    branches = [m.group(1) for line in triggers for m in [re.match(r"^\s+- '?([^']+)'?\s*$", line)] if m]
-    if branches != ["recortex-manuscript", "paper-*"]:
-        problems.append("the push filters are not the branch and the tags paper-*")
-    for found in re.findall(r"^\s*(?:- )?uses:\s*(\S+)", text, re.M):
-        match = re.fullmatch(r"([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)@([0-9a-f]{40})", found)
-        if not match:
-            problems.append("an action is not pinned to 40 hex characters: %s" % found)
-        elif PINNED.get(match.group(1)) != match.group(2):
-            problems.append("an action is not one of the pinned ones: %s" % found)
-    blocks = step_blocks(lines)
-    for block in blocks:
-        joined = "\n".join(block)
-        if "actions/checkout@" in joined and not re.search(r"persist-credentials:\s*false", joined):
-            problems.append("a checkout keeps its credentials")
-        if "actions/upload-artifact@" in joined and "retention-days:" not in joined:
-            problems.append("an upload sets no retention-days")
-        if "manubot/rootstock" in joined and not re.search(r"ref:\s*%s\s*$" % ROOTSTOCK, joined, re.M):
-            problems.append("rootstock is not pinned to its commit")
-        for run in run_blocks(block):
-            if "github.event" in run or "${{" in run:
-                problems.append("a run line holds an expression of the event or of the workflow context")
-    if not any("manubot/rootstock" in "\n".join(b) for b in blocks):
-        problems.append("rootstock is not checked out")
-    for word in ("gh-pages", "ghp-import", "deploy.sh", "git push", "pages:"):
-        if word in text:
-            problems.append("something publishes: %s" % word)
-    if re.search(r"^\s*-?\s*name:\s*Deploy", text, re.M):
-        problems.append("a deploy step")
-    return problems
-
-
-class BuildWorkflowTests(unittest.TestCase):
-    def shipped(self):
-        with open(os.path.join(os.path.dirname(ts.SCRIPTS), "templates", "recortex-manuscript.yaml"), encoding="utf-8") as handle:
-            return handle.read()
-
-    def test_the_shipped_workflow_breaks_no_rule(self):
-        self.assertEqual([], workflow_problems(self.shipped()))
-
-    def test_the_four_actions_and_rootstock_are_the_pinned_commits(self):
-        text = self.shipped()
-        found = dict(re.findall(r"uses:\s*([^@\s]+)@([0-9a-f]{40})", text))
-        self.assertEqual(PINNED, found)
-        self.assertIn("ref: %s" % ROOTSTOCK, text)
-        self.assertEqual(2, text.count("persist-credentials: false"))
-
-    def test_the_triggers_the_retention_and_the_environment_are_what_the_docs_say(self):
-        text = self.shipped()
-        self.assertIn("MANUBOT_USE_DOCKER: 'false'", text)
-        self.assertIn("BUILD_DOCX: 'true'", text)
-        self.assertIn("SPELLCHECK: 'false'", text)
-        self.assertIn("retention-days: ${{ github.ref_type == 'tag' && 90 || 30 }}", text)
-        self.assertNotIn("400", text)
-
-    def mutated(self, old, new):
-        text = self.shipped()
-        self.assertIn(old, text)
-        return text.replace(old, new, 1)
-
-    def assertCaught(self, text, words):
-        found = workflow_problems(text)
-        self.assertTrue([p for p in found if words in p], (words, found))
-
-    def test_each_rule_catches_its_own_breach(self):
-        self.assertCaught(self.mutated("permissions:\n  contents: read\n  actions: read", "permissions:\n  contents: read\n  actions: read\n  pages: write"),
-                          "top-level permissions")
-        self.assertCaught(self.mutated("actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6", "actions/checkout@v6"),
-                          "not pinned to 40 hex")
-        self.assertCaught(self.mutated("    tags:\n      - 'paper-*'\n", "    tags:\n      - 'paper-*'\n  schedule:\n    - cron: '0 3 * * *'\n"),
-                          "triggers")
-        self.assertCaught(self.shipped() + "      - name: Deploy the paper\n        run: git push origin HEAD:gh-pages\n", "publishes")
-        self.assertCaught(self.mutated("persist-credentials: false", "persist-credentials: true"), "keeps its credentials")
-        self.assertCaught(self.mutated("          retention-days: ${{ github.ref_type == 'tag' && 90 || 30 }}\n", ""), "retention-days")
-        self.assertCaught(self.mutated('echo "skip=false" >> "$GITHUB_OUTPUT"', 'echo "${{ github.event.head_commit.message }}"'),
-                          "run line")
-        self.assertCaught(self.mutated("GH_TOKEN: ${{ github.token }}", "GH_TOKEN: ${{ secrets.DEPLOY_KEY }}"), "secret")
-        self.assertCaught(self.mutated("ref: %s" % ROOTSTOCK, "ref: main"), "rootstock")
-        self.assertCaught(self.mutated("name: Build\n", "name: Build\n    environment: production\n"), "environment")
-        self.assertCaught(self.mutated("actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f", "actions/upload-artifact@" + "a" * 40),
-                          "not one of the pinned")
-
-    def test_the_file_the_branch_is_made_with_is_the_shipped_text(self):
-        self.assertEqual(self.shipped(), open(os.path.join(os.path.dirname(ts.SCRIPTS), "templates", "recortex-manuscript.yaml"),
-                                             encoding="utf-8").read())
-
-
-if __name__ == "__main__":
-    unittest.main()

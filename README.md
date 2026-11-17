@@ -17,12 +17,12 @@ New and compacted sessions start from that record.
 
 ## What you get
 
-- A session that starts from the last recorded state. A short brief of the record opens every session and every subagent.
+- A session that starts from the last recorded state. A short brief of the record opens each session and subagent.
 - A record you can read on GitHub. One pinned hub, one issue per topic, and a dated memory for each result, decision, failure, idea and question.
-- A start-up line showing recortex is on.
+- A start-up line shows recortex is on.
 - The mind page. One private local page that tells the memory in sentences: where things stand, how each thread got there, what went wrong, what is settled, what is open.
 - The finished work, compiled. Topic bodies hold the deliverable's current text, so the paper or the release notes are assembled from the issues.
-- The paper's plan, its text and its versions. The session writes the text in the mode you choose, never changes a paragraph you wrote, and keeps, names and builds every version.
+- The paper's plan, its text and its versions. The session writes the text in the mode you choose, never changes a paragraph you wrote, and keeps every version; `mind.py --paper` prints it.
 - Helpers that know your field. A short field sheet tells every subagent what counts as proof in your work and what must never be written down.
 - A board that keeps itself current. Sub-issues and a private GitHub Projects board follow the record; you do not drag a card to keep it honest.
 - Optional observation. Context follows recorded decisions and failures; independent checks select events, and explicit holds stop supported actions. [Controls and limits](skills/recortex/references/observer.md).

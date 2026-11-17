@@ -14,9 +14,9 @@ The mode is the user's, per machine and repository: `review` (the plugin drafts 
 - With no entry, the session brief says "Writing: the user has not chosen whether recortex writes the paper's text. Ask once ..." at every start until answered. An existing project that upgrades is asked once this way, in its first session after the upgrade.
 - An unreadable file (a symlink, loose permissions, not JSON) counts as off, with one fixed line in the brief that points to `hooks.py --doctor`.
 
-The question, asked with the multiple-choice prompt (review recommended first), ends with these plain lines, which `setup.py writing set` prints again and which are the whole consent to versions and builds:
+The question, asked with the multiple-choice prompt (review recommended first), ends with these plain lines, which `setup.py writing set` prints again and which are the whole consent to versions:
 
-> With review or autonomous, recortex also keeps every version of the manuscript for you in (repository), and shows them on the mind page. It adds one workflow there that builds the paper as HTML, PDF and Word for each version you name, and at most once a day when the text changed. A build takes a few minutes of the repository's GitHub Actions allowance, and its files stay private to people who can read the repository.
+> With review or autonomous, recortex also keeps every version of the manuscript for you in (repository), and shows them on the mind page. Nothing is built or run there.
 
 The same question asks whether the author keeps a manuscript file of their own that recortex should know about: "Yes" (they then name it), "No" and "Ask me later" ([Your own paper](#your-own-paper)).
 

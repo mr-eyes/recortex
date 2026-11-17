@@ -143,7 +143,7 @@ With a plan, recortex can write the text of the paper's own manuscript (Methods,
 
 ### Versions of the paper
 
-With review or autonomous writing, the text's versions are kept on a branch of the record's repository. When the user asks to name a version, get one back, restore a part or see where the built paper is, follow [references/versions.md](references/versions.md): `versions.py name`, `compile.py --version`, `versions.py restore` and `versions.py build-status`, each after the user's words in the chat. When a file of a part was changed on the branch alone, ask the user whether to take the change into the text or put the file back; never take it silently.
+With review or autonomous writing, the text's versions are kept on a branch of the record's repository. When the user asks to name a version, get one back, restore a part or write the paper as a page to print, follow [references/versions.md](references/versions.md): `versions.py name`, `compile.py --version`, `versions.py restore` and `mind.py --paper [--version NAME]`, each after the user's words in the chat (the page is only read, so it needs none). When a file of a part was changed on the branch alone, ask the user whether to take the change into the text or put the file back; never take it silently.
 
 ### The board and the sub-issues
 
@@ -200,7 +200,7 @@ Why each rule exists, with the Mermaid and GitHub limits: [references/pitfalls.m
 | `catchup.py` | `inventory` and `gap` list earlier work (read-only); `event` drafts a reconstructed event comment | no |
 | `plan.py` | The plan of the paper: `setup` makes the plan issue, `digest` writes what the record holds for the planner, `status` the states and gaps, `check` and `post` lint and post the planned parts, `render` writes the readable copy into the plan issue's body, `off` and `on` switch planning | `setup`, `post` and `render` only, `--dry-run` available |
 | `writing.py`, `write.py`, `proposals.py` | The writing mode of this machine; `write.py status`, `start`, `check`, `apply` and `log` write the text of the paper's own manuscript, with the checks of `references/writing.md`; `propose` and `approvals --apply` are the approval of a change by a pull request on GitHub | `apply`, `propose`, `approvals --apply` |
-| `versions.py`, `paper_layout.py` | The versions of the paper's text on the branch `recortex-manuscript`: `status`, `sync`, `log`, `diff`, `name`, `restore`, `put-back`, `fetch`, `build-status`, `meta` and `doctor`; the layout is Manubot's (`references/versions.md`) | `sync`, `name`, `put-back`, `meta` and the commit after a write |
+| `versions.py`, `paper_layout.py` | The versions of the paper's text on the branch `recortex-manuscript`: `status`, `sync`, `log`, `diff`, `name`, `restore`, `put-back`, `fetch`, `meta` and `doctor`; the layout is Manubot's (`references/versions.md`) | `sync`, `name`, `put-back`, `meta` and the commit after a write |
 | `own_paper.py` | The author's own paper: `where`, `status`, `since`, `propose`; `apply` is the one write, only with the author's words | `apply` only, to their file |
 | `compile.py` | The deliverable by section, figure, table and source lists, the dated timeline and a manifest, from the record; `--version NAME` compiles a named version and `--layout manubot` also writes the Manubot `content/` | no (reads) |
 | `session_start_hook.sh` | SessionStart hook; calls `run_hook.sh session-start` | no |
