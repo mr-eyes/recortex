@@ -631,6 +631,20 @@ def apply_command(args):
     if problems:
         say("not written: the change's own comment does not pass the linter: %s" % problems[0])
         return 1
+    if getattr(args, "dry_run", False):
+        steps = [] if done.get("body") else [recortex.show_command(
+            ["issue", "edit", str(issue), "--repo", repo, "--body-file", os.path.join(args.dir, "draft.md")],
+            "%d characters, only while the body is still base.md; a backup is kept first" % len(files["draft.md"]))]
+        if "version" not in done:
+            steps.append("the version commit of #%d to the branch %s (versions.commit), when this machine keeps versions" % (
+                issue, versions_branch()))
+        if "memory" not in done:
+            steps.append(recortex.show_command(["issue", "comment", str(issue), "--repo", repo, "--body-file", "-"],
+                                               "the text memory, %d characters" % len(draft_memory)))
+        for step in steps:
+            say("would run: " + step)
+        say("dry run: every check passed; nothing was written")
+        return 0
     # 3. the body, through post_verified.py with the base the draft was made from, and a backup
     if not done.get("body"):
         try:   # kept before the write, so that a stop right after it can be told from a body somebody else wrote
@@ -676,6 +690,11 @@ def apply_command(args):
     say("write: %s of #%d changed (%s mode); comment %d says why. See it on the mind page or with write.py log." % (
         ", ".join(headings), issue, mode, done["memory"]))
     return 0
+
+
+def versions_branch():
+    import versions  # noqa: E402
+    return versions.BRANCH
 
 
 def save_state(repo, record, state):
@@ -754,6 +773,7 @@ def main(argv=None):
         if name == "apply":
             p.add_argument("--words-file", help="the author's answer in the chat (review mode)")
             p.add_argument("--who", default="the author", help="the name or role the words are quoted under")
+            p.add_argument("--dry-run", action="store_true", help="run every check and print the commands; write nothing")
         if name == "log":
             p.add_argument("--issue", type=int)
     for name in ("propose", "approvals"):
@@ -765,6 +785,7 @@ def main(argv=None):
         else:
             p.add_argument("--apply", action="store_true")
             p.add_argument("--issue", type=int)
+        p.add_argument("--dry-run", action="store_true", help="run every check and print what would be written; write nothing")
     args = parser.parse_args(argv)
     if args.command in ("propose", "approvals"):
         import proposals  # noqa: E402 - the second way to approve a change (references/writing.md)

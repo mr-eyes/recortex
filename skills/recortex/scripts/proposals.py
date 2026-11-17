@@ -188,6 +188,14 @@ def propose_command(args):
         SAY("propose: pull request #%d already holds this change" % record["proposal"]["pull"])
         return 0
     branch = "recortex-proposal-%d-%s" % (issue, text[:8])
+    if getattr(args, "dry_run", False):
+        SAY("would run: a commit of topics/%d.md on the new branch %s, cut from the head of %s" % (issue, branch, versions.BRANCH))
+        SAY("would run: " + recortex.show_command(["api", "-X", "POST", "repos/%s/pulls" % repo, "--input", "-"],
+                                                  "one pull request into %s" % versions.BRANCH))
+        SAY("would run: " + recortex.show_command(["issue", "comment", str(issue), "--repo", repo, "--body-file", "-"],
+                                                  "the proposal comment"))
+        SAY("dry run: every check passed; nothing was written")
+        return 0
     try:
         commit = versions.post_commit(repo, {"topics/%d.md" % issue: record_format.body_bytes(files["draft.md"]).decode("utf-8")},
                                       "Proposed text: %s of topic %d" % (", ".join(headings)[:60], issue), head, ref="heads/" + branch)
@@ -296,6 +304,10 @@ def approvals_command(args):
     written = 0
     for issue, status, detail in results:
         if status == "ready":
+            if args.apply and args.dry_run:
+                SAY("would apply: #%d, merged as pull request #%d by %s: the body, the version commit and the text memory (write.py "
+                    "apply, with the form of a merge on GitHub)" % (issue, detail["pull"], detail["login"]))
+                continue
             if not args.apply:
                 SAY("approvals: #%d is approved on GitHub (pull request #%d merged by %s); run write.py approvals --apply" % (
                     issue, detail["pull"], detail["login"]))
@@ -309,18 +321,25 @@ def approvals_command(args):
             SAY(LINES[status] % detail)
         elif status in ("moved", "elsewhere"):
             SAY(LINES[status] % issue)
-            if status == "moved" and args.apply:
+            if status == "moved" and args.apply and args.dry_run:
+                SAY("would close: pull request #%d, with a fixed comment" % detail)
+            elif status == "moved" and args.apply:
                 close_proposal(repo, detail)
         else:
             SAY(LINES[status] % detail)
             if status == "closed" and args.apply and detail not in closed:
-                drop_proposal(config, repo, issue, detail)
+                if args.dry_run:
+                    SAY("would post: a checkpoint on #%d that says pull request #%d was closed without merging" % (issue, detail))
+                else:
+                    drop_proposal(config, repo, issue, detail)
             if status in ("stranger", "other"):
                 refused += 1
     if refused:
         SAY("approvals: %d proposal%s refused" % (refused, "" if refused == 1 else "s"))
     if not results:
         SAY("approvals: no proposal waits")
+    if args.apply and args.dry_run:
+        SAY("dry run: nothing was written")
     return 0
 
 

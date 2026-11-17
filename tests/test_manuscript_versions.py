@@ -1476,6 +1476,125 @@ class FetchTests(VersionBox):
         self.assertEqual([4343], self.repo()["reruns"])
 
 
+class DryRunTests(VersionBox):
+    """Every command of write.py, versions.py and own_paper.py that writes has --dry-run: the checks run, the commands it would
+    make are printed, and nothing is written (the fake repository, the project file and the author's file stay as they were)."""
+
+    def frozen(self):
+        data = self.repo()
+        data.pop("log", None)
+        data.pop("reads", None)   # the fake counts its reads
+        with open(os.path.join(self.project, recortex.CONFIG_NAME), "rb") as handle:
+            return json.dumps(data, sort_keys=True), handle.read()
+
+    def dry(self, *command, env=None, wants="dry run: "):
+        before = self.frozen()
+        done = self.cmd(*command, env=env)
+        self.assertEqual(0, done.returncode, " ".join(command) + "\n" + done.stdout + done.stderr)
+        self.assertIn("would ", done.stdout, command)
+        self.assertIn(wants, done.stdout, command)
+        self.assertEqual(before, self.frozen(), command)
+        return done
+
+    def test_write_apply_runs_every_check_and_writes_nothing_then_a_real_apply_still_works(self):
+        self.ready()
+        self.mode("autonomous")
+        folder = self.start(5)
+        self.draft(folder)
+        files = sorted(os.listdir(folder))
+        done = self.dry("write.py", "apply", "--dir", folder, "--dry-run")
+        self.assertIn("would run: gh issue edit 5", done.stdout)
+        self.assertEqual(files, sorted(os.listdir(folder)))   # no backup, no comment text
+        self.assertNotIn("The pooled fit", self.body(5))
+        self.draft(folder, text=self.base(folder), parts=(), results=())   # a draft that fails a check is still refused
+        refused = self.cmd("write.py", "apply", "--dir", folder, "--dry-run")
+        self.assertNotEqual(0, refused.returncode)
+        self.draft(folder)
+        self.assertEqual(0, self.cmd("write.py", "apply", "--dir", folder).returncode)
+        self.assertIn("The pooled fit", self.body(5))
+
+    def test_write_propose_and_approvals_apply_write_nothing(self):
+        self.ready()
+        self.mode("review")
+        folder = self.start(5)
+        self.draft(folder)
+        self.dry("write.py", "propose", "--dir", folder, "--dry-run")
+        self.assertEqual([], [k for k, v in self.repo()["issues"].items() if v.get("pull_request") and v.get("head")])
+        self.assertEqual(0, self.cmd("write.py", "propose", "--dir", folder).returncode)
+        pull = next(int(k) for k, v in self.repo()["issues"].items() if v.get("pull_request") and v.get("head"))
+        import subprocess
+        merged = subprocess.run(ts.FAKE.split() + ["api", "-X", "PUT", "repos/octo-org/sample-project/pulls/%d/merge" % pull],
+                                input="{}", capture_output=True, text=True, env=dict(os.environ, FAKE_GH_STATE=self.state))
+        self.assertEqual(0, merged.returncode, merged.stdout + merged.stderr)
+        done = self.dry("write.py", "approvals", "--apply", "--dry-run")
+        self.assertIn("would apply: #5", done.stdout)
+        self.assertNotIn("The pooled fit", self.body(5))
+        self.assertEqual(0, self.cmd("write.py", "approvals", "--apply").returncode)
+        self.assertIn("The pooled fit", self.body(5))
+
+    def hand_edit(self):
+        self.written()
+        self.edited_by_hand(5, "\n### Figure: dryspell", "\nA second look, by hand.\n\n### Figure: dryspell")
+
+    def test_versions_sync_name_meta_and_commit_write_nothing(self):
+        self.hand_edit()
+        heads = self.head()
+        self.dry("versions.py", "sync", "--dry-run")
+        self.assertEqual(heads, self.head())
+        self.assertEqual(1, len(self.text_memories()))
+        live = os.path.join(self.dir, "live.md")
+        with open(live, "w") as handle:
+            handle.write(self.body(5))
+        self.dry("versions.py", "commit", "--issue", "5", "--body-file", live, "--dry-run")
+        other = os.path.join(self.dir, "other.md")
+        with open(other, "w") as handle:
+            handle.write(self.body(5) + "\nNot the live body.\n")
+        refused = self.cmd("versions.py", "commit", "--issue", "5", "--body-file", other, "--dry-run")
+        self.assertNotEqual(0, refused.returncode)
+        self.assertIn("is not the live body of #5", refused.stderr)
+        self.assertEqual(0, self.cmd("versions.py", "sync").returncode)   # in step again, so that a name may be given
+        self.ready()
+        self.dry("versions.py", "name", "submitted", "--words-file", self.words("name it"), "--dry-run")
+        self.assertEqual({}, self.tags())
+        self.dry("versions.py", "meta", "--authors", "A. Author", "--dry-run")
+
+    def test_versions_put_back_writes_nothing(self):
+        self.written()
+        files = dict(self.files_at())
+        head = self.head()
+        files["topics/5.md"] = files["topics/5.md"] + "\nTyped into the file.\n"
+        data = self.repo()
+        data["git"]["trees"]["d" * 40] = files
+        data["git"]["commits"]["e" * 40] = {"tree": "d" * 40, "parents": [head], "message": "by hand"}
+        data["git"]["refs"]["heads/" + BRANCH] = "e" * 40
+        self.save(data)
+        self.dry("versions.py", "put-back", "--issue", "5", "--dry-run")
+        self.assertEqual("e" * 40, self.head())
+
+    def test_own_paper_where_and_apply_write_nothing(self):
+        self.ready()
+        path = os.path.join(self.project, "paper", "paper.tex")
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w") as handle:
+            handle.write(tw.PAPER_TEX)
+        self.dry("own_paper.py", "where", "--set", path, "--dry-run")
+        self.dry("own_paper.py", "where", "--set", "no", "--dry-run")
+        self.assertEqual(0, self.cmd("own_paper.py", "where", "--set", path, "--yes").returncode)
+        folder = os.path.join(self.dir, "since")
+        self.assertEqual(0, self.cmd("own_paper.py", "since", "--issue", "5", "--section", "Results", "--out", folder).returncode)
+        new = os.path.join(self.dir, "new.tex")
+        with open(new, "w") as handle:
+            handle.write(tw.PAPER_TEX.replace("9 of 11 spells.", "9 of 11 spells, and 12 of 14 with a third season."))
+        self.assertEqual(0, self.cmd("own_paper.py", "propose", "--file", new, "--out", folder).returncode)
+        words = self.words("Apply")
+        before = open(path, "rb").read()
+        self.dry("own_paper.py", "apply", "--dir", folder, "--words-file", words, "--parts", "5:Results", "--dry-run")
+        self.dry("own_paper.py", "apply", "--dir", folder, "--words-file", words, "--parts", "5:Results", "--pasted", "--dry-run")
+        self.assertEqual(before, open(path, "rb").read())
+        self.assertEqual(0, self.cmd("own_paper.py", "apply", "--dir", folder, "--words-file", words, "--parts", "5:Results").returncode)
+        self.assertNotEqual(before, open(path, "rb").read())
+
+
 class MindVersionTests(unittest.TestCase):
     """The differences of the History (pure): mind_versions."""
 

@@ -697,7 +697,7 @@ def put_back_command(args):
     commit of the body over the file. Needs the author's yes; nothing is read from the file."""
     config, repo, hub, plan, allowed, mode = load(need_mode=True)
     print(recortex.describe(config, repo))
-    if not args.yes:
+    if not args.yes and not args.dry_run:
         sys.exit("error: pass --yes once the author said to put the file back")
     try:
         index.sync(repo, hub, timeout=60, deadline=300)
@@ -716,6 +716,10 @@ def put_back_command(args):
         body = live_body(db, args.issue)
     finally:
         db.close()
+    if args.dry_run:
+        say("would run: a version commit of the live body of #%d over its file on the branch %s" % (args.issue, BRANCH))
+        say("dry run: nothing was written")
+        return 0
     result = commit(config, repo, args.issue, body)
     if not SHA40.fullmatch(result):
         return 1
@@ -731,6 +735,7 @@ def last_editor(db, number):
 
 def sync_command(args):
     config, repo, hub, plan, allowed, mode = load(need_mode=True)
+    dry = getattr(args, "dry_run", False)
     print(recortex.describe(config, repo))
     try:
         index.sync(repo, hub, timeout=60, deadline=300)
@@ -744,6 +749,10 @@ def sync_command(args):
         state, items = told_items(db, config, allowed, plan)
         texts = write_rules.text_memories(db, items) if state else []
         if head_of(repo) is None:
+            if dry:
+                say("would run: make the branch %s with a first commit of the current text (versions.ensure)" % BRANCH)
+                say("dry run: nothing was written")
+                return 0
             db.close()
             db = None
             result = ensure(config, repo)
@@ -771,6 +780,11 @@ def sync_command(args):
             before = (versions.get("topics") or {}).get(str(number), {}).get("sha256")
             before = before if isinstance(before, str) and re.fullmatch(r"[0-9a-f]{64}", before) else None
             actor, when = last_editor(db, number)
+            if dry:
+                say("would run: the version commit of #%d to the branch %s, and one text change on #%d that says who edited it" % (
+                    number, BRANCH, number))
+                made += 1
+                continue
             result = commit(config, repo, number, body)
             if not SHA40.fullmatch(result):
                 return 1
@@ -803,6 +817,9 @@ def sync_command(args):
                 "**Version:** `%s`" % result, ""])
             cid = post_comment(repo, number, "text", memory, scratch_folder(repo))
             say("versions: #%d recorded as a hand edit%s." % (number, " (comment %d)" % cid if cid else "; its comment was not posted"))
+        if dry:
+            say("dry run: sync would make %d version%s; nothing was written" % (made, "" if made == 1 else "s"))
+            return 0
         say("versions: sync made %d version%s." % (made, "" if made == 1 else "s"))
         return 0
     finally:
@@ -986,6 +1003,12 @@ def name_command(args):
     finally:
         db.close()
     memory = decision_text(args.name, head, manifest, words, utc_now(), title)
+    if getattr(args, "dry_run", False):
+        say("would run: " + recortex.show_command(["issue", "comment", str(target), "--repo", repo, "--body-file", "-"],
+                                                  "the decision that names %s, %d characters" % (args.name, len(memory))))
+        say("would run: gh api -X POST repos/%s/git/refs   # refs/tags/paper-%s at %s" % (repo, args.name, head[:12]))
+        say("dry run: every check passed; nothing was written")
+        return 0
     cid = post_comment(repo, target, "decision", memory, scratch_folder(repo))
     if cid is None:
         say("versions: the decision was not posted, so the version was not named")
@@ -1361,7 +1384,7 @@ def doctor_command(args):
 
 def meta_command(args):
     config, repo, hub, plan, allowed, mode = load(need_mode=True)
-    if not args.yes:
+    if not args.yes and not args.dry_run:
         sys.exit("error: pass --yes once the author gave the names or keywords in the conversation")
     head = head_of(repo)
     if head is None:
@@ -1377,6 +1400,11 @@ def meta_command(args):
     finally:
         if db is not None:
             db.close()
+    if args.dry_run:
+        say("would run: a commit of content/metadata.yaml to the branch %s (%d author%s, %d keyword%s)" % (
+            BRANCH, len(authors), "" if len(authors) == 1 else "s", len(keywords), "" if len(keywords) == 1 else "s"))
+        say("dry run: nothing was written")
+        return 0
     try:
         commit_files(repo, {"content/metadata.yaml": paper_layout.metadata(title, authors, keywords)}, "Set the authors and keywords",
                      delete_stale=False)
@@ -1390,6 +1418,13 @@ def meta_command(args):
 def commit_command(args):
     config, repo, hub, plan, allowed, mode = load()
     text = recortex.read_text(args.body_file)
+    if recortex.normalize(text) != recortex.normalize(recortex.read_issue_body(repo, args.issue)):
+        sys.exit("versions: the file is not the live body of #%d; this command keeps the version of the text that stands, so "
+                 "write the text first" % args.issue)
+    if args.dry_run:
+        say("would run: the version commit of #%d to the branch %s (%d characters)" % (args.issue, BRANCH, len(text)))
+        say("dry run: nothing was written")
+        return 0
     result = commit(config, repo, args.issue, text)
     say(result if SHA40.fullmatch(result) else "Not kept: " + result)
     return 0 if SHA40.fullmatch(result) else 1
@@ -1399,7 +1434,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status").set_defaults(run=status_command)
-    sub.add_parser("sync").set_defaults(run=sync_command)
+    p = sub.add_parser("sync")
+    p.add_argument("--dry-run", action="store_true", help="say what would be committed and posted; write nothing")
+    p.set_defaults(run=sync_command)
     p = sub.add_parser("log")
     p.add_argument("--issue", type=int)
     p.add_argument("--json", action="store_true")
@@ -1412,11 +1449,13 @@ def main(argv=None):
     p = sub.add_parser("name")
     p.add_argument("name")
     p.add_argument("--words-file")
+    p.add_argument("--dry-run", action="store_true", help="run every check and say what would be written; write nothing")
     p.set_defaults(run=name_command)
     sub.add_parser("doctor").set_defaults(run=doctor_command)
     p = sub.add_parser("put-back", help="after a file was changed on the branch alone: commit the text over it (needs --yes)")
     p.add_argument("--issue", type=int, required=True)
     p.add_argument("--yes", action="store_true")
+    p.add_argument("--dry-run", action="store_true", help="run every check and say what would be written; write nothing")
     p.set_defaults(run=put_back_command)
     p = sub.add_parser("restore")
     p.add_argument("--issue", type=int, required=True)
@@ -1436,10 +1475,12 @@ def main(argv=None):
     p.add_argument("--authors")
     p.add_argument("--keywords")
     p.add_argument("--yes", action="store_true")
+    p.add_argument("--dry-run", action="store_true", help="run every check and say what would be written; write nothing")
     p.set_defaults(run=meta_command)
     p = sub.add_parser("commit", help="make the version commit of a topic's new text (used by the other scripts)")
     p.add_argument("--issue", type=int, required=True)
     p.add_argument("--body-file", required=True)
+    p.add_argument("--dry-run", action="store_true", help="run every check and say what would be written; write nothing")
     p.set_defaults(run=commit_command)
     args = parser.parse_args(argv)
     return args.run(args)

@@ -203,12 +203,16 @@ def where_command(args):
             say("own paper: %s; the file is %s" % ("kept inside the project" if found["state"] == "inside" else
                                                    "kept outside the project, on this machine only", placed["path"]))
         return 0
-    if not args.yes:
+    if not args.yes and not args.dry_run:
         sys.exit("error: pass --yes once the author named the place in the conversation")
     import setup
     path = config["_path"]
     data = json.loads(recortex.read_text(path))
     if args.set.lower() == "no":
+        if args.dry_run:
+            say("would write: %s   # own_manuscript set to false: the author keeps no paper of their own\ndry run: nothing was "
+                "written" % path)
+            return 0
         data["own_manuscript"] = False
         setup.write_text(path, json.dumps(data, indent=2) + "\n", False, "the own paper entry", os.path.dirname(path))
         say("own paper: nothing of this part will be shown again")
@@ -231,12 +235,20 @@ def where_command(args):
             sys.exit("error: that path is not usable (relative, at most %d characters, no '..')" % recortex.OWN_PATH_LIMIT)
         if refusal(relative, config):
             sys.exit("error: %s is not usable: %s" % (relative, refusal(relative, config)))
+        if args.dry_run:
+            say("would write: this machine's confirmation of %s, then %s   # the path goes into the project file\ndry run: every "
+                "check passed; nothing was written" % (relative, path))
+            return 0
         write_place(repo, {"inside": inside_hash(relative)})   # first: the confirmation on this machine, then the project file
         data["own_manuscript"] = {"path": relative, "brought": keep}
         say("own paper: %s, inside the project; the path goes into the project file and is confirmed on this machine" % relative)
     else:
         if refusal(os.path.realpath(full), config):
             sys.exit("error: %s is not usable: %s" % (given, refusal(os.path.realpath(full), config)))
+        if args.dry_run:
+            say("would write: this machine's record of the place, and %s   # outside: the project file holds no path\ndry run: every "
+                "check passed; nothing was written" % path)
+            return 0
         write_place(repo, {"path": os.path.realpath(full)})
         data["own_manuscript"] = {"outside": True, "brought": keep}
         say("own paper: outside the project folder; the place is kept on this machine only")
@@ -447,6 +459,12 @@ def apply_command(args):
             sys.exit("own paper: your paper changed since the difference was made; make it again")
         if len(current) > FILE_CAP or not is_text(placed["path"], current):
             sys.exit("own paper: " + NOT_EDITED)
+        if args.dry_run:
+            say("would write: %s   # %d bytes, through a temporary file after a backup kept on this machine, then read back; and "
+                "the project file records that %s %s brought over\ndry run: every check passed; nothing was written" % (
+                    placed["path"], len(new), ", ".join("%s of #%d" % (h, t) for t, h in parts),
+                    "was" if len(parts) == 1 else "were"))
+            return 0
         storage.write_cached(repo, ("own",), "backup-%s.txt" % sha(current), current.decode("utf-8"))
         folder = os.path.dirname(placed["path"])
         mode = stat.S_IMODE(os.lstat(placed["path"]).st_mode)
@@ -467,6 +485,11 @@ def apply_command(args):
             sys.exit("own paper: the file does not read back as written; the backup is in %s" % os.path.join(
                 storage.cache_folder(repo, "own"), "backup-%s.txt" % sha(current)))
         say("own paper: wrote %s and read it back" % placed["path"])
+    elif args.dry_run:
+        say("would write: the project file only, to record that %s %s brought over; the author's file is not written\ndry run: "
+            "every check passed; nothing was written" % (", ".join("%s of #%d" % (h, t) for t, h in parts),
+                                                          "was" if len(parts) == 1 else "were"))
+        return 0
     else:
         say("own paper: nothing is written to the file; the author pasted the passages themselves")
     commit = ""
@@ -508,6 +531,7 @@ def main(argv=None):
     p = sub.add_parser("where")
     p.add_argument("--set", help="the path of the file, or no")
     p.add_argument("--yes", action="store_true", help="the author named it in the conversation")
+    p.add_argument("--dry-run", action="store_true", help="run every check and say what would be written; write nothing")
     sub.add_parser("status")
     p = sub.add_parser("since")
     p.add_argument("--issue", type=int, required=True)
@@ -521,6 +545,7 @@ def main(argv=None):
     p.add_argument("--words-file")
     p.add_argument("--parts")
     p.add_argument("--pasted", action="store_true", help="the author pasted the passages; nothing is written to the file")
+    p.add_argument("--dry-run", action="store_true", help="run every check and say what would be written; write nothing")
     args = parser.parse_args(argv)
     return {"where": where_command, "status": status_command, "since": since_command, "propose": propose_command,
             "apply": apply_command}[args.command](args)
