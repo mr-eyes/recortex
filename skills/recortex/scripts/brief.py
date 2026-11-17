@@ -236,8 +236,10 @@ class Record:
         if not changed:
             return []
         return ["Your own paper: %d part%s of the record's text changed since you last brought %s into it. Mention it at a "
-                "pause; change the file only when the user asks." % (changed, "" if changed == 1 else "s",
-                                                                    "it" if changed == 1 else "them")]
+                "pause; change the file only when the user asks, and bring the record's text into it only through "
+                "own_paper.py (it shows the difference, keeps a backup and records it). If a request such as \"update "
+                "the paper\" could mean the record's text or the file, ask which." % (
+                    changed, "" if changed == 1 else "s", "it" if changed == 1 else "them")]
 
     def board_moved(self):
         """The numbers of the cards someone moved by hand; [] when no board was read or the index cannot say."""

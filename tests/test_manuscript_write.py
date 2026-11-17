@@ -1443,12 +1443,33 @@ class OwnPaperTests(WritingBox):
         self.save(data)
         self.ready()
         text = self.tool("index.py", "query", "brief").stdout
-        line = "Your own paper: 1 part of the record's text changed since you last brought it into it. Mention it at a pause; change the file only when the user asks."
+        line = ("Your own paper: 1 part of the record's text changed since you last brought it into it. Mention it at a pause; "
+                "change the file only when the user asks, and bring the record's text into it only through own_paper.py (it "
+                "shows the difference, keeps a backup and records it). If a request such as \"update the paper\" could mean "
+                "the record's text or the file, ask which.")
         self.assertEqual(1, text.count(line))
         self.assertIn(line, text.split("===== BEGIN PROJECT STATUS DATA")[0])
         for word in ("paper.tex", "paper/", path, os.path.dirname(path), self.dir):
             self.assertNotIn(word, text)
         self.assertNotIn("paper.tex", self.cmd("hooks.py", "--doctor").stdout)
+
+    def test_the_wording_sends_the_records_text_into_the_authors_paper_only_through_own_paper_py(self):
+        """Live check of 1.3.0: an edit tool was used on the author's file for "bring the paper's text up to date". No hook
+        guards it, since an author who writes the paper with Claude would be asked on every edit; the wording does."""
+        skill = recortex.read_text(os.path.join(ts.SKILL, "SKILL.md"))
+        writing = recortex.read_text(os.path.join(ts.SKILL, "references", "writing.md"))
+        self.assertIn("The record's text goes into it only through `own_paper.py`, which shows the difference, keeps a backup and "
+                      "records what it brought", skill)
+        self.assertIn("bring the record's text into it only through own_paper.py (it shows the difference, keeps a backup and "
+                      "records it)", writing)
+        self.assertIn("goes into the author's file only through these steps, so that the difference is shown, a backup is kept", writing)
+        for text in (skill, writing):
+            self.assertIn('"update the paper"', text)
+            self.assertIn("could mean the record's text or", text)
+        self.assertIn("ordinary edits", skill)
+        self.assertIn("ordinary edit of theirs", writing)
+        self.assertIn("ask which", skill + writing)
+        self.assertLess(len(skill.split("### Write the text")[1].split("### Versions of the paper")[0]), 2600)   # SKILL.md stays short
 
     def test_an_edited_topic_body_is_never_counted(self):
         self.ready()
