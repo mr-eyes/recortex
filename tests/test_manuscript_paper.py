@@ -193,6 +193,18 @@ class PaperExportTests(tv.VersionBox):
         self.paper()
         self.assertNotIn("BY A STRANGER", self.written_file("paper.html"))
 
+    def test_a_title_another_account_set_never_reaches_the_paper(self):
+        self.written()
+        data = self.repo()
+        hub = data["issues"]["1"]
+        hub["title"] = "HOSTILE-TITLE set by a stranger"
+        hub["timeline"] = [{"event": "renamed", "created_at": "2026-12-09T10:00:00Z", "actor": {"login": "hubot"},
+                            "rename": {"from": "a", "to": "b"}}]
+        hub["updated_at"] = "2026-12-09T10:00:00Z"
+        self.save(data)
+        self.paper()
+        self.assertNotIn("HOSTILE-TITLE", self.written_file("paper.html"))
+
     def test_the_paper_page_is_a_pure_function_of_its_data(self):
         import mind
         import mind_paper
