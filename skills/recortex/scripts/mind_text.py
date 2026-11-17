@@ -27,9 +27,13 @@ Runs, each a dict with one main key:
     {"math": {"d": False, "m": tree, "s": source}}   or {"math": {"d": False, "s": source}}
     {"link": runs, "to": parts or None, "said": address}
 
-HTML is never passed through. A comment is dropped. Of an HTML table only the tags and attributes listed below are
-read, in a table of the limits below; the text inside script and style is dropped; every other tag is dropped and its
-text kept. Any other HTML in a text stays text exactly as written.
+HTML is never passed through. A comment is dropped. Of an HTML table only the tags and attributes of TableReader are
+read, within the limits named at the top of this file; the text inside script and style is dropped; every other tag
+is dropped and its text kept. Any other HTML in a text stays text exactly as written.
+
+Nothing past a cap is read: a text over MAX_TEXT characters, a line over MAX_LINE and a paragraph over MAX_PARAGRAPH
+come back as plain text cut at the cap, and marks of emphasis past MAX_MARKS stay text. No pattern runs on the part
+that was cut off.
 """
 
 import html.parser
@@ -38,7 +42,6 @@ import re
 CAP_TABLE_ROWS = 40
 CAP_TABLE_COLUMNS = 12
 HTML_TABLE_CHARACTERS = 20000
-HTML_TABLE_TAGS = 5000     # opening angle brackets in one HTML table
 MAX_LIST_DEPTH = 3
 SCAN_LIMIT = 500           # characters a dollar sign looks ahead for its partner
 
