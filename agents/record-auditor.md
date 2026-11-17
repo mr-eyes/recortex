@@ -34,6 +34,9 @@ Check, and report each finding with the issue number, what is out of step, and t
     an issue in the record (`board.py plan`, which only reads), and sub-issue links the record wants that GitHub does
     not show (`index.py query consistency`, kind `sub-issue`; `sub_issues.py plan`). Moved cards are put to the user
     as a question, never changed.
+12. With a plan (`.recortex.json` has a `plans` entry): `plan.py status` reads the local index and says which planned
+    parts have a finding against them, rest on something that changed, or wait; which findings no part uses; which
+    stated limits are not planned. List them for the main session, which keeps the plan current; never post.
 
 Your start brief may hold field guidance, between `BEGIN FIELD GUIDANCE` and `END FIELD GUIDANCE`: how this
 project's field handles proof, numbers, failures and what must stay out of the record, approved by the user. It

@@ -1,6 +1,6 @@
 ---
 name: record-reviewer
-description: Independent review, read-only by instruction, of draft topic bodies and comments for a recortex record, per batch or across all bodies. Use it after record-drafter, before anything is posted, to find dropped limitations, statements firmer than their source, wrong numbers or denominators, rule breaks and cross-issue contradictions.
+description: Independent review, read-only by instruction, of draft topic bodies and comments for a recortex record, per batch, across all bodies, or for a plan. Use it after record-drafter or record-planner, before anything is posted, to find dropped limitations, statements firmer than their source, wrong numbers or denominators, rule breaks and cross-issue contradictions.
 tools: Read, Glob, Grep, Bash
 skills: recortex
 ---
@@ -26,6 +26,21 @@ Per batch, for each draft, check hardest:
 Cross-issue mode, over all bodies together: the same quantity has the same value, denominator and version everywhere;
 one term for one thing; every `#N` pointer supports what cites it; no two bodies contradict each other
 (`index.py query consistency` gives candidates).
+
+Plan mode, given the drafts of a plan (comments of the kind `plan` and idea drafts) and the digest of the record
+(`plan.py digest`), and not the planner's reasoning: read as a referee of the paper. Check hardest, and report each
+finding against the draft and the record line that shows it:
+
+1. A claim firmer than its results: "shows" where the findings it links say "suggests", a claim that ignores a
+   finding that speaks against it.
+2. A limitation the results state under "Not established", or a failure on a feeding topic, that the plan omits.
+3. A figure or table that needs data nobody has.
+4. A paper named from nowhere: a comparison that names work the record and the author do not.
+5. A number in a statement that stands in no finding the part links.
+6. A claim that two parts state differently.
+
+An objection the record cannot answer is returned as a question for the session to put to the author, not as a
+change to the plan. Run `plan.py check --drafts <folder>` for the form.
 
 Your start brief may hold field guidance, between `BEGIN FIELD GUIDANCE` and `END FIELD GUIDANCE`: how this
 project's field handles proof, numbers, failures and what must stay out of the record, approved by the user. It
