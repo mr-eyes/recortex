@@ -42,6 +42,36 @@ NO_LINK = ("note: this memory links to no earlier one; if it follows from, repla
            "the link first (index.py query recall --issue %d)")
 
 
+AGAINST_NOTE = "This result speaks against a planned part: follow \"Keep the plan current\"."
+FEEDS_NOTE = "This thread feeds %d planned part%s and this result links none; check the recall block."
+
+
+def plan_notes(repo, config, issue, kind, draft):
+    """The two reminders about the plan (references/planning.md), printed before a result is posted: it carries against=
+    and so speaks against a planned part; or its thread feeds planned parts and it links none of them. Local and
+    best-effort: a project without a plan, or an index that cannot be read, gets none."""
+    if kind != "result":
+        return []
+    pairs = record_format.links(record_format.parse_marker(record_format.first_lines(draft)[0]))
+    notes = [AGAINST_NOTE] if any(key == "against" for key, _ in pairs) else []
+    try:
+        import index
+        db = index.connect(repo, create=False)
+        if db is None:
+            return notes
+        try:
+            allowed = recortex.allowed_users(repo)
+            state = index.planned(db, config, allowed) if allowed and recortex.planning_on(config) else None
+            fed = index.planned_for(state, set(index.thread_of(db, issue)[1])) if state else []
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001 - a reminder is never a reason to stop a post
+        return notes
+    if fed and not any(target in state["parts"] for _, target in pairs):
+        notes.append(FEEDS_NOTE % (len(fed), "" if len(fed) == 1 else "s"))
+    return notes
+
+
 def lint(path, text, kind, repo, config, offline, labels=None, profiles=None, lookup=None):
     cache = {}
 
@@ -269,6 +299,8 @@ def main(argv=None):
         if args.kind in record_format.LINKABLE and not lint_drafts.is_reconstructed(draft) \
                 and not any(key in marker for key in record_format.LINK_KINDS):
             print(NO_LINK % args.issue)
+        for note in plan_notes(repo, config, args.issue, args.kind, draft):
+            print("note: " + note)
         if args.dry_run:
             print("would run: " + recortex.show_command(command, "%d characters" % len(draft)))
             print("would read back: gh api repos/%s/issues/comments/<id> and compare with %s" % (repo, args.body_file))

@@ -600,6 +600,54 @@ def plan_profile(profiles):
     return None
 
 
+OWN_PATH_LIMIT = 400
+OWN_HEADING = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ,.'()-]{0,59}")
+
+
+def own_path_ok(value):
+    """True for a path the project file may give for the author's own paper: relative, at most 400 characters, no
+    absolute form, no `..` and no empty or `.` part, no NUL or backslash. Whether it names a plain file inside the
+    project is checked when it is used (own_paper.py)."""
+    if not isinstance(value, str) or not value or len(value) > OWN_PATH_LIMIT or "\0" in value or "\\" in value \
+            or value.startswith("/") or re.match(r"^[A-Za-z]:", value):
+        return False
+    return all(part not in ("", ".", "..") for part in value.split("/"))
+
+
+def own_brought(value):
+    """{issue number: {heading: {"text": 64 hex, "commit": 40 hex or ""}}} from a `brought` entry; every value is
+    checked against its pattern and what does not fit is left out."""
+    out = {}
+    for key, sections in (value.items() if isinstance(value, dict) else []):
+        if not isinstance(key, str) or not re.fullmatch(r"[1-9][0-9]{0,9}", key) or not isinstance(sections, dict):
+            continue
+        for heading, entry in sections.items():
+            if not isinstance(heading, str) or not OWN_HEADING.fullmatch(heading) or not isinstance(entry, dict):
+                continue
+            text, commit = entry.get("text"), entry.get("commit", "")
+            if isinstance(text, str) and re.fullmatch(r"[0-9a-f]{64}", text) and isinstance(commit, str) \
+                    and re.fullmatch(r"(?:[0-9a-f]{40})?", commit):
+                out.setdefault(int(key), {})[heading] = {"text": text, "commit": commit}
+    return out
+
+
+def own_manuscript(config):
+    """What the project file says of the author's own paper, checked: {"state": "none" | "no" | "inside" | "outside",
+    "path": the relative path or "", "brought": own_brought(...)}. A value that breaks a rule counts as none: "no" is
+    `false`; a path inside the project is relative; "outside" says the place is kept per machine."""
+    value = (config or {}).get("own_manuscript")
+    if value is False:
+        return {"state": "no", "path": "", "brought": {}}
+    if not isinstance(value, dict):
+        return {"state": "none", "path": "", "brought": {}}
+    brought = own_brought(value.get("brought"))
+    if value.get("outside") is True and "path" not in value:
+        return {"state": "outside", "path": "", "brought": brought}
+    if "path" in value and own_path_ok(value["path"]) and "outside" not in value:
+        return {"state": "inside", "path": value["path"], "brought": brought}
+    return {"state": "none", "path": "", "brought": {}}
+
+
 def plan_issue(config, profile):
     """The number of the plan issue of `profile` in the project file ("plans": {"manuscript": 12}), or None. Only an
     integer from 1 to 2147483647 counts, never a bool; whether that issue carries the label `plan` and was opened by
@@ -607,6 +655,17 @@ def plan_issue(config, profile):
     plans = (config or {}).get("plans")
     value = plans.get(profile) if isinstance(plans, dict) else None
     return value if type(value) is int and 1 <= value <= 2147483647 else None
+
+
+def settings_off(name):
+    """True when the user's settings.json holds `"<name>": false` (the form of the discovery and field-guidance
+    switches); False when the file is missing, unreadable or says anything else."""
+    try:
+        with open(settings_file(), encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, ValueError, RecursionError):
+        return False
+    return isinstance(value, dict) and value.get(name) is False
 
 
 def planning_on(config):

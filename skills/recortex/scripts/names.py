@@ -22,6 +22,13 @@ ENV_PREFIX = "RECORTEX_"
 OLD_ENV_PREFIX = "GHIM_"
 WORKFLOW = "recortex-triage.yml"
 OLD_WORKFLOW = "ghim-triage.yml"
+# Names of 1.3.0 that have no earlier name: the user's writing mode per repository, the paper kept outside the project
+# folder (both in the private folder of the configuration top, like the field approvals), and the branch that holds the
+# versions of the plugin's own manuscript in the record's repository.
+WRITING_MODES = "writing-modes.json"
+OWN_PAPER = "own-paper.json"
+MANUSCRIPT_BRANCH = "recortex-manuscript"
+MANUSCRIPT_WORKFLOW = "recortex-manuscript.yaml"
 # The plugin's environment variables, without the prefix. The three before the last are read only by the tests.
 # LINK_PAUSE is the seconds create_issues.py waits after each sub-issue link it writes (default 1, at most 10);
 # the tests set it to 0.

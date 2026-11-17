@@ -649,10 +649,32 @@ APPROVED_FORMS = (
 )
 # The reasons a version was not kept as a file (references/versions.md): the Version field says "Not kept: <reason>".
 NOT_KEPT = ("this account may not write files to the repository", "a branch rule refused the write",
-            "the branch changed while writing")
+            "the branch changed while writing", "versions are not kept here")
 KEPT_FROM_AUTHOR = re.compile(r"(?:[1-9][0-9]{0,3} paragraphs? (?:was|were) changed by hand and (?:was|were) left as "
                               r"(?:it is|they are)\.|Nothing was changed by hand\.)")
 VERSION_NAME = re.compile(r"Version name: ([a-z0-9][a-z0-9.-]{0,39}); commit (%s); manifest sha256 (%s)" % ("[0-9a-f]{40}", SHA256))
+
+
+def body_bytes(text):
+    """The bytes a topic body is kept and hashed as: its normalized text (LF endings, no trailing blanks) and one final
+    line break. The hashes of the Body field of a text comment, the files of the versions and every check agree on
+    this form."""
+    return (recortex.normalize(text or "") + "\n").encode("utf-8")
+
+
+def body_sha(text):
+    """The SHA-256 of body_bytes(text), 64 lowercase hexadecimal characters."""
+    import hashlib
+    return hashlib.sha256(body_bytes(text)).hexdigest()
+
+
+def section_sha(body, heading):
+    """The SHA-256 of the text of one section of a body (its text with the surrounding blank lines removed), 64
+    hexadecimal characters, or None when the body has no such section. What was last brought into the author's own
+    paper is remembered by this value."""
+    import hashlib
+    text = section_text(body, heading)
+    return None if text is None else hashlib.sha256(text.strip("\n").encode("utf-8")).hexdigest()
 
 
 def field_text(body, label):

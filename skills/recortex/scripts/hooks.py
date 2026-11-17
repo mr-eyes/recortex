@@ -696,6 +696,50 @@ def board_lines(db, config, repo):
     return lines + board_api.doctor_lines(config, repo)
 
 
+def plan_doctor_lines(db, config, repo):
+    """For --doctor: the plan's counts the sync kept, whether planning is on, and what is wrong with them. Fixed wording
+    and integers only. Nothing at all for a project whose profiles have no plan."""
+    record = brief.Record(db, config, repo)
+    plan = recortex.plan_profile(record.profiles)
+    if plan is None:
+        return []
+    off = not recortex.planning_on(config) or recortex.settings_off("planning")
+    counts, bad = record.plan_counts()
+    state = "off (\"planning\": false in the project file or in %s)" % recortex.settings_file() if off else "on"
+    if bad:
+        return ["plan: planning is %s; the counts the sync keeps are not in the form the plugin writes; run index.py "
+                "sync" % state]
+    if counts is None:
+        return ["plan: planning is %s; no counts yet (the sync keeps them for a project that has a plan issue)" % state]
+    entry = recortex.plan_issue(config, plan["profile"])
+    if not counts["issue"]:
+        return ["plan: planning is %s; %s" % (state, "the plan issue named in the project file is not usable (not in the "
+                                               "index, no label plan, or opened by an account that is not allowed)"
+                                               if entry is not None else "no plan issue yet")]
+    return ["plan: planning is %s; issue #%d; %s" % (
+        state, counts["issue"], "; ".join("%s %d" % (key, counts[key]) for key in index.PLAN_COUNT_KEYS[1:]))]
+
+
+def writing_doctor_lines(db, config, repo):
+    """For --doctor: the writing mode of this machine and the state of the author's own paper, in fixed words. Never a
+    path, a login or text from the record. Nothing for a project whose profiles have no plan."""
+    record = brief.Record(db, config, repo)
+    if recortex.plan_profile(record.profiles) is None:
+        return []
+    import writing
+    lines = [writing.sentence(repo)]
+    own = recortex.own_manuscript(config)
+    lines.append("own paper: %s" % {
+        "none": "no place is recorded", "no": "the author keeps none",
+        "inside": "a place inside the project is recorded (the path is not shown here)",
+        "outside": "a place outside the project is kept on this machine (the path is not shown here)"}[own["state"]])
+    extra = record.own_paper_lines()
+    if extra:
+        lines.append("own paper: parts of the record's text changed since they were brought into it (the brief says "
+                     "how many)")
+    return lines
+
+
 GH_STATES = {
     "ready": "signed in to github.com as %s",
     "signed-out": "not signed in to github.com; run `gh auth login` in a terminal",
@@ -813,6 +857,10 @@ def doctor():
         print("resume block: %s" % (index.get_meta(db, "resume_note") or "not read"))
         print(field_line(config, repo))
         for line in board_lines(db, config, repo):
+            print(line)
+        for line in plan_doctor_lines(db, config, repo):
+            print(line)
+        for line in writing_doctor_lines(db, config, repo):
             print(line)
         if synced:
             for event, text in brief.all_payloads(db, config, repo).items():

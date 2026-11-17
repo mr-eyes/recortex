@@ -44,7 +44,8 @@ Do this before stopping, before handing over, and when the context is close to f
 3. `python3 scripts/resume_block.py update --file <draft> --dry-run`, read the comment it would post, then run it without `--dry-run`. The script posts the block as a new comment on the hub, with the heading `### Resume block: <date time zone>` and the markers, and reads it back. The hub body and earlier resume comments are not touched.
 
 4. With the observer on, the memories that wait for the user's answer, as at session start (step 6 above).
-5. With a board (the script prints a reminder after posting): `python3 scripts/board.py apply --dry-run`, then `board.py apply`. If the brief reported cards moved by hand, ask the user first (see [board.md](board.md)).
+5. With a plan of the paper: when the brief says the plan is behind the record, bring it up to date before the pause ([planning.md](planning.md), "Keep the plan current"). When a result is recorded, `python3 scripts/index.py query recall --issue N` lists the planned parts its thread feeds with their states; a result that bears one out carries `checks=<its id>` and one that speaks against it `against=<its id>`, and `post_verified.py` prints a reminder for a result that links none of them.
+6. With a board (the script prints a reminder after posting): `python3 scripts/board.py apply --dry-run`, then `board.py apply`. If the brief reported cards moved by hand, ask the user first (see [board.md](board.md)).
 
 Keep the block under 4,000 characters. It is an index into the record, not the record. Never edit a resume comment after posting, not even to fix a typo; post a new one. A resume comment that was edited at all, by anyone, is ignored by `show` and the hook. `update` warns when the login it posts as is not in the allowed accounts, because such a comment would be ignored too.
 

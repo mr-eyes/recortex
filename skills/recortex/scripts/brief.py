@@ -21,6 +21,7 @@ import re
 import sqlite3
 
 import recortex
+import record_format
 import index
 import names
 import field_sheet
@@ -44,6 +45,18 @@ ALIAS = ("%s was named %s before version 0.5.0; where a project file names the %
 # say when an answer draws on the record. About 40 tokens once per session start; the marker costs about 4 per answer.
 SAY = ('When an answer uses what this record holds (this brief, an issue or a comment of it), start that part with '
        '"From the record:". Do not write it when the record was not used.')
+
+
+PLAN_START = ("Plan: this project writes a paper and has no plan for it yet. Start the plan run in the background now "
+              "(recortex skill, \"Plan the paper\"), tell the user in one line that it started, and show them the plan "
+              "when it is ready.")
+PLAN_UNUSABLE = ("recortex: the plan issue named in the project file is not usable (it is not in the index, lacks the "
+                 "label plan, or an account that is not allowed opened it). Run hooks.py --doctor.")
+PLAN_RANGE = 99999   # a count in meta.plan_counts is an integer from 0 to this
+WRITING_NOT_CHOSEN = ("Writing: the user has not chosen whether recortex writes the paper's text. Ask once with the "
+                      "multiple-choice prompt (review, autonomous, off), then run setup.py writing set.")
+WRITING_UNREADABLE = ("recortex: the writing setting of this machine cannot be read, so recortex writes nothing. Run "
+                      "hooks.py --doctor.")
 
 
 def defuse(text):
@@ -75,6 +88,133 @@ class Record:
             self.labels.setdefault(row["issue"], []).append(row["label"].lower())
         # From the configuration the hook parsed once: what is checked, fingerprinted and shown is this object.
         self.field = field_sheet.state(config, repo)
+
+    def plan_counts(self):
+        """(counts, bad): meta.plan_counts as the sync wrote it, a dict of integers from 0 to PLAN_RANGE under exactly
+        the keys of index.PLAN_COUNT_KEYS, or None when there is none; bad is True when the value is anything else. The
+        sync is local and trusted, but the file it writes is not: nothing but these integers is ever read from it."""
+        raw = index.get_meta(self.db, "plan_counts")
+        if not raw:
+            return None, False
+        try:
+            data = json.loads(raw)
+        except (ValueError, RecursionError):
+            return None, True
+        if not isinstance(data, dict) or set(data) != set(index.PLAN_COUNT_KEYS) or any(
+                type(value) is not int or not 0 <= value <= PLAN_RANGE for value in data.values()):
+            return None, True
+        return data, False
+
+    def plan(self):
+        """The plan of the project's profiles when planning is on for it: None for a project whose profiles have no plan
+        and for one whose project file or whose user's settings say "planning": false."""
+        plan = recortex.plan_profile(self.profiles)
+        if plan is None or not recortex.planning_on(self.config) or recortex.settings_off("planning"):
+            return None
+        return plan
+
+    def paper_material(self):
+        """True when the record holds a finding of an allowed account, or a topic with text, for a first plan to use."""
+        if not self.allowed:
+            return False
+        marks = ",".join("?" * len(self.allowed))
+        if self.db.execute("SELECT 1 FROM events WHERE type = 'result' AND lower(author) IN (%s) LIMIT 1" % marks,
+                           sorted(self.allowed)).fetchone():
+            return True
+        return bool(self.db.execute(
+            "SELECT 1 FROM sections s JOIN labels l ON l.issue = s.issue WHERE lower(l.label) = 'final-record' "
+            "AND length(trim(s.text)) > 0 LIMIT 1").fetchone())
+
+    def plan_issue(self):
+        """The number of the plan issue the sync found usable, or None."""
+        counts, _ = self.plan_counts() if self.plan() else (None, False)
+        return counts["issue"] or None if counts else None
+
+    def plan_lines(self):
+        """The fixed lines about the plan, outside the data frame: wording, one issue number checked as an integer and
+        counts checked as integers. Nothing a part says, nothing the record holds."""
+        plan = self.plan()
+        if plan is None:
+            return []
+        counts, bad = self.plan_counts()
+        if bad:
+            return []  # one line in --doctor says what is wrong
+        entry = recortex.plan_issue(self.config, plan["profile"])
+        if counts is None or not counts["issue"]:
+            if entry is not None:
+                return [PLAN_UNUSABLE] if counts is not None else []
+            return [PLAN_START] if self.paper_material() else []
+        parts = "%d part%s" % (counts["parts"], "" if counts["parts"] == 1 else "s")
+        said = []
+        if counts["against"]:
+            said.append("%d %s a finding against it" % (counts["against"], "has" if counts["against"] == 1 else "have"))
+        if counts["moved"]:
+            said.append("%d rest%s on something that changed" % (counts["moved"], "s" if counts["moved"] == 1 else ""))
+        if counts["unused"]:
+            said.append("%d finding%s since the plan last changed %s used by no part" % (
+                counts["unused"], "" if counts["unused"] == 1 else "s", "is" if counts["unused"] == 1 else "are"))
+        if counts["limits"]:
+            said.append("%d stated limit%s %s not planned" % (
+                counts["limits"], "" if counts["limits"] == 1 else "s", "is" if counts["limits"] == 1 else "are"))
+        head = "Plan of the %s (#%d): %s" % (plan["noun"], counts["issue"], parts)
+        if counts["against"] or counts["moved"] or counts["limits"] or counts["unused"] >= 3:
+            return ["%s; %s. Bring the plan up to date now (recortex skill, \"Keep the plan current\") and ask the user "
+                    "only where the skill says to." % (head, "; ".join(said))]
+        return ["%s, in step with the record." % head]
+
+    def writing_lines(self):
+        """The fixed lines about writing, for a project that has a plan: the question the user has not answered, the
+        setting that cannot be read, or what is due in the mode that was chosen. Integers and fixed words only."""
+        counts, bad = self.plan_counts() if self.plan() else (None, False)
+        if not counts or not counts["issue"] or bad:
+            return []
+        import writing
+        found = writing.read(self.repo)
+        if found["state"] == "unreadable":
+            return [WRITING_UNREADABLE]
+        if found["state"] == "none":
+            return [WRITING_NOT_CHOSEN]
+        if found["mode"] == "off":
+            return []
+        said = []
+        if counts["due"]:
+            said.append("%d part%s of the text %s due" % (counts["due"], "" if counts["due"] == 1 else "s",
+                                                           "is" if counts["due"] == 1 else "are"))
+        if counts["proposals"]:
+            said.append("%d proposal%s wait%s on GitHub" % (counts["proposals"], "" if counts["proposals"] == 1 else "s",
+                                                           "s" if counts["proposals"] == 1 else ""))
+        if counts["texts"]:
+            said.append("%d text change%s %s written since the last pause" % (
+                counts["texts"], "" if counts["texts"] == 1 else "s", "was" if counts["texts"] == 1 else "were"))
+        if not said:
+            return []
+        return ["Writing (%s mode): %s. Follow \"Write the text\" in the recortex skill." % (found["mode"], "; ".join(said))]
+
+    def own_paper_lines(self):
+        """The one line about the author's own paper: how many parts of the record's text changed since they were last
+        brought into it. An integer and fixed words; no path and no file name (they come from the project file). A part
+        never brought over is not counted, so an author who never asks is never reminded."""
+        if not self.plan() or not self.allowed:
+            return []
+        own = recortex.own_manuscript(self.config)
+        if own["state"] not in ("inside", "outside") or not own["brought"]:
+            return []
+        plan = recortex.plan_profile(self.profiles)
+        told = index.told_bodies(self.db, self.allowed)
+        changed = 0
+        for topic, sections in own["brought"].items():
+            if topic not in told:
+                continue
+            row = self.db.execute("SELECT body FROM issues WHERE number = ?", (topic,)).fetchone()
+            for heading, entry in sections.items():
+                now = record_format.section_sha(row["body"] or "", heading) if row else None
+                if now is not None and now != entry["text"] and heading.lower() in {h.lower() for h in plan["sections"]}:
+                    changed += 1
+        if not changed:
+            return []
+        return ["Your own paper: %d part%s of the record's text changed since you last brought %s into it. Mention it at a "
+                "pause; change the file only when the user asks." % (changed, "" if changed == 1 else "s",
+                                                                    "it" if changed == 1 else "them")]
 
     def board_moved(self):
         """The numbers of the cards someone moved by hand; [] when no board was read or the index cannot say."""
@@ -125,6 +265,8 @@ class Record:
 
     def in_play(self):
         numbers = set(self.open_with("active"))
+        if self.plan_issue():
+            numbers.add(self.plan_issue())
         for _, _, nums in self.topics_by_section():
             numbers.update(nums)
         return sorted(numbers)
@@ -149,7 +291,11 @@ class Record:
 
     def key(self):
         """A short fingerprint of what the prompt payload shows, to tell when it changed."""
-        return json.dumps([self.hub, self.open_with("active"), self.synced and self.synced[:10]])
+        key = [self.hub, self.open_with("active"), self.synced and self.synced[:10]]
+        counts, _ = self.plan_counts() if self.plan() else (None, False)
+        if counts and counts["issue"]:
+            key.append(counts["against"])
+        return json.dumps(key)
 
 
 RULES = ("The GitHub issues of %s are this project's memory, not this conversation. Record each result, decision "
@@ -209,7 +355,7 @@ def session_payload(record, fresh):
     board = record.board_note()  # fixed wording, outside the data frame; empty for a project without a board
     head = ["recortex record brief for %s (%s)." % (record.repo, record.freshness(fresh)),
             "Rules: " + RULES % record.repo, ALIAS, SAY] + ([field] if field else []) + ([board] if board else []) + \
-        ["", BEGIN, DATA_NOTE, ""]
+        record.plan_lines() + record.writing_lines() + record.own_paper_lines() + ["", BEGIN, DATA_NOTE, ""]
     resume = index.get_meta(record.db, "resume") or ""
     note = index.get_meta(record.db, "resume_note") or "not read"
     days = resume_days(record.config)
@@ -275,6 +421,8 @@ def subagent_payload(record, fresh=None):
         "numbers with their denominators, and what is not established, so the main session can record them. "
         "If your task tells you to post, invoke the recortex skill and use its scripts.",
     ]
+    if record.plan_issue():
+        head.append("The %s has a plan (#%d)." % (record.plan()["noun"], record.plan_issue()))
     tail = [ALIAS, BEGIN, DATA_NOTE]
     frame = field_frame(record.field, record.config)
     # The issue list gives way first, one issue at a time; the frame and both END lines are never cut. If even no
@@ -296,10 +444,15 @@ def subagent_payload(record, fresh=None):
 
 def prompt_payload(record):
     active = record.open_with("active")
-    text = ("recortex: record %s%s; active: %s. Record results, decisions and failures as they happen "
+    counts, _ = record.plan_counts() if record.plan() else (None, False)
+    against = "; plan: %d part%s a finding against %s" % (
+        counts["against"], " has" if counts["against"] == 1 else "s have", "it" if counts["against"] == 1 else "them") \
+        if counts and counts["issue"] and counts["against"] else ""
+    text = ("recortex: record %s%s; active: %s%s. Record results, decisions and failures as they happen "
             "(invoke the recortex skill to post)." % (
                 record.repo, ", hub #%d" % record.hub if record.hub else "",
-                ", ".join("#%d" % n for n in active[:10]) + (" and more" if len(active) > 10 else "") or "none"))
+                ", ".join("#%d" % n for n in active[:10]) + (" and more" if len(active) > 10 else "") or "none",
+                against))
     return cap(text, CAPS["prompt-submit"])
 
 

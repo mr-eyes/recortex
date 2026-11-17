@@ -4,6 +4,7 @@ The record is organized so that writing the paper, release notes or report is as
 
 ## Before assembling
 
+0. With a plan of the paper (`plans` in the project file), run `python3 scripts/plan.py status` first: a part with a finding against it or resting on something that changed is brought up to date (SKILL.md, "Plan the paper, and keep the plan current") before the text is assembled. `compile.py` prints the gap counts and never refuses.
 1. Read the hub in full. Check that the newest resume comment is recent and that no issue labeled `needs-decision` or `active` is open for a section you are about to assemble with a result it would change.
 2. For each body, read the newest result, decision and correction comments of its issue. If one changes what the deliverable says and the body does not say it, the body is stale: edit it first (SKILL.md, "Change the deliverable text"), then assemble.
 3. Do one consistency pass over all bodies together: the same quantity has the same value, denominator and source everywhere; one term is used for one thing; every `#N` pointer supports what cites it; no two bodies contradict each other.

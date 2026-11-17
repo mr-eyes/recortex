@@ -1544,6 +1544,17 @@ def plan_findings(db, profiles):
     if newest and (made is None or sort_key(made) < newest):
         out.append({"kind": "plan-body", "issue": state["issue"], "detail": "the copy of the plan in the body is %s than "
                     "the newest planned part; plan.py render writes it again" % ("missing" if made is None else "older")})
+    import writing
+    import write_rules
+    if writing.read(repo)["mode"] != "off":  # versions are kept, so a body that is not the one last written is a finding
+        texts = write_rules.text_memories(db, items)
+        for issue in sorted({row["issue"] for row in texts}):
+            newest = write_rules.newest_text(texts, issue)
+            body = db.execute("SELECT body FROM issues WHERE number = ?", (issue,)).fetchone()
+            if newest["after"] and body is not None and record_format.body_sha(body["body"] or "") != newest["after"]:
+                out.append({"kind": "text-drift", "issue": issue, "detail": "the body is not the text that the newest text "
+                            "change (comment %d) says it left; someone changed it since, or a write stopped before its "
+                            "comment: write.py status, and versions.py sync records an edit by hand" % newest["id"]})
     for cid, found in sorted(state["parts"].items()):
         if found["standing"] and found["state"] in ("doubt", "moved"):
             out.append({"kind": "plan-doubt", "issue": state["issue"], "detail": "planned part %d (%s) %s; follow \"Keep "
@@ -1844,6 +1855,13 @@ def body_told(db, number, allowed):
         "SELECT actor FROM timeline WHERE issue = ? AND event = 'edited'", (number,)))
 
 
+def told_bodies(db, allowed):
+    """The numbers of the issues whose body is told (body_told): the rule the mind page uses for a topic's text. Blocks
+    (figures and tables), the text of sections and the ids a plan sees come only from these."""
+    return {row["number"] for row in db.execute("SELECT number FROM issues WHERE is_pr = 0")
+            if body_told(db, row["number"], allowed)}
+
+
 def plan_issue_of(db, config, plan, allowed):
     """The number of the plan issue: the project file's `plans` entry for the plan's profile, used only when that
     issue is in the index, carries the label `plan` and was opened by an allowed account; else None."""
@@ -1887,7 +1905,8 @@ def planned(db, config, allowed, plan=None, found=None):
     every = {row["comment"]: row["type"] for row in db.execute(
         "SELECT comment, type FROM events WHERE type IN (%s)" % ",".join("?" * len(record_format.MEMORY_TYPES)),
         record_format.MEMORY_TYPES)}
-    blocks = {(row["issue"], row["id"]) for row in db.execute("SELECT issue, id FROM blocks")}
+    told = told_bodies(db, allowed)
+    blocks = {(row["issue"], row["id"]) for row in db.execute("SELECT issue, id FROM blocks") if row["issue"] in told}
     details = plan_details(db, plan, issue)
     parts = plan_rules.assess(found["items"], details, blocks, every, plan["evidence"], plan["display"])
     return {"plan": plan, "issue": issue, "found": found, "details": details, "parts": parts, "config": config}
@@ -1991,9 +2010,10 @@ def gaps(db, config, allowed, state=None):
                 if key == "because" and target in standing:
                     ideas.setdefault(target, []).append(cid)
     unused, limits = unused_and_limits(db, state)
+    told = told_bodies(db, allowed)
     text_of = {row["heading"].lower() for row in db.execute(
-        "SELECT s.heading FROM sections s WHERE s.issue IN (%s) AND length(trim(s.text)) > 0"
-        % ",".join(str(n) for n in plan_topics(db, plan, state.get("config")) or [0]))}
+        "SELECT s.heading, s.issue FROM sections s WHERE s.issue IN (%s) AND length(trim(s.text)) > 0"
+        % ",".join(str(n) for n in plan_topics(db, plan, state.get("config")) or [0])) if row["issue"] in told}
     covered = {f["section"].lower() for f in standing.values()}
     comparisons = []
     for cid, found in standing.items():
@@ -2271,8 +2291,9 @@ def main(argv=None):
                   "you allow")
             return 1
         import mind_model  # noqa: E402
+        config = recortex.load_config()
         model = mind_model.build(db, repo, allowed, datetime.date.today(),
-                                 recortex.shipped_profiles(recortex.load_config().get("profiles")))
+                                 recortex.shipped_profiles(config.get("profiles")), config)
         if args.json:
             print(json.dumps(model, indent=1))
             return 0

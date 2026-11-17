@@ -333,3 +333,29 @@ def describe(path):
     elif _uid() is not None and info.st_uid not in (_uid(), 0):
         problem = "owned by another user"
     return True, owner, "%o" % (info.st_mode & 0o7777), problem
+
+
+# ---------------------------------------------------------------- the texts and versions kept beside the index
+
+TEXTS = "texts"        # texts/<issue>/<sha256>.md: the body the plugin last wrote, to tell what the author changed
+VERSIONS = "versions"  # versions/<commit>/<issue>.md: a vouched version of a topic body, fetched for the mind page
+
+
+def cache_folder(repo, *parts, create=True):
+    """<index folder>/<parts>, a private folder (mode 0700) made where missing; None when it is missing and create is
+    False. Raises StorageError for a folder that is not safe to use."""
+    return folder(cache_top(), repo_folder(repo), *parts, create=create)
+
+
+def read_cached(repo, parts, name):
+    """The text of <index folder>/<parts>/<name>, or None when it is not there. Nothing is made; a symlink or a file
+    that others can read is refused."""
+    path = cache_folder(repo, *parts, create=False)
+    if path is None:
+        return None
+    return read_file(os.path.join(path, name))
+
+
+def write_cached(repo, parts, name, text):
+    """Write <index folder>/<parts>/<name> through a fresh temporary file with mode 0600."""
+    write_file(os.path.join(cache_folder(repo, *parts), name), text)

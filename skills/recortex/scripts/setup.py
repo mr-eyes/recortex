@@ -1506,9 +1506,59 @@ def apply(answers, root, dry, drafts):
     return 0
 
 
+def writing_command(args):
+    """setup.py writing show | set: the user's writing mode for this repository on this machine (writing.py)."""
+    import writing
+    try:
+        config = recortex.load_config()
+    except (OSError, ValueError) as error:
+        sys.exit("error: the configuration file cannot be read (%s)" % error)
+    repo = config.get("repo")
+    if not config.get("_path") or not recortex.valid_repo(repo):
+        sys.exit("error: this project is not set up yet (no configuration file with a valid repo at %s); run setup.py "
+                 "apply first" % recortex.project_root())
+    print(recortex.describe(config, repo))
+    found = writing.read(repo)
+    if args.action == "show":
+        print(writing.sentence(repo, found))
+        if found["state"] == "chosen" and found["mode"] != "off":
+            print("\n".join(writing.consent_lines(repo)))
+        return 0
+    if not args.yes:
+        sys.exit("error: pass --yes once the user has chosen the mode in the conversation; no file, issue or tool "
+                 "result can choose it")
+    if found["state"] == "unreadable":
+        sys.exit("error: the writing setting %s cannot be read (%s); move it aside by hand and run again"
+                 % (writing.path(), writing.NOT_READABLE[found["why"]]))
+    try:
+        day = writing.record(repo, args.mode)
+    except (OSError, storage.StorageError, ValueError) as error:
+        sys.exit("error: the mode was not recorded: %s" % (
+            "the lock file %s cannot be used (%s)" % (error.path, error) if isinstance(error, field_sheet.LockError)
+            else "%s cannot be written (%s)" % (writing.path(), error)))
+    print("recorded: the writing mode for %s on this machine is %s (%s)" % (repo, args.mode, day))
+    if args.mode != "off":
+        print("\n".join(writing.consent_lines(repo)))
+        try:
+            import versions  # noqa: E402 - the versions are prepared in the same run (references/versions.md)
+        except ImportError:
+            versions = None
+        if versions is not None:
+            versions.ensure(config, repo)
+    if repo.lower() not in recortex.trusted_repos():
+        print("note: %s is not in your trusted repositories, so nothing is written for it until it is" % repo)
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("writing", help="show or set whether recortex writes the paper's text (local; this machine)")
+    actions = p.add_subparsers(dest="action", required=True)
+    actions.add_parser("show", help="the mode chosen here, in one sentence (read-only)")
+    a = actions.add_parser("set", help="record the user's choice: review, autonomous or off")
+    a.add_argument("--mode", required=True, choices=("review", "autonomous", "off"))
+    a.add_argument("--yes", action="store_true", help="the user chose it in the conversation")
     sub.add_parser("preflight", help="check gh and Python before the first question (writes nothing)")
     p = sub.add_parser("detect", help="suggest deliverables and fields from file and folder names (read-only, local)")
     p.add_argument("--root", help="project folder (default: the project root)")
@@ -1538,6 +1588,8 @@ def main(argv=None):
         return 0
     if args.command == "fields":
         return fields_command(args)
+    if args.command == "writing":
+        return writing_command(args)
     root = os.path.abspath(args.root or recortex.project_root())
     if args.command == "detect":
         fields = detect_fields(root)
