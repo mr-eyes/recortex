@@ -1753,6 +1753,30 @@ class PlanCompileTests(PaperSandbox):
         out, done = self.compile()
         self.assertEqual([], [n for n in os.listdir(os.path.join(out, "deliverable")) if n.startswith("plan")])
 
+    def planted(self, folder, name, *args):
+        """Compile into a folder where `name` is a link to a file of the author's; return that file and the result."""
+        if not os.path.exists(self.index_file()):
+            self.ready()
+        victim = os.path.join(self.dir, "victim-%s.tex" % name)
+        with open(victim, "w") as handle:
+            handle.write("the author's own paper\n")
+        out = os.path.join(self.dir, "out-%s" % name)
+        os.makedirs(os.path.join(out, folder))
+        os.symlink(victim, os.path.join(out, folder, name))
+        return victim, self.tool("compile.py", "--out", out, "--no-sync", *args)
+
+    def test_compile_never_writes_its_plan_through_a_link(self):
+        for name in ("plan.md", "plan.tsv"):
+            with self.subTest(name=name):
+                victim, done = self.planted("deliverable", name)
+                self.assertNotEqual(0, done.returncode)
+                self.assertEqual("the author's own paper\n", open(victim).read())
+
+    def test_compile_never_writes_the_layout_through_a_link(self):
+        victim, done = self.planted("content", "metadata.yaml", "--layout", "manubot")
+        self.assertNotEqual(0, done.returncode)
+        self.assertEqual("the author's own paper\n", open(victim).read())
+
 
 class PlanModelTests(PaperSandbox):
     """Section 10.1: the plan in the model of the mind page, from the index alone."""

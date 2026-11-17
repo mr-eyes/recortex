@@ -140,10 +140,9 @@ def plan_files(db, config, repo, deliverable, dry_run):
                      "text_changed": (topic["last_edited_at"] or topic["created_at"]) if has_text and topic else "",
                      "newest_text": newest["id"] if newest else ""})
     files = [os.path.join(deliverable, "plan.md"), os.path.join(deliverable, "plan.tsv")]
-    if not dry_run:
-        with open(files[0], "w", encoding="utf-8") as handle:
-            handle.write("\n".join(lines).rstrip("\n") + "\n")
-        write_tsv(files[1], PLAN_COLUMNS, rows)
+    if not dry_run:   # no name is written through a link
+        recortex.write_working_files(deliverable, {"plan.md": "\n".join(lines).rstrip("\n") + "\n",
+                                                   "plan.tsv": tsv_text(PLAN_COLUMNS, rows)})
     counts = index.plan_counts(db, config, allowed, state)
     return files, dict(counts, gap_classes={name: len(gaps[name]) for name in GAP_WORDS if gaps[name]})
 
@@ -152,11 +151,13 @@ def cell(value):
     return re.sub(r"[\t\r\n]+", " ", "" if value is None else str(value)).strip()
 
 
+def tsv_text(columns, rows):
+    return "\t".join(columns) + "\n" + "".join("\t".join(cell(row.get(c)) for c in columns) + "\n" for row in rows)
+
+
 def write_tsv(path, columns, rows):
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write("\t".join(columns) + "\n")
-        for row in rows:
-            handle.write("\t".join(cell(row.get(c)) for c in columns) + "\n")
+        handle.write(tsv_text(columns, rows))
 
 
 def kept_versions(db, config, repo):
@@ -354,13 +355,9 @@ def main(argv=None):
         if layout_bodies is None:
             layout_bodies = versions.paper_bodies(db, config, repo, hub, allowed, plan, {})[0]
         laid = versions.layout_files(db, config, repo, hub, allowed, plan, layout_bodies, layout_meta, order=layout)
-        for path, text in sorted(laid.items()):
-            if path.startswith("content/"):
-                target = os.path.join(args.out, path)
-                os.makedirs(os.path.dirname(target), exist_ok=True)
-                with open(target, "w", encoding="utf-8", newline="") as handle:
-                    handle.write(text)
-                files.append(target)
+        content = {path[len("content/"):]: text for path, text in sorted(laid.items()) if path.startswith("content/")}
+        recortex.write_working_files(os.path.join(args.out, "content"), content)   # no name is written through a link
+        files += [os.path.join(args.out, "content", name) for name in sorted(content)]
     for name in files:
         print("wrote: %s" % name)
     print("sections %(sections)d (texts %(section_texts)d), figures %(figures)d, tables %(tables)d, sources %(sources)d, "
