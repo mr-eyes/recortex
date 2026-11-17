@@ -1027,7 +1027,11 @@ def restore_command(args):
         if recortex.normalize(draft) == recortex.normalize(live):
             sys.exit("versions: the text already says what that version said; nothing to restore")
         newest, last = write.last_written(repo, args.issue, texts)
-        protected = write.protected_paragraphs(live, newest, last)
+        # The author asks, in the chat and in their own words, for these sections to say what they said: the paragraphs the
+        # restore replaces are theirs to give up, and every other paragraph of theirs stays protected.
+        mine = {h.lower() for h in headings}
+        given = {p for key, (_, section) in write.sections_of(live)[0].items() if key in mine for p in write.paragraphs(section)}
+        protected = [p for p in write.protected_paragraphs(live, newest, last) if p not in given]
     finally:
         db.close()
     day = (vouched["at"] or vouched["time"] or "")[:10]
@@ -1043,15 +1047,6 @@ def restore_command(args):
                               "protected": protected, "state": {},
                               "restore": {"after": record_format.body_sha(text), "headings": headings, "text": text,
                                           "day": day}})
-    plain = "the text of %s is back to what it said on %s" % (", ".join(headings), day)
-    for name, content in (("base.md", live), ("draft.md", draft),
-                          ("used.json", json.dumps({"parts": [], "results": [], "decisions": []})),
-                          ("memory.json", json.dumps({"plain": plain[:200], "changed": "The text of %s was restored from the "
-                                                      "version of %s." % (", ".join(headings), day),
-                                                      "why": "The author asked for the earlier text back."})),
-                          ("start.json", json.dumps({"issue": args.issue, "nonce": nonce}))):
-        with open(os.path.join(args.out, name), "w", encoding="utf-8") as handle:
-            handle.write(content)
     say("restore: the version of %s is prepared for %s of #%d in %s (%d paragraph%s of the author's are protected). Ask the author, "
         "then run write.py check --dir %s and write.py apply --dir %s --words-file F." % (
             day, ", ".join(headings), args.issue, args.out, len(protected), "" if len(protected) == 1 else "s", args.out, args.out))

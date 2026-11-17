@@ -153,6 +153,8 @@ class WritingModeTests(WritingBox):
             else:
                 open(path, "w").write(good)
                 os.chmod(path, 0o644)
+            if how in ("not json", "wrong form", "bad mode"):
+                os.chmod(path, 0o600)   # private, as the plugin writes it, so that only the content is wrong
             shown = self.cmd("setup.py", "writing", "show").stdout
             self.assertIn("writing: the setting of this machine cannot be read", shown, how)
             self.assertIn("so recortex writes nothing. Run hooks.py --doctor.", shown, how)
@@ -905,6 +907,30 @@ class WriteTests(WritingBox):
         self.refused(folder, 5, "protected paragraph 0")
         done = self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words())
         self.assertEqual(1, done.returncode)
+
+    def test_a_hand_edit_that_versions_sync_recorded_is_still_the_authors_and_protected(self):
+        """versions.py sync tells a hand edit as a text change (form "edited") whose after is the live body; it must not
+        make the plugin believe it wrote that body."""
+        self.ready()
+        self.mode("review")
+        self.write_once()
+        self.author_edits("The wilting point was taken from the texture class of the field, not measured per plot.",
+                          "The wilting point was taken from the texture class of the field; I measured it in six plots.")
+        synced = self.cmd("versions.py", "sync")
+        self.assertEqual(0, synced.returncode, synced.stdout + synced.stderr)
+        self.ready()
+        edited = [body for cid, body in self.text_memories() if "Edited by octocat on GitHub" in body]
+        self.assertEqual(1, len(edited), "the sync tells the hand edit as a text change")
+        self.second_round()
+        folder = self.start(5, "second")
+        self.assertIn("last.md", os.listdir(folder))
+        protected = json.loads(self.read(folder, "protected.json"))["paragraphs"]
+        self.assertEqual(1, len(protected))
+        self.assertIn("I measured it in six plots", protected[0])
+        base = self.base(folder)
+        self.draft(folder, base.replace("I measured it in six plots", "I measured it in every plot", 1), parts=(9410,),
+                   results=(9140,))
+        self.refused(folder, 5, "protected paragraph 0")
 
     def test_without_the_copy_of_the_last_text_every_paragraph_is_protected_again(self):
         self.ready()

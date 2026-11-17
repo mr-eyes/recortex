@@ -134,9 +134,11 @@ def sections_of(text):
 # ---------------------------------------------------------------- what the author changed (section 7.6)
 
 def last_written(repo, issue, texts):
-    """(the newest told text change of the issue or None, the body this machine kept as the one the plugin last wrote or
-    None)."""
-    newest = write_rules.newest_text(texts, issue)
+    """(the newest told text change of the issue that the plugin wrote, or None, and the body this machine kept as the one
+    the plugin last wrote, or None). A change recorded for a hand edit (the form "edited", made by versions.py sync) is the
+    author's own text and never counts as written by the plugin: it names the live body as its after, so counting it would
+    leave the author's edit unprotected."""
+    newest = write_rules.newest_text([row for row in texts if row["form"] != "edited"], issue)
     if newest is None or not newest["after"]:
         return newest, None
     try:
@@ -239,7 +241,6 @@ def start_command(args):
                "decisions": sorted({c for d in due for c in d["decisions"]})}
     finally:
         db.close()
-    os.makedirs(args.out, exist_ok=True)
     files = {"base.md": live, "material.md": material}
     if last is not None and newest is not None and record_format.body_sha(last) == newest["after"]:
         files["last.md"] = last
