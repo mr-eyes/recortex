@@ -1,6 +1,6 @@
 {
   "name": "recortex",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "Project memory that survives every session. Keep a project's full record in GitHub issues: a pinned hub, one issue per topic whose body is the deliverable's current text, dated comments for results, decisions and failures, and a resume block that survives context compaction.",
   "author": {
     "name": "mr-eyes",
