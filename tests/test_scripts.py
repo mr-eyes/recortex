@@ -9407,6 +9407,29 @@ class MindPageTests(MindSandbox):
         self.assertIn('This part is long, so the page stops here. <a href="https://github.com/octo-org/sample-project/'
                       'issues/9#issuecomment-9141" rel="noopener noreferrer">Read the rest on GitHub.</a>', text)
 
+    def test_a_section_can_hold_a_block_before_its_parts_and_the_kinds_and_states_are_data(self):
+        mind = self.mind()
+        self.manuscript_record()
+        self.ready()
+        model = self.model()
+        section = model["outline"]["deliverables"][0]["sections"][1]
+        section["before"] = {"blocks": [{"p": [{"t": "MARK-BEFORE what we plan to say here"}]}], "cut": False}
+        text = mind.render(model)
+        self.assertEqual([], page_problems(text))
+        at = text.index("MARK-BEFORE")
+        self.assertLess(text.index('<h3>Methods</h3>'), at)
+        self.assertLess(at, text.index('id="text-3-0"'))
+        # the tables of kinds and states are rows of data; the script only reads their keys
+        sys.path.insert(0, SCRIPTS)
+        import mind_model
+        self.assertEqual(set(mind_model.KINDS), set(mind.KIND_WORD))
+        self.assertEqual({"k-" + kind for kind in mind_model.KINDS}, set(mind.KIND_CLASS.values()))
+        script = recortex.read_text(os.path.join(SKILL, "page", "mind.js"))
+        for word in [word for _, word, _ in mind.KIND_TABLE] + [title for _, _, title, _ in mind.STATE_TABLE]:
+            self.assertNotIn(word, script)
+        self.assertEqual({key for _, key, _, _ in mind.STATE_TABLE} | {"thread-open", "thread-clear", "thread-aside"} |
+                         {"kind-" + kind for kind in mind_model.KINDS}, set(mind.EXPLAIN_TEXT))
+
     def test_the_last_lines_show_in_full_under_the_first_view_only(self):
         text = self.ms_page()
         pieces = text.split('<section class="view" id="')[1:]
