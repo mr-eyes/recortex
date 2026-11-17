@@ -966,6 +966,8 @@ class Build(mind_plan.PlanMixin):
         memories = [self.memory_model(memory) for memory in self.order]
         threads = [self.thread_model(thread) for thread in self.threads]
         outline = self.outline_model(threads)
+        self.threads_for_versions = threads
+        self.versions = self.versions_model(outline)
         tree = self.tree_model(outline)
         self.read_word_uses(threads)
         words = [self.word_model(n, rows) for n, rows in self.word_rows]
@@ -985,7 +987,7 @@ class Build(mind_plan.PlanMixin):
             "since": [m["id"] for m in self.order if self.last and self.last["wall"] and m["wall"] > self.last["wall"]],
             "latest_of": self.latest_of(),
             "cited": [self.cited[n] for n in sorted(self.cited)],
-            "open": opened, "map": self.map_model(), "plan": self.plan,
+            "open": opened, "map": self.map_model(), "plan": self.plan, "versions": self.versions,
             "counts": {"memories": len(self.order), "threads": len(self.threads), "words": len(words),
                        "open": sum(1 for m in self.order if m["css"] == "open")},
             "not_told": not_told,

@@ -365,3 +365,7 @@ math{font-family:"STIX Two Math","Cambria Math","Latin Modern Math","Noto Sans M
 .plantable tr.p-open td:nth-child(2){color:var(--idea)}.plantable tr.p-aside td,.plantable tr.p-replaced td{color:var(--quiet)}
 .plansum{margin:6px 0 22px}.plansum .lab{font-weight:600}.plansummary{list-style:none;padding:0;margin:8px 0;font:15px/1.6 var(--sans)}
 .histlist{list-style:none;padding:0;margin:8px 0}.hist{padding:8px 0;border-bottom:1px solid var(--rule)}.histhead{margin:0 0 3px}
+.diff{margin:6px 0;font:14px/1.55 var(--sans);max-width:70ch}.diff p{margin:5px 0;padding:2px 0 2px 10px;border-left:3px solid transparent;white-space:pre-wrap}
+.diff .dsame{color:var(--quiet);border-left-color:var(--rule)}.diff .d-add{border-left-color:var(--brand)}.diff .d-del{border-left-color:var(--quiet);color:var(--quiet)}
+.diff .d-change{border-left-color:var(--thread)}.diff ins{text-decoration:underline;text-decoration-thickness:2px;text-decoration-color:var(--brand);background:var(--wash)}
+.diff del{text-decoration:line-through;color:var(--quiet)}.versions{margin:6px 0 22px}

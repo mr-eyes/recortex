@@ -1041,17 +1041,30 @@ def cached_version(repo, commit, issue):
         return None
 
 
-def read_build(repo):
-    """{"run": int, "day": "YYYY-MM-DD", "commit": 40 hex} kept by fetch, or None."""
-    try:
-        found = json.loads(storage.read_cached(repo, (storage.VERSIONS,), BUILD_FILE) or "")
-    except (storage.StorageError, OSError, ValueError, UnicodeDecodeError):
-        return None
+def run_entry(found):
+    """{"run": int, "day": "YYYY-MM-DD", "commit": 40 hex} from a value read back from the cache, or None."""
     if isinstance(found, dict) and type(found.get("run")) is int and 0 < found["run"] < 10 ** 15 \
             and isinstance(found.get("day"), str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", found["day"]) \
             and isinstance(found.get("commit"), str) and SHA40.fullmatch(found["commit"]):
         return {"run": found["run"], "day": found["day"], "commit": found["commit"]}
     return None
+
+
+def read_builds(repo):
+    """{"branch": run entry or None, "names": {name: run entry}} kept by fetch; every value is checked against its pattern."""
+    try:
+        found = json.loads(storage.read_cached(repo, (storage.VERSIONS,), BUILD_FILE) or "")
+    except (storage.StorageError, OSError, ValueError, UnicodeDecodeError, RecursionError):
+        return {"branch": None, "names": {}}
+    if not isinstance(found, dict):
+        return {"branch": None, "names": {}}
+    named = found.get("names") if isinstance(found.get("names"), dict) else {}
+    return {"branch": run_entry(found.get("branch")),
+            "names": {k: run_entry(v) for k, v in named.items() if isinstance(k, str) and NAME.fullmatch(k) and run_entry(v)}}
+
+
+def read_build(repo):
+    return read_builds(repo)["branch"]
 
 
 def newest_run(repo, ref):
@@ -1083,6 +1096,7 @@ def fetch(config, repo, issue=None, clock=None):
         plan = recortex.plan_profile(recortex.shipped_profiles(config.get("profiles")))
         state, items = told_items(db, config, allowed, plan)
         texts = write_rules.text_memories(db, items) if state else []
+        names_now = named_versions(db, items)
     finally:
         db.close()
     total = 0
@@ -1118,9 +1132,12 @@ def fetch(config, repo, issue=None, clock=None):
         counts["fetched"] += 1
         total += len(data)
     try:
-        run = newest_run(repo, BRANCH)
-        if run is not None:
-            storage.write_cached(repo, (storage.VERSIONS,), BUILD_FILE, json.dumps(run, sort_keys=True))
+        builds = {"branch": newest_run(repo, BRANCH), "names": {}}
+        for row in reversed(names_now[-10:]):   # the newest ten names, one request each
+            run = newest_run(repo, "paper-%s" % row["name"])
+            if run is not None:
+                builds["names"][row["name"]] = run
+        storage.write_cached(repo, (storage.VERSIONS,), BUILD_FILE, json.dumps(builds, sort_keys=True))
     except (GitError, storage.StorageError, OSError):
         pass
     if counts["left"] or counts["failed"]:

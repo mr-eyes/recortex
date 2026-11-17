@@ -13,9 +13,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import index  # noqa: E402
+import mind_versions  # noqa: E402
 import plan_rules  # noqa: E402
 import recortex  # noqa: E402
 import record_format  # noqa: E402
+import storage  # noqa: E402
 import write_rules  # noqa: E402
 
 PHRASES = {
@@ -47,6 +49,17 @@ PHRASES = {
     "hist.nodiff.days": "Only the day the text changed is known here.",
     "hist.nodiff.unfetched": "The text of this version has not been fetched yet; build the page again with --sync.",
     "hist.nodiff.unchecked": "The text of this version could not be checked, so it is not shown.",
+    "hist.nodiff.before": "The text before this change is not kept as a version, so no difference is shown.",
+    "hist.nodiff.budget": "This page shows the differences of the newest versions only; older ones keep their entries.",
+    "hist.changed": "What changed",
+    "diff.same.one": "1 paragraph is the same", "diff.same": "%d paragraphs are the same",
+    "diff.cut": "The difference goes on; it is cut here.",
+    "ver.title": "Versions of the paper", "ver.none": "No version of the paper has been named yet.",
+    "ver.named": "Named %s on %s.", "ver.since": "What changed since %s",
+    "ver.same.one": "1 part did not change.", "ver.same": "%d parts did not change.",
+    "ver.unfetched": "The text of some versions has not been fetched yet; build the page again with --sync.",
+    "ver.build": "The paper was last built on %s (HTML, PDF and Word).", "ver.build.name": "Built on %s.",
+    "ver.build.open": "Open the build on GitHub.",
 }
 
 STATE_CSS = {"dropped": "aside", "revised": "replaced", "doubt": "open", "moved": "open", "waits": "open",
@@ -275,11 +288,64 @@ class PlanMixin:
 
     # ------------------------------------------------------------ the history of a part
 
+    def version_names(self):
+        """The named versions told by the record: [{"name", "commit", "id", "time", "day", "words"}], oldest first, from the
+        told decisions whose Effect starts with the fixed line (record_format.version_name)."""
+        if getattr(self, "_names", None) is not None:
+            return self._names
+        out = []
+        if self.plan_state is not None:
+            for cid, item in self.plan_state["found"]["items"].items():
+                found = record_format.version_name(index.event_field(self.db, cid, "Effect")) if item["kind"] == "decision" else None
+                if found and cid in self.m:
+                    from mind_model import short  # noqa: E402
+                    out.append({"name": found[0], "commit": found[1], "id": cid, "time": item["time"], "day": self.m[cid]["day"],
+                                "words": short(index.event_field(self.db, cid, "Exact words").lstrip("> ").replace("\n> ", " "))})
+        self._names = sorted(out, key=lambda row: (row["time"], row["id"]))
+        return self._names
+
+    def version_text(self, commit, issue, after):
+        """(text, state) of the file of a topic at a commit kept on this machine: state "ok" when its hash is the "after" value
+        of the told change that names the commit, "unfetched" when it is not kept, "unchecked" when it has another hash. The
+        text is never used without "ok"."""
+        if not commit or not after:
+            return None, "unfetched"
+        memo = getattr(self, "_texts_of", None)
+        if memo is None:
+            memo = self._texts_of = {}
+        key = (commit, issue)
+        if key not in memo:
+            try:
+                text = storage.read_cached(self.repo, (storage.VERSIONS, commit), "%d.md" % issue)
+            except (storage.StorageError, OSError, UnicodeDecodeError):
+                text = None
+            memo[key] = text
+        text = memo[key]
+        if text is None:
+            return None, "unfetched"
+        if record_format.body_sha(text) != after:
+            return None, "unchecked"
+        return text, "ok"
+
+    def section_diff(self, before, after, heading):
+        """The operations between the text of `heading` in two bodies (either may be None for none), with the budget of the
+        page: {"diff": ops or None, "no_diff": a key or None}."""
+        old = record_format.section_text(before, heading) if before is not None else ""
+        new = record_format.section_text(after, heading)
+        if new is None and old is None:
+            return {"diff": None, "no_diff": "unchecked"}
+        ops = mind_versions.diff_text(old or "", new or "")
+        used = getattr(self, "_diff_bytes", 0) + mind_versions.size(ops)
+        if used > mind_versions.MAX_BYTES:
+            return {"diff": None, "no_diff": "budget"}
+        self._diff_bytes = used
+        return {"diff": ops, "no_diff": None}
+
     def history_model(self, topic, heading):
         """The History of a part, newest first: [{"id", "day", "how", "plain", "why", "names", "diff", "no_diff"}] from the
-        told text changes of the topic that name the heading. With versions kept (a mode of review or autonomous) the
-        entries carry `no_diff` until mind_versions fills the differences; with the mode off the entries are the days
-        the body changed, from the edit history the index holds."""
+        told text changes of the topic that name the heading. With versions kept (a mode of review or autonomous) each entry
+        carries the difference from the version before it when both texts were fetched and checked, else a key that says why
+        not; with the mode off the entries are the days the body changed, from the edit history the index holds."""
         if self.plan_state is None or topic is None:
             return {"kept": False, "entries": []}
         kept = self.writing != "off"
@@ -291,16 +357,101 @@ class PlanMixin:
                     days.append(day)
             return {"kept": False, "entries": [{"id": None, "day": day, "how": None, "plain": None, "why": None, "names": [],
                                                  "diff": None, "no_diff": "days"} for day in days]}
-        entries = []
-        for text in reversed([t for t in self.texts if t["issue"] == topic and heading.lower() in
-                              [h.lower() for h in t["sections"]]]):
+        entries, made = [], 0
+        topic_texts = [t for t in self.texts if t["issue"] == topic]
+        names = self.version_names()
+        for text in reversed([t for t in topic_texts if heading.lower() in [h.lower() for h in t["sections"]]]):
             if text["id"] not in self.m:
                 continue
             memory = self.m[text["id"]]
-            entries.append({"id": text["id"], "day": memory["day"], "how": text["form"], "plain": memory["plain"],
-                            "why": self.field(text["id"], "Why"), "names": [], "diff": None, "no_diff": "unfetched",
-                            "after": text["after"], "before": text["before"], "commit": text["version"]})
+            entry = {"id": text["id"], "day": memory["day"], "how": text["form"], "plain": memory["plain"],
+                     "why": self.field(text["id"], "Why"), "diff": None, "no_diff": "unfetched",
+                     "names": [{"name": n["name"], "day": n["day"]} for n in names if text["version"] and n["commit"] == text["version"]]}
+            if made >= mind_versions.MAX_PARTS:
+                entry["no_diff"] = "budget"
+            else:
+                after, state = self.version_text(text["version"], topic, text["after"])
+                if state != "ok":
+                    entry["no_diff"] = state
+                elif text["before"] is None:
+                    entry.update(self.section_diff(None, after, heading))
+                else:
+                    earlier = next((t for t in topic_texts if t["after"] == text["before"] and t["version"]), None)
+                    before, state = self.version_text(earlier["version"], topic, earlier["after"]) if earlier else (None, "before")
+                    if state != "ok":
+                        entry["no_diff"] = state
+                    else:
+                        entry.update(self.section_diff(before, after, heading))
+                if entry["diff"] is not None:
+                    made += 1
+            entries.append(entry)
         return {"kept": True, "entries": entries}
+
+    # ------------------------------------------------------------ the versions of the paper
+
+    def versions_model(self, outline):
+        """The versions block: {"kept", "names": [{"name", "day", "id", "words", "build", "since"}], "build", "unfetched"} or
+        None when the project has no plan. "since" is, for a name after the first, what changed in each part of the text
+        between the name before and this one: {"name", "parts": [{"thread", "ordinal", "label", "diff", "no_diff"}], "same": n}."""
+        if self.plan_state is None:
+            return None
+        kept = self.writing != "off"
+        names = self.version_names() if kept else []
+        commits = {t["version"] for t in self.texts if t["version"]} | {n["commit"] for n in names}
+        builds = {"branch": None, "names": {}}
+        if kept:
+            try:
+                import versions  # noqa: E402
+                builds = versions.read_builds(self.repo)
+            except Exception:  # noqa: BLE001 - a build line is never worth a page that fails
+                builds = {"branch": None, "names": {}}
+        branch = builds["branch"] if builds["branch"] and builds["branch"]["commit"] in commits else None
+        out, unfetched = [], 0
+        parts = []
+        for group in outline.get("deliverables", []):
+            for section in group.get("sections", []):
+                for part in section.get("parts", []):
+                    if isinstance(part.get("ordinal"), int):
+                        parts.append((part["thread"], part["ordinal"], section["label"]))
+        topic_of = {m["n"]: m.get("topic") for m in self.threads_for_versions}
+        previous = None
+        for number, row in enumerate(names):
+            entry = {"name": row["name"], "day": row["day"], "id": row["id"], "words": row["words"], "since": None,
+                     "build": self.name_build(builds, row, commits)}
+            if previous is not None:
+                changed, same = [], 0
+                for thread, ordinal, label in parts:
+                    topic = topic_of.get(thread)
+                    before, after = (self.text_at_name(topic, label, n) for n in (previous, row))
+                    if before[1] != "ok" or after[1] != "ok":
+                        unfetched += 1
+                        changed.append({"thread": thread, "ordinal": ordinal, "label": label, "diff": None,
+                                        "no_diff": after[1] if before[1] == "ok" else before[1]})
+                        continue
+                    found = self.section_diff(before[0], after[0], label)
+                    if found["diff"] is not None and not mind_versions.changed(found["diff"]):
+                        same += 1
+                    else:
+                        changed.append(dict(found, thread=thread, ordinal=ordinal, label=label))
+                entry["since"] = {"name": previous["name"], "parts": changed, "same": same}
+            out.append(entry)
+            previous = row
+        return {"kept": kept, "names": list(reversed(out)), "build": branch, "unfetched": unfetched}
+
+    def name_build(self, builds, row, commits):
+        found = builds["names"].get(row["name"])
+        return found if found and found["commit"] in commits else None
+
+    def text_at_name(self, topic, heading, row):
+        """(body, state) of a topic as it stood at a named version: the file of the newest told change of the topic up to the
+        name, checked against that change's hash."""
+        if topic is None:
+            return None, "unfetched"
+        found = [t for t in self.texts if t["issue"] == topic and t["time"] <= row["time"] and t["version"]]
+        if not found:
+            return None, "unfetched"
+        newest = found[-1]
+        return self.version_text(newest["version"], topic, newest["after"])
 
     # ------------------------------------------------------------ what is still open
 

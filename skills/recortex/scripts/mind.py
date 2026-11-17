@@ -39,6 +39,7 @@ import index  # noqa: E402
 import mind_figures  # noqa: E402
 import mind_model  # noqa: E402
 import mind_plan  # noqa: E402
+import mind_versions  # noqa: E402
 import recortex  # noqa: E402
 import storage  # noqa: E402
 
@@ -74,7 +75,7 @@ DATA_URI = re.compile(r"data:image/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={
 
 
 TAGS = frozenset("""html head meta title body nav main aside section article div p span a button ul ol
-li h2 h3 h4 h5 h6 blockquote details summary table thead tbody tr th td code pre b i sup sub img input dialog svg line
+li h2 h3 h4 h5 h6 blockquote details summary table thead tbody tr th td code pre b i sup sub ins del img input dialog svg line
 text path rect circle polygon math mrow mi mn mo mtext mspace msub msup msubsup mfrac msqrt mover munder munderover""".split())
 VOID = frozenset(("meta", "input"))
 SVG_SHAPES = frozenset(("line", "path", "rect", "circle", "polygon"))
@@ -217,6 +218,7 @@ def anchor(name):
 ISSUE_NUMBER = re.compile(r"[0-9]{1,10}")
 COMMENT_ID = re.compile(r"[0-9]{1,19}")
 LINE_NUMBER = re.compile(r"[0-9]{1,7}")
+RUN_ID = re.compile(r"[1-9][0-9]{0,14}")
 COMMIT = re.compile(r"[0-9a-f]{7,40}")
 TAG_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 PATH = re.compile(r"[A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)*")
@@ -241,7 +243,7 @@ def good_path(path):
 def github_url(kind, repo, *parts):
     """An address on GitHub built from checked parts only, or None when a part fails. The forms: issue (repo, n),
     memory (repo, n, comment id), pull (repo, n), lines (repo, commit, path, first, last), picture (repo, ref,
-    path)."""
+    path), run (repo, run id: the latest build of the paper)."""
     if not recortex.valid_repo(repo):
         return None
     base = SCHEME + "github.com/" + repo
@@ -265,6 +267,9 @@ def github_url(kind, repo, *parts):
                 and ref not in (".", "..") and good_path(path)):
             return None
         return Href("%s/blob/%s/%s" % (base, ref, path))
+    if kind == "run":   # the latest build of the paper (references/versions.md): the only address that is not an issue's
+        n = number(parts[0], RUN_ID)
+        return Href("%s/actions/runs/%d" % (base, n)) if n else None
     raise ValueError("no address of kind %s" % kind)
 
 
@@ -1030,11 +1035,11 @@ class Page:
             for name in entry.get("names", []) if isinstance(entry.get("names"), list) else []:
                 if isinstance(name, dict):
                     lines.append(E("p", {"class": "quiet"}, "Named %s on %s." % (text_of(name.get("name")), text_of(name.get("day")))))
-            note = {"days": "hist.nodiff.days", "unfetched": "hist.nodiff.unfetched",
-                    "unchecked": "hist.nodiff.unchecked"}.get(entry.get("no_diff"))
+            note = {"days": "hist.nodiff.days", "unfetched": "hist.nodiff.unfetched", "unchecked": "hist.nodiff.unchecked",
+                    "before": "hist.nodiff.before", "budget": "hist.nodiff.budget"}.get(entry.get("no_diff"))
             diff = entry.get("diff")
-            if isinstance(diff, list) and diff and hasattr(self, "diff"):
-                lines.append(self.show("What changed", self.diff(diff)))
+            if isinstance(diff, list) and diff:
+                lines.append(self.show(mind_model.PHRASES["hist.changed"], self.diff(diff)))
             elif note:
                 lines.append(E("p", {"class": "quiet"}, mind_model.PHRASES[note]))
             items.append(E("li", {"class": "hist"}, *lines))
@@ -1043,6 +1048,83 @@ class Page:
         guide = E("p", {"class": "quiet"}, mind_model.PHRASES["hist.restore"] % text_of(entries[0].get("day"))) if kept else \
             E("p", {"class": "quiet"}, mind_model.PHRASES["hist.days"])
         return self.show(title, guide, E("ol", {"class": "histlist"}, *items), first)
+
+    def diff(self, ops):
+        """A difference between two versions of a section's text, drawn from the model's operations. This is the one place
+        that makes an `ins` or a `del` element, and only from a run of type add or del: an operation or a run type that is not
+        on the lists of mind_versions is drawn as plain text, and every text is text (through E())."""
+        out = []
+        for op in ops if isinstance(ops, list) else []:
+            if not isinstance(op, dict):
+                continue
+            kind = op.get("op")
+            if kind == "same" and "n" in op:
+                count = integer(op.get("n"))
+                out.append(E("p", {"class": "dsame"}, mind_model.PHRASES["diff.same.one"] if count == 1 else
+                             mind_model.PHRASES["diff.same"] % count))
+            elif kind == "cut":
+                out.append(E("p", {"class": "quiet"}, mind_model.PHRASES["diff.cut"]))
+            else:
+                runs = op.get("runs") if isinstance(op.get("runs"), list) else []
+                parts = []
+                for run in runs:
+                    if not isinstance(run, dict):
+                        continue
+                    words = text_of(run.get("text"))
+                    if kind in mind_versions.OPS and run.get("t") == "add":
+                        parts.append(E("ins", None, words))
+                    elif kind in mind_versions.OPS and run.get("t") == "del":
+                        parts.append(E("del", None, words))
+                    else:
+                        parts.append(words)
+                cls = "d-" + kind if kind in ("add", "del", "change") else "d-plain"
+                out.append(E("p", {"class": cls}, *parts))
+        return E("div", {"class": "diff"}, *out)
+
+    def versions_block(self):
+        """"Versions of the paper": each named version with its day and the author's words, under it what changed since the
+        name before (a fold per part that changed, and a count of the parts that did not), and the line of the latest build."""
+        data = self.model.get("versions")
+        if not isinstance(data, dict) or data.get("kept") is not True:
+            return ""
+        names = [n for n in data.get("names", []) if isinstance(n, dict)] if isinstance(data.get("names"), list) else []
+        items = []
+        for entry in names:
+            lines = [E("p", {"class": "histhead"}, E("b", None, text_of(entry.get("name"))), "  ",
+                       mind_model.PHRASES["ver.named"] % (text_of(entry.get("name")), text_of(entry.get("day"))))]
+            if text_of(entry.get("words")):
+                lines.append(E("p", {"class": "quiet"}, "\u201c" + text_of(entry.get("words")) + "\u201d"))
+            build = entry.get("build") if isinstance(entry.get("build"), dict) else None
+            address = github_url("run", self.repo, build.get("run")) if build else None
+            if address:
+                lines.append(E("p", {"class": "quiet"}, mind_model.PHRASES["ver.build.name"] % text_of(build.get("day")), "  ",
+                               E("a", {"class": "inl", "href": address}, mind_model.PHRASES["ver.build.open"])))
+            since = entry.get("since") if isinstance(entry.get("since"), dict) else None
+            if since is not None:
+                inner = []
+                for part in since.get("parts", []) if isinstance(since.get("parts"), list) else []:
+                    if not isinstance(part, dict):
+                        continue
+                    label = "%s: %s" % (self.thread_name(integer(part.get("thread"))), text_of(part.get("label")))
+                    if isinstance(part.get("diff"), list) and part["diff"]:
+                        inner.append(self.show(label, self.diff(part["diff"])))
+                    else:
+                        note = {"unfetched": "hist.nodiff.unfetched", "unchecked": "hist.nodiff.unchecked",
+                                "budget": "hist.nodiff.budget"}.get(part.get("no_diff"))
+                        inner.append(E("p", {"class": "quiet"}, label + ". " + (mind_model.PHRASES[note] if note else "")))
+                same = integer(since.get("same"))
+                if same:
+                    inner.append(E("p", {"class": "quiet"}, mind_model.PHRASES["ver.same.one"] if same == 1 else
+                                   mind_model.PHRASES["ver.same"] % same))
+                lines.append(self.show(mind_model.PHRASES["ver.since"] % text_of(since.get("name")), *inner))
+            items.append(E("li", {"class": "hist"}, *lines))
+        build = data.get("build") if isinstance(data.get("build"), dict) else None
+        address = github_url("run", self.repo, build.get("run")) if build else None
+        latest = E("p", {"class": "quiet"}, mind_model.PHRASES["ver.build"] % text_of(build.get("day")), "  ",
+                   E("a", {"class": "inl", "href": address}, mind_model.PHRASES["ver.build.open"])) if address else ""
+        return E("section", {"class": "versions", "id": "versions-of-the-paper"}, E("h3", None, mind_model.PHRASES["ver.title"]),
+                 E("ol", {"class": "histlist"}, *items) if items else E("p", {"class": "quiet"}, mind_model.PHRASES["ver.none"]),
+                 latest)
 
     def open_plan_group(self, key, title, hint, rows, empty):
         return E("section", {"class": "ogroup", "id": "open-%s" % key}, E("h3", None, title),
@@ -1122,7 +1204,7 @@ class Page:
                 numbers.append(self.show(J("Where the numbers of ", self.thread_name(n), " come from"), E("ul", {
                     "class": "srcs"}, *[E("li", None, E("b", None, self.runs(row.get("statement"))), ": ",
                                           self.runs(row.get("source"))) for row in sources])))
-        return self.view("text", title, TEXT_LEDE, self.plan_summary(),
+        return self.view("text", title, TEXT_LEDE, self.plan_summary(), self.versions_block(),
                          E("ul", {"class": "contents", "aria-label": "The parts of the text, in order"}, *contents),
                          *body, E("h3", None, "Where the numbers come from") if numbers else "", *numbers,
                          self.untold_line())
@@ -1973,6 +2055,8 @@ def main(argv=None):
     parser.add_argument("--sync", action="store_true", help="run index.py sync first (reads GitHub)")
     parser.add_argument("--figures", action="store_true", help="fetch the pictures of figures not yet kept (--sync does "
                                                               "too); otherwise only the ones kept are shown")
+    parser.add_argument("--versions", action="store_true", help="bring the versions of the text that the record vouches for "
+                                                                "into the cache first (--sync does too)")
     parser.add_argument("--open", action="store_true", help="ask the browser to open the page")
     args = parser.parse_args(argv)
     config = recortex.load_config()
@@ -1987,6 +2071,12 @@ def main(argv=None):
     if not allowed:
         print(UNTRUSTED)
         return 1
+    if args.sync or args.versions:
+        try:
+            import versions  # noqa: E402 - the page reads what this brings (references/versions.md); a failure never stops it
+            versions.fetch(config, repo)
+        except Exception as error:  # noqa: BLE001
+            print("versions: the versions of the text could not be fetched (%s); the page shows what is kept." % type(error).__name__)
     try:
         db = index.connect(repo, create=False)
     except storage.StorageError:
