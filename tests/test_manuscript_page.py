@@ -295,23 +295,25 @@ class PageBox(tv.VersionBox):
         import storage
         storage.write_cached(self.config["repo"], (storage.VERSIONS, commit), "%d.md" % topic, body)
 
-    def craft(self, steps, topic=5, heading="Results", live=None, skip=(), hour=10):
+    def craft(self, steps, topic=5, heading="Results", live=None, skip=(), hour=10, first=0):
         """Make the topic's history: `steps` is a list of dicts (body, form, before) in time order. Each becomes a told text change with
         the hashes of its body and a file kept in the cache (not for the indexes in `skip`); the live body is the last one, or
         `live`. Returns the commits."""
         data = self.repo()
         previous, commits = None, []
         for index, step in enumerate(steps):
-            commit = hashlib.sha1(("version %d" % index).encode()).hexdigest()
+            commit = hashlib.sha1(("version %d" % (index + first)).encode()).hexdigest()
             commits.append(commit)
             after = record_format.body_sha(step["body"])
             before = step.get("before", previous or "none")
             at = "2026-11-%02dT%02d:00-05:00" % (20 + index // 20, hour + index % 20)
-            text = manuscript_record.text_memory(at, heading, "the text of the %s changed" % heading.lower(), "One paragraph changed.",
+            text = manuscript_record.text_memory(at, heading, "the text of the %s changed" % heading.lower(),
+                                                 step.get("changed", "One paragraph changed."),
                                                  "The record moved.", FORMS[step.get("form", "autonomous")], before=before,
                                                  after=after, version=commit)
             # the comment is stamped after everything the record holds, so that an incremental sync reads it; its marker has the time
-            data["comments"][str(9400 + index)] = {"issue": topic, "body": text, "created_at": "2026-12-06T%02d:%02d:00Z" % divmod(index, 60)}
+            data["comments"][str(9400 + index + first)] = {"issue": topic, "body": text,
+                                                           "created_at": "2026-12-06T%02d:%02d:00Z" % divmod(index + first, 60)}
             if index not in skip:
                 self.plant(commit, topic, step["body"])
             previous = after
@@ -319,7 +321,7 @@ class PageBox(tv.VersionBox):
         issue["body"] = live if live is not None else steps[-1]["body"]
         issue["edits"] = [{"at": "2026-12-05T10:00:00Z", "by": "octocat"}, {"at": issue["created_at"], "by": "octocat"}]
         issue["last_edited_at"] = issue["updated_at"] = "2026-12-05T10:00:00Z"
-        data["next_comment"] = max(data.get("next_comment", 0), 9400 + len(steps) + 1)
+        data["next_comment"] = max(data.get("next_comment", 0), 9400 + first + len(steps) + 1)
         self.save(data)
         self.ready()
         return commits
@@ -515,9 +517,13 @@ class TextAndOrderTests(PageBox):
 
     def test_figures_tables_and_sources_are_drawn_as_a_paper_draws_them(self):
         view = self.sheet_of(self.page())
-        self.assertRegex(view, r'<figure class="tab"><figcaption><span class="ft">Plots by block and treatment\.</span> Plots in')
+        self.assertRegex(view, r'<figure class="tab"><figcaption id="tcap-[0-9]+"><span class="ft">Plots by block and treatment\.</span> Plots in')
         self.assertIn('role="region"', view)
-        self.assertRegex(view, r'aria-label="Table [0-9]+, scrolls sideways"')
+        self.assertRegex(view, r'aria-label="Table [0-9]+"')
+        self.assertNotIn("scrolls sideways", view)   # the region is named by its number; the scroll shadow shows that it scrolls
+        for caption, table in re.findall(r'<figcaption id="(tcap-[0-9]+)">.*?<table aria-labelledby="(tcap-[0-9]+)">', view):
+            self.assertEqual(caption, table)   # a table is named by its caption
+        self.assertTrue(re.search(r'<table aria-labelledby="tcap-[0-9]+">', view))
         self.assertIn('scope="col"', view)
         self.assertIn('tabindex="0"', view)
         self.assertRegex(view, r'<figure class="fig nopic">')
@@ -532,11 +538,15 @@ class MarksAndSlotsTests(PageBox):
     def test_each_state_of_a_planned_part_has_its_own_words_and_mark(self):
         model = self.model()
         said = {m["text"] for s in model["sheet"]["sections"] for p in s["parts"] for m in p["marks"]}
-        for words in ("2 planned parts backed", "A finding speaks against it", "1 planned part rests on something that changed",
-                      "Planned; nothing backs it yet", "Can be made now", "A backed part can be written now",
-                      "2 backed parts can be written now", "1 open question", "2 failures nothing followed",
+        for words in ("2 planned parts backed", "A finding speaks against 1 planned part", "1 planned part rests on something that changed",
+                      "1 planned part: nothing backs it yet", "1 planned part can be made now", "1 planned part can be written now",
+                      "2 planned parts can be written now", "1 open question", "2 failures nothing followed",
                       "The record has decisions and findings that the text does not say yet"):
             self.assertIn(words, said)
+        for words in said:   # every state with a count says what it counts, and what can be written is not said to be backed
+            if "open question" not in words and "failure" not in words and not words.startswith("The record"):
+                self.assertIn("planned part", words)
+        self.assertFalse([w for w in said if "backed parts" in w])
         text = self.page()
         view = self.sheet_of(text)
         for kind in ("backed", "against", "moved", "planned", "now", "open"):
@@ -545,7 +555,7 @@ class MarksAndSlotsTests(PageBox):
         self.assertIn('data-explain="state-plan-backed"', view)
         self.assertIn('data-explain="state-plan-can-be-made"', view)
         self.assertIn(">See the finding</a>", view)
-        for old in ("In doubt", "Due:", "not backed yet"):
+        for old in ("In doubt", "Due:", "not backed yet", "A backed part can be written now"):
             self.assertNotIn(old, self.words(view))
 
     def test_a_part_with_nothing_planned_shows_no_mark_and_the_section_says_so(self):
@@ -582,7 +592,8 @@ class MarksAndSlotsTests(PageBox):
         self.assertIn("Planned for the Results and not in the text yet", self.words(view))
         self.assertIn("Planned table · can be made now", self.words(view))
         self.assertIn("tabulate the spells by length", self.words(view))
-        self.assertIn("Planned claim · an attempt to show it failed", self.words(view))
+        self.assertIn("Planned · an attempt to show it failed", self.words(view))   # the plan's line starts with "claim": said once
+        self.assertNotIn("Planned claim · an attempt to show it failed", self.words(view))
         self.assertIn("3 planned parts are not in the text yet: 2 claims and a table", self.words(view))   # the margin of each list of slots
         self.assertIn("2 planned parts are not in the text yet: 2 claims", self.words(view))
         self.assertNotIn("Claim: claim", self.words(view))      # the doubled word of the plan's table
@@ -778,7 +789,7 @@ class VersionTests(Steps):
         self.assertIn('data-added="4 3 2 1"', view)
         # the default is version 6, and what was added since it carries the bar
         self.assertEqual(2, len(re.findall(r'<div class="row rw r-added[ "]', view[view.index('id="p-5-0"'):view.index('id="p-4-2"')])))
-        self.assertIn("2 paragraphs in 1 part changed since version 6", self.words(view))
+        self.assertIn("2 changes in 1 part since version 6", self.words(view))
 
     def test_one_kept_version_gives_no_picker_and_the_fixed_line_and_the_slots_and_notes_still_show(self):
         self.mode("autonomous")
@@ -801,7 +812,9 @@ class VersionTests(Steps):
         self.mode("off")
         view = self.sheet_of(self.page())
         self.assertNotIn("<select", view)
-        self.assertIn("Versions of the text are kept only when recortex writes the paper (writing mode review or autonomous).", self.words(view))
+        self.assertIn("Earlier versions of the text are kept only when recortex writes the paper for you, with your review or on its own.",
+                      self.words(view))
+        self.assertIn("The current text, with no marks. Earlier versions", self.words(view))   # in the line of the bar, where the picker would be
         self.assertIn('data-mode="plain"', view)
         self.assertNotIn('class="who"', view)       # no authorship without versions
         self.assertNotIn("Written by the plugin", self.words(view))
@@ -933,7 +946,10 @@ class StateTests(Steps):
         self.assertEqual({1: "before"}, self.states(model, 3, 0))
         text = self.page(gh="false")     # gh is `false`: nothing can be asked of GitHub
         self.assertIn("Same as version", self.words(self.sheet_of(text)))
-        self.assertIn("This part has no kept version at or before version", self.words(self.sheet_of(text)))
+        words = self.words(self.sheet_of(text))
+        self.assertRegex(words, r"Nothing changed since version 1, [A-Za-z]+ [0-9]+, in the parts compared; [0-9]+ parts have no earlier version to compare")
+        self.assertEqual(1, len(re.findall(r"no earlier version to compare", words)))   # said once in the bar, not by each part
+        self.assertNotIn("This part has no kept version at or before version", words)
 
     def test_marked_new_unchecked_and_long(self):
         self.mode("autonomous")
@@ -1219,9 +1235,9 @@ class ModeTests(Steps):
         self.assertIn(".sbar{position:sticky;top:0;z-index:3;background:var(--fog);padding:12px 0;margin:0 0 20px;border-bottom:1px solid var(--rule);max-width:1060px", style)
         self.assertIn(".ptx{font:19px/1.68 var(--serif);hyphens:auto;text-wrap:pretty;max-width:35em", style)
         self.assertIn("@media (max-width:1180px){", style)
-        self.assertIn(".row{display:block}", style.split("@media (max-width:1180px){", 1)[1])
-        self.assertIn(".mn{border-left:0;padding:0;margin:0 0 18px;display:flex;flex-wrap:wrap;gap:3px 14px}.mn .lab,.meter{display:none}", style)
-        self.assertIn("@media (max-width:420px){main{padding:0}.sheet{border-radius:0;box-shadow:none;padding:18px 16px}}", style)
+        self.assertIn(".row:not(.r-removed){display:block}", style.split("@media (max-width:1180px){", 1)[1])
+        self.assertIn(".mn{border-left:0;padding:0;margin:0 0 18px;display:flex;flex-wrap:wrap;gap:6px 14px}.mn .lab,.meter{display:none}", style)
+        self.assertIn("@media (max-width:420px){main{padding:0}.sheet{border-radius:0;box-shadow:none;padding:18px 16px}", style)
         self.assertIn(".st-against::before{background:none;border:2px solid var(--c);border-radius:1px}", style)
         self.assertIn(".hole{border:1.5px dashed var(--asked);border-radius:10px;padding:8px 14px;font:14.5px/1.5 var(--sans);color:var(--ink)}", style)
         self.assertIn(".hole .kind{display:block;font:600 11.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--asked)}", style)
@@ -1229,6 +1245,86 @@ class ModeTests(Steps):
         self.assertIn(".v-marks ins::before{content:\"[added: \"}", style)
         self.assertIn("clip-path:inset(50%)", style)
         self.assertNotIn("url(", style)
+
+    def style(self):
+        with open(os.path.join(PAGE, "mind.css"), encoding="utf-8") as handle:
+            return handle.read()
+
+    def block(self, style, start):
+        """The text of the @media block that starts with `start` (up to the next top-level @media or the end)."""
+        at = style.index(start)
+        depth, i = 0, style.index("{", at)
+        for i in range(i, len(style)):
+            depth += {"{": 1, "}": -1}.get(style[i], 0)
+            if depth == 0:
+                break
+        return style[at:i + 1]
+
+    def test_m1_at_1180_and_below_a_note_for_a_version_shows_only_for_the_version_chosen_and_never_in_the_clean_copy(self):
+        narrow = self.block(self.style(), "@media (max-width:1180px){")
+        shows, hides = narrow.index(".mn>.st{display:flex}"), narrow.index(".mn>.pn{display:none}")
+        self.assertLess(shows, hides)   # the rule that displays every state is followed by the one that hides the per-version notes
+        self.assertIn("#paper[data-mode=changes] .mn>.pn.on{display:block}#paper[data-mode=changes] .mn>.pn.st.on{display:flex}", narrow)
+        self.assertLess(hides, narrow.index("#paper[data-mode=changes] .mn>.pn.on"))
+
+    def test_m2_at_1180_and_below_a_removed_row_shows_only_in_the_changes_for_its_own_versions_at_the_full_width(self):
+        narrow = self.block(self.style(), "@media (max-width:1180px){")
+        self.assertIn(".row:not(.r-removed){display:block}", narrow)
+        self.assertNotIn(".row{display:block}", narrow)   # that rule would also show every .r-removed row
+        self.assertIn("#paper[data-mode=changes] .r-removed.on{display:block}", narrow)
+        self.assertIn(".r-removed{display:none}", self.style().split("@media (max-width:1180px){")[0])
+
+    def test_m3_the_view_keeps_the_sticky_bar_clear_of_every_jump(self):
+        self.assertIn("html.js[data-view=paper]{scroll-padding-top:120px}", self.style())
+
+    def test_m4_the_side_bar_scrolls_on_its_own_and_the_logo_never_shrinks(self):
+        style = self.style()
+        side = re.search(r"\n\.side\{[^}]*\}", style).group(0)
+        self.assertIn("overflow-y:auto", side)
+        self.assertIn("overscroll-behavior:contain", side)
+        self.assertRegex(style, r"\.logo\{display:block;flex:none;")
+        self.assertIn(".side{position:static;height:auto;overflow:visible;", style)   # a phone's bar is a row, not a scrolling column
+
+    def test_the_rest_of_the_style_review_s5_to_s22_and_p5_to_p10(self):
+        style = self.style()
+        self.assertIn(".side .subnav a{font-size:13.5px;padding:4px 10px 4px 24px;color:var(--quiet)}", style)   # S5: indented, over .side li a
+        self.assertIn(".side .subnav a.here{color:var(--ink);font-weight:600}", style)
+        wide, narrow = self.block(style, "@media (max-width:1366px){"), self.block(style, "@media (max-width:1180px){")
+        self.assertLess(style.index("@media (max-width:1366px){"), style.index("@media (max-width:1180px){"))   # S22: the 1180 rules win
+        self.assertIn(".row{grid-template-columns:minmax(0,1fr) 180px;column-gap:28px}", wide)
+        self.assertIn(".bartools{display:none}", narrow)   # S8: Print leaves the bar at 1180, with the round buttons
+        self.assertIn(".fronttools button{display:inline-block}", narrow)
+        self.assertIn('#chgprev::before{content:"\\2191";font-size:16px}', narrow)
+        small = self.block(style, "@media (max-width:860px){#paper.view")
+        self.assertNotIn("#chgprev::before", small)
+        self.assertNotIn(".bartools{display:none}", small)
+        self.assertIn("#paper[data-mode=changes] .rw.r-added .mn .c-added{display:none}", small)   # S21: "Added since" once on a phone
+        self.assertIn("@media (min-width:561px) and (max-width:860px){.barline{flex:1 1 0;order:0}.sbar .grow{display:none}}", style)   # S9
+        self.assertIn("#paper .sbar{padding-left:16px;padding-right:16px}", self.block(style, "@media (max-width:420px){"))   # S10
+        self.assertIn(".legend summary{display:list-item;", style)   # S11
+        self.assertIn(".mn .stw{display:inline-block;padding:3px 0}", style)   # S12
+        self.assertRegex(style, r"\.pick\{[^}]*max-width:24em")   # S13
+        self.assertIn(".pick{max-width:10em}", small)
+        self.assertIn(".hole .req{display:block}", style)   # S19
+        self.assertIn(".ptx h4.sub,.ptx h5.sub,.ptx h6.sub{font:italic 600 17px/1.35 var(--serif);margin:1.2em 0 .4em}", style)   # S20
+        self.assertIn(".ptx h4.sub,.ptx h5.sub,.ptx h6.sub{font-size:11.5pt;margin:10pt 0 4pt}", style[style.rindex("@media print{"):])
+        self.assertIn("#paper[data-mode=plain] .sbar{position:static}", style)   # P10
+        self.assertNotRegex(re.search(r"\n\.mn\{[^}]*\}", style).group(0), r"padding:[^;]*[1-9]px 0 [1-9]")   # P5: no padding that draws a stub
+        self.assertIn("border-left:1px solid var(--rule)", re.search(r"\n\.mn\{[^}]*\}", style).group(0))
+        self.assertIn(".mn>.sts{display:flex;flex-wrap:wrap;gap:2px 12px;overflow:visible}", style)   # S1: the states wrap
+
+    def test_print_leaves_out_the_notes_the_rooms_of_the_margin_and_the_plugins_lines_under_a_figure(self):
+        printed = self.style()[self.style().rindex("@media print{"):]
+        hidden = printed.split("{display:none!important}")[0]
+        for name in (".mnotes", ".fig .where", ".tab .where", ".fig .made", ".tab .made", ".cw"):
+            self.assertIn(name, hidden, name)   # P7, and the margin's rooms that the script gave a negative margin
+        self.assertIn("#paper .rh-clean{display:none!important}", printed)   # P6: the date is in the line under the title
+        self.assertNotIn("#paper .rh-clean{display:inline!important}", printed)
+        self.assertIn(".cell-chg{background:none!important", printed)
+
+    def test_forced_colors_outline_a_changed_cell_because_a_wash_would_vanish(self):
+        forced = self.block(self.style(), "@media (forced-colors:active){")
+        self.assertIn("#paper[data-mode=changes] .cell-chg.on{outline:2px solid CanvasText;outline-offset:-2px}", forced)
 
     def test_the_part_and_section_numbers_are_counters_that_hold_no_record_text(self):
         with open(os.path.join(PAGE, "mind.css"), encoding="utf-8") as handle:
@@ -1260,6 +1356,33 @@ class ScriptTests(unittest.TestCase):
         self.assertIn("Request copied. Paste it in the chat.", script)
         self.assertIn("Copy did not work; press Ctrl+C.", script)
         self.assertIn("prefers-reduced-motion: reduce", script)
+
+    def test_the_script_of_the_fix_round_checks_what_it_reads_and_says_only_fixed_words(self):
+        script = self.script()
+        body = script[script.index("function pickVersion(k) {"):]
+        self.assertTrue(body.split("\n")[1].strip().startswith("if (!paper || !VERSION.test(k || '')) { return; }"))   # checked first
+        self.assertIn("'Change ' + (changes().indexOf(target) + 1) + ' of ' + changes().length", script)   # S18
+        self.assertIn("'No later change'", script)
+        self.assertIn("'No earlier change'", script)
+        self.assertIn("kept[was] = window.scrollY", script)   # S7: the place of a view is kept when it is left
+        self.assertIn("kept[view.id]", script)
+        self.assertIn("setTimeout(function () { told.textContent = words; }, 50)", script)   # P3
+        self.assertIn("changes.checked = true; setMode('changes');", script)   # P1
+        self.assertIn("shownBox.hidden", script)   # P2: Escape closes the history box that holds the focus
+        self.assertIn("{ rootMargin: '-120px 0px -70% 0px' }", script)   # S6: the sections are watched
+        self.assertIn("$$('.psec', paper).forEach(function (section) { spy.observe(section); });", script)
+        self.assertIn("a.setAttribute('aria-current', 'location')", script)
+        self.assertIn("if (!ID.test(id)) { return; }", script)
+        # S1: the notes are laid out by one ResizeObserver and by the choices of the reader; the text is never touched
+        self.assertEqual(1, script.count("new ResizeObserver("))
+        self.assertIn("(min-width: 1181px)", script)
+        for call in ("u.style.marginBottom", "u.style.top", "host.style.paddingBottom"):
+            self.assertIn(call, script)
+        side = script[script.index("function sideNotes() {"):script.index("function toggleBox(id) {")]
+        for banned in ("textContent", "innerText", "createElement", "appendChild", "localStorage", "cloneNode"):
+            self.assertNotIn(banned, side, banned)
+        self.assertIn("sideNotes();", script[script.index("function pickVersion(k) {"):script.index("function setMode(mode) {")])
+        self.assertIn("toggleBox(el.id)", script)   # the text view's link to a history box opens it
 
     def test_the_script_copies_the_words_of_the_request_before_the_button_and_never_a_value_of_its_own(self):
         script = self.script()
@@ -1325,11 +1448,13 @@ class ListTests(unittest.TestCase):
 
     def test_the_label_of_a_table_region_and_the_picker_are_constants(self):
         mind = self.mind()
-        for label in ("How to read the text", "Compare the text with which version", "Table 1, scrolls sideways",
-                      "Table 60, scrolls sideways", "A table, scrolls sideways"):
+        for label in ("How to read the text", "Compare the text with which version", "Table 1", "Table 60", "A table"):
             mind.E("div", {"aria-label": label})
-        for label in ("Table 61, scrolls sideways", "Compare the text with the version <b>", "Table 1"):
+        for label in ("Table 61", "Compare the text with the version <b>", "Table 1, scrolls sideways", "A table, scrolls sideways"):
             self.refused("div", {"aria-label": label})
+        for label in ("Previous change", "Next change"):   # the two buttons of the bar carry a tooltip
+            mind.E("button", {"title": label})
+        self.refused("button", {"title": "Previous change <b>"})
 
 
 class HostileTests(Steps):
@@ -1464,7 +1589,8 @@ class FailureModeTests(PageBox):
         text = self.page()
         self.assertEqual([], ts.page_problems(text))
         view = self.sheet_of(text)
-        self.assertIn('<div class="tbox" tabindex="0" role="region" aria-label="A table, scrolls sideways">', view)
+        self.assertIn('<div class="tbox" tabindex="0" role="region" aria-label="A table">', view)   # a table without a name of its own
+        self.assertRegex(view, r'<div class="tbox" tabindex="0" role="region" aria-label="Table [0-9]+">')   # and one with a number
         self.assertIn("<th scope=\"col\">c11</th>", view)
         self.assertEqual(1, view.count('class="fig nopic"'))
         self.assertIn("The picture is not in this page: it was not kept on this machine when the page was built.", self.words(view))
@@ -1495,6 +1621,196 @@ class FailureModeTests(PageBox):
         again = self.words(self.page())
         self.assertIn("What do we deliver?", again)       # with several profiles the old name stays
         self.assertIn("Read the manuscript", again)
+
+
+class FixRoundTests(Steps):
+    """The page of the fix round of 1.4.0: the review items that the model and the markup can show."""
+
+    def kinds_page(self):
+        self.mode("autonomous")
+        base = self.topic_body()
+        older = base.replace("| 8 to 12 days | 4 | 3 of 4 | 1 of 4 |", "| 8 to 12 days | 4 | 2 of 4 | 1 of 4 |")
+        commits = self.craft([{"body": older, "before": "c" * 64}, {"body": base}])
+        return commits
+
+    def test_the_subheadings_of_a_part_are_one_level_below_the_part_in_the_manuscript_view_and_unchanged_elsewhere(self):
+        text = self.page()
+        view = self.sheet_of(text)
+        self.assertRegex(view, r'<h5 class="sub">')
+        self.assertNotIn('<h4 class="sub">', view)   # the part is the h4
+        self.assertRegex(view, r'<h4 class="parth"')
+        self.assertIn('<h4 class="sub">', text[:text.index('<section class="view" id="paper"')] + text[text.index('<section class="view" id="threads"'):])
+
+    def test_a_changed_cell_of_a_table_of_the_same_shape_is_marked_with_what_it_was_and_another_shape_is_not(self):
+        self.kinds_page()
+        model = self.model()
+        part = self.results(model)
+        mark = next(m for row in part["rows"] for m in row["then"] if m.get("cells"))
+        self.assertEqual([{"k": "rows", "r": 1, "c": 2, "was": "2 of 4"}], mark["cells"])
+        text = self.page()
+        view = self.sheet_of(text)
+        self.assertEqual([], ts.page_problems(text))
+        self.assertEqual(1, len(re.findall(r'class="cell-chg on"', view)))
+        self.assertRegex(view, r'<td class="cell-chg on" data-for="1">3 of 4<span class="cw on" data-for="1"> \(was 2 of 4\)</span></td>')
+        self.assertIn("Changed since version", view[view.index('class="vh vh-changed"'):][:200])   # said before the table, for a screen reader
+
+    def test_a_table_that_gained_a_row_is_another_shape_so_the_whole_block_is_shown_as_it_was_and_no_cell_is_marked(self):
+        self.mode("autonomous")
+        base = self.topic_body()
+        older = base.replace("| over 12 days | 1 | 0 of 1 | 0 of 1 |\n", "")
+        self.craft([{"body": older, "before": "c" * 64}, {"body": base}])
+        part = self.results(self.model())
+        self.assertTrue([m for row in part["rows"] for m in row["then"]])
+        self.assertEqual([], [m for row in part["rows"] for m in row["then"] if m.get("cells")])
+        view = self.sheet_of(self.page())
+        self.assertNotIn("cell-chg", view)
+        self.assertIn('class="ev v-then', view)
+
+    def test_a_hostile_cell_word_is_text_and_a_cell_mark_names_only_listed_versions(self):
+        self.kinds_page()
+        import mind
+        model = self.model()
+        part = self.results(model)
+        mark = next(m for row in part["rows"] for m in row["then"] if m.get("cells"))
+        mark["cells"][0]["was"] = "<b>HOSTILE</b>"
+        mark["cells"].append({"k": "rows", "r": "x", "c": [], "was": 5})
+        mark["cells"].append("not a cell")
+        mark["cells"].append({"k": "script", "r": 0, "c": 0, "was": "no"})
+        text = mind.render(model, {})
+        self.assertEqual([], ts.page_problems(text))
+        self.assertNotIn("<b>HOSTILE", text)
+        self.assertIn("&lt;b&gt;HOSTILE", text)
+
+    def test_the_bar_counts_the_parts_that_have_no_earlier_version_and_the_parts_it_could_not_compare(self):
+        self.mode("autonomous")
+        base = self.topic_body()
+        changed = add_after(base, FIGURE_LINE, "An extra paragraph.")
+        self.craft([{"body": self.topic_body(4), "before": "c" * 64}], topic=4, hour=8)   # kept, and what the live body is: comparable
+        self.craft([{"body": base, "before": "c" * 64}, {"body": changed}], skip=(0,), hour=10, first=1)   # topic 5: first file not kept
+        model = self.model()
+        listed = {v["n"]: v for v in model["sheet"]["versions"]["list"]}
+        self.assertEqual([2, 1], sorted(listed, reverse=True))
+        entry = listed[2]
+        self.assertEqual((0, 0), (entry["changed"]["changes"], entry["changed"]["parts"]))
+        self.assertEqual(2, entry["changed"]["other"])    # the Results and the Limitations of topic 5: the file is not kept
+        self.assertGreater(entry["changed"]["before"], 0)   # parts nothing was ever recorded for
+        view = self.sheet_of(self.page())
+        words = self.words(view)
+        self.assertRegex(words, r"Nothing changed since version 2, [A-Za-z]+ [0-9]+, in the parts compared; [0-9]+ parts have no "
+                                r"earlier version to compare; 2 parts are not compared")
+        self.assertNotIn("This part has no kept version at or before version", words)   # no part says it for itself
+        self.assertEqual(2, words.count("have no earlier version to compare"))   # once for each version of the picker
+
+    def test_the_history_box_heads_each_entry_with_its_version_number_and_name_and_its_button_with_the_time(self):
+        commits = self.history()
+        self.name(commits[3], "sent-to-coauthors")
+        text = self.page()
+        view = self.sheet_of(text)
+        box = view[view.index('id="hist-5-0"'):]
+        box = box[:box.index('class="askline"><button')]
+        heads = re.findall(r'<p class="histhead"><b>(.*?)</b>', box)
+        self.assertEqual(7, len(heads))
+        self.assertRegex(heads[0], r"^Version 7 · [A-Za-z]+ [0-9]+$")
+        self.assertEqual(["Version %d" % n for n in (7, 6, 5, 4, 3, 2, 1)], [h.split(" ·")[0] for h in heads])
+        self.assertRegex(heads[3], r"^Version 4 · [A-Za-z]+ [0-9]+ “sent-to-coauthors”$")
+        buttons = re.findall(r'<button type="button" class="ask" data-copy="1">(.*?)</button>', box)
+        self.assertEqual(7, len(set(buttons)), buttons)   # no two buttons carry one name
+        for name in buttons:
+            self.assertRegex(name, r"^Copy the request: restore the Results of [A-Za-z]+ [0-9]+ at [0-2][0-9]:[0-5][0-9]$")
+
+    def test_a_restore_request_with_a_time_that_is_no_clock_falls_back_to_the_day(self):
+        self.history()
+        import mind
+        model = self.model()
+        for group in model["outline"]["deliverables"]:
+            for section in group["sections"]:
+                for part in section["parts"]:
+                    for entry in (part.get("history") or {}).get("entries", []):
+                        entry["time"] = "<b>99:99"
+        text = mind.render(model, {})
+        self.assertEqual([], ts.page_problems(text))
+        requests = re.findall(r'<span class="req">(Restore the .*?)</span>', self.sheet_of(text))
+        self.assertTrue(requests)
+        for request in requests:
+            self.assertRegex(request, r"^Restore the Results of [A-Za-z]+ [0-9]+, the version changed")
+            self.assertNotIn("99:99", request)
+        self.assertNotIn("99:99", text)
+
+    def test_two_changes_the_plugin_posts_in_fixed_words_are_told_in_fixed_words(self):
+        self.mode("autonomous")
+        base = self.topic_body()
+        bodies = [base, add_after(base, FIGURE_LINE, "A hand edit."), add_after(base, FIGURE_LINE, "A hand edit."),
+                  add_after(add_after(base, FIGURE_LINE, "A hand edit."), FIGURE_LINE, "A paragraph by the plugin.")]
+        steps = [{"body": bodies[0], "before": "c" * 64}, {"body": bodies[1], "form": "edited", "changed": "The author edited the text by hand."},
+                 {"body": bodies[2], "form": "kept", "changed": "Nothing; the file of the earlier text change was kept afterwards."},
+                 {"body": bodies[3]}]
+        self.craft(steps)
+        model = self.model()
+        told = {m["id"]: m["sentence"] for m in model["memories"] if m["id"] in (9401, 9402, 9403)}
+        self.assertEqual("", told[9401]["words"])
+        self.assertRegex(told[9401]["lead"], r"^On [A-Za-z]+ [0-9]+ you edited the text of this part by hand on GitHub$")
+        self.assertEqual("", told[9402]["words"])
+        self.assertRegex(told[9402]["lead"], r"^On [A-Za-z]+ [0-9]+ the file of the earlier text change was kept on the branch$")
+        self.assertIn("we changed the text to say that ", told[9403]["lead"])   # every other change is told as before
+        text = self.page()
+        self.assertEqual([], ts.page_problems(text))
+        words = self.words(text)
+        self.assertRegex(words, r"you edited the text of this part by hand on GitHub\.")
+        self.assertRegex(words, r"the file of the earlier text change was kept on the branch\.")
+        self.assertNotIn("to say that the text of this part was edited by hand", words)
+        # only the plugin's own fixed forms: another sentence of "What changed" is told as the record words it
+        self.craft(steps[:1] + [dict(steps[1], changed="The author edited the text by hand, and more.")], first=20)
+        again = {m["id"]: m["sentence"] for m in self.model()["memories"] if m["id"] == 9421}
+        self.assertIn("we changed the text to say that ", again[9421]["lead"])
+
+    def test_the_text_view_keeps_the_history_fold_of_a_part_the_manuscript_view_does_not_tell(self):
+        self.history()
+        import mind
+        model = self.model()
+        for section in model["sheet"]["sections"]:
+            section["parts"] = [p for p in section["parts"] if p["thread"] != 5]   # the sheet no longer tells the Results part
+        text = mind.render(model, {})
+        text_view = text[text.index('<section class="view" id="text"'):text.index('<section class="view" id="paper"')]
+        self.assertIn("History (", self.words(text_view))
+        self.assertIn("<ins>", text_view)
+
+    def test_the_running_head_carries_the_name_of_each_named_version_and_the_legend_has_a_row_of_its_own(self):
+        commits = self.history()
+        self.name(commits[3], "sent-to-coauthors")
+        view = self.sheet_of(self.page())
+        head = view[view.index('<span class="rh-changes">'):][:400]
+        self.assertRegex(head, r'<span class="kn" data-for="4">, “sent-to-coauthors”</span>')   # not only of the default version
+        front = view[view.index('<header class="front">'):view.index('</header>')]
+        self.assertRegex(front, r'</div><details class="legend noprint" open="open"><summary>What the marks mean</summary><div class="lgrows">')
+        row = front[front.index('<div class="row">'):front.index('<details')]
+        self.assertNotIn("legend", row)   # it is no longer the second column of the row of the plan message
+
+    def test_the_states_of_a_part_stand_in_one_wrapping_group_and_the_line_of_its_own_changes_in_one_line(self):
+        self.history()
+        view = self.sheet_of(self.page())
+        part = view[view.index('id="p-5-0"'):view.index('id="p-4-2"')]
+        note = part[part.index('<div class="mn pnote"'):]
+        note = note[:note.index('</div></div>')]
+        self.assertEqual(1, note.count('<div class="sts">'))
+        self.assertEqual(1, note.count('class="plinks"'))
+        links = note[note.index('class="plinks"'):]
+        self.assertRegex(links, r'<span class="lc">Last changed [A-Za-z]+ [0-9]+[^<]*</span>.*History \([0-9]+\).*How we got here')
+
+    def test_the_two_buttons_of_the_bar_carry_a_title_and_the_bar_says_a_plain_text_is_plain_in_its_own_line(self):
+        self.history()
+        view = self.sheet_of(self.page())
+        self.assertIn('<button type="button" id="chgprev" title="Previous change">Previous change</button>', view)
+        self.assertIn('<button type="button" id="chgnext" title="Next change">Next change</button>', view)
+        self.mode("off")
+        view = self.sheet_of(self.page())
+        self.assertIn('data-mode="plain"', view)
+        self.assertNotIn('<p class="quiet noprint">Earlier versions', view)   # not a line of its own, far from the bar: in the bar's line
+
+    def test_a_section_of_a_hostile_number_makes_no_link_to_a_section_that_does_not_exist(self):
+        import mind
+        model = self.model()
+        model["sheet"]["sections"][0]["n"] = -3
+        self.assertEqual([], ts.page_problems(mind.render(model, {})))
 
 
 class WholeBuildTests(Steps):

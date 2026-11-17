@@ -88,7 +88,7 @@ autocomplete disabled aria-label aria-labelledby aria-hidden aria-live aria-expa
 width height transform points text-anchor d rowspan colspan start display mathvariant accent src alt loading data-m data-term
 data-issue data-nav data-ask data-go data-kind data-group data-a data-b data-explain data-fold data-print
 data-mode data-for data-added data-reworded data-changed data-toggle data-copy aria-controls scope checked selected value
-preserveAspectRatio open""".split())
+preserveAspectRatio open title""".split())
 VALUE = re.compile(r"[A-Za-z0-9 _.,:;#/()'+=?-]*")
 ANCHOR = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,80}")
 KEY = re.compile(r"[a-z][a-z0-9-]{0,40}")   # a key the page made: of an explanation, of a fold
@@ -96,13 +96,13 @@ TOKENS = re.compile(r"[0-9]{1,6}(?: [0-9]{1,6}){0,63}")   # version numbers, whi
 DAY = re.compile(r"(?:[A-Z][a-z]{2,8} [0-9]{1,2}(?:, [0-9]{4})?|an unknown day)")   # a day as the model writes one
 CLOCK = re.compile(r"[0-2][0-9]:[0-5][0-9]")
 PART_KIND = re.compile(r"[a-z][a-z-]{0,29}")   # a kind of planned part, as the plan's profile names it
-FREE = ("content", "aria-label", "placeholder")   # take only the constants below (and the policy)
+FREE = ("content", "aria-label", "placeholder", "title")   # take only the constants below (and the policy)
 CONSTANTS = frozenset((VIEWPORT, "no-referrer", "Ways into the mind", "One memory", "First visit",
                        "Words to look for", "For example: memory, quote, speed", "Map of the threads of this mind over time",
                        "The parts of the text, in order", "The threads, by section", "The map of what we know",
                        "Open or close every branch", "Which map to show", "How to read the text",
-                       "Compare the text with which version", "A table, scrolls sideways")
-                      + tuple("Table %d, scrolls sideways" % n for n in range(1, 61)))
+                       "Compare the text with which version", "Previous change", "Next change", "A table")
+                      + tuple("Table %d" % n for n in range(1, 61)))
 MSPACE_WIDTHS = frozenset(("0.1667em", "0.2222em", "0.2778em", "-0.1667em", "1em", "2em", "0.5em"))
 
 
@@ -126,7 +126,8 @@ ATTR_RULES = {
     "accent": (frozenset(("mover",)), lambda value: value == "true"),
     "aria-expanded": (frozenset(("button",)), lambda value: value in ("true", "false")),
     "data-mode": (frozenset(("section",)), lambda value: value in ("changes", "clean", "plain")),
-    "data-for": (frozenset(("span", "div", "details", "p")), lambda value: isinstance(value, str) and TOKENS.fullmatch(value) is not None),
+    "data-for": (frozenset(("span", "div", "details", "p", "td", "th")),
+                 lambda value: isinstance(value, str) and TOKENS.fullmatch(value) is not None),
     "data-added": (frozenset(("div",)), lambda value: isinstance(value, str) and TOKENS.fullmatch(value) is not None),
     "data-reworded": (frozenset(("div",)), lambda value: isinstance(value, str) and TOKENS.fullmatch(value) is not None),
     "data-changed": (frozenset(("div",)), lambda value: isinstance(value, str) and TOKENS.fullmatch(value) is not None),
@@ -453,7 +454,21 @@ class Page:
         self.fallbacks = 0
         self.sheet = model.get("sheet") if isinstance(model.get("sheet"), dict) else None
         self.sheet_list, self.sheet_default, self.sheet_ids, self.sheet_tables = {}, None, {}, 0
+        self.sheet_numbers, self.sheet_parts = {}, set()   # text change id -> (version number, name); the parts the sheet tells
+        data = (self.sheet or {}).get("versions") if isinstance((self.sheet or {}).get("versions"), dict) else {}
+        for item in data.get("numbered", []) if isinstance(data.get("numbered"), list) else []:
+            if isinstance(item, dict) and integer(item.get("n")) > 0 and integer(item.get("id")):
+                name = item.get("name")
+                self.sheet_numbers[integer(item["id"])] = (integer(item["n"]), name if isinstance(name, str) and
+                                                            versions.NAME.fullmatch(name) else None)
+        for section in (self.sheet or {}).get("sections", []) if isinstance((self.sheet or {}).get("sections"), list) else []:
+            for part in section.get("parts", []) if isinstance(section, dict) and isinstance(section.get("parts"), list) else []:
+                if isinstance(part, dict):
+                    ordinal = part.get("ordinal")
+                    self.sheet_parts.add((integer(part.get("thread")), ordinal if isinstance(ordinal, int)
+                                          and not isinstance(ordinal, bool) else None))
         self.term_tag = "span"   # a project word is a span; in the manuscript view it is a button, which a keyboard reaches
+        self.sheet_headings = False   # in the manuscript view the part is an h4, so the text's own headings start at h5
         self.outline_parts = {}   # (topic thread, ordinal) -> the part of the outline, which holds its History
         for group in self.outline.get("deliverables", []) if isinstance(self.outline.get("deliverables"), list) else []:
             for section in group.get("sections", []) if isinstance(group, dict) and isinstance(group.get("sections"), list) else []:
@@ -613,8 +628,8 @@ class Page:
             return E("p", None, self.runs(block["p"]))
         if "h" in block:
             data = block["h"] if isinstance(block["h"], dict) else {}
-            return E({1: "h4", 2: "h5", 3: "h6"}.get(integer(data.get("level")), "h6"), {"class": "sub"},
-                     self.runs(data.get("r")))
+            levels = {1: "h5", 2: "h6", 3: "h6"} if self.sheet_headings else {1: "h4", 2: "h5", 3: "h6"}
+            return E(levels.get(integer(data.get("level")), "h6"), {"class": "sub"}, self.runs(data.get("r")))
         for key, tag in (("ul", "ul"), ("ol", "ol")):
             if key in block:
                 return self.list_block(block, key, tag)
@@ -747,10 +762,10 @@ class Page:
         return E("details", {"class": "ev"}, E("summary", None, summary), E("div", {"class": "evbody"}, *children))
 
     @staticmethod
-    def made_from(block):
+    def made_from(block, cls="quiet"):
         if not text_of(block.get("data")):
             return ""
-        return E("p", {"class": "quiet"}, "Made from ", E("code", None, block["data"]),
+        return E("p", {"class": cls}, "Made from ", E("code", None, block["data"]),
                  J(" with ", E("code", None, text_of(block.get("command")))) if text_of(block.get("command")) else "",
                  ".")
 
@@ -1071,7 +1086,8 @@ class Page:
     def history_items(self, part, restore=None):
         """(kept, entries, items) of a part's History, newest version first: one list item for each version, with its day, how it
         came about, the reason and the names it carries; the difference is drawn by Page.diff() (mind_versions) when the model
-        holds one. With `restore` (the heading of the part's section) each version also carries its own request for the chat."""
+        holds one. With `restore` (the heading of the part's section) each version is headed by its number in the paper's
+        versions and also carries its own request for the chat."""
         data = part.get("history") if isinstance(part.get("history"), dict) else None
         entries = [e for e in (data.get("entries") if data else []) or [] if isinstance(e, dict)]
         kept = bool(data) and data.get("kept") is True
@@ -1079,7 +1095,12 @@ class Page:
         for entry in entries:
             how = text_of(entry.get("how"))
             words = mind_model.PHRASES.get("how." + how) if how in mind_plan.HOW else None
-            lines = [E("p", {"class": "histhead"}, E("b", None, text_of(entry.get("day"))), ", " + words if words else "")]
+            numbered = self.sheet_numbers.get(integer(entry.get("id"))) if restore is not None else None
+            head = mind_model.PHRASES["history.version"] % (numbered[0], self.day_of(entry.get("day"))) if numbered else \
+                text_of(entry.get("day"))
+            if numbered and numbered[1]:
+                head += " \u201c%s\u201d" % numbered[1]
+            lines = [E("p", {"class": "histhead"}, E("b", None, head), ", " + words if words else "")]
             memory = self.m.get(integer(entry.get("id")))
             if memory is not None:
                 lines.append(E("p", None, self.said(memory, "inl"), "  ", text_of(entry.get("why"))))
@@ -1098,16 +1119,25 @@ class Page:
                 came = mind_model.PHRASES["history.how"] % words if words else ""
                 request = mind_model.PHRASES["history.restore"] % (shown, day, clock) if CLOCK.fullmatch(clock) else \
                     mind_model.PHRASES["history.restore.day"] % (shown, day)
-                lines.append(E("p", {"class": "askline"}, self.sheet_copy(request[:-1] + came + ".",
-                                                                          mind_model.PHRASES["history.copy"] % (shown, day))))
+                name = mind_model.PHRASES["history.copy"] % (shown, day, clock) if CLOCK.fullmatch(clock) else \
+                    mind_model.PHRASES["history.copy.day"] % (shown, day)
+                lines.append(E("p", {"class": "askline"}, self.sheet_copy(request[:-1] + came + ".", name)))
             items.append(E("li", {"class": "hist"}, *lines))
         return kept, entries, items
 
     def history(self, part):
-        """The History of a part: a fold, newest version first (history_items)."""
+        """The History of a part in the text view. A part that the manuscript view tells has its History there, in the box that
+        its row opens, and only that: here one fixed line says so and links to it. Any other part has its own fold, newest version
+        first (history_items)."""
         kept, entries, items = self.history_items(part)
         if not entries:
             return ""
+        n, ordinal = integer(part.get("thread")), part.get("ordinal")
+        if (n, ordinal if isinstance(ordinal, int) and not isinstance(ordinal, bool) else None) in self.sheet_parts and \
+                isinstance(ordinal, int) and not isinstance(ordinal, bool):
+            return E("p", {"class": "quiet"}, mind_model.PHRASES["hist.paper"], " ",
+                     E("a", {"class": "lk", "href": anchor("hist-%d-%d" % (n, ordinal))},
+                       mind_model.PHRASES["sheet.nav"] % (text_of((self.sheet or {}).get("noun")) or "the paper")), ".")
         title = plural(len(entries), "History (1 version)", "History (%d versions)") if kept else "History"
         first = E("p", {"class": "quiet"}, mind_model.PHRASES["hist.first"]) if kept else ""
         guide = E("p", {"class": "quiet"}, mind_model.PHRASES["hist.restore"] % text_of(entries[0].get("day"))) if kept else \
@@ -1258,11 +1288,11 @@ class Page:
 
     def sheet_view(self):
         """The manuscript view, with the project words as buttons (a keyboard reaches them) in all of it."""
-        self.term_tag = "button"
+        self.term_tag, self.sheet_headings = "button", True
         try:
             return self.sheet_drawn()
         finally:
-            self.term_tag = "span"
+            self.term_tag, self.sheet_headings = "span", False
 
     def sheet_drawn(self):
         """The manuscript as a paper: a sheet with the text in the order of the deliverable and a quiet margin beside each part and
@@ -1283,8 +1313,7 @@ class Page:
         body = [self.sheet_section(s, k + 1) for k, s in enumerate(sections)]
         said = []
         line = text_of(data.get("line"))
-        if line in ("off", "none", "first") and mode == "plain":
-            said.append(mind_model.PHRASES["line." + line])
+        note = mind_model.PHRASES["line." + line] if line in ("off", "none", "first", "unchecked") and mode == "plain" else ""
         if mode == "changes" and integer(data.get("omitted")) > 0:
             said.append(plural(integer(data["omitted"]), *mind_model.PHRASES["line.omitted"]))
         if mode == "changes" and data.get("dropped") is True:
@@ -1309,53 +1338,61 @@ class Page:
                   E("div", {"class": "row"},
                     E("div", None, E("div", {"class": "pmsg noprint"}, E("p", {"class": "lab"}, mind_model.PHRASES["sheet.message"]),
                                      E("p", None, message, "  ", E("a", {"class": "lk", "href": anchor("plan-against-text")},
-                                                                    mind_model.PHRASES["sheet.plan"]))) if message else ""),
-                    self.sheet_legend(bool(sheet.get("plan")), mode == "changes")))
+                                                                    mind_model.PHRASES["sheet.plan"]))) if message else "")),
+                  self.sheet_legend(bool(sheet.get("plan")), mode == "changes"))
         return E("section", {"class": "view", "id": "paper", "aria-labelledby": "paper-h", "data-mode": mode},
                  E("a", {"class": "skip", "href": anchor("paper-text")}, mind_model.PHRASES["sheet.skip"]),
-                 self.sheet_bar(mode, listed), E("p", {"class": "sr", "id": "copystatus", "aria-live": "polite"}),
+                 self.sheet_bar(mode, listed, note), E("p", {"class": "sr", "id": "copystatus", "aria-live": "polite"}),
                  E("article", {"class": "sheet"},
                    E("p", {"class": "rh"}, E("span", None, name), E("span", {"class": "rh-clean"},
                                                                      mind_model.PHRASES["sheet.rh"] % (title, built)),
-                     E("span", {"class": "rh-changes"}, self.sheet_kv("sheet.rh.changes", [self.sheet_default])
+                     E("span", {"class": "rh-changes"}, self.sheet_kv("sheet.rh.changes", list(self.sheet_list))
                        if self.sheet_default else "")),
                    front, *[E("p", {"class": "quiet noprint"}, words) for words in said],
                    E("div", {"id": "paper-text"}, *body), sourced,
                    E("p", {"class": "sheetfoot noprint"}, mind_model.PHRASES["sheet.hint"], " ", mind_model.PHRASES["foot"])))
 
-    def sheet_bar(self, mode, listed):
+    def sheet_bar(self, mode, listed, note=""):
         """The bar that stays at the top while the paper is read: the two ways to show it (the changes since a version, or a clean
-        copy), which version, a line that says what is shown, the buttons for the next change, the way to the plan and the print."""
+        copy), which version, a line that says what is shown, the buttons for the next change, the way to the plan and the print.
+        `note` is the fixed line that stands in the line where there is no picker (versions off, none kept, one kept)."""
         controls, lines = "", []
+        phrases = mind_model.PHRASES
         if mode == "changes":
             options = []
             for entry in listed:
                 n = integer(entry["n"])
-                label = mind_model.PHRASES["sheet.version"] % (n, self.day_of(entry.get("day")))
-                label += mind_model.PHRASES["sheet.previous"] if entry.get("previous") is True else ""
-                label += " “%s”" % self.sheet_name(n) if self.sheet_name(n) else ""
+                label = phrases["sheet.version"] % (n, self.day_of(entry.get("day")))
+                label += phrases["sheet.previous"] if entry.get("previous") is True else ""
+                label += " \u201c%s\u201d" % self.sheet_name(n) if self.sheet_name(n) else ""
                 options.append(E("option", {"value": n, "selected": "selected" if n == self.sheet_default else None}, label))
                 counts = entry.get("changed") if isinstance(entry.get("changed"), dict) else {}
-                paragraphs, parts = integer(counts.get("paragraphs")), integer(counts.get("parts"))
+                changes, parts = integer(counts.get("changes")), integer(counts.get("parts"))
+                before, other = integer(counts.get("before")), integer(counts.get("other"))
                 when = self.day_of(entry.get("day"))
-                lines.append(E("span", {"class": "ml mlc" + (" on" if n == self.sheet_default else ""), "data-for": str(n)},
-                               mind_model.PHRASES["line.changed"] % (plural(paragraphs, *mind_model.PHRASES["line.paragraphs"]),
-                                                                    plural(parts, *mind_model.PHRASES["line.parts"]), n, when)
-                               if paragraphs else mind_model.PHRASES["line.same"] % (n, when)))
-            controls = E("fieldset", {"class": "seg"}, E("legend", None, mind_model.PHRASES["sheet.view"]),
+                said = phrases["line.changed"] % (plural(changes, *phrases["line.changes"]), plural(parts, *phrases["line.parts"]), n, when) \
+                    if changes else (phrases["line.same.some"] if before or other else phrases["line.same"]) % (n, when)
+                if before:
+                    said += "; " + plural(before, *phrases["line.before"])
+                if other:
+                    said += "; " + plural(other, *phrases["line.not"])
+                lines.append(E("span", {"class": "ml mlc" + (" on" if n == self.sheet_default else ""), "data-for": str(n)}, said))
+            controls = E("fieldset", {"class": "seg"}, E("legend", None, phrases["sheet.view"]),
                          E("label", {"class": "si"}, E("input", {"type": "radio", "name": "pmode", "value": "changes",
                                                                 "checked": "checked"}),
-                           E("span", None, mind_model.PHRASES["sheet.changes"])),
+                           E("span", None, phrases["sheet.changes"])),
                          E("select", {"class": "pick", "id": "pick", "aria-label": "Compare the text with which version"},
                            *options),
                          E("label", {"class": "si"}, E("input", {"type": "radio", "name": "pmode", "value": "clean"}),
-                           E("span", None, mind_model.PHRASES["sheet.clean"])))
-        lines.append(E("span", {"class": "ml mln"}, mind_model.PHRASES["line.clean"]))
-        buttons = E("span", {"class": "chgnav"}, E("button", {"type": "button", "id": "chgprev"}, mind_model.PHRASES["sheet.prev"]),
-                    E("button", {"type": "button", "id": "chgnext"}, mind_model.PHRASES["sheet.next"])) if mode == "changes" else ""
+                           E("span", None, phrases["sheet.clean"])))
+        lines.append(E("span", {"class": "ml mln"}, phrases["line.clean"], ". " + note if note else ""))
+        buttons = E("span", {"class": "chgnav"},
+                    E("button", {"type": "button", "id": "chgprev", "title": "Previous change"}, phrases["sheet.prev"]),
+                    E("button", {"type": "button", "id": "chgnext", "title": "Next change"}, phrases["sheet.next"])) \
+            if mode == "changes" else ""
         return E("div", {"class": "sbar noprint"}, controls, E("span", {"class": "grow"}),
-                 E("span", {"class": "bartools"}, E("a", {"class": "lk barlink", "href": anchor("text")}, mind_model.PHRASES["sheet.deliver"]),
-                   E("button", {"type": "button", "class": "barprint", "data-print": "1"}, mind_model.PHRASES["sheet.print"])),
+                 E("span", {"class": "bartools"}, E("a", {"class": "lk barlink", "href": anchor("text")}, phrases["sheet.deliver"]),
+                   E("button", {"type": "button", "class": "barprint", "data-print": "1"}, phrases["sheet.print"])),
                  E("div", {"class": "barline"}, E("span", {"class": "modeline", "aria-live": "polite"}, *lines), buttons))
 
     @staticmethod
@@ -1377,7 +1414,8 @@ class Page:
             rows.append(E("p", {"class": "lg-slot"}, mind_model.PHRASES["leg.slot"]))
         if not rows:
             return ""
-        return E("details", {"class": "mn legend noprint", "open": "open"}, E("summary", None, mind_model.PHRASES["sheet.legend"]), *rows)
+        return E("details", {"class": "legend noprint", "open": "open"}, E("summary", None, mind_model.PHRASES["sheet.legend"]),
+                 E("div", {"class": "lgrows"}, *rows))
 
     def sheet_contents(self):
         """The sections of the paper as indented items of the side bar, which the script shows while the paper is open and marks
@@ -1467,8 +1505,11 @@ class Page:
             part_id = integer(slot.get("id"))
             ask = self.sheet_copy(mind_model.PHRASES["slot.request"] % (self.copy_heading(slot.get("heading")), part_id),
                                   mind_model.PHRASES["slot.write"]) if slot.get("write") is True and part_id > 0 else ""
-            rows.append(E("li", {"class": "hole"}, E("span", {"class": "kind"}, mind_model.PHRASES["slot.kind"] % (
-                kind if PART_KIND.fullmatch(kind) else "part", text_of(slot.get("tail")))), text_of(slot.get("plain")), ask))
+            plain, kind = text_of(slot.get("plain")), kind if PART_KIND.fullmatch(kind) else "part"
+            doubled = plain.lower().split(None, 1)[:1] == [kind]   # the plan's line starts with the kind: it is said once
+            rows.append(E("li", {"class": "hole"}, E("span", {"class": "kind"}, mind_model.PHRASES["slot.kind.bare"] % text_of(slot.get("tail"))
+                                                    if doubled else mind_model.PHRASES["slot.kind"] % (kind, text_of(slot.get("tail")))),
+                          plain, ask))
         margin = slots.get("margin") if isinstance(slots, dict) and isinstance(slots.get("margin"), dict) else {}
         count, kinds = integer(margin.get("count")), text_of(margin.get("kinds"))
         one, many = mind_model.PHRASES["slot.margin"]
@@ -1516,9 +1557,9 @@ class Page:
                  *body, slots)
 
     def sheet_part_note(self, part, outline, n, ident):
-        """The margin of a part's heading: its states, one to a line, when it last changed, how it stands against the versions the
-        picker offers, and the ways to its history and its story."""
-        out = []
+        """The margin of a part's heading: its states in one wrapping group, how it stands against the versions the picker offers, and
+        one line with when it last changed and the ways to its history and its story."""
+        states = []
         for mark in part.get("marks", []) if isinstance(part.get("marks"), list) else []:
             if not isinstance(mark, dict) or mark.get("k") not in MARK_KINDS:
                 continue
@@ -1527,19 +1568,20 @@ class Page:
                 link = E("a", {"class": "stw lk", "href": anchor("m-%d" % m), "data-m": m}, words) \
                     if kind == "open" and count == 1 and m in self.m else \
                     E("a", {"class": "stw lk", "href": anchor("open-questions" if kind == "open" else "open-failures")}, words)
-                out.append(E("span", {"class": "st st-open"}, link))
+                states.append(E("span", {"class": "st st-open"}, link))
                 continue
             sign = self.sheet_mark(kind, words, mark.get("explain"))
-            out.append(J(sign, " ", E("a", {"class": "lk", "href": anchor("m-%d" % m), "data-m": m}, mind_model.PHRASES["mark.see"]))
-                       if kind == "against" and m in self.m else sign)
+            states.append(J(sign, " ", E("a", {"class": "lk", "href": anchor("m-%d" % m), "data-m": m}, mind_model.PHRASES["mark.see"]))
+                          if kind == "against" and m in self.m else sign)
+        out = [E("div", {"class": "sts"}, *states)] if states else []
+        since = part.get("since") if isinstance(part.get("since"), list) else []
+        out += [line for line in (self.sheet_since_note(g) for g in since if isinstance(g, dict)) if line != ""]
+        links = []   # when it last changed and the ways to its history and its story, in one flowing line
         last = part.get("last") if isinstance(part.get("last"), dict) else None
         if last is not None:
             how = text_of(last.get("how"))
-            out.append(E("span", None, mind_model.PHRASES["part.changed"] % self.day_of(last.get("day")),
-                         ", " + mind_model.PHRASES["how." + how] if how in mind_plan.HOW else ""))
-        since = part.get("since") if isinstance(part.get("since"), list) else []
-        out += [line for line in (self.sheet_since_note(g) for g in since if isinstance(g, dict)) if line != ""]
-        links = []
+            links.append(E("span", {"class": "lc"}, mind_model.PHRASES["part.changed"] % self.day_of(last.get("day")),
+                           ", " + mind_model.PHRASES["how." + how] if how in mind_plan.HOW else ""))
         history = outline.get("history") if isinstance(outline.get("history"), dict) else {}
         entries = [e for e in history.get("entries", []) if isinstance(e, dict)] if isinstance(history.get("entries"), list) else []
         if entries:
@@ -1555,7 +1597,7 @@ class Page:
     def sheet_since_note(self, group):
         """How a part stands against the versions of a group: what changed, or why nothing is marked. It shows with those versions."""
         numbers, state = self.whole_numbers(group.get("for")), group.get("state")
-        if not numbers or state not in SINCE_STATES:
+        if not numbers or state not in SINCE_STATES or state == "before":   # parts with no earlier version are counted in the bar
             return ""
         attrs = {"class": "pn", "data-for": self.tokens(numbers)}
         if self.sheet_default in numbers:
@@ -1569,8 +1611,7 @@ class Page:
         if state == "new":
             return E("span", dict(attrs, **{"class": attrs["class"] + " st st-changed chg"}),
                      E("span", {"class": "stw"}, self.sheet_kv("since.new", numbers)))
-        key = {"same": "since.same", "unfetched": "since.unfetched", "unchecked": "since.unchecked",
-               "before": "since.before"}.get(state)
+        key = {"same": "since.same", "unfetched": "since.unfetched", "unchecked": "since.unchecked"}.get(state)
         if key is not None:
             return E("span", attrs, self.sheet_kv(key, numbers))
         return E("span", attrs, mind_model.PHRASES["since.long" if state == "long" else "since.budget"]) \
@@ -1631,9 +1672,17 @@ class Page:
             if kinds[kind]:
                 attrs["data-" + kind] = self.tokens(kinds[kind])
         ptx = []
-        if kinds["added"]:
-            ptx.append(E("span", {"class": "vh"}, self.sheet_kv("since.added", kinds["added"]), ": "))
-        ptx.append(E("div", {"class": "v-now"}, self.sheet_block(block, store, topic)))
+        for kind in ("added", "changed"):   # what a screen reader hears before the block: the bar and the note come after it
+            if kinds[kind]:
+                ptx.append(E("span", {"class": "vh vh-" + kind}, self.sheet_kv("since." + kind, kinds[kind]), ": "))
+        cells = {}   # the cells of a table that differ from an earlier version of it: (head or rows, row, column) -> [(versions, was)]
+        for then in row.get("then", []) if isinstance(row.get("then"), list) else []:
+            numbers = self.whole_numbers(then.get("for")) if isinstance(then, dict) else []
+            for cell in then.get("cells", []) if numbers and isinstance(then.get("cells"), list) else []:
+                if isinstance(cell, dict) and cell.get("k") in ("head", "rows"):
+                    cells.setdefault((cell["k"], integer(cell.get("r")), integer(cell.get("c"))), []).append(
+                        (numbers, text_of(cell.get("was"))))
+        ptx.append(E("div", {"class": "v-now"}, self.sheet_block(block, store, topic, cells)))
         for mark in row.get("marks", []) if isinstance(row.get("marks"), list) else []:
             numbers = self.whole_numbers(mark.get("for")) if isinstance(mark, dict) else []
             if numbers:
@@ -1676,54 +1725,68 @@ class Page:
             return self.sheet_table_figure(entry, False) if entry.get("kind") == "table" else self.sheet_figure(entry, False)
         return self.block(block, None, topic) if block else ""
 
-    def sheet_block(self, block, store, topic):
+    def sheet_block(self, block, store, topic, cells=None):
         """A block of the current text: a figure or table of the paper as a figure with a caption, a table as a box that scrolls on
-        its own, anything else as the page draws it."""
+        its own, anything else as the page draws it. `cells` are the cells of a table that an earlier version had otherwise."""
         data = block.get("block") if isinstance(block.get("block"), dict) else None
         if data is not None and store is not None:
             found = store.get((data.get("kind"), data.get("id")))
             if found:
-                return self.sheet_table_figure(found, True) if found.get("kind") == "table" else self.sheet_figure(found, True)
+                return self.sheet_table_figure(found, True, cells) if found.get("kind") == "table" else self.sheet_figure(found, True)
         if "table" in block:
-            return self.sheet_table_box(block["table"])
+            return self.sheet_table_box(block["table"], None, None, cells)
         return self.block(block, store, topic)
 
-    def sheet_cell(self, cell, head):
+    def sheet_cell(self, cell, head, was=None):
+        """A cell. `was` lists, for the versions that held it otherwise, its earlier words: the cell is then washed while one of
+        them is chosen, and a screen reader is told what it said."""
         cell = cell if isinstance(cell, dict) else {}
         rs, cs = integer(cell.get("rs"), 1), integer(cell.get("cs"), 1)
         shade = {"l": "al", "c": "ac", "r": "ar"}.get(cell.get("a"))
         header = head or cell.get("h") is True
-        return E("th" if header else "td", {"rowspan": rs if rs > 1 else None, "colspan": cs if cs > 1 else None,
-                                              "class": shade, "scope": "col" if head else None}, self.runs(cell.get("r")))
+        attrs = {"rowspan": rs if rs > 1 else None, "colspan": cs if cs > 1 else None, "class": shade,
+                 "scope": "col" if head else None}
+        notes = []
+        if was:
+            every = self.whole_numbers([n for numbers, _ in was for n in numbers])
+            attrs["class"] = ((shade + " ") if shade else "") + "cell-chg" + (" on" if self.sheet_default in every else "")
+            attrs["data-for"] = self.tokens(every)
+            for numbers, words in was:
+                notes.append(E("span", {"class": "cw" + (" on" if self.sheet_default in numbers else ""), "data-for": self.tokens(numbers)},
+                               mind_model.PHRASES["cell.was"] % words))
+        return E("th" if header else "td", attrs, self.runs(cell.get("r")), *notes)
 
-    def sheet_table_box(self, table, number=None):
-        """A table in a box that scrolls on its own, which a keyboard reaches and a screen reader names; a note when it was cut."""
+    def sheet_table_box(self, table, number=None, label=None, cells=None):
+        """A table in a box that scrolls on its own, which a keyboard reaches and a screen reader names (the region by its number,
+        the table by its caption, `label` the id of that caption); a note when it was cut."""
         if not isinstance(table, dict):
             return ""
-        rows = lambda key, head: [E("tr", None, *[self.sheet_cell(c, head) for c in row]) for row in table.get(key, [])
-                                  if isinstance(row, list)]
-        label = "Table %d, scrolls sideways" % number if number and number <= 60 else "A table, scrolls sideways"
+        cells = cells or {}
+        rows = lambda key, head: [E("tr", None, *[self.sheet_cell(c, head, cells.get((key, r, k))) for k, c in enumerate(row)])
+                                  for r, row in enumerate(table.get(key, [])) if isinstance(row, list)]
+        name = "Table %d" % number if number and number <= 60 else "A table"
         caption = self.runs(table.get("caption")) if table.get("caption") else ""
         return J(E("p", {"class": "quiet"}, caption) if caption else "",
-                 E("div", {"class": "tbox", "tabindex": "0", "role": "region", "aria-label": label},
-                   E("table", None, E("thead", None, *rows("head", True)), E("tbody", None, *rows("rows", False)))),
+                 E("div", {"class": "tbox", "tabindex": "0", "role": "region", "aria-label": name},
+                   E("table", {"aria-labelledby": label}, E("thead", None, *rows("head", True)), E("tbody", None, *rows("rows", False)))),
                  E("p", {"class": "quiet"}, TABLE_CUT) if table.get("cut") else "")
 
-    def sheet_table_figure(self, block, counted):
+    def sheet_table_figure(self, block, counted, cells=None):
         """A table of the paper: its caption (the numbering is the style's), the table, and where it was made from."""
         number = None
         if counted:
             self.sheet_tables += 1
             number = self.sheet_tables
+        label = self.sheet_id("tcap")
         return E("figure", {"class": "tab" if counted else "tab then-tab"},
-                 self.sheet_caption(block),
-                 self.sheet_table_box(block.get("table"), number), self.made_from(block))
+                 self.sheet_caption(block, label),
+                 self.sheet_table_box(block.get("table"), number, label, cells), self.made_from(block, "quiet made"))
 
     @staticmethod
-    def sheet_caption(block):
+    def sheet_caption(block, ident=None):
         """The caption of a figure or table: its title, a full stop unless the title ends in one, and the caption."""
         title, caption = text_of(block.get("title")), text_of(block.get("caption"))
-        return E("figcaption", None, E("span", {"class": "ft"}, title + ("" if not title or title[-1] in ".!?" else ".")), " ", caption)
+        return E("figcaption", {"id": ident}, E("span", {"class": "ft"}, title + ("" if not title or title[-1] in ".!?" else ".")), " ", caption)
 
     def sheet_figure(self, block, counted):
         """A figure of the paper: the picture the build kept (or one fixed line and the link when it kept none), its caption, where
@@ -1736,7 +1799,7 @@ class Page:
                  pic if pic != "" else E("p", {"class": "nopic-line"}, mind_model.PHRASES["fig.missing"], " ", link),
                  self.sheet_caption(block),
                  E("p", {"class": "quiet where"}, "The picture is ", E("code", None, text_of(block.get("path"))), " at ",
-                   text_of(block.get("ref")), ".") if text_of(block.get("path")) else "", self.made_from(block),
+                   text_of(block.get("ref")), ".") if text_of(block.get("path")) else "", self.made_from(block, "quiet made"),
                  link if pic != "" else "")
 
     @staticmethod

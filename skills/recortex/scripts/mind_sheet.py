@@ -54,12 +54,16 @@ PHRASES = {
     "sheet.prev": "Previous change", "sheet.next": "Next change",
     "sheet.version": "Version %d \u00b7 %s", "sheet.previous": " (previous)",
     # the line in the bar, and the fixed lines that stand where the picker is not
-    "line.changed": "%s in %s changed since version %d, %s", "line.same": "Nothing changed since version %d, %s",
+    "line.changed": "%s in %s since version %d, %s", "line.same": "Nothing changed since version %d, %s",
+    "line.same.some": "Nothing changed since version %d, %s, in the parts compared",
     "line.clean": "The current text, with no marks",
-    "line.paragraphs": ("1 paragraph", "%d paragraphs"), "line.parts": ("1 part", "%d parts"),
+    "line.changes": ("1 change", "%d changes"), "line.parts": ("1 part", "%d parts"),
+    "line.before": ("1 part has no earlier version to compare", "%d parts have no earlier version to compare"),
+    "line.not": ("1 part is not compared", "%d parts are not compared"),
     "line.first": "This is the first kept version of the text. Changes show here once it changes again.",
     "line.none": "No version of the text has been kept yet. Changes show here once it has changed.",
-    "line.off": "Versions of the text are kept only when recortex writes the paper (writing mode review or autonomous).",
+    "line.off": "Earlier versions of the text are kept only when recortex writes the paper for you, with your review or on its own.",
+    "line.unchecked": "The earlier versions of the text could not be compared here, so no changes are marked.",
     "line.dropped": "The oldest versions are not offered: this page marks changes against the newest ones only.",
     "line.omitted": ("1 older named version is not offered: the picker holds the 10 latest versions and the 20 newest named ones.",
                      "%d older named versions are not offered: the picker holds the 10 latest versions and the 20 newest named ones."),
@@ -67,12 +71,12 @@ PHRASES = {
                       "mind.py --versions.",
     # the marks of a part and a section
     "mark.backed.one": "1 planned part backed", "mark.backed": "%d planned parts backed",
-    "mark.against.one": "A finding speaks against it", "mark.against": "Findings speak against %d planned parts",
+    "mark.against.one": "A finding speaks against 1 planned part", "mark.against": "Findings speak against %d planned parts",
     "mark.moved.one": "1 planned part rests on something that changed",
     "mark.moved": "%d planned parts rest on something that changed",
-    "mark.planned.one": "Planned; nothing backs it yet", "mark.planned": "%d planned parts; nothing backs them yet",
-    "mark.now.one": "Can be made now", "mark.now": "%d can be made now",
-    "mark.claim.one": "A backed part can be written now", "mark.claim": "%d backed parts can be written now",
+    "mark.planned.one": "1 planned part: nothing backs it yet", "mark.planned": "%d planned parts: nothing backs them yet",
+    "mark.now.one": "1 planned part can be made now", "mark.now": "%d planned parts can be made now",
+    "mark.claim.one": "1 planned part can be written now", "mark.claim": "%d planned parts can be written now",
     "mark.changed.text": "The record moved on since this was written; it can be updated now",
     "mark.methods.text": "The record has decisions and findings that the text does not say yet",
     "mark.open.one": "1 open question", "mark.open": "%d open questions",
@@ -90,7 +94,7 @@ PHRASES = {
     "since.reworded": "Reworded since version %d", "since.added": "Added since version %d",
     "since.changed": "Changed since version %d", "since.removed": "A paragraph was removed here since version %d",
     "since.removed.part": "A part was removed here since version %d",
-    "since.show": "Show what was removed", "since.then": "Show it as it was",
+    "since.show": "Show what was removed", "since.then": "Show it as it was", "cell.was": " (was %s)",
     "count.reworded": ("1 paragraph reworded", "%d paragraphs reworded"), "count.added": ("1 added", "%d added"),
     "count.removed": ("1 removed", "%d removed"), "count.changed": ("1 changed", "%d changed"),
     "count.since": " since version %d",
@@ -102,6 +106,7 @@ PHRASES = {
     "who.before": "In the text since before versions were kept",
     # what the plan says is not in the text yet
     "slot.label": "Planned for the %s and not in the text yet", "slot.kind": "Planned %s \u00b7 %s",
+    "slot.kind.bare": "Planned \u00b7 %s",
     "slot.more": "and %d more in the plan", "slot.write": "write this part",
     "slot.margin": ("1 planned part is not in the text yet: %s", "%d planned parts are not in the text yet: %s"),
     "slot.request": "Write this part of the %s: planned part %d.",
@@ -116,7 +121,8 @@ PHRASES = {
     # the history box
     "history.title": "History of %s, newest first", "history.close": "Close the history",
     "history.restore": "Restore the %s of %s at %s.", "history.restore.day": "Restore the %s of %s.",
-    "history.copy": "restore the %s of %s", "history.how": ", the version changed %s",
+    "history.copy": "restore the %s of %s at %s", "history.copy.day": "restore the %s of %s",
+    "history.how": ", the version changed %s", "history.version": "Version %d \u00b7 %s",
     # figures, tables and the sources
     "fig.missing": "The picture is not in this page: it was not kept on this machine when the page was built.",
     "src.title": "Where the numbers come from",
@@ -153,7 +159,8 @@ class SheetMixin:
         commit, in the order of the record) and, for the picker, the earlier ones: the LISTED most recent and the NAMED newest
         named ones older (`omitted` counts the named ones left out). `line` is the fixed line that stands where the picker is
         not."""
-        found = {"kept": False, "rows": [], "list": [], "count": 0, "line": "off", "dropped": False, "omitted": 0}
+        found = {"kept": False, "rows": [], "list": [], "count": 0, "line": "off", "dropped": False, "omitted": 0,
+                 "numbered": []}
         if self.plan_state is None or self.writing == "off":
             return found
         from mind_model import short  # noqa: E402
@@ -168,7 +175,9 @@ class SheetMixin:
                 same = [version for version in rows if version["version"] == row["commit"]]
                 if same:
                     named[same[-1]["n"]] = row   # a commit two changes share is named once, on the newer
-        found.update(kept=True, rows=rows, count=len(rows), line="none" if not rows else "first" if len(rows) == 1 else None)
+        found.update(kept=True, rows=rows, count=len(rows), line="none" if not rows else "first" if len(rows) == 1 else None,
+                     numbered=[{"n": v["n"], "id": v["id"], "name": named[v["n"]]["name"] if v["n"] in named else None}
+                               for v in rows])
         earlier = list(reversed(rows[:-1]))
         older = [version for version in earlier[LISTED:] if version["n"] in named]
         keep = earlier[:LISTED] + older[:NAMED]
@@ -247,10 +256,13 @@ class SheetMixin:
         mode = "changes" if info["list"] and comparable else "plain"
         message = (self.plan or {}).get("message") if planned else None
         line = info["line"] if mode == "plain" else None
+        if mode == "plain" and line is None and info["count"] > 1:
+            line = "unchecked"   # two or more kept versions and no part could be compared with any of them
         return {
             "profile": profile["profile"], "noun": noun, "title": noun.capitalize(), "name": self.repo.split("/")[1],
             "plan": planned, "message": message["plain"] if message else None, "mode": mode,
-            "versions": {"kept": info["kept"], "count": info["count"], "list": info["list"] if mode == "changes" else [],
+            "versions": {"kept": info["kept"], "count": info["count"], "numbered": info["numbered"],
+                         "list": info["list"] if mode == "changes" else [],
                          "default": info["list"][0]["n"] if mode == "changes" else None, "line": line,
                          "dropped": info["dropped"] and mode == "changes",
                          "omitted": info["omitted"] if mode == "changes" else 0},
@@ -461,7 +473,7 @@ class SheetMixin:
                     same_key = mind_versions.block_key(item["then"], variant["entries"])
                     mark = next((m for m in row["then"] if m["key"] == same_key), None)
                     if mark is None:
-                        mark = {"for": [], "key": same_key, "block": item["then"],
+                        mark = {"for": [], "key": same_key, "block": item["then"], "cells": item.get("cells"),
                                 "entry": self.sheet_then(item["then"], variant["entries"], ctx)}
                         row["then"].append(mark)
                     mark["for"] += fors
@@ -651,15 +663,20 @@ class SheetMixin:
 
     @staticmethod
     def sheet_totals(sections, info):
-        """Per listed version, how many paragraphs in how many parts changed: the line under the bar."""
+        """Per listed version: how many changes in how many parts (the line under the bar), how many parts have no earlier
+        version to compare ("before") and how many could not be compared for another reason (not kept here, not checked, too long,
+        past the budget), so that a line that says nothing changed says it only of the parts compared."""
         for entry in info["list"]:
-            n, paragraphs, parts = entry["n"], 0, 0
+            n, changes, parts, before, other = entry["n"], 0, 0, 0, 0
             for section in sections:
                 for part in section["parts"]:
                     if part["rows"] is None:
                         continue
                     here = sum(1 for row in part["rows"] if n in row["added"] or n in row["reworded"] or n in row["changed"]) \
                         + sum(1 for place in part["removed"] if n in place["for"])
-                    paragraphs += here
+                    changes += here
                     parts += 1 if here else 0
-            entry["changed"] = {"paragraphs": paragraphs, "parts": parts}
+                    states = {group["state"] for group in part["since"] if n in group["for"]}
+                    before += 1 if "before" in states else 0
+                    other += 1 if states & {"unfetched", "unchecked", "long", "budget"} else 0
+            entry["changed"] = {"changes": changes, "parts": parts, "before": before, "other": other}

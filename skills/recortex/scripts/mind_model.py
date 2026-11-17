@@ -116,6 +116,9 @@ PHRASES = {
     "short.none": "No summary of where the project stands has been written yet. The next resume block carries one.",
 }
 
+# the "What changed" lines versions.py posts for a hand edit and for a file kept later: the page tells them in fixed words
+TEXT_FORMS = {"The author edited the text by hand.": "lead.text.hand",
+              "Nothing; the file of the earlier text change was kept afterwards.": "lead.text.kept"}
 PHRASES.update(mind_plan.PHRASES)
 PHRASES.update(mind_sheet.PHRASES)
 
@@ -405,6 +408,10 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
 
     def sentence(self, memory):
         kind, day = memory["kind"], memory["day"]
+        if kind == "text":   # two changes of the text that the plugin posts in fixed words are told in fixed words
+            fixed = TEXT_FORMS.get((self.field(memory["id"], "What changed") or "").strip())
+            if fixed:
+                return {"lead": PHRASES[fixed] % day, "words": "", "quoted": False}
         if memory["plain"]:
             return {"lead": PHRASES["lead." + kind] % day, "words": memory["plain"], "quoted": False}
         words = self.field(memory["id"], OLD_FIELD.get(kind, "")) if kind in OLD_FIELD else None

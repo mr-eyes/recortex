@@ -352,8 +352,51 @@ def pairs(old, new, budget, first=None, second=None):
     return "changed"
 
 
-def row(kind, now=None, then=None, runs=None, i=None, j=None):
-    return {"k": kind, "now": now, "then": then, "runs": runs, "i": i, "j": j}
+def row(kind, now=None, then=None, runs=None, i=None, j=None, cells=None):
+    return {"k": kind, "now": now, "then": then, "runs": runs, "i": i, "j": j, "cells": cells}
+
+
+def table_of(block, entries):
+    """The table a block is or points at (a pipe table, or the entry of a named table), or None."""
+    kind = block_kind(block)
+    if kind == "table" and isinstance(block["table"], dict):
+        return block["table"]
+    if kind == "block" and isinstance(block["block"], dict):
+        entry = (entries or {}).get((block["block"].get("kind"), block["block"].get("id")))
+        if isinstance(entry, dict) and isinstance(entry.get("table"), dict):
+            return entry["table"]
+    return None
+
+
+def shape(table):
+    """The rows of a table as a list of cell sizes, [[(rowspan, colspan), ...], ...] for the head and the body, or None."""
+    out = []
+    for key in ("head", "rows"):
+        lines = table.get(key) or []
+        if not isinstance(lines, list):
+            return None
+        out.append([[(cell.get("rs"), cell.get("cs")) if isinstance(cell, dict) else None for cell in line]
+                    if isinstance(line, list) else None for line in lines])
+    return out
+
+
+MAX_CELL_MARKS = 60      # the changed cells of one table that the page marks one by one
+
+
+def cell_changes(old, new, old_entries=None, new_entries=None):
+    """The cells that differ between an old table and a new one of the same shape, [{"k": "head" or "rows", "r": row, "c": column,
+    "was": the cell's old words}] in reading order (at most MAX_CELL_MARKS), or None when either block is no table, the shapes
+    differ (the page then shows the whole block as it was) or no cell differs."""
+    first, second = table_of(old, old_entries), table_of(new, new_entries)
+    if first is None or second is None or shape(first) != shape(second):
+        return None
+    out = []
+    for key in ("head", "rows"):
+        for r, (line_a, line_b) in enumerate(zip(first.get(key) or [], second.get(key) or [])):
+            for c, (cell_a, cell_b) in enumerate(zip(line_a, line_b)):
+                if structure(cell_a) != structure(cell_b) and len(out) < MAX_CELL_MARKS:
+                    out.append({"k": key, "r": r, "c": c, "was": run_text(cell_a.get("r")) if isinstance(cell_a, dict) else ""})
+    return out or None
 
 
 def since(old_blocks, new_blocks, old_entries=None, new_entries=None):
@@ -400,7 +443,8 @@ def since(old_blocks, new_blocks, old_entries=None, new_entries=None):
             runs = None
             if how == "reworded":
                 runs = phrases(word_runs(block_text(old_blocks[i]), block_text(new_blocks[later])))
-            out.append(row(how, new_blocks[later], old_blocks[i], runs, later, i))
+            cells = cell_changes(old_blocks[i], new_blocks[later], old_entries, new_entries) if how == "changed" else None
+            out.append(row(how, new_blocks[later], old_blocks[i], runs, later, i, cells))
             j = later + 1
         out += [row("added", new_blocks[n], None, None, n, None) for n in range(j, j2)]
     return out

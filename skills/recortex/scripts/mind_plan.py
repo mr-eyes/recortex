@@ -23,6 +23,8 @@ import write_rules  # noqa: E402
 PHRASES = {
     "kind.plan": "Planned", "kind.text": "Text change",
     "lead.text": "On %s we changed the text to say that ",
+    "lead.text.hand": "On %s you edited the text of this part by hand on GitHub",
+    "lead.text.kept": "On %s the file of the earlier text change was kept on the branch",
     "old.text": "On %s we changed the text: ",
     "thread.plan": "The plan of the paper",
     # the states of a planned part (references/planning.md); the chip words
@@ -46,6 +48,7 @@ PHRASES = {
     "how.kept": "by the plugin; this file was kept after the first try was refused", "how.unknown": "in a way this page cannot tell",
     "hist.days": "Versions with their differences are kept once you choose review or autonomous writing.",
     "hist.first": "This is the first version kept.",
+    "hist.paper": "The history of this part, with each version, is in",
     "hist.restore": "To go back to a version, ask in the chat, for example: restore the Results of %s.",
     "hist.nodiff.days": "Only the day the text changed is known here.",
     "hist.nodiff.unfetched": "The text of this version has not been fetched yet; build the page again with --sync.",
