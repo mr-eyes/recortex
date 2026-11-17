@@ -243,20 +243,16 @@ def start_command(args):
     files = {"base.md": live, "material.md": material}
     if last is not None and newest is not None and record_format.body_sha(last) == newest["after"]:
         files["last.md"] = last
-    for name, text in files.items():
-        with open(os.path.join(args.out, name), "w", encoding="utf-8") as handle:
-            handle.write(text)
-    with open(os.path.join(args.out, "material.json"), "w", encoding="utf-8") as handle:
-        json.dump(dict(ids, issue=args.issue, headings=sorted({d["heading"] for d in due}), base=record_format.body_sha(live),
-                       blocks=["%s %s" % (b["kind"], b["id"]) for b in blocks]), handle, indent=1)
-    with open(os.path.join(args.out, "protected.json"), "w", encoding="utf-8") as handle:
-        json.dump({"paragraphs": protected}, handle, indent=1)
+    files["material.json"] = json.dumps(dict(ids, issue=args.issue, headings=sorted({d["heading"] for d in due}),
+                                             base=record_format.body_sha(live),
+                                             blocks=["%s %s" % (b["kind"], b["id"]) for b in blocks]), indent=1)
+    files["protected.json"] = json.dumps({"paragraphs": protected}, indent=1)
     nonce = secrets.token_hex(16)
+    files["start.json"] = json.dumps({"issue": args.issue, "nonce": nonce})
     earlier = read_record(repo, args.issue, record_format.body_sha(live))
+    recortex.write_working_files(args.out, files)   # no name is written through a link
     write_record(repo, {"form": 1, "issue": args.issue, "base": record_format.body_sha(live), "nonce": nonce,
                         "protected": protected, "state": earlier["state"] if earlier else {}})
-    with open(os.path.join(args.out, "start.json"), "w", encoding="utf-8") as handle:
-        json.dump({"issue": args.issue, "nonce": nonce}, handle)
     say("start: #%d, %d due part%s; base.md, material.md and protected.json (%d paragraph%s of the author's) in %s" % (
         args.issue, len(due), "" if len(due) == 1 else "s", len(protected), "" if len(protected) == 1 else "s", args.out))
     return 0
@@ -666,8 +662,7 @@ def apply_command(args):
         text = memory_text(issue, title, headings, files, approved, kept_field(kept), before, after, done["version"],
                            because, moment)
         path = os.path.join(args.dir, "text-memory.md")
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(text)
+        recortex.write_working_files(args.dir, {"text-memory.md": text})
         ran = subprocess.run([sys.executable, os.path.join(SCRIPTS, "post_verified.py"), "comment", "--repo", repo, "--issue",
                               str(issue), "--kind", "text", "--body-file", path], capture_output=True, text=True)
         match = re.search(r"^memory id: ([0-9]+)$", ran.stdout, re.M)

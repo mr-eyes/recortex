@@ -1029,8 +1029,14 @@ def restore_command(args):
     finally:
         db.close()
     day = (vouched["at"] or vouched["time"] or "")[:10]
-    os.makedirs(args.out, exist_ok=True)
     nonce = secrets.token_hex(16)
+    plain = "the text of %s is back to what it said on %s" % (", ".join(headings), day)
+    recortex.write_working_files(args.out, {   # no name is written through a link
+        "base.md": live, "draft.md": draft,
+        "used.json": json.dumps({"parts": [], "results": [], "decisions": []}),
+        "memory.json": json.dumps({"plain": plain[:200], "changed": "The text of %s was restored from the version of %s." % (
+            ", ".join(headings), day), "why": "The author asked for the earlier text back."}),
+        "start.json": json.dumps({"issue": args.issue, "nonce": nonce})})
     write.write_record(repo, {"form": 1, "issue": args.issue, "base": record_format.body_sha(live), "nonce": nonce,
                               "protected": protected, "state": {},
                               "restore": {"after": record_format.body_sha(text), "headings": headings, "text": text,

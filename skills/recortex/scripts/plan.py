@@ -315,12 +315,8 @@ def digest_command(args):
             lines += ["", "## Gaps now", "", "```json", json.dumps(report["gaps"], indent=1, sort_keys=True), "```"]
     finally:
         db.close()
-    os.makedirs(args.out, exist_ok=True)
     text = "\n".join(lines) + "\n"
-    with open(os.path.join(args.out, "digest.md"), "w", encoding="utf-8") as handle:
-        handle.write(text)
-    with open(os.path.join(args.out, "plan.json"), "w", encoding="utf-8") as handle:
-        json.dump(report, handle, indent=1, sort_keys=True)
+    recortex.write_working_files(args.out, {"digest.md": text, "plan.json": json.dumps(report, indent=1, sort_keys=True)})
     say("digest: %d characters in %s (digest.md, plan.json)" % (len(text), args.out))
     return 0
 
@@ -620,10 +616,8 @@ def read_state(path, repo, issue):
 
 
 def write_state(path, repo, issue, found):
-    temporary = path + ".part"
-    with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump(dict(found, repo=repo, issue=issue), handle, indent=1, sort_keys=True)
-    os.replace(temporary, path)
+    recortex.write_working_files(os.path.dirname(path) or ".", {os.path.basename(path): json.dumps(
+        dict(found, repo=repo, issue=issue), indent=1, sort_keys=True)})
 
 
 def post_command(args):
@@ -694,8 +688,7 @@ def post_command(args):
         if args.dry_run:
             say("would run: " + recortex.show_command(command, "%s, %d characters" % (key + ".md", len(text))))
             continue
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(text)
+        recortex.write_working_files(posting, {key + ".md": text})
         ran = subprocess.run([sys.executable, post_verified, "comment", "--repo", repo, "--issue", str(issue),
                               "--kind", "plan", "--body-file", path], capture_output=True, text=True)
         match = re.search(r"^memory id: ([0-9]+)$", ran.stdout, re.M)
@@ -743,9 +736,7 @@ def render_command(args):
         say("dry run: nothing was written")
         return 0
     live = recortex.read_issue_body(repo, issue)
-    for path, text in ((draft, body), (base, live)):
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(text)
+    recortex.write_working_files(work, {"plan-body.md": body, "plan-body.base.md": live})
     if os.path.exists(backup):
         backup = os.path.join(work, "plan-body.before.%d.md" % os.getpid())
     done = subprocess.run([sys.executable, os.path.join(SCRIPTS, "post_verified.py"), "body", "--repo", repo, "--issue",

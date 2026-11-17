@@ -989,6 +989,18 @@ class PlanCommandTests(PaperSandbox):
 
     # ------------------------------------------------------------ digest, status
 
+    def test_the_digest_is_never_written_through_a_link(self):
+        self.ready()
+        author = os.path.join(self.dir, "authors-paper.tex")
+        with open(author, "w") as handle:
+            handle.write("the author's own paper\n")
+        folder = os.path.join(self.dir, "digest-linked")
+        os.makedirs(folder)
+        os.symlink(author, os.path.join(folder, "plan.json"))
+        done = self.plan_cmd("digest", "--out", folder)
+        self.assertNotEqual(0, done.returncode)
+        self.assertEqual("the author's own paper\n", open(author).read())
+
     def test_the_digest_holds_what_allowed_accounts_wrote_and_caps_a_thread(self):
         self.ready()
         folder = os.path.join(self.dir, "digest")

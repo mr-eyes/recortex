@@ -578,6 +578,18 @@ class RestoreTests(VersionBox):
         out = os.path.join(self.dir, name)
         return out, self.cmd("versions.py", "restore", "--issue", "5", "--to", to, "--out", out, *extra)
 
+    def test_a_restore_is_never_written_through_a_link(self):
+        v1, text_one = self.two_versions()
+        author = os.path.join(self.dir, "authors-paper.tex")
+        with open(author, "w") as handle:
+            handle.write("the author's own paper\n")
+        out = os.path.join(self.dir, "r-linked")
+        os.makedirs(out)
+        os.symlink(author, os.path.join(out, "draft.md"))
+        done = self.cmd("versions.py", "restore", "--issue", "5", "--to", v1, "--out", out)
+        self.assertNotEqual(0, done.returncode)
+        self.assertEqual("the author's own paper\n", open(author).read())
+
     def test_a_restore_of_one_section_leaves_the_others_and_is_a_new_version_that_equals_an_old_one(self):
         v1, text_one = self.two_versions()
         versions_before = len(self.history())

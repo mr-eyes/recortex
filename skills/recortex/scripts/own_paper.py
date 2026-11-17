@@ -326,15 +326,13 @@ def since_command(args):
     wanted = [(t, h) for (t, h) in sections if t == args.issue and (not args.section or h.lower() == args.section.lower())]
     if not wanted:
         sys.exit("own paper: #%d has no told section%s" % (args.issue, " '%s'" % args.section if args.section else ""))
-    os.makedirs(args.out, exist_ok=True)
-    record = {}
+    record, written, notes = {}, {}, []
     for topic, heading in wanted:
         body = sections[(topic, heading)]
         current = record_format.section_text(body, heading) or ""
         entry = brought.get(topic, {}).get(heading)
         record["%d:%s" % (topic, heading)] = record_format.section_sha(body, heading)
-        with open(os.path.join(args.out, "current-%s.md" % slug(heading)), "w", encoding="utf-8") as handle:
-            handle.write(current + "\n")
+        written["current-%s.md" % slug(heading)] = current + "\n"
         received = None
         if entry is not None:
             try:
@@ -342,20 +340,23 @@ def since_command(args):
             except (storage.StorageError, OSError, UnicodeDecodeError):
                 received = None
         if received is not None:
-            with open(os.path.join(args.out, "received-%s.md" % slug(heading)), "w", encoding="utf-8") as handle:
-                handle.write(received)
+            written["received-%s.md" % slug(heading)] = received
             diff = "\n".join(difflib.unified_diff(received.split("\n"), (current + "\n").split("\n"), "what your file last "
                                                   "received", "what the record says now", lineterm=""))
-            with open(os.path.join(args.out, "difference-%s.diff" % slug(heading)), "w", encoding="utf-8") as handle:
-                handle.write(diff + "\n")
-        say("%s of #%d: %s" % (heading, topic, "never brought over; current-%s.md holds the record's text" % slug(heading)
-                                if entry is None else "in step" if entry["text"] == record["%d:%s" % (topic, heading)] else
-                                "changed since; %s" % ("difference-%s.diff holds the difference" % slug(heading)
-                                                       if received is not None else
-                                                       "this machine kept no copy of what your file received; read the "
-                                                       "file against current-%s.md" % slug(heading))))
-    with open(os.path.join(args.out, "since.json"), "w", encoding="utf-8") as handle:
-        json.dump(record, handle, indent=1)
+            written["difference-%s.diff" % slug(heading)] = diff + "\n"
+        notes.append("%s of #%d: %s" % (heading, topic, "never brought over; current-%s.md holds the record's text" % slug(heading)
+                                         if entry is None else "in step" if entry["text"] == record["%d:%s" % (topic, heading)] else
+                                         "changed since; %s" % ("difference-%s.diff holds the difference" % slug(heading)
+                                                                if received is not None else
+                                                                "this machine kept no copy of what your file received; read the "
+                                                                "file against current-%s.md" % slug(heading))))
+    written["since.json"] = json.dumps(record, indent=1)
+    recortex.write_working_files(args.out, written)   # no name is written through a link
+    # The folder is a working folder that an agent can write: apply believes a since.json only when this record, kept here on
+    # this machine by since, names the same text.
+    storage.write_cached(repo, ("own", "since"), "%s.json" % sha(written["since.json"].encode("utf-8")), written["since.json"])
+    for note in notes:
+        say(note)
     return 0
 
 
@@ -380,17 +381,24 @@ def propose_command(args):
         sys.exit("error: the new copy is not a text file within the size limit")
     if new == current:
         sys.exit("own paper: the new copy does not differ from the file")
-    os.makedirs(args.out, exist_ok=True)
     diff = "\n".join(difflib.unified_diff(text.split("\n"), new_text.split("\n"), "your paper now", "your paper with the "
                                           "record's changes", lineterm=""))
-    with open(os.path.join(args.out, "proposal.diff"), "w", encoding="utf-8") as handle:
-        handle.write(diff + "\n")
-    with open(os.path.join(args.out, "proposal.new"), "wb") as handle:
-        handle.write(new)
-    with open(os.path.join(args.out, "proposal.json"), "w", encoding="utf-8") as handle:
-        json.dump({"base": sha(current), "new": sha(new)}, handle)
+    recortex.write_working_files(args.out, {"proposal.diff": diff + "\n", "proposal.new": new})
+    # The folder is a working folder that an agent can write, and the author reviews what is in it: apply believes a
+    # proposal only when this record of it, kept here on this machine by propose, names the same new copy, the same
+    # difference, the same base and the same file. Nothing it says is read from the folder.
+    storage.write_cached(repo, ("own", "proposals"), "%s.json" % sha(new), json.dumps(
+        {"base": sha(current), "new": sha(new), "diff": sha((diff + "\n").encode("utf-8")), "path": placed["path"]}))
     say("propose: the difference is in %s; the file's hash now is %s" % (os.path.join(args.out, "proposal.diff"), sha(current)[:12]))
     return 0
+
+
+def private_record(repo, kind, name):
+    """The text of a record that since or propose kept on this machine, or None (unreadable, unsafe or not there)."""
+    try:
+        return storage.read_cached(repo, ("own", kind), "%s.json" % name)
+    except (storage.StorageError, OSError, UnicodeDecodeError):
+        return None
 
 
 def parse_parts(value, since):
@@ -415,17 +423,26 @@ def apply_command(args):
     since_path = os.path.join(args.dir, "since.json")
     if not os.path.isfile(since_path):
         sys.exit("error: %s has no since.json; run since first" % args.dir)
-    since = json.load(open(since_path, encoding="utf-8"))
+    since_bytes = open(since_path, "rb").read()
+    if private_record(repo, "since", sha(since_bytes)) is None:
+        sys.exit("error: since.json is not one that since made on this machine; run since again")
+    since = json.loads(since_bytes.decode("utf-8"))
     parts = parse_parts(args.parts, since)
     current = open(placed["path"], "rb").read()
     if not args.pasted:
-        proposal = os.path.join(args.dir, "proposal.json")
-        if not os.path.isfile(proposal):
-            sys.exit("error: %s has no proposal.json; run propose first" % args.dir)
-        meta = json.load(open(proposal, encoding="utf-8"))
+        if not os.path.isfile(os.path.join(args.dir, "proposal.new")):
+            sys.exit("error: %s has no proposal.new; run propose first" % args.dir)
         new = open(os.path.join(args.dir, "proposal.new"), "rb").read()
-        if sha(new) != meta["new"]:
-            sys.exit("error: the new copy changed since the difference was made; make it again")
+        shown = open(os.path.join(args.dir, "proposal.diff"), "rb").read() if os.path.isfile(
+            os.path.join(args.dir, "proposal.diff")) else b""
+        try:   # the folder is not trusted: the hashes that count are the ones propose kept here, for this very copy
+            meta = json.loads(private_record(repo, "proposals", sha(new)) or "")
+        except (ValueError, RecursionError):
+            meta = None
+        if not isinstance(meta, dict) or meta.get("new") != sha(new) or meta.get("path") != placed["path"] \
+                or not isinstance(meta.get("base"), str) or meta.get("diff") != sha(shown):
+            sys.exit("error: the new copy and its difference are not ones that propose made on this machine for this file; "
+                     "make them again")
         if sha(current) != meta["base"]:
             sys.exit("own paper: your paper changed since the difference was made; make it again")
         if len(current) > FILE_CAP or not is_text(placed["path"], current):
@@ -472,7 +489,7 @@ def apply_command(args):
         brought.setdefault(str(topic), {})[heading] = {"text": since["%d:%s" % (topic, heading)], "commit": commit}
         current_text = open(os.path.join(args.dir, "current-%s.md" % slug(heading)), encoding="utf-8").read() \
             if os.path.isfile(os.path.join(args.dir, "current-%s.md" % slug(heading))) else None
-        if current_text is not None:
+        if current_text is not None and sha(current_text.strip("\n").encode("utf-8")) == since["%d:%s" % (topic, heading)]:
             try:
                 storage.write_cached(repo, ("own", str(topic)), "%s-%s.md" % (slug(heading), since["%d:%s" % (topic, heading)]),
                                      current_text)

@@ -284,6 +284,60 @@ class WriteTests(WritingBox):
         self.assertNotEqual(0, done.returncode)
         self.assertIn("write: nothing is due for #2", done.stderr)
 
+    def author_file(self, text="the author's own paper\n"):
+        path = os.path.join(self.dir, "authors-paper.tex")
+        with open(path, "w") as handle:
+            handle.write(text)
+        return path
+
+    def test_start_never_writes_through_a_link_to_the_authors_file(self):
+        """A drafting agent can put a link in the folder where start writes; the file at its other end must stay as it is."""
+        self.ready()
+        self.mode("review")
+        author = self.author_file()
+        for name in ("material.md", "base.md", "protected.json", "start.json"):
+            folder = os.path.join(self.dir, "linked-%s" % name)
+            os.makedirs(folder)
+            os.symlink(author, os.path.join(folder, name))
+            done = self.cmd("write.py", "start", "--issue", "5", "--out", folder)
+            self.assertNotEqual(0, done.returncode, name)
+            self.assertEqual("the author's own paper\n", open(author).read(), name)
+            self.assertEqual([name], os.listdir(folder), "nothing else is written when a name is a link")
+
+    def test_start_in_a_folder_that_is_itself_a_link_writes_nothing(self):
+        self.ready()
+        self.mode("review")
+        elsewhere = os.path.join(self.dir, "elsewhere")
+        os.makedirs(elsewhere)
+        folder = os.path.join(self.dir, "w5-link")
+        os.symlink(elsewhere, folder)
+        done = self.cmd("write.py", "start", "--issue", "5", "--out", folder)
+        self.assertNotEqual(0, done.returncode)
+        self.assertEqual([], os.listdir(elsewhere))
+
+    def test_start_replaces_a_hard_link_and_never_writes_through_it(self):
+        self.ready()
+        self.mode("review")
+        author = self.author_file()
+        folder = os.path.join(self.dir, "w5-hard")
+        os.makedirs(folder)
+        os.link(author, os.path.join(folder, "material.md"))
+        done = self.cmd("write.py", "start", "--issue", "5", "--out", folder)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual("the author's own paper\n", open(author).read())
+        self.assertIn("### Planned part 9302", self.read(folder, "material.md"))
+
+    def test_the_text_memory_of_an_apply_is_not_written_through_a_link(self):
+        self.ready()
+        self.mode("review")
+        author = self.author_file()
+        folder = self.start(5)
+        self.draft(folder)
+        os.symlink(author, os.path.join(folder, "text-memory.md"))
+        done = self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words())
+        self.assertEqual("the author's own paper\n", open(author).read())
+        self.assertNotEqual(0, done.returncode)
+
     # ------------------------------------------------------------ the write
 
     def test_a_write_in_review_mode_changes_the_body_keeps_a_copy_and_posts_its_comment(self):
@@ -1263,6 +1317,13 @@ class OwnPaperTests(WritingBox):
         self.assertEqual(before, (self.sha_of(path), os.stat(path).st_mtime_ns))
         self.assertEqual([], [n for n in os.listdir(os.path.dirname(path)) if n != "paper.tex"])
 
+    def test_a_folder_at_the_place_is_never_used(self):
+        self.ready()
+        path = self.place()
+        os.replace(path, path + ".moved")
+        os.makedirs(path)                      # the confirmed place now holds a folder, not a plain file
+        self.assertIn("it is not a plain file", self.own("where").stdout)
+
     def test_no_script_but_own_paper_apply_opens_the_file_for_writing(self):
         import re as regex
         scripts = [name for name in os.listdir(ts.SCRIPTS) if name.endswith((".py", ".sh"))]
@@ -1319,6 +1380,112 @@ class OwnPaperTests(WritingBox):
         self.save(data)
         self.ready()
         self.assertNotIn("Your own paper", self.tool("index.py", "query", "brief").stdout)
+
+
+    # The working folder of the author's own paper is writable by a drafting agent, so nothing in it is believed, and no
+    # name in it is written through a link.
+
+    def swap_new_copy(self, folder, text=b"% not what the author saw\n"):
+        with open(os.path.join(folder, "proposal.new"), "wb") as handle:
+            handle.write(text)
+        meta = {"base": hashlib.sha256(open(self.own("where").stdout.rsplit("the file is ", 1)[-1].strip(), "rb").read()
+                                       ).hexdigest(), "new": hashlib.sha256(text).hexdigest()}
+        with open(os.path.join(folder, "proposal.json"), "w") as handle:   # the hash the folder held before: now nothing reads it
+            json.dump(meta, handle)
+
+    def test_a_new_copy_and_hash_swapped_in_the_folder_after_the_review_is_never_written(self):
+        self.ready()
+        path = self.place()
+        folder = self.bring()
+        before = open(path, "rb").read()
+        self.swap_new_copy(folder)
+        done = self.own("apply", "--dir", folder, "--words-file", self.words("Apply"), "--parts", "5:Results")
+        self.assertNotEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(before, open(path, "rb").read())
+        self.assertIn("not ones that propose made on this machine", done.stderr)
+
+    def test_a_difference_swapped_after_the_review_is_not_the_one_the_author_saw(self):
+        self.ready()
+        path = self.place()
+        folder = self.bring()
+        before = open(path, "rb").read()
+        with open(os.path.join(folder, "proposal.diff"), "w") as handle:
+            handle.write("--- a harmless-looking difference\n")
+        done = self.own("apply", "--dir", folder, "--words-file", self.words("Apply"), "--parts", "5:Results")
+        self.assertNotEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(before, open(path, "rb").read())
+
+    def test_a_base_hash_rewritten_in_the_folder_does_not_hide_an_edit_of_the_paper(self):
+        self.ready()
+        path = self.place()
+        folder = self.bring()
+        with open(path, "a") as handle:
+            handle.write("% the author kept writing after the review\n")
+        edited = open(path, "rb").read()
+        with open(os.path.join(folder, "proposal.json"), "w") as handle:
+            json.dump({"base": hashlib.sha256(edited).hexdigest(),
+                       "new": hashlib.sha256(open(os.path.join(folder, "proposal.new"), "rb").read()).hexdigest()}, handle)
+        done = self.own("apply", "--dir", folder, "--words-file", self.words("Apply"), "--parts", "5:Results")
+        self.assertNotEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(edited, open(path, "rb").read())
+        self.assertIn("your paper changed since the difference was made", done.stderr)
+
+    def test_a_since_file_changed_in_the_folder_is_not_recorded_as_what_the_paper_received(self):
+        self.ready()
+        path = self.place()
+        folder = self.bring()
+        with open(os.path.join(folder, "since.json"), "w") as handle:
+            json.dump({"5:Results": "f" * 64}, handle)
+        done = self.own("apply", "--dir", folder, "--words-file", self.words("Apply"), "--parts", "5:Results")
+        self.assertNotEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual({"path": "paper/paper.tex", "brought": {}}, self.project_file()["own_manuscript"])
+
+    def test_a_current_copy_swapped_in_the_folder_is_not_kept_as_what_the_paper_received(self):
+        self.ready()
+        self.place()
+        folder = self.bring()
+        with open(os.path.join(folder, "current-results.md"), "w") as handle:
+            handle.write("A different text that the paper never received.\n")
+        done = self.own("apply", "--dir", folder, "--words-file", self.words("Apply"), "--parts", "5:Results")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        kept = os.path.join(self.data, "private", self.slug(), "own", "5")
+        texts = [open(os.path.join(kept, name)).read() for name in os.listdir(kept)] if os.path.isdir(kept) else []
+        self.assertNotIn("A different text that the paper never received.\n", texts)
+
+    def test_a_proposal_for_another_file_is_not_applied_to_this_one(self):
+        self.ready()
+        path = self.place()
+        folder = self.bring()
+        elsewhere = os.path.join(self.dir, "other", "paper.tex")
+        os.makedirs(os.path.dirname(elsewhere))
+        with open(elsewhere, "w") as handle:
+            handle.write(open(path).read())
+        self.assertEqual(0, self.own("where", "--set", elsewhere, "--yes").returncode)
+        done = self.own("apply", "--dir", folder, "--words-file", self.words("Apply"), "--parts", "5:Results")
+        self.assertNotEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(open(path).read(), open(elsewhere).read())
+
+    def test_since_and_propose_never_write_through_a_link_to_the_authors_file(self):
+        self.ready()
+        self.place()
+        author = os.path.join(self.dir, "authors-notes.txt")
+        with open(author, "w") as handle:
+            handle.write("the author's notes\n")
+        folder = os.path.join(self.dir, "linked-since")
+        os.makedirs(folder)
+        os.symlink(author, os.path.join(folder, "current-results.md"))
+        done = self.own("since", "--issue", "5", "--section", "Results", "--out", folder)
+        self.assertNotEqual(0, done.returncode)
+        self.assertEqual("the author's notes\n", open(author).read())
+        folder = os.path.join(self.dir, "linked-propose")
+        os.makedirs(folder)
+        os.symlink(author, os.path.join(folder, "proposal.new"))
+        new = os.path.join(self.dir, "new-linked.tex")
+        with open(new, "w") as handle:
+            handle.write(open(self.own("where").stdout.rsplit("the file is ", 1)[-1].strip()).read() + "% one more line\n")
+        done = self.own("propose", "--file", new, "--out", folder)
+        self.assertNotEqual(0, done.returncode)
+        self.assertEqual("the author's notes\n", open(author).read())
 
 
 class TextPageTests(WritingBox):

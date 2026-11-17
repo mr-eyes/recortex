@@ -11,6 +11,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 
 import names
 
@@ -880,6 +881,32 @@ def substitute_placeholders(text, numbers, target_repo, home_repo):
 def read_text(path):
     with open(path, encoding="utf-8") as handle:
         return handle.read()
+
+
+def write_working_files(folder, files):
+    """Write the files of a working folder, {name: text or bytes}: the folder a script is told to fill and a drafting agent may
+    also write. Nothing is written through a link: the folder itself must be a folder and no name may be a symlink (the
+    author's paper or any other file could be at the other end), and each file is written through a fresh temporary file
+    in the folder and moved into place, so that a hard link at the name is replaced and never written through. The
+    names are all checked before the first is written. Exits with one line when the folder or a name is a link."""
+    if os.path.islink(folder) or (os.path.lexists(folder) and not os.path.isdir(folder)):
+        sys.exit("error: %s is a link or not a folder; use a new folder of your own" % folder)
+    for name in files:
+        if os.path.islink(os.path.join(folder, name)):
+            sys.exit("error: %s in %s is a link and is never written through; use a new folder of your own" % (name, folder))
+    os.makedirs(folder, exist_ok=True)
+    for name, text in files.items():
+        descriptor, temporary = tempfile.mkstemp(dir=folder, prefix=".part-")
+        try:
+            if hasattr(os, "fchmod"):
+                os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(text.encode("utf-8") if isinstance(text, str) else text)
+            os.replace(temporary, os.path.join(folder, name))
+        except BaseException:
+            if os.path.lexists(temporary):
+                os.unlink(temporary)
+            raise
 
 
 def extract_resume_block(body):
