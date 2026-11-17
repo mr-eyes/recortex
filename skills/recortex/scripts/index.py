@@ -141,6 +141,19 @@ MIND_TRIGGERS = (
   BEGIN UPDATE meta SET value = '0' WHERE key = 'mind_derived'; END""",
     """CREATE TRIGGER IF NOT EXISTS mind_behind_ed AFTER DELETE ON events
   BEGIN UPDATE meta SET value = '0' WHERE key = 'mind_derived'; END""",
+    # A write by any version, an older one included, also clears derive_version: an older version re-derives the comments
+    # it stores by its own rules (a plan, text or proposal comment becomes "other") and then sets mind_derived to 1 again,
+    # so only this key tells the next sync of this version to derive everything again.
+    """CREATE TRIGGER IF NOT EXISTS derive_behind_ci AFTER INSERT ON comments
+  BEGIN UPDATE meta SET value = '' WHERE key = 'derive_version'; END""",
+    """CREATE TRIGGER IF NOT EXISTS derive_behind_cu AFTER UPDATE ON comments
+  BEGIN UPDATE meta SET value = '' WHERE key = 'derive_version'; END""",
+    """CREATE TRIGGER IF NOT EXISTS derive_behind_cd AFTER DELETE ON comments
+  BEGIN UPDATE meta SET value = '' WHERE key = 'derive_version'; END""",
+    """CREATE TRIGGER IF NOT EXISTS derive_behind_ei AFTER INSERT ON events
+  BEGIN UPDATE meta SET value = '' WHERE key = 'derive_version'; END""",
+    """CREATE TRIGGER IF NOT EXISTS derive_behind_ed AFTER DELETE ON events
+  BEGIN UPDATE meta SET value = '' WHERE key = 'derive_version'; END""",
 )
 NOT_READY = ("the index was last written by an older version of the plugin, or never by this one; run index.py sync")
 RAW = ("issues", "comments", "timeline", "meta")
@@ -1329,8 +1342,9 @@ def derive(db, issues=None, comments=None):
         if before:
             db.execute("INSERT INTO changes VALUES (?,?,?)", (before["comment"], edit["issue"], edit["at"]))
     derive_mind(db, None if touched is None else comments)
-    if touched is None:
-        set_meta(db, "derive_version", DERIVE_VERSION)  # every comment was derived by this version's rules
+    # every stored comment is now derived by this version's rules: a full derive, or one that run_sync chose only because
+    # derive_version was current when the sync began (the triggers clear it on this derive's own writes)
+    set_meta(db, "derive_version", DERIVE_VERSION)
     set_meta(db, "mind_derived", "1")  # last, in the same transaction as the rows: the tables of MIND are current
     db.commit()
 

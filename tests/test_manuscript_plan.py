@@ -774,6 +774,35 @@ class PlanIndexTests(PaperSandbox):
         self.ready()
         self.assertEqual("3", self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
 
+    def test_a_derive_by_an_older_version_on_a_shared_index_is_derived_again(self):
+        """An older version re-derives the comments it stores by its own rules and then sets mind_derived to 1 again;
+        it never touches derive_version. Its writes are made here as it makes them: rows deleted and inserted."""
+        import sqlite3
+        self.ready()
+        before = len(self.plan_json()["parts"])
+        self.assertGreater(before, 0)
+        db = sqlite3.connect(self.index_file())
+        rows = db.execute("SELECT * FROM events WHERE type IN ('plan', 'text', 'proposal')").fetchall()
+        columns = [c[1] for c in db.execute("PRAGMA table_info(events)")]
+        db.execute("DELETE FROM events WHERE type IN ('plan', 'text', 'proposal')")
+        for row in rows:
+            values = dict(zip(columns, row), type="other")
+            db.execute("INSERT INTO events (%s) VALUES (%s)" % (",".join(columns), ",".join("?" * len(columns))),
+                       [values[c] for c in columns])
+        db.execute("UPDATE meta SET value = '1' WHERE key = 'mind_derived'")   # the older derive ends this way
+        db.commit()
+        db.close()
+        self.ready()
+        self.assertEqual(before, len(self.plan_json()["parts"]))
+
+    def test_an_ordinary_sync_keeps_the_derive_current(self):
+        """The triggers clear derive_version on every write, this version's own included, so the derive that ends a sync
+        sets it again; if it did not, every sync after a new comment would derive every comment again."""
+        self.ready()
+        self.add_comment(9990, 4, "A plain remark, no marker.", "2026-12-05T10:00:00Z")
+        self.ready()
+        self.assertEqual("3", self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
+
 
 class PlanNotesTests(PaperSandbox):
     """Section 6.2: the two reminders post_verified.py prints for a result."""
