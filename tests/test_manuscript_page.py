@@ -1277,7 +1277,12 @@ class ModeTests(Steps):
         self.assertIn(".r-removed{display:none}", self.style().split("@media (max-width:1180px){")[0])
 
     def test_m3_the_view_keeps_the_sticky_bar_clear_of_every_jump(self):
-        self.assertIn("html.js[data-view=paper]{scroll-padding-top:120px}", self.style())
+        self.assertIn("html.js[data-view=paper]{scroll-padding-top:var(--barpad,120px)}", self.style())   # 120px without the script
+        script = ScriptTests.script(None)
+        self.assertIn("root.style.setProperty('--barpad', (bar.offsetHeight + 24) + 'px')", script)   # with it, the bar's own height
+        self.assertEqual(1, script.count("new ResizeObserver("))
+        self.assertIn("watch.observe(bar)", script)
+        self.assertIn("    barPad();\n    sideNotes();", script)   # set once at the start, and again whenever the bar changes size
 
     def test_m4_the_side_bar_scrolls_on_its_own_and_the_logo_never_shrinks(self):
         style = self.style()

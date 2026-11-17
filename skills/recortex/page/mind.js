@@ -444,13 +444,20 @@
     // the notes of the margin, laid out beside the text (see sideNotes)
     var side = window.matchMedia ? window.matchMedia('(min-width: 1181px)') : null;
     if (side) { if (side.addEventListener) { side.addEventListener('change', sideNotes); } else if (side.addListener) { side.addListener(sideNotes); } }
+    // what a jump leaves clear at the top is the height of the bar, which grows with a long line on a narrow window
+    var bar = $('.sbar', paper);
+    function barPad() { if (bar) { root.style.setProperty('--barpad', (bar.offsetHeight + 24) + 'px'); } }
     if ('ResizeObserver' in window && $('#paper-text', paper)) {
-      new ResizeObserver(function () {
+      var watch = new ResizeObserver(function () {
+        barPad();
         var host = $('#paper-text', paper), now = host.offsetWidth + 'x' + host.offsetHeight;
         if (now === laid || soon) { return; }
         soon = window.requestAnimationFrame(function () { soon = 0; sideNotes(); });
-      }).observe($('#paper-text', paper));
+      });
+      watch.observe($('#paper-text', paper));
+      if (bar) { watch.observe(bar); }
     }
+    barPad();
     sideNotes();
     // a link to a history box opens it (the boxes were shut above, after the first route)
     if (/^#hist-[0-9]+-[0-9]+$/.test(location.hash)) { route(); }
