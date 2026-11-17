@@ -411,7 +411,7 @@ math{font-family:"STIX Two Math","Cambria Math","Latin Modern Math","Noto Sans M
 .si span{display:block;padding:4px 14px;border-radius:999px;font-size:13.5px;white-space:nowrap;cursor:pointer}
 .si input:checked+span{background:var(--thread);color:var(--sheet)}
 .si input:focus-visible+span{outline:2px solid var(--thread);outline-offset:2px}
-.pick{font:13.5px var(--sans);color:var(--ink);background:var(--sheet);border:1px solid var(--rule);border-radius:999px;padding:3px 8px;max-width:22em;min-width:0}
+.pick{font:13.5px var(--sans);color:var(--ink);background:var(--sheet);border:1px solid var(--rule);border-radius:999px;padding:3px 8px;max-width:15em;min-width:0}
 .chgnav{display:none;gap:6px}
 .js #paper[data-mode=changes] .chgnav{display:inline-flex}
 .chgnav button,.barprint{font-size:13px;padding:4px 11px}
@@ -513,8 +513,8 @@ a.stw{color:var(--quiet)}
 .nopic-line{border:1px solid var(--rule);border-radius:4px;padding:10px 14px;font:14px/1.5 var(--sans);color:var(--quiet);margin:0 0 12px;max-width:62ch}
 .fig.nopic::before{display:none;content:"[Figure " counter(fig) " is not embedded in this copy]"}
 .tbox{overflow-x:auto;margin:6px 0 10px;background:linear-gradient(to right,var(--sheet) 30%,transparent) 0 0/32px 100% no-repeat local,linear-gradient(to left,var(--sheet) 30%,transparent) 100% 0/32px 100% no-repeat local,radial-gradient(farthest-side at 0 50%,rgba(0,0,0,.22),transparent) 0 0/12px 100% no-repeat scroll,radial-gradient(farthest-side at 100% 50%,rgba(0,0,0,.22),transparent) 100% 0/12px 100% no-repeat scroll}
-.tab table{width:100%;font:14px/1.45 var(--sans);border-top:1.5px solid var(--ink);border-bottom:1.5px solid var(--ink);hyphens:manual;min-width:540px}
-.tab th,.tab td{overflow-wrap:normal}.tab th{white-space:nowrap;border-bottom:1px solid var(--ink);color:var(--ink);padding-top:7px}.tab code{overflow-wrap:anywhere}.tab td.ar{white-space:nowrap}
+.tab table,.ptx .tbox table{width:100%;font:14px/1.45 var(--sans);border-top:1.5px solid var(--ink);border-bottom:1.5px solid var(--ink);hyphens:manual;min-width:480px}
+.tab th,.tab td,.ptx .tbox th,.ptx .tbox td{overflow-wrap:normal}.tab th,.ptx .tbox th{white-space:nowrap;border-bottom:1px solid var(--ink);color:var(--ink);padding-top:7px}.tab code,.ptx .tbox code{overflow-wrap:anywhere}.tab td.ar,.ptx .tbox td.ar{white-space:nowrap}
 .refs2{margin:0;padding:0 0 0 2.2em;font:16px/1.6 var(--serif)}.refs2 li{margin:0 0 8px;padding-left:4px}.refs2 li::marker{font:13px var(--sans);color:var(--quiet)}
 .refs2 b{font-weight:600}
 .srcs-head{margin-top:56px}
@@ -538,11 +538,14 @@ a.stw{color:var(--quiet)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;margin:0}
 .copybox{display:block;width:100%;max-width:36em;font:14px/1.4 var(--sans);margin:8px 0}
 .copyaside{position:fixed;left:-9999px;top:0}
-@media (max-width:1180px){.row{display:block}.hrow{display:flex;flex-direction:column}.hrow>.parth{order:1}.hrow>.ptx{order:3}.hrow>.mnotes{display:contents}.hrow>.mnotes>.pnote{order:2}.hrow>.mnotes>.mn:not(.pnote){order:4}.mn{border-left:0;padding:0;margin:0 0 18px;display:flex;flex-wrap:wrap;gap:3px 14px}.mn .lab,.meter{display:none}
+@media (max-width:1180px){.barlink{display:none}.fronttools{display:flex;gap:12px;align-items:center;margin:0 0 18px}.fronttools button{display:none}.row{display:block}.hrow{display:flex;flex-direction:column}.hrow>.parth{order:1}.hrow>.ptx{order:3}.hrow>.mnotes{display:contents}.hrow>.mnotes>.pnote{order:2}.hrow>.mnotes>.mn:not(.pnote){order:4}.mn{border-left:0;padding:0;margin:0 0 18px;display:flex;flex-wrap:wrap;gap:3px 14px}.mn .lab,.meter{display:none}
 .mn>*{display:block;margin:0}.mn>.st{display:flex}
 .sheet{padding-left:70px;padding-right:34px}
 .sechead .mn{margin:6px 0 0}.partrow .mn{margin:0 0 12px}.legend{display:block}}
 @media (max-width:860px){#paper.view{margin-bottom:60px}main{padding:16px 12px 100px}
+.sbar{padding:8px 0;gap:6px 10px}.barline{flex-wrap:nowrap;gap:8px}.modeline{flex:1 1 0;min-width:0;font-size:12.5px;line-height:1.3}
+.chgnav button{width:36px;height:36px;padding:0;font-size:0;border-radius:50%}#chgprev::before{content:"\2191";font-size:16px}#chgnext::before{content:"\2193";font-size:16px}
+.pick{max-width:10em}
 .sheet{padding:20px 18px 40px}.rh{display:block;margin-bottom:26px}.rh>span{display:block}
 .sech::before,.parth::before{position:static;margin-right:9px}
 .ptitle{font-size:31px}.ptx{font-size:17.5px;line-height:1.62}
@@ -550,18 +553,17 @@ a.stw{color:var(--quiet)}
 .si span{padding:8px 14px}.pick{padding:8px 10px}
 #paper[data-mode=changes] .rw.r-added .vh{position:static;width:auto;height:auto;clip-path:none;white-space:normal;margin:0 0 2px;font:600 12px/1.4 var(--sans);color:var(--thread)}
 .bartools{display:none}
-.fronttools{display:flex;gap:12px;align-items:center;margin:0 0 18px}
+.fronttools button{display:inline-block}
 #paper[data-mode=changes] .rw.r-added>.ptx::before,#paper[data-mode=changes] .rw.r-reworded>.ptx::before,#paper[data-mode=changes] .rw.r-changed>.ptx::before{left:-11px}}
 #paper .part-empty .partrow{margin-bottom:0}
 @media (max-width:420px){main{padding:0}.sheet{border-radius:0;box-shadow:none;padding:18px 16px}}
-@media (prefers-reduced-motion:no-preference){html{scroll-behavior:auto}}
 .subnav{display:none;margin:2px 0 6px 12px}
 .subnav a{font-size:13.5px;padding:4px 10px;color:var(--quiet)}
 .js[data-view=paper] .subnav{display:block}
 .subnav a.here{color:var(--ink);font-weight:600}
 @media (forced-colors:active){.si input:checked+span{forced-color-adjust:none;background:Highlight;color:HighlightText}
 #paper[data-mode=changes] .rw.r-added>.ptx::before,#paper[data-mode=changes] .rw.r-reworded>.ptx::before,#paper[data-mode=changes] .rw.r-changed>.ptx::before,.st::before{forced-color-adjust:none;background:CanvasText}
-.st-against::before,.st-planned::before{background:none;border-color:CanvasText}.hole{border-color:CanvasText}}
+.st-against::before,.st-planned::before,.st-open::before,.st-moved::before{background:none;border-color:CanvasText}.hole{border-color:CanvasText}}
 body.paper .paperdoc{counter-reset:sec}
 .papersec{counter-reset:part}
 .papersec>h3{counter-increment:sec}
