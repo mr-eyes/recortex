@@ -65,6 +65,16 @@ def read_metadata(text):
     return ([a for a in authors if isinstance(a, str)][:50], [k for k in keywords if isinstance(k, str)][:30])
 
 
+JINJA_OPENING = re.compile(r"\{(?=[{%]|##)")
+
+
+def jinja_safe(text):
+    """Record text as Manubot's build reads it. Manubot renders the files of content/ with Jinja2 before Pandoc (its comments
+    are {## ##}), so a "{" that would open a template ({{, {% or {##) is written as the expression {{ '{' }}, which Jinja2
+    prints as "{": no template can come from the record, and Pandoc reads the text as it was written."""
+    return JINJA_OPENING.sub("{{ '{' }}", text)
+
+
 def slug(heading):
     return re.sub(r"[^a-z0-9]+", "-", heading.lower()).strip("-") or "section"
 
@@ -136,7 +146,7 @@ def layout(repo, hub, title, sections, authors=(), keywords=(), lang="en-US", fr
         parts = ["## %s" % heading, ""]
         for number, name, text in topics:
             if text.strip():
-                parts += ["### %s" % (name or "Topic %d" % number), "", lay_text(text, images, number), ""]
+                parts += ["### %s" % jinja_safe(name or "Topic %d" % number), "", jinja_safe(lay_text(text, images, number)), ""]
         files["content/%02d.%s.md" % (10 + position * step, slug(heading))] = "\n".join(parts).rstrip("\n") + "\n"
     files["content/metadata.yaml"] = metadata(title, authors, keywords, lang)
     files["content/00.front-matter.md"] = front_matter if front_matter is not None else FRONT_MATTER

@@ -378,12 +378,17 @@ def metadata_at(repo, ref):
 
 
 def version_at(repo, ref):
+    """VERSION.json at a ref, or None when it is missing or not in the form this plugin writes: the branch is not trusted,
+    and a file somebody changed there never stops a write or a sync."""
     text = file_at(repo, ref, "VERSION.json") if ref else None
     try:
         found = json.loads(text) if text else None
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
-    return found if isinstance(found, dict) else None
+    if not isinstance(found, dict) or not isinstance(found.get("topics"), dict) \
+            or not all(isinstance(entry, dict) for entry in found["topics"].values()):
+        return None
+    return found
 
 
 # ---------------------------------------------------------------- ensure and commit
@@ -707,6 +712,7 @@ def sync_command(args):
             sha = record_format.body_sha(body)
             newest = write_rules.newest_text(texts, number)
             before = (versions.get("topics") or {}).get(str(number), {}).get("sha256")
+            before = before if isinstance(before, str) and re.fullmatch(r"[0-9a-f]{64}", before) else None
             actor, when = last_editor(db, number)
             result = commit(config, repo, number, body)
             if not SHA40.fullmatch(result):
