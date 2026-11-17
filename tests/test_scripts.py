@@ -12635,7 +12635,7 @@ class DocsTests(unittest.TestCase):
         found = set()
         for path in self.files() + ["docs/pictures/record/chain/3-decision.md", "docs/pictures/record/manifest.json"]:
             found.update(re.findall(r"github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", self.text(path)))
-        self.assertEqual({"mr-eyes/recortex", "octo-org/sample-project"}, found)
+        self.assertEqual({"recortex/recortex", "octo-org/sample-project"}, found)
         for path in self.files():
             self.assertNotIn("octo-org/octo-repo", self.text(path), path)
 
@@ -12688,8 +12688,8 @@ class PackagingTests(unittest.TestCase):
     def test_the_packaging_carries_the_new_name(self):
         plugin = self.read_json(".claude-plugin", "plugin.json")
         market = self.read_json(".claude-plugin", "marketplace.json")
-        self.assertEqual(("recortex", "https://github.com/mr-eyes/recortex"), (plugin["name"], plugin["repository"]))
-        self.assertEqual("mr-eyes-skills", market["name"])  # a changed marketplace name has no migration
+        self.assertEqual(("recortex", "https://github.com/recortex/recortex"), (plugin["name"], plugin["repository"]))
+        self.assertEqual("recortex", market["name"])  # renamed in 1.4.0; upgrading.md says how to add it again
         self.assertEqual(["recortex"], [entry["name"] for entry in market["plugins"]])
         self.assertEqual({names.OLD_NAME: names.NAME}, market["renames"])
         self.assertNotIn("forceRemoveDeletedPlugins", market)

@@ -1,9 +1,9 @@
 {
-  "name": "mr-eyes-skills",
-  "description": "Skills by mr-eyes. Currently one plugin: recortex.",
+  "name": "recortex",
+  "description": "The recortex plugin: project memory that survives every session.",
   "owner": {
-    "name": "mr-eyes",
-    "url": "https://github.com/mr-eyes"
+    "name": "recortex",
+    "url": "https://github.com/recortex"
   },
   "plugins": [
     {

@@ -34,8 +34,8 @@ You need Claude Code, the GitHub CLI `gh` (signed in) and Python 3.8 or newer.
 1. Install the plugin.
 
    ```bash
-   claude plugin marketplace add mr-eyes/recortex
-   claude plugin install recortex@mr-eyes-skills
+   claude plugin marketplace add recortex/recortex
+   claude plugin install recortex@recortex
    ```
 
 2. Open Claude Code in your project and say: "Set up the record for this project." Setup checks `gh` first and says what to run if it is missing or signed out. You answer a few multiple-choice questions, including whether to trust the repository (the plugin shows a session nothing from GitHub until you do), and confirm a summary. Nothing is written before that.
