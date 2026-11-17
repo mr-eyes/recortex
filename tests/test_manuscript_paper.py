@@ -212,11 +212,32 @@ class PaperExportTests(tv.VersionBox):
                                  {5: "# T\n\n## Results\n\nText with $x^2$ and $$y=z$$.\n\n## Sources\n\n| Statement or number | Source |\n"
                                      "|---|---|\n| 9 of 11 | the log |\n"}, {5: "Topic five"})
         self.assertEqual([("Results", 1)], [(s["heading"], len(s["parts"])) for s in paper["sections"]])
-        self.assertEqual([{"topic": 5, "statement": "9 of 11", "source": "the log"}], paper["sources"])
+        self.assertEqual([{"topic": 5, "statement": [{"t": "9 of 11"}], "source": [{"t": "the log"}]}], paper["sources"])
         first, second = mind.render_paper(paper), mind.render_paper(paper)
         self.assertEqual(first, second)
         self.assertEqual([], ts.page_problems(first))
         self.assertEqual(2, first.count("<math"))
+
+
+    def test_code_in_the_rows_of_sources_is_code_in_the_export_and_not_backticks(self):
+        """Live check of 1.3.0: the rows of "Where the numbers come from" showed their backticks as they stood in the record."""
+        import mind
+        import mind_paper
+        body = ("# T\n\n## Results\n\nText.\n\n## Sources\n\n| Statement or number | Source |\n|---|---|\n"
+                "| 0.024 from `fit_pooled.csv` | `results/fit_pooled.csv`, commit 3f9c2ab |\n"
+                "| <b>raw</b> and `<script>alert(1)</script>` | `a` <img src=x onerror=alert(1)> |\n")
+        paper = mind_paper.paper("octo-org/sample-project", "A title", "A note.", [("ms:results", "Results", [5]), ("x", "Sources", [5])],
+                                 {5: body}, {5: "Topic five"})
+        page = mind.render_paper(paper)
+        self.assertIn("<code>results/fit_pooled.csv</code>, commit 3f9c2ab", page)
+        self.assertIn("<code>fit_pooled.csv</code>", page)
+        listed = page.split('class="srcs"')[1].split("</ul>")[0]
+        self.assertNotIn("`", listed)
+        self.assertNotIn("<script", listed)       # untrusted text stays text, whatever it holds
+        self.assertNotIn("<img", listed)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", listed)
+        self.assertEqual([], ts.page_problems(page))
+        self.assertEqual(page, mind.render_paper(paper))
 
 
 if __name__ == "__main__":

@@ -14,7 +14,9 @@ where `order` is [(label, heading, [issue numbers])] (the outline: the index's, 
     {"repo", "title", "note",
      "sections": [{"heading", "parts": [{"topic", "name", "doc"}]}],     doc as the model's: {"blocks": [...], "cut": False}
      "threads": [{"n": issue, "blocks": [figure and table entries]}],   what the page keys its figures and tables by
-     "sources": [{"topic", "statement", "source"}]}                      "Where the numbers come from"
+     "sources": [{"topic", "statement", "source"}]}                      "Where the numbers come from"; statement and
+                                                                         source are the runs of mind_text.inline, so that
+                                                                         a code span is code, not backticks
 
 A section with no text in any of its topics is left out. "Sources" is never a section of the paper; its rows are listed
 at the end. Text goes through the model's clean() and mind_text.blocks(), so the formulas, tables and lists are the
@@ -76,8 +78,8 @@ def paper(repo, title, note, order, bodies, names):
                 seen.add(number)
                 threads.append({"n": number, "blocks": entries(bodies[number])})
                 for row in record_format.sources(bodies[number]):
-                    sources.append({"topic": number, "statement": short(clean(row["statement"]), CAP_FIELD),
-                                    "source": short(clean(row["source"]), CAP_FIELD)})
+                    sources.append({"topic": number, "statement": mind_text.inline(short(clean(row["statement"]), CAP_FIELD)),
+                                    "source": mind_text.inline(short(clean(row["source"]), CAP_FIELD))})
         if parts:
             sections.append({"heading": short(clean(heading)), "parts": parts})
     return {"repo": repo, "title": short(clean(title)), "note": short(clean(note)), "sections": sections,

@@ -2017,8 +2017,8 @@ class Page:
             sections.append(E("section", {"class": "sec papersec"}, E("h3", None, text_of(section.get("heading"))), *inner))
         rows = [r for r in paper.get("sources", []) if isinstance(r, dict)] if isinstance(paper.get("sources"), list) else []
         sourced = E("section", {"class": "sec papersec"}, E("h3", None, "Where the numbers come from"),
-                    E("ul", {"class": "srcs"}, *[E("li", None, E("b", None, text_of(r.get("statement"))), ": ",
-                                                    text_of(r.get("source"))) for r in rows])) if rows else ""
+                    E("ul", {"class": "srcs"}, *[E("li", None, E("b", None, self.runs(r.get("statement"))), ": ",
+                                                    self.runs(r.get("source"))) for r in rows])) if rows else ""
         main = E("main", {"id": "main", "class": "paperdoc"},
                  E("div", {"class": "papertop noprint"},
                    E("button", {"type": "button", "class": "primary", "data-print": "1"}, "Print or save as PDF"),
