@@ -27,12 +27,14 @@ OLD_WORKFLOW = "ghim-triage.yml"
 # versions of the plugin's own manuscript in the record's repository.
 WRITING_MODES = "writing-modes.json"
 OWN_PAPER = "own-paper.json"
+# 1.3.1: the answers of this machine to the setup questions an update adds (private folder of the configuration top).
+SETUP_ANSWERS = "setup-answers.json"
 MANUSCRIPT_BRANCH = "recortex-manuscript"
 # The plugin's environment variables, without the prefix. The three before the last are read only by the tests.
 # LINK_PAUSE is the seconds create_issues.py waits after each sub-issue link it writes (default 1, at most 10);
-# the tests set it to 0.
+# the tests set it to 0. SETUP_QUESTIONS set to 0, off, no or false switches the hook's line about the setup questions off.
 VARIABLES = ("GH", "CONFIG", "TRUSTED_FILE", "TRUSTED_REPOS", "HOOK_TIMEOUT", "DISCOVERY", "SYNC_PAGE",
-             "DATA_HOME", "TESTING", "TEST_KEEP", "LINK_PAUSE", "NOTICE")
+             "DATA_HOME", "TESTING", "TEST_KEEP", "LINK_PAUSE", "NOTICE", "SETUP_QUESTIONS")
 
 
 def env(name, default=None):

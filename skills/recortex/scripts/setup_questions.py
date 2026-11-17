@@ -1,0 +1,610 @@
+"""The setup questions an update adds to a project that was set up before, and the answers of this machine to them.
+
+Python 3 standard library only. A question is a row of QUESTIONS. Whether it is still open is read from the current
+state (the project file, the user's Claude Code settings, the private files of this machine, the record's index),
+never from a stored setup version, so a project set up with any earlier version gets the right list with no
+migration. `since` says which version added the question; it decides nothing.
+
+Three answers are remembered per machine, in the private folder of the configuration top (storage.config_top), in
+setup-answers.json, written through storage.py under a lock exactly as writing.py writes its file:
+
+  yes, no   the question is closed on this machine for good (`reset` removes the entry)
+  later     the question is asked again at the first session start seven or more days later
+
+A project-wide "yes" settles the question for everyone through the project file or GitHub. A project-wide "no" is
+remembered on this machine only, so each collaborator is asked it once; no key is added to the project file. Nothing
+the project file holds is read as an answer.
+
+The hook (hooks.py, session start only) counts the open questions from local files alone and prints one fixed line
+once per session; it makes no GitHub call and prints nothing it read. `setup.py questions` is what the session then
+runs: it reads GitHub once at most (the labels), prints each open question with the exact commands of its options,
+and writes nothing but the note that no label is missing. `setup.py answer` records one answer. The hooks only read
+the file. A file that cannot be read (a symlink, loose permissions, not JSON, not of the form, too large) is never
+replaced and is reported in one fixed line that points to hooks.py --doctor.
+
+Switched off with RECORTEX_SETUP_QUESTIONS set to 0, off, no or false, or "setup_questions": false in the user's
+settings.json of the plugin (recortex.settings_file). The switch stops the hook's line; `setup.py questions` still
+answers when it is asked.
+"""
+
+import datetime
+import json
+import os
+import re
+import shlex
+import stat
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import field_sheet  # noqa: E402
+import names  # noqa: E402
+import recortex  # noqa: E402
+import storage  # noqa: E402
+import writing  # noqa: E402
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+FORM = 1
+ANSWERS = ("yes", "no", "later")
+FILE_CAP = 20000
+LOCK = "setup-answers.lock"
+LATER_DAYS = 7
+SETTINGS_CAP = 1024 * 1024
+ID = re.compile(r"[a-z][a-z-]{0,39}")
+EVIDENCE = re.compile(r"[A-Za-z0-9 ./*_-]{1,40}")
+OPEN, SETTLED, NOT_ASKED = "open", "settled", "not-asked"
+NOT_READABLE = {"storage": "the folder or the file is not safe to read", "form": "the file is not in the form the plugin "
+                "writes", "large": "the file is larger than the plugin writes"}
+# Why a question is not asked, in the plugin's fixed words (for --doctor and `setup.py questions`).
+REASONS = {
+    "no-index": "the record has not been read yet",
+    "no-plan": "no usable plan issue",
+    "writing-unreadable": "the writing setting of this machine cannot be read",
+    "project-file": "the project file does not fit the form the plugin writes",
+    "no-manuscript": "the project has no manuscript profile",
+    "no-paper-files": "no paper or manuscript files",
+    "settings-unusable": "the Claude Code settings file is a symlink, too large or not a JSON object",
+    "observer-off": "the project file switches the observer off",
+    "approvals-unreadable": "the approvals of the observer cannot be read",
+    "check-failed": "the check could not be made",
+}
+
+
+# ---------------------------------------------------------------- the switch
+
+def off():
+    """True when the user switched the questions off: RECORTEX_SETUP_QUESTIONS set to 0, off, no or false, or
+    "setup_questions": false in the plugin's settings.json (modeled on hooks.discovery_off)."""
+    if names.env("SETUP_QUESTIONS", "").strip().lower() in ("0", "off", "no", "false"):
+        return True
+    try:
+        with open(recortex.settings_file(), encoding="utf-8") as handle:
+            return json.load(handle).get("setup_questions") is False
+    except (OSError, ValueError, AttributeError, RecursionError):
+        return False
+
+
+# ---------------------------------------------------------------- the state of this machine
+
+def path():
+    return os.path.join(storage.config_top(), storage.PRIVATE, names.SETUP_ANSWERS)
+
+
+def empty():
+    return {"form": FORM, "machine": {}, "repos": {}}
+
+
+def entries_fit(entries):
+    """{id: {"answer": yes|no|later, "day": a real day}}. An id the plugin does not know is kept, so that an older
+    version reads a newer file, when it has the form of an id."""
+    if not isinstance(entries, dict):
+        return False
+    for key, entry in entries.items():
+        if not isinstance(key, str) or not ID.fullmatch(key) or not isinstance(entry, dict) \
+                or set(entry) != {"answer", "day"} or entry["answer"] not in ANSWERS or not writing.real_day(entry["day"]):
+            return False
+    return True
+
+
+def load(create=False):
+    """The validated file: {"form": 1, "machine": {id: entry}, "repos": {"owner/name": {id: entry}}}. Raises ValueError
+    with a key of NOT_READABLE for a file that does not fit, and storage.StorageError for refused storage. With
+    create=False nothing is made or tightened (the hooks)."""
+    private = storage.folder(storage.config_top(), create=create, tighten=create)
+    if private is None:
+        return empty()
+    target = os.path.join(private, names.SETUP_ANSWERS)
+    info = storage.check_path(target, "file")
+    if not info:
+        return empty()
+    if info.st_size > FILE_CAP:
+        raise ValueError("large")
+    try:
+        data = json.loads(storage.read_file(target) or "")
+    except (ValueError, RecursionError):
+        raise ValueError("form")
+    if not isinstance(data, dict) or set(data) != {"form", "machine", "repos"} or type(data["form"]) is not int \
+            or data["form"] != FORM or not entries_fit(data["machine"]) or not isinstance(data["repos"], dict):
+        raise ValueError("form")
+    for repo, entries in data["repos"].items():
+        if not recortex.valid_repo(repo) or repo != repo.lower() or not entries_fit(entries):
+            raise ValueError("form")
+    return data
+
+
+def read():
+    """{"state": "ok" | "unreadable", "data": the file (empty when unreadable), "why": a key of NOT_READABLE or ""}. Read
+    only."""
+    try:
+        return {"state": "ok", "data": load(), "why": ""}
+    except storage.StorageError:
+        return {"state": "unreadable", "data": empty(), "why": "storage"}
+    except ValueError as error:
+        return {"state": "unreadable", "data": empty(), "why": str(error) if str(error) in NOT_READABLE else "form"}
+
+
+def entry_of(data, question, repo):
+    """The stored answer of `question` for `repo` on this machine, or None."""
+    if question.scope == "machine":
+        return data["machine"].get(question.id)
+    return data["repos"].get(repo.lower(), {}).get(question.id)
+
+
+def record(repo, question_id, answer, day=None):
+    """Record one answer of the user on this machine: yes, no or later with a day (default today), or reset, which
+    removes the entry. Entries of other questions, other repositories and ids this version does not know stay. A file
+    that cannot be read stops it and is never replaced. Returns the day."""
+    question = find(question_id)
+    if question is None or answer not in ANSWERS + ("reset",):
+        raise ValueError("id")
+    day = day or datetime.date.today().isoformat()
+    with field_sheet.approvals_lock(name=LOCK):
+        data = load(create=True)
+        where = data["machine"] if question.scope == "machine" else data["repos"].setdefault(repo.lower(), {})
+        if answer == "reset":
+            if question.id not in where:
+                return day   # nothing was kept: the file is left as it is
+            del where[question.id]
+        else:
+            where[question.id] = {"answer": answer, "day": day}
+        data["repos"] = {key: value for key, value in data["repos"].items() if value}
+        text = json.dumps(data, indent=1, sort_keys=True) + "\n"
+        if len(text.encode("utf-8")) > FILE_CAP:
+            raise ValueError("large")
+        private = storage.folder(storage.config_top())
+        storage.write_file(os.path.join(private, names.SETUP_ANSWERS), text)
+    return day
+
+
+def deferred(entry, today):
+    """True while a `later` is in force: until today is its day plus LATER_DAYS or later, in local dates. A day in the
+    future counts as deferred."""
+    then = datetime.datetime.strptime(entry["day"], "%Y-%m-%d").date()
+    return today < then + datetime.timedelta(days=LATER_DAYS)
+
+
+# ---------------------------------------------------------------- the checks
+
+class Context:
+    """What the checks look at, read once: the repository, the project file the caller parsed, the project folder and
+    the record (a brief.Record, or None when there is no index)."""
+
+    def __init__(self, repo, config, root, record=None):
+        self.repo, self.config, self.root, self.record = repo, config, root, record
+        self.cache = {}
+
+    def once(self, key, make):
+        if key not in self.cache:
+            self.cache[key] = make()
+        return self.cache[key]
+
+    def plan_gate(self):
+        """"" when the plan issue is usable (the gate Record.writing_lines uses), else the key of a reason."""
+        if self.record is None:
+            return "no-index"
+        counts, bad = self.record.plan_counts() if self.record.plan() else (None, False)
+        return "" if counts and counts["issue"] and not bad else "no-plan"
+
+
+def check_writing_mode(ctx):
+    why = ctx.plan_gate()
+    if why:
+        return NOT_ASKED, why, None
+    found = writing.read(ctx.repo)
+    if found["state"] == "unreadable":
+        return NOT_ASKED, "writing-unreadable", None
+    return (SETTLED if found["state"] == "chosen" else OPEN), "", None
+
+
+def check_own_paper(ctx):
+    why = ctx.plan_gate()
+    if why:
+        return NOT_ASKED, why, None
+    if writing.read(ctx.repo)["state"] == "unreadable":
+        return NOT_ASKED, "writing-unreadable", None
+    return (OPEN if recortex.own_manuscript(ctx.config)["state"] == "none" else SETTLED), "", None
+
+
+def project_file_fits(ctx):
+    import setup
+    try:
+        setup.check_existing(ctx.config)
+    except setup.AnswerError:
+        return False
+    return True
+
+
+def check_manuscript_profile(ctx):
+    import setup
+    if not project_file_fits(ctx):
+        return NOT_ASKED, "project-file", None
+    if "manuscript" in setup.covered_profiles(ctx.config):
+        return SETTLED, "", None
+    found = ctx.once("signals", lambda: setup.uncovered_signals(ctx.root, ctx.config))
+    for item in found:
+        if item["kind"] == "paper":
+            return OPEN, "", [e for e in item["evidence"] if EVIDENCE.fullmatch(e)][:6]
+    return NOT_ASKED, "no-paper-files", None
+
+
+def check_labels(ctx):
+    """Open for a project with the manuscript profile; whether a label is missing is for `setup.py questions` to read
+    from GitHub (the hook makes no call, so it counts this question as one to check)."""
+    import setup
+    if "manuscript" not in setup.covered_profiles(ctx.config):
+        return NOT_ASKED, "no-manuscript", None
+    if not project_file_fits(ctx):
+        return NOT_ASKED, "project-file", None
+    return OPEN, "", None
+
+
+def check_status_line(ctx):
+    import setup
+    target = setup.claude_settings_file()
+    try:
+        info = os.lstat(target)
+    except FileNotFoundError:
+        return OPEN, "", None
+    except OSError:
+        return NOT_ASKED, "settings-unusable", None
+    if not stat.S_ISREG(info.st_mode) or info.st_size > SETTINGS_CAP:
+        return NOT_ASKED, "settings-unusable", None
+    try:
+        descriptor = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            data = json.loads(handle.read(SETTINGS_CAP + 1))
+    except (OSError, ValueError, RecursionError):
+        return NOT_ASKED, "settings-unusable", None
+    if not isinstance(data, dict):
+        return NOT_ASKED, "settings-unusable", None
+    return (SETTLED if "statusLine" in data else OPEN), "", None
+
+
+def check_observer(ctx):
+    import observer_runtime
+    if observer_runtime.project_off(ctx.config):
+        return NOT_ASKED, "observer-off", None
+    try:
+        approval = observer_runtime.stored_approval(ctx.root)
+    except (storage.StorageError, ValueError, OSError):
+        return NOT_ASKED, "approvals-unreadable", None
+    return (SETTLED if approval is not None else OPEN), "", None
+
+
+# ---------------------------------------------------------------- the registry
+
+class Option:
+    """One answer the user can pick: its label, the answer to record (yes, no or later), whether it is the one the
+    session recommends, and the commands to run first (each a tuple of words; a word in <angle brackets> is for the
+    session to fill in)."""
+
+    def __init__(self, label, answer, commands=(), recommended=False, note=""):
+        self.label, self.answer, self.commands, self.recommended, self.note = label, answer, commands, recommended, note
+
+
+class Question:
+    def __init__(self, id, since, scope, where, check, text, options):
+        self.id, self.since, self.scope, self.where, self.check = id, since, scope, where, check
+        self.text, self.options = text, options
+
+
+def dry_then_real(*words):
+    return (tuple(words) + ("--dry-run",), tuple(words) + ("--yes",))
+
+
+def observer_options(mode, label, recommended):
+    return Option(label, "yes", dry_then_real("setup.py", "observer", "--mode", mode, "--model", "sonnet"),
+                  recommended, "Other: the user names another model, and it replaces sonnet in both commands.")
+
+
+QUESTIONS = (
+    Question(
+        "writing-mode", "1.3.0", "repo", "this machine and this repository", check_writing_mode,
+        "Should recortex write the text of this project's paper (Methods, Results, Discussion and Limitations of the "
+        "topic bodies, from the plan and the record)? Review: it drafts, shows each change and writes it after your yes "
+        "in the chat. Autonomous: it writes without asking. Off: it writes nothing. {consent}",
+        (Option("Review", "yes", (("setup.py", "writing", "set", "--mode", "review", "--yes"),), True),
+         Option("Autonomous", "yes", (("setup.py", "writing", "set", "--mode", "autonomous", "--yes"),)),
+         Option("Off", "no", (("setup.py", "writing", "set", "--mode", "off", "--yes"),)),
+         Option("Later", "later"))),
+    Question(
+        "own-paper", "1.3.0", "repo", "the project file", check_own_paper,
+        "Does the author keep a manuscript file of their own (LaTeX, Markdown or Word) that recortex should know about? "
+        "recortex never changes it on its own: it says when the record's text has moved on, and brings changes over "
+        "only when the author asks.",
+        (Option("Yes", "yes", (("own_paper.py", "where", "--set", "<path of the file>", "--dry-run"),
+                               ("own_paper.py", "where", "--set", "<path of the file>", "--yes")),
+                note="The user names the file; no recommendation."),
+         Option("No", "no", (("own_paper.py", "where", "--set", "no", "--yes"),)),
+         Option("Later", "later"))),
+    Question(
+        "manuscript-profile", "1.3.0", "repo", "the project file", check_manuscript_profile,
+        "Paper or manuscript files now exist in this project ({evidence}), and its setup has no manuscript profile. Add "
+        "it? That adds the profile and its labels to the project file, with the plan of the paper and the writing of "
+        "its text to follow; the deliverables the project has stay as they are.",
+        (Option("Yes", "yes", dry_then_real("setup.py", "apply", "--answers", "<the answers file below>"), True),
+         Option("No", "no"),
+         Option("Later", "later"))),
+    Question(
+        "labels", "1.2.0", "repo", "GitHub, noted on this machine", check_labels,
+        "Labels that this project's profiles use are missing on GitHub ({missing}). Create them? setup_labels.py "
+        "creates only the missing ones and never changes or deletes an existing label.",
+        (Option("Yes", "yes", (("setup_labels.py", "--dry-run"), ("setup_labels.py",)), True),
+         Option("No", "no"),
+         Option("Later", "later"))),
+    Question(
+        "status-line", "1.2.0", "machine", "this machine", check_status_line,
+        "Show recortex in the Claude Code status line, with the record's age? It copies one small script to your "
+        "configuration folder and adds a statusLine entry to your Claude Code settings.json, only when that file has "
+        "none.",
+        (Option("Yes", "yes", dry_then_real("setup.py", "status-line"), True),
+         Option("No", "no"),
+         Option("Later", "later"))),
+    Question(
+        "observer", "1.1.0", "repo", "this machine and this folder", check_observer,
+        "Turn on the observer (experimental)? It takes notes of the conversation (the prompts you type and the agent's "
+        "messages to you) and posts reviewed memories on its own. Automatic: it posts them. Shadow: it reviews them, "
+        "after a one-call check of its background calls, and keeps them on this machine. Its calls run under your "
+        "Claude sign-in and count against your usage, at most 60 a day for the project (with an API key or another "
+        "provider set, they are billed to it instead), and it needs the repository in your trusted list.",
+        (observer_options("automatic", "Automatic with sonnet", True),
+         observer_options("shadow", "Shadow with sonnet", False),
+         Option("No", "no"),
+         Option("Later", "later"))),
+)
+IDS = tuple(question.id for question in QUESTIONS)
+
+
+def find(question_id):
+    return next((question for question in QUESTIONS if question.id == question_id), None)
+
+
+# ---------------------------------------------------------------- what is open
+
+class Result:
+    """One question, as it stands: `status` is open, answered, deferred, not-asked, or unread (the labels, when GitHub
+    could not be read); `reason` a key of REASONS for not-asked, or "complete" for labels found on GitHub; `detail` the
+    evidence of the profile question or the missing labels; `entry` the stored answer, if any."""
+
+    def __init__(self, question, status, reason="", detail=None, entry=None):
+        self.question, self.status, self.reason, self.detail, self.entry = question, status, reason, detail, entry
+
+
+def evaluate(ctx, data, today=None, labels=None):
+    """A Result for each question of QUESTIONS, in order. `data` is the state of this machine. A stored answer
+    overrides open: yes and no close the question, and later closes it for LATER_DAYS days. `labels` is None for the hook,
+    which counts the labels as one to check, or a function that reads GitHub and returns the names of the wanted
+    labels that are missing, [] when none is, or None when GitHub could not be read; it runs only when the labels
+    would otherwise be open."""
+    today = today or datetime.date.today()
+    out = []
+    for question in QUESTIONS:
+        try:
+            state, reason, detail = question.check(ctx)
+        except Exception:  # noqa: BLE001 - a check that fails is a question that is not asked; --doctor says so
+            state, reason, detail = NOT_ASKED, "check-failed", None
+        entry = entry_of(data, question, ctx.repo)
+        if state == NOT_ASKED:
+            out.append(Result(question, "not-asked", reason, entry=entry))
+        elif state == SETTLED:
+            out.append(Result(question, "answered", entry=entry))
+        elif entry is not None and entry["answer"] in ("yes", "no"):
+            out.append(Result(question, "answered", entry=entry))
+        elif entry is not None and deferred(entry, today):
+            out.append(Result(question, "deferred", entry=entry))
+        elif question.id == "labels" and labels is not None:
+            missing = labels()
+            if missing is None:
+                out.append(Result(question, "unread", entry=entry))
+            elif not missing:
+                out.append(Result(question, "answered", "complete", entry=entry))
+            else:
+                out.append(Result(question, "open", detail=missing, entry=entry))
+        else:
+            out.append(Result(question, "open", detail=detail, entry=entry))
+    return out
+
+
+LABEL_SHOWN = re.compile(r"[A-Za-z0-9:._ -]{1,50}")
+
+
+def missing_labels(repo, config):
+    """The names of the labels the project's profiles and topics want that GitHub does not list: one `gh label list`
+    call, through recortex.gh. [] when none is missing; None when GitHub could not be read (or the profiles do not fit),
+    which is one fixed line for the session and never a stop."""
+    import setup_labels
+    try:
+        wanted = setup_labels.wanted_labels(list(config.get("profiles") or []), config.get("topics") or [])
+        listed = json.loads(recortex.gh(["label", "list", "--repo", repo, "--json", "name,color,description",
+                                         "--limit", "1000"], timeout=30))
+    except (recortex.GhError, ValueError, RecursionError, SystemExit, TypeError, AttributeError):
+        return None
+    if not isinstance(listed, list):
+        return None
+    have = {label["name"].lower() for label in listed if isinstance(label, dict) and isinstance(label.get("name"), str)}
+    return [label["name"] for label in wanted if label["name"].lower() not in have]
+
+
+def open_questions(repo, config, root, record, data=None, today=None, labels=None):
+    """The Results that are open now. `data` defaults to the file of this machine; a file that cannot be read raises
+    what load raises."""
+    data = load() if data is None else data
+    return [r for r in evaluate(Context(repo, config, root, record), data, today, labels) if r.status == "open"]
+
+
+# ---------------------------------------------------------------- the hook
+
+def hook_parts(repo, config, record, session, room, state_io=None):
+    """(line, skip): the one fixed line the session start prints for the setup questions, "" when there is none, and the
+    set of deliverable kinds whose signal line stays quiet because a question already asks about them. Nothing read
+    is printed. The line is "" when the questions are switched off, when none is open, when it does not fit `room`
+    (it is then not marked as shown), and when it was already shown for this session id. SETUP_UNREADABLE comes at
+    every session start while the file of answers cannot be read and a question would be open without it. Other
+    failures give no line: the brief is shown as usual, and hooks.py --doctor has the detail."""
+    import brief
+    if off():
+        return "", set()
+    root = os.path.realpath(recortex.project_root())
+    ctx = Context(repo, config, root, record)
+    found = read()
+    if found["state"] == "unreadable":
+        would_open = any(r.status == "open" for r in evaluate(ctx, empty()))
+        line = brief.SETUP_UNREADABLE
+        return (line if would_open and len(line) + 1 <= room else ""), set()
+    results = evaluate(ctx, found["data"])
+    by_id = {r.question.id: r for r in results}
+    skip = {"paper"} if by_id["manuscript-profile"].status in ("open", "deferred") else set()
+    count = sum(1 for r in results if r.status == "open")
+    if not count:
+        return "", skip
+    line = brief.SETUP_QUESTIONS % (count, "" if count == 1 else "s")
+    if len(line) + 1 > room:
+        return "", skip
+    try:
+        if not mark_asked(repo, session, state_io):
+            return "", skip
+    except Exception:  # noqa: BLE001 - not marked, so not shown
+        return "", skip
+    return line, skip
+
+
+def hook_line(repo, config, record, session, room, state_io=None):
+    """The line of hook_parts."""
+    return hook_parts(repo, config, record, session, room, state_io)[0]
+
+
+def mark_asked(repo, session, state_io=None):
+    """True when the line was not yet shown in this session; then `asked: true` is stored in the session's entry of the
+    prompt state before it returns, as the offer of the field is. An empty session id is never marked, so the line is
+    shown each time. `state_io` is (load, save) of hooks.py."""
+    if not session:
+        return True
+    if state_io is None:
+        import hooks
+        state_io = (hooks.load_state, hooks.save_state)
+    load_state, save_state = state_io
+    state = load_state(repo)
+    entry = state.get(session, {"count": 0})
+    if entry.get("asked") is True:
+        return False
+    entry["asked"] = True
+    entry["seen"] = time.time()
+    state[session] = entry
+    save_state(repo, state)
+    return True
+
+
+def doctor_lines(repo, config, record):
+    """For --doctor: one line with the ids that are open, answered and deferred, and why the others are not asked, in
+    fixed words. Never a path, a name or a value read from a file. The labels count as open (the hook counts them so; setup.py
+    questions reads GitHub)."""
+    if off():
+        return ["setup questions: switched off (RECORTEX_SETUP_QUESTIONS, or \"setup_questions\": false in %s)"
+                % recortex.settings_file()]
+    found = read()
+    if found["state"] == "unreadable":
+        return ["setup questions: the answers of this machine cannot be read (%s), so no question is asked; the file's "
+                "text is not shown" % NOT_READABLE[found["why"]]]
+    results = evaluate(Context(repo, config, os.path.realpath(recortex.project_root()), record), found["data"])
+    groups = []
+    for status in ("open", "answered", "deferred"):
+        ids = [r.question.id for r in results if r.status == status]
+        if ids:
+            groups.append("%s: %s" % (status, ", ".join(ids)))
+    skipped = ["%s (%s)" % (r.question.id, REASONS.get(r.reason, "not applicable")) for r in results
+               if r.status == "not-asked"]
+    if skipped:
+        groups.append("not asked: %s" % ", ".join(skipped))
+    return ["setup questions: %s" % "; ".join(groups)]
+
+
+# ---------------------------------------------------------------- what `setup.py questions` prints
+
+def render_command(words):
+    """A command of an option as the session runs it: the script by its full path, every word quoted, a word in angle
+    brackets (or the three answers, for the command that records one) left for the session to fill in."""
+    script, rest = words[0], words[1:]
+    first = "python3 %s" % shlex.quote(os.path.join(HERE, script))
+    return " ".join([first] + [word if re.fullmatch(r"<[a-z ]{1,40}>|yes\|no\|later", word) else shlex.quote(word)
+                               for word in rest])
+
+
+def answers_file(repo, config):
+    """The answers file that `setup.py apply` takes for the manuscript profile: the repository and one deliverable of
+    kind paper, `prompt_hook` and `read_transcripts` copied from the project file when they fit (new_config would
+    otherwise reset them), and every optional flag false. Nothing else of the project file is repeated: apply keeps the
+    rest."""
+    import setup
+    answers = {"repo": repo, "deliverables": [{"kind": "paper"}]}
+    hook = config.get("prompt_hook")
+    if isinstance(hook, dict):
+        try:
+            setup.check_answers(dict(answers, prompt_hook=hook))
+            answers["prompt_hook"] = hook
+        except setup.AnswerError:
+            pass
+    if isinstance(config.get("read_transcripts"), bool):
+        answers["read_transcripts"] = config["read_transcripts"]
+    for flag in ("catch_up", "triage_workflow", "claude_md", "trust", "status_line"):
+        answers[flag] = False
+    answers["observer"] = {"mode": "off"}
+    return answers
+
+
+def question_text(result, repo):
+    """The fixed question wording, with the repository (a name that passed valid_repo), the evidence of the profile
+    question (words checked against EVIDENCE) and the labels that are missing (names checked against LABEL_NAME)."""
+    text = result.question.text
+    if "{consent}" in text:
+        text = text.replace("{consent}", " ".join(writing.consent_lines(repo)))
+    if "{evidence}" in text:
+        text = text.replace("{evidence}", ", ".join(result.detail or []) or "see setup.py detect")
+    if "{missing}" in text:
+        names_shown = [name for name in (result.detail or []) if LABEL_SHOWN.fullmatch(name)][:8]
+        total = len(result.detail or [])
+        text = text.replace("{missing}", "%d: %s%s" % (total, ", ".join(names_shown) or "see setup_labels.py --dry-run",
+                                                      ", and more" if total > len(names_shown) else ""))
+    return text
+
+
+def describe(result, repo, config):
+    """The lines for one open question: its id, since and scope in words, the question, one line per option with the
+    exact commands, and the command that records the answer."""
+    question = result.question
+    lines = ["question %s (added in %s; the answer is kept for: %s)" % (question.id, question.since, question.where),
+             "  " + question_text(result, repo)]
+    if question.id == "manuscript-profile":
+        lines.append("  the answers file for apply (write it to a scratch file, then run the commands below with it):")
+        lines.append("  " + json.dumps(answers_file(repo, config)))
+    for option in question.options:
+        steps = [render_command(words) for words in option.commands] or ["nothing to run"]
+        steps.append(render_command(record_words(question, option.answer)))
+        what = "  - %s%s: %s" % (option.label, " (recommended)" if option.recommended else "", " ; then ".join(steps))
+        lines.append(what + (" (%s)" % option.note if option.note else ""))
+    lines.append("  record the answer: %s" % render_command(record_words(question, "yes|no|later")))
+    return lines
+
+
+def record_words(question, answer):
+    """The command that records `answer` for `question`."""
+    return ("setup.py", "answer", "--id", question.id, "--answer", answer)
