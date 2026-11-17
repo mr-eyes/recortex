@@ -907,6 +907,65 @@ class WriteTests(WritingBox):
         done = self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words())
         self.assertEqual(1, done.returncode)
 
+    def second_write(self, parts, date="2026-12-10", before="on 9 of 11 spells.", after="on 9 of 11 spells, in both seasons."):
+        data = self.repo()
+        data["date"] = date   # what the fake creates is stamped after everything the sync has read, as on GitHub
+        self.save(data)
+        folder = self.start(5, "second-" + date)
+        base = self.base(folder)
+        self.draft(folder, base.replace(before, after, 1), parts=parts, results=(9140,))
+        done = self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words())
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.ready()
+
+    def test_a_claim_replaced_after_a_text_change_is_not_due_once_a_newer_text_change_links_its_replacement(self):
+        """The live shape: text change A links claim C1, C2 replaces C1, text change B links C2. Nothing is due for it."""
+        self.ready()
+        self.mode("review")
+        self.write_once()                          # A links 9302 (C1) and 9140
+        self.second_round()                        # C2 (9410) replaces 9302
+        self.assertIn("due: #5 Results", self.cmd("write.py", "status").stdout)
+        self.second_write(parts=(9410,))           # B links 9410
+        out = self.cmd("write.py", "status").stdout
+        self.assertNotIn("due: #5", out)
+        self.assertEqual("text", self.part_state(9410))
+        self.assertEqual(3, self.plan_json()["counts"]["due"])
+        found = json.loads(self.cmd("write.py", "status", "--json").stdout.split("\n", 1)[1])
+        self.assertEqual([], [entry for entry in found["due"] if entry["topic"] == 5])
+
+    def test_a_claim_revised_again_after_that_text_change_is_due_again_for_the_newest_claim_only(self):
+        self.ready()
+        self.mode("review")
+        self.write_once()
+        self.second_round()
+        self.second_write(parts=(9410,))
+        third = manuscript_record.plan_memory(
+            "2026-12-05T10:00-05:00", "claim", "wetter topsoil in dry spells, narrowed",
+            "claim that a rye cover keeps the topsoil wetter during dry spells", "Results", "#5",
+            "In dry spells the plots with a rye cover stayed above the wilting point on more spells than the bare plots, "
+            "in the first season.", "The dry-spell comparison in the first season.", "The dry-spell result.",
+            "The paper reports the season effect only.", "None for now, owner Claude session", change="narrows",
+            links="replaces=9410 because=9140")
+        self.add_comment(9420, 13, third, "2026-12-11T10:00:00Z")
+        self.ready()
+        found = json.loads(self.cmd("write.py", "status", "--json").stdout.split("\n", 1)[1])
+        entries = [entry for entry in found["due"] if entry["topic"] == 5]
+        self.assertEqual([("Results", [9420])], [(entry["heading"], entry["parts"]) for entry in entries])
+        self.second_write(parts=(9420,), date="2026-12-12", before="in both seasons.", after="in the first season.")
+        self.assertNotIn("due: #5", self.cmd("write.py", "status").stdout)
+
+    def test_a_newer_text_change_that_does_not_link_the_replacement_leaves_the_part_due(self):
+        self.ready()
+        self.mode("review")
+        self.write_once()
+        self.second_round()
+        other = manuscript_record.text_memory(
+            "2026-12-04T10:00-05:00", "Results", "the figure caption names the plot size", "The caption changed.",
+            "The size was missing.", "By the author in the chat, 2026-12-04 10:00 EST:\n\n> Approve", links="because=9140")
+        self.add_comment(9430, 5, other, tp.later(self))
+        self.ready()
+        self.assertIn("due: #5 Results", self.cmd("write.py", "status").stdout)
+
     def test_a_hand_edit_that_versions_sync_recorded_is_still_the_authors_and_protected(self):
         """versions.py sync tells a hand edit as a text change (form "edited") whose after is the live body; it must not
         make the plugin believe it wrote that body."""

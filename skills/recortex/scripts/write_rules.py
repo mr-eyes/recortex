@@ -5,7 +5,9 @@ rules exist once. A part of the text is a topic issue and one of the profile's `
 
   claim        a backed claim, or a standing discussion part whose every linked claim is backed or in the text, names
                the topic, and no told text change newer than it links it;
-  changed      a memory that a told text change links was replaced, corrected or set aside after that change;
+  changed      a memory that a told text change links was replaced, corrected or set aside after that change, and no
+               told text change newer than that one, for the same topic and heading, links what replaced it (or what
+               replaced that in turn);
   methods      under a `write_from_record` heading: a told standing decision on the topic's thread, or a standing result
                that a backed claim links, is newer than the topic's newest told text change or checkpoint and is linked
                by no told text change.
@@ -115,6 +117,19 @@ def due_parts(db, config, allowed, state):
     for memory in items.values():
         for key, target in memory["links"]:
             pointing.setdefault(target, []).append((key, memory))
+    def covered(row, heading, target):
+        """True when a told text change newer than `row` for the same topic and heading links what replaced `target`, or what
+        replaced that in turn: the text already says what the record now holds, so nothing is due for it."""
+        later, todo = set(), [target]
+        while todo:
+            for key, other in pointing.get(todo.pop(), []):
+                if key in ("replaces", "instead") and other["id"] not in later:
+                    later.add(other["id"])
+                    todo.append(other["id"])
+        return any(newer["issue"] == row["issue"] and (newer["time"], newer["id"]) > (row["time"], row["id"])
+                   and heading.lower() in {name.lower() for name in newer["sections"]} and later & set(newer["links"])
+                   for newer in texts)
+
     for row in texts:
         for target in row["links"]:
             moved = items.get(target)
@@ -128,7 +143,7 @@ def due_parts(db, config, allowed, state):
                               and parts[t]["state"] in ("backed", "stands", "text")]
             for heading in row["sections"]:
                 if heading.lower() in write and topic_ok(row["issue"], write[heading.lower()]) \
-                        and write[heading.lower()] not in plan["write_from_record"]:
+                        and write[heading.lower()] not in plan["write_from_record"] and not covered(row, heading, target):
                     add(row["issue"], write[heading.lower()], "changed", results=[o["id"] for o in newer
                                                                                 if o["kind"] in ("result", "correction")],
                         decisions=[o["id"] for o in newer if o["kind"] == "decision"])
