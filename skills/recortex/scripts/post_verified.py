@@ -30,6 +30,7 @@ import difflib
 import json
 import os
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -240,6 +241,11 @@ def main(argv=None):
                            help="let the run remove section labels whose sections the body no longer has")
             p.add_argument("--allow-other-profiles", action="store_true",
                            help="go on although the issue carries section labels of other profiles; they are left alone")
+            p.add_argument("--text-memory", help="a text change (kind text) whose Version field says `pending`: when versions "
+                           "are kept, the body edit gets its commit and this comment is posted with that commit in the Version "
+                           "field (references/versions.md)")
+            p.add_argument("--no-version", action="store_true", help="make no version commit and say nothing about versions "
+                           "(write.py makes its own)")
     args = parser.parse_args(argv)
     if args.offline and not args.dry_run:
         parser.error("--offline only makes sense with --dry-run")
@@ -395,7 +401,43 @@ def main(argv=None):
     ok = recortex.verify_body(draft, recortex.read_issue_body(repo, args.issue), "%s#%d" % (repo, args.issue))
     if not ok:
         return 1
-    return follow_labels(repo, args.issue, labels_command, plan, profiles, draft) if follow else 0
+    result = follow_labels(repo, args.issue, labels_command, plan, profiles, draft) if follow else 0
+    if result == 0 and not args.no_version:
+        result = keep_version(config, repo, args, draft)
+    return result
+
+
+def keep_version(config, repo, args, draft):
+    """After a verified body edit of a topic of the paper, when versions are kept: the commit of the new text and, when the
+    session passed one, its text change with the commit in the Version field. Without a text change the branch is left for
+    `versions.py sync`, which records the edit with its account and time."""
+    try:
+        import versions  # noqa: E402
+    except ImportError:
+        return 0
+    if args.kind != "final-record" or not versions.kept_here(repo) or recortex.plan_profile(
+            recortex.shipped_profiles(config.get("profiles"))) is None:
+        return 0
+    if not args.text_memory:
+        print("versions: this body change has no text change of its own; pass --text-memory FILE next time, or "
+              "versions.py sync records it as an edit.")
+        return 0
+    memory = recortex.read_text(args.text_memory)
+    after = record_format.sha_pair(record_format.field_text(memory, "Body") or "")
+    if after is None or after[1] != record_format.body_sha(draft) or not re.search(r"^\*\*Version:\*\* pending\s*$", memory, re.M):
+        print("not posted: the text change must hold '**Body:** before sha256 `...`; after sha256 `...`' of this body and "
+              "'**Version:** pending'; the body was written and has no text change yet")
+        return 1
+    result = versions.commit(config, repo, args.issue, draft)
+    field = "`%s`" % result if re.fullmatch(r"[0-9a-f]{40}", result) else "Not kept: %s" % result
+    memory = re.sub(r"^\*\*Version:\*\* pending\s*$", lambda _m: "**Version:** " + field, memory, count=1, flags=re.M)
+    filled = args.text_memory + ".filled"
+    with open(filled, "w", encoding="utf-8") as handle:
+        handle.write(memory)
+    ran = subprocess.run([sys.executable, os.path.abspath(__file__), "comment", "--repo", repo, "--issue", str(args.issue),
+                          "--kind", "text", "--body-file", filled], capture_output=True, text=True)
+    print(ran.stdout.rstrip())
+    return ran.returncode
 
 
 def body_still_matches(repo, number, expected, consequence):

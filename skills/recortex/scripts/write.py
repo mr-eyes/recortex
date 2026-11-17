@@ -329,6 +329,7 @@ def trusted_inputs(repo, db, config, allowed, plan, state, files):
         material[key] = sorted({cid for entry in due for cid in entry[key]})
     files["material.json"] = material
     files["protected.json"] = {"paragraphs": record["protected"]}
+    files["restore"] = record.get("restore") if isinstance(record.get("restore"), dict) else None
     return issue, record
 
 
@@ -371,6 +372,7 @@ def check_files(db, config, plan, state, repo, files, unprotect=()):
                 problems.append((2, "'%s' may gain rows but not lose or change one" % heading))
         elif heading.lower() not in write:
             problems.append((2, "the section '%s' is not one the plugin writes (%s)" % (heading, ", ".join(plan["write"]))))
+    restore = files.get("restore")
     numbers = record_format.field_numbers(base)
     items = state["found"]["items"] if state else {}
     for cid in material["results"]:
@@ -378,7 +380,7 @@ def check_files(db, config, plan, state, repo, files, unprotect=()):
             numbers |= record_format.field_numbers(row["text"])
     reported = set()
     for heading, (added, gone) in changes.items():
-        if heading.lower() == recortex.SOURCES_HEADING.lower():
+        if heading.lower() == recortex.SOURCES_HEADING.lower() or restore is not None:
             continue
         for paragraph in added:
             for written, token, power in record_format.plain_numbers(paragraph):
@@ -388,7 +390,7 @@ def check_files(db, config, plan, state, repo, files, unprotect=()):
                                         "and not in the base" % (written, heading)))
     base_blocks = {(b["kind"], b["id"]) for b in record_format.blocks(base)}
     for block in record_format.blocks(draft):
-        if (block["kind"], block["id"]) not in base_blocks:
+        if restore is None and (block["kind"], block["id"]) not in base_blocks:
             problems.append((4, "the draft adds the %s block '%s'; the plugin adds no figure or table block" % (
                 block["kind"], block["id"])))
     kept = set(paragraphs(draft))
@@ -398,6 +400,14 @@ def check_files(db, config, plan, state, repo, files, unprotect=()):
                                 "exactly" % (position, one_line(paragraph, 60))))
     if recortex.normalize(base) == recortex.normalize(draft):
         problems.append((6, "the draft does not differ from the base"))
+    if restore is not None:   # check 9: what a restore changes is exactly what the vouched version says, and nothing else
+        wanted = {s["heading"].lower(): s["text"].strip() for s in record_format.sections(restore["text"])}
+        for heading in changes:
+            if heading.lower() not in {h.lower() for h in restore["headings"]}:
+                problems.append((9, "the draft changes '%s', which this restore does not restore" % heading))
+            elif (new.get(heading.lower(), (heading, ""))[1].strip()) != wanted.get(heading.lower(), ""):
+                problems.append((9, "'%s' is not the text of the version being restored" % heading))
+        return problems
     if any(h.lower() in {x.lower() for x in plan["write_from_record"]} for h in changes):
         for heading, (added, gone) in changes.items():
             if heading.lower() not in {x.lower() for x in plan["write_from_record"]}:
@@ -484,7 +494,11 @@ def quote(words):
     return "\n".join("> " + line if line.strip() else ">" for line in text.split("\n"))
 
 
-def approved_field(mode, words, asked, who, moment):
+def approved_field(mode, words, asked, who, moment, restore=False):
+    if restore:   # a restore is always asked in the chat, in every mode
+        if not words:
+            sys.exit("error: a restore is always asked in the chat: pass --words-file with the author's answer")
+        return "Restored by %s in the chat, %s:\n\n%s" % (who, utc_stamp(moment), quote(words))
     if mode == "autonomous":
         return "Written without asking, under the autonomous mode."
     if not words:
@@ -574,7 +588,7 @@ def apply_command(args):
             sys.exit("write: " + UNTOLD)
         items = state["found"]["items"] if state else {}
         if not done.get("body"):
-            if not stands(state, items, files["used.json"]):  # first: what it rests on is not what it was
+            if files.get("restore") is None and not stands(state, items, files["used.json"]):  # first: what it rests on is not what it was
                 say("not written: what this text rests on changed while it waited; draft it again.")
                 return 1
             problems = check_files(db, config, plan, state, repo, files, unprotect)
@@ -595,7 +609,7 @@ def apply_command(args):
             continue
         if linked >= moment:
             moment = linked + datetime.timedelta(minutes=1)
-    approved = approved_field(mode, words, asked, args.who, moment)
+    approved = approved_field(mode, words, asked, args.who, moment, restore=files.get("restore") is not None)
     protected = files["protected.json"]["paragraphs"]
     kept = len([p for i, p in enumerate(protected) if i not in unprotect])
     before = record_format.body_sha(files["base.md"]) if files["base.md"].strip() else None  # the body this change starts from
@@ -630,7 +644,8 @@ def apply_command(args):
             backup = os.path.join(args.dir, "backup.%d.md" % os.getpid())
         ran = subprocess.run([sys.executable, os.path.join(SCRIPTS, "post_verified.py"), "body", "--repo", repo, "--issue",
                               str(issue), "--kind", "final-record", "--body-file", os.path.join(args.dir, "draft.md"),
-                              "--expected-body-file", os.path.join(args.dir, "base.md"), "--backup", backup],
+                              "--expected-body-file", os.path.join(args.dir, "base.md"), "--backup", backup,
+                              "--no-version"],
                              capture_output=True, text=True)
         say(ran.stdout.rstrip())
         if ran.returncode != 0:

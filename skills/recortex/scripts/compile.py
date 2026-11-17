@@ -25,6 +25,12 @@ see deletions) and --no-sync uses the index as it is. Then it writes, under --ou
 
 Files of the same name are replaced; nothing else in --out is touched.
 
+--version NAME compiles a named version of the paper instead of the record as it stands: the name must be one that a told
+decision of an allowed account carries, its tag must point at the commit the decision names, and every topic file at that
+commit must be the text the version's VERSION.json says; no body is read from the index, the plan files are left out and the
+timeline stops at the decision. --layout manubot also writes content/ (the Manubot layout of the branch of versions) under
+--out, from the same code that fills the branch.
+
 Examples:
   compile.py --out .tmp/compiled --dry-run
   compile.py --out .tmp/compiled --ref v0.3.0
@@ -152,9 +158,10 @@ def write_tsv(path, columns, rows):
             handle.write("\t".join(cell(row.get(c)) for c in columns) + "\n")
 
 
-def build(db, config, repo, hub, out, ref=None, dry_run=False):
+def build(db, config, repo, hub, out, ref=None, dry_run=False, bodies=None, cut=None, version=None):
     profiles = recortex.shipped_profiles(config.get("profiles"))
     plan = index.deliverable_order(db, hub, profiles)
+    kept = bodies is not None   # a named version: the bodies are the version's, never the index's
     files = []
     issues = {r["number"]: r for r in db.execute("SELECT * FROM issues")}
     deliverable = os.path.join(out, "deliverable")
@@ -169,8 +176,10 @@ def build(db, config, repo, hub, out, ref=None, dry_run=False):
         files.append(name)
         parts = ["# %s" % heading, "", "Section label `%s`. Compiled from %s." % (label, repo), ""]
         for number in numbers:
+            if kept and number not in bodies:
+                continue
             issue = issues[number]
-            text = record_format.section_text(issue["body"] or "", heading)
+            text = record_format.section_text(bodies[number] if kept else issue["body"] or "", heading)
             if text is None:
                 text = "(The body of #%d has no '## %s' section, although the issue carries %s.)" % (number, heading, label)
             parts += ["## %s (#%d)" % (issue["title"], number), "", issue["url"] or "", "", text.strip(), ""]
@@ -181,24 +190,38 @@ def build(db, config, repo, hub, out, ref=None, dry_run=False):
         counts["sections"] += 1
 
     blocks = {"figure": [], "table": []}
-    for row in db.execute("SELECT * FROM blocks ORDER BY issue"):
-        blocks[row["kind"]].append(dict(row))
+    if kept:
+        found, listed = [], []
+        for number in sorted(bodies):
+            for block in record_format.blocks(bodies[number]):
+                found.append(dict(block, issue=number, image=block["image"], has_source=1 if block["source"] else 0))
+            for ordinal, row in enumerate(record_format.sources(bodies[number])):
+                listed.append({"issue": number, "ordinal": ordinal, "statement": row["statement"], "source": row["source"]})
+        rows_of = lambda kind: [b for b in found if b["kind"] == kind]  # noqa: E731
+    else:
+        for row in db.execute("SELECT * FROM blocks ORDER BY issue"):
+            blocks[row["kind"]].append(dict(row))
+        rows_of = lambda kind: blocks[kind]  # noqa: E731
     for kind in ("figure", "table"):
         name = os.path.join(deliverable, "%ss.tsv" % kind)
         files.append(name)
-        counts["%ss" % kind] = len(blocks[kind])
+        counts["%ss" % kind] = len(rows_of(kind))
         if not dry_run:
-            write_tsv(name, BLOCK_COLUMNS, blocks[kind])
-    sources = [dict(r, issue_title=issues.get(r["issue"])["title"] if issues.get(r["issue"]) else "")
-               for r in db.execute("SELECT * FROM sources ORDER BY issue, ordinal")]
+            write_tsv(name, BLOCK_COLUMNS, rows_of(kind))
+    if kept:
+        sources = [dict(r, issue_title=issues.get(r["issue"])["title"] if issues.get(r["issue"]) else "") for r in listed]
+    else:
+        sources = [dict(r, issue_title=issues.get(r["issue"])["title"] if issues.get(r["issue"]) else "")
+                   for r in db.execute("SELECT * FROM sources ORDER BY issue, ordinal")]
     counts["sources"] = len(sources)
     files.append(os.path.join(deliverable, "sources.tsv"))
     if not dry_run:
         write_tsv(files[-1], ["issue", "issue_title", "statement", "source"], sources)
 
-    plan_made, plan_counts = plan_files(db, config, repo, deliverable, dry_run)
+    plan_made, plan_counts = ([], None) if kept else plan_files(db, config, repo, deliverable, dry_run)
     files += plan_made
-    rows = [dict(r, reconstructed="yes" if r["reconstructed"] else "no") for r in index.timeline(db)]
+    rows = [dict(r, reconstructed="yes" if r["reconstructed"] else "no") for r in index.timeline(db)
+            if cut is None or (r["at"] or "") <= cut]
     counts["timeline_rows"] = len(rows)
     counts["events"] = sum(1 for r in rows if r["type"] in record_format.EVENT_TYPES)
     counts["other_comments"] = sum(1 for r in rows if r["type"] == "other")
@@ -223,6 +246,8 @@ def build(db, config, repo, hub, out, ref=None, dry_run=False):
                 "files": [os.path.relpath(f, out) for f in files]}
     if plan_counts is not None:
         manifest["plan"] = plan_counts
+    if version is not None:
+        manifest["version"] = version
     files.append(os.path.join(out, "MANIFEST.json"))
     if not dry_run:
         with open(files[-1], "w", encoding="utf-8") as handle:
@@ -240,6 +265,8 @@ def main(argv=None):
     parser.add_argument("--no-sync", action="store_true", help="use the index as it is, without reading GitHub")
     parser.add_argument("--incremental", action="store_true",
                         help="sync only what changed instead of rebuilding; deletions on GitHub are then not seen")
+    parser.add_argument("--version", help="compile this named version of the paper (see the top of this file)")
+    parser.add_argument("--layout", choices=("manubot",), help="also write content/, the Manubot layout, under --out")
     parser.add_argument("--dry-run", action="store_true",
                         help="list what would be read and written; read nothing from GitHub, write nothing")
     args = parser.parse_args(argv)
@@ -270,7 +297,36 @@ def main(argv=None):
     db = index.connect(repo, create=False)
     if db is None:
         sys.exit("error: no index for %s; run without --no-sync" % repo)
-    files, counts = build(db, config, repo, hub, args.out, args.ref)
+    bodies = cut = version = layout_bodies = layout_meta = None
+    if args.version:
+        import versions  # noqa: E402
+        allowed = recortex.allowed_users(repo)
+        plan = recortex.plan_profile(recortex.shipped_profiles(config.get("profiles")))
+        if not allowed or plan is None:
+            sys.exit("compile: this project has no plan or is not in your trusted repositories, so no version can be vouched for")
+        try:
+            bodies, decision, authors, keywords = versions.vouched_version(config, repo, db, allowed, plan, args.version)
+        except versions.NotVouched as error:
+            sys.exit(str(error))
+        cut = decision["time"]
+        version = {"name": args.version, "commit": decision["commit"], "manifest_sha256": decision["manifest"],
+                   "decision": decision["id"]}
+        layout_bodies, layout_meta = bodies, (authors, keywords)
+    files, counts = build(db, config, repo, hub, args.out, args.ref, bodies=bodies, cut=cut, version=version)
+    if args.layout:
+        import versions  # noqa: E402
+        allowed = recortex.allowed_users(repo)
+        plan = recortex.plan_profile(recortex.shipped_profiles(config.get("profiles")))
+        if layout_bodies is None:
+            layout_bodies = versions.paper_bodies(db, config, repo, hub, allowed, plan, {})
+        laid = versions.layout_files(db, config, repo, hub, allowed, plan, layout_bodies, layout_meta)
+        for path, text in sorted(laid.items()):
+            if path.startswith("content/"):
+                target = os.path.join(args.out, path)
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with open(target, "w", encoding="utf-8", newline="") as handle:
+                    handle.write(text)
+                files.append(target)
     for name in files:
         print("wrote: %s" % name)
     print("sections %(sections)d (texts %(section_texts)d), figures %(figures)d, tables %(tables)d, sources %(sources)d, "
