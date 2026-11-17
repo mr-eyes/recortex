@@ -460,9 +460,9 @@ class WorkerTests(unittest.TestCase):
         with store.Store(REPO,config=self.config) as db:
             item=db.observation(sid);return item['state'],item['reason']
     def test_uncertain_sources_are_offered_again_as_their_session_goes_on_a_bounded_number_of_times(self):
-        # The live test left 26 sources "uncertain" for good: what the selector neither used nor set aside waits
-        # for its session to go on (or five minutes), is offered again with what followed, at most three times in all,
-        # and then stays deferred, visible in pending, for observer.py record --source.
+        # What the selector neither used nor set aside waits for its session to go on (or five minutes), is offered
+        # again with what followed, at most three times in all, and then stays deferred, visible in pending, for
+        # observer.py record --source; it is never left "uncertain" for good.
         first=self.capture('Run the tests and tell me which one fails.')
         shown,call=self.offered()
         self.run_worker(call)

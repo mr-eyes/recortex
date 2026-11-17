@@ -220,7 +220,7 @@ class PaperExportTests(tv.VersionBox):
 
 
     def test_code_in_the_rows_of_sources_is_code_in_the_export_and_not_backticks(self):
-        """Live check of 1.3.0: the rows of "Where the numbers come from" showed their backticks as they stood in the record."""
+        """The rows of "Where the numbers come from" draw a code span as code, not as backticks around its text."""
         import mind
         import mind_paper
         body = ("# T\n\n## Results\n\nText.\n\n## Sources\n\n| Statement or number | Source |\n|---|---|\n"

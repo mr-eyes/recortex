@@ -357,7 +357,7 @@ class WriteTrustTests(VersionBox):
         self.nothing_written()
 
     def test_a_rejection_is_recorded_once_and_the_proposal_stops_waiting(self):
-        """Codex review of 1.3.0: every later run posted another checkpoint, and the brief went on counting the proposal."""
+        """A rejection is posted once; a later run posts no other checkpoint, and the brief stops counting the proposal."""
         self.proposed()
         self.ready()
         self.assertEqual(1, self.plan_json()["counts"]["proposals"])

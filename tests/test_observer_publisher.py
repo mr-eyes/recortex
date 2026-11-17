@@ -117,8 +117,8 @@ class ObserverPublisherTests(unittest.TestCase):
             self.assertIsNone(publisher.outbound_problem("Plain text " + text, repo), text)
 
     def test_an_automatic_body_names_nothing_of_this_machine(self):
-        # The first live test's checkpoint published an absolute local path: an automatic body refuses absolute local
-        # paths, the home folder, the local user name and email addresses, written plainly or as entities.
+        # An automatic body refuses absolute local paths, the home folder, the local user name and email addresses,
+        # written plainly or as entities.
         repo, home = fixtures.REPO, os.path.expanduser("~")
         with mock.patch.object(publisher, "local_names", return_value=({home, "/home/octo-dev"}, {"octo-dev"})):
             for text in ("Ran in /home/octo-dev/work/octo-repo.", "Ran `/usr/bin/python3 -m unittest`.", "See ~/notes/run.txt.",

@@ -1821,8 +1821,8 @@ class PlanModelTests(PaperSandbox):
                           "comparisons": 1}, plan["gaps"])
 
     def test_agreed_on_is_the_day_of_the_decision_that_adopted_the_plan_and_not_of_the_earliest_decision_a_part_links(self):
-        """Live check of 1.3.0: a claim said "Agreed on November 14" for a plan the author adopted on November 17, since the
-        part also linked an older decision and the page took the earliest decision a part links."""
+        """A claim of a plan adopted on November 17 says "Agreed on November 17", though the part also links an older
+        decision: the page does not take the earliest decision a part links."""
         data = self.repo()
         body = data["comments"]["9302"]["body"]
         self.assertIn("because=9300,9140", body)

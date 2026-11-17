@@ -449,8 +449,8 @@ class ObserverHookTests(unittest.TestCase):
             sources.answered({"session_id": "session1", "transcript_path": str(path)}, str(self.project), "1f9dd5d6", line)
 
     def test_a_push_hold_stops_every_form_of_a_push_and_lets_status_run(self):
-        # The live test's lines: before a Bash call every simple command of the line is checked, redirections,
-        # prefixes and shell strings included; a line that is not taken apart is stopped when it holds the words.
+        # Before a Bash call every simple command of the line is checked, redirections, prefixes and shell strings
+        # included; a line that is not taken apart is stopped when it holds the words.
         self.append("Don't push.")
         for command in ("git push origin HEAD 2>&1", "git status; git push", "cd x && git push",
                         'git remote -v && git push origin HEAD 2>&1; echo "exit=$?"', "bash -c 'git push'",
@@ -479,7 +479,7 @@ class ObserverHookTests(unittest.TestCase):
         self.assertIn("transcript sources are unavailable", hooks.handle("stop", gone, self.config, REPO)["systemMessage"])
 
     def queued(self, text, **changes):
-        """What Claude Code 2.1.325 writes for a message typed while a turn runs, as the live test found it."""
+        """What Claude Code 2.1.325 writes for a message typed while a turn runs."""
         item = dict({"type": "queued_command", "prompt": text, "source_uuid": "d3a0fc45-b874-428e-a353-1be5d7f01c0c",
                      "delivery_id": "63ed5f0f-6377-4f82-a89b-11339c109367", "commandMode": "prompt",
                      "origin": {"kind": "human"}, "timestamp": "2026-11-16T17:09:55.601Z", "humanTurn": True},
@@ -967,8 +967,8 @@ class ObserverHookTests(unittest.TestCase):
         self.assertIn("catches up at the end of each turn", hooks.BEHIND["reason"])
 
     def test_the_denial_says_the_user_asked_and_invites_no_release(self):
-        # The first live test's denial ("release that hold explicitly before this action") led the session to try a
-        # release. The denial now says only that the user has asked that this action not be taken.
+        # A denial that said "release that hold explicitly before this action" would lead the session to try a
+        # release. The denial says only that the user has asked that this action not be taken.
         self.append("/recortex hold git-push")
         reason = self.run_hook()["hookSpecificOutput"]["permissionDecisionReason"]
         self.assertEqual("The user has asked that this action not be taken.", reason)
@@ -1022,8 +1022,8 @@ class ObserverHookTests(unittest.TestCase):
         self.assertEqual(1, sum("not yet verified in GitHub" in line for line in lines))
 
     def test_ordinary_backlog_and_a_long_transcript_show_no_line(self):
-        # The first live test showed "transcript sources are unavailable or incomplete" at every first prompt (the
-        # session's attachments passed one scan's bound) and "captured work is still pending" at most stops.
+        # A session whose attachments pass one scan's bound must not show "transcript sources are unavailable or
+        # incomplete" at every first prompt, nor "captured work is still pending" at most stops.
         with self.path.open("a") as handle:
             for n in range(40):
                 handle.write(json.dumps({"type": "attachment", "attachment": {"content": "x" * 20000}}) + "\n")

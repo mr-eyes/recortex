@@ -919,7 +919,7 @@ class WriteTests(WritingBox):
         self.ready()
 
     def test_a_claim_replaced_after_a_text_change_is_not_due_once_a_newer_text_change_links_its_replacement(self):
-        """The live shape: text change A links claim C1, C2 replaces C1, text change B links C2. Nothing is due for it."""
+        """Text change A links claim C1, C2 replaces C1, text change B links C2. Nothing is due for it."""
         self.ready()
         self.mode("review")
         self.write_once()                          # A links 9302 (C1) and 9140
@@ -1627,8 +1627,9 @@ class OwnPaperTests(WritingBox):
         self.assertNotIn("paper.tex", self.cmd("hooks.py", "--doctor").stdout)
 
     def test_the_wording_sends_the_records_text_into_the_authors_paper_only_through_own_paper_py(self):
-        """Live check of 1.3.0: an edit tool was used on the author's file for "bring the paper's text up to date". No hook
-        guards it, since an author who writes the paper with Claude would be asked on every edit; the wording does."""
+        """A request such as "bring the paper's text up to date" must not lead to an edit of the author's file with an edit
+        tool. No hook guards it, since an author who writes the paper with Claude would be asked on every edit; the
+        wording does."""
         skill = recortex.read_text(os.path.join(ts.SKILL, "SKILL.md"))
         writing = recortex.read_text(os.path.join(ts.SKILL, "references", "writing.md"))
         self.assertIn("The record's text goes into it only through `own_paper.py`, which shows the difference, keeps a backup and "
