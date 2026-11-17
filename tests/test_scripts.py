@@ -12562,6 +12562,15 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("python -m unittest discover -s tests -v", workflow)
         self.assertIn("timeout-minutes: 45", workflow)
 
+    def test_the_skill_sends_the_planned_headings_through_the_writing_mode(self):
+        """Owner decision of 16 November 2026: with a plan, a change to a heading on the plan's write list goes through the
+        writing mode, and the session does not make it itself when the mode is off or not chosen."""
+        text = recortex.read_text(os.path.join(ROOT, "skills", "recortex", "SKILL.md"))
+        section = text.split("### Change the deliverable text", 1)[1].split("###", 1)[0]
+        self.assertIn("a heading on the plan's `write` list goes through [references/writing.md]", section)
+        self.assertIn("whenever this machine's writing mode is review or autonomous", section)
+        self.assertIn("With the mode off or not chosen, do not make that change yourself unless the user asks for that very edit", section)
+
     def test_every_class_of_test_scripts_is_in_one_of_the_four_commands(self):
         text = recortex.read_text(os.path.join(ROOT, "CONTRIBUTING.md"))
         listed = {name for group in re.findall(r"tests\.test_scripts\.\{([^}]*)\}", text) for name in group.split(",")}

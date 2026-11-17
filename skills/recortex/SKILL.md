@@ -101,6 +101,8 @@ The plain line, links, Evidence and folds in full: [references/issue-model.md](r
 
 ### Change the deliverable text
 
+In a project with a plan, a change to a heading on the plan's `write` list goes through [references/writing.md](references/writing.md) (`write.py`) whenever this machine's writing mode is review or autonomous. With the mode off or not chosen, do not make that change yourself unless the user asks for that very edit in the chat. Every other heading takes the steps below.
+
 1. Fetch the topic body to an unchanged base file, copy it to a separate draft and edit the draft: the new text replaces the old, with no folded block, date or note of what changed. Text that leaves the deliverable is deleted, and a section with no text left is deleted with its heading.
 2. `python3 ${CLAUDE_SKILL_DIR}/scripts/post_verified.py body --issue N --kind final-record --body-file <draft> --expected-body-file <base> --backup <file> --dry-run` first, then without `--dry-run`. It refuses a changed live body: read the current text and merge your changes before retrying; never refresh only the base to bypass the check. Coordinate one writer per issue because the check and write are separate GitHub calls. It refuses an issue labeled `hub` or `active`, or one without `final-record`; it lints, replaces the body, adds and removes section labels so they follow the headings, and reads both back. It prints `removes: <labels>` and removes a section label only with `--allow-label-removal`, so check that each of those sections left on purpose.
 3. Make sure the dated comment that motivated the change is posted. That comment and GitHub's edit history are the trail.
