@@ -1948,6 +1948,35 @@ class ZoneTests(unittest.TestCase):
                           "written as 2026-03-04 14:10 IST"):
             self.assertIsNone(zones.zone_of(statement), repr(statement))
 
+    def test_words_never_name_the_united_states_for_a_place_elsewhere(self):
+        import zones
+        for statement in ("Australian Eastern time", "Australian Central Standard Time", "Pacific/Auckland", "Pacific/Honolulu",
+                          "Central Africa Time", "Eastern Africa", "Asia/Kolkata", "China time", "India time", "New Zealand time",
+                          "Europe/Berlin", "US/Pacific", "Western Australia"):
+            self.assertIsNone(zones.zone_of(statement), statement)
+        for statement, label, minutes in (("central Europe", "CET", 60), ("Central European Summer Time", "CET", 60),
+                                          ("Eastern Europe", "EET", 120), ("Western Europe", "WET", 0),
+                                          ("US Eastern time", "EST", -300), ("Pacific Time (US & Canada)", "PST", -480),
+                                          ("Central time, US", "CST", -360), ("Alaska time", "AKST", -540)):
+            found = zones.zone_of(statement)
+            self.assertEqual((label, minutes), (found.label, found.minutes), statement)
+
+    def test_gmt_with_an_offset_is_utc_with_that_offset_and_a_bare_gmt_stays_gmt(self):
+        import zones
+        for statement, label, minutes in (("GMT+1", "UTC+1", 60), ("GMT-5:30", "UTC-5:30", -330), ("Offset GMT+02:00 all year", "UTC+02:00", 120),
+                                          ("written as 2026-03-04 14:10 GMT+1", "UTC+1", 60), ("GMT", "GMT", 0)):
+            found = zones.zone_of(statement)
+            self.assertEqual((label, minutes), (found.label, found.minutes), statement)
+
+    def test_the_example_forms_of_a_setup_read_as_they_say_even_for_places_the_words_rule_leaves_unknown(self):
+        import zones
+        for statement, label in (("US Pacific time, written as 2026-03-04 14:10 PST", "PST"),
+                                 ("Australian Eastern time, written as 2026-03-04 14:10 AEST", "AEST"),
+                                 ("New Zealand time, written as 2026-03-04 14:10 NZST", "NZST"),
+                                 ("Central Africa Time, written as 2026-03-04 14:10 SAST", "SAST"),
+                                 ("Pacific/Auckland, written as 2026-03-04 14:10 NZDT", "NZDT"),
+                                 ("Berlin, written as 2026-03-04 14:10 CET", "CET"), ("East Africa Time (EAT)", "EAT")):
+            self.assertEqual(label, zones.zone_of(statement).label, statement)
 
     def test_a_stamp_is_written_with_the_abbreviation_and_offset_of_its_moment(self):
         import zones

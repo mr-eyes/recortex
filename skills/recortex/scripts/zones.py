@@ -27,10 +27,13 @@ PAIRS = (("PST", "PDT", -480, "US"), ("MST", "MDT", -420, "US"), ("CST", "CDT", 
 FIXED = {"UTC": 0, "UT": 0, "GMT": 0, "HST": -600, "JST": 540, "KST": 540, "SGT": 480, "HKT": 480, "SAST": 120, "EAT": 180,
          "WAT": 60, "MSK": 180, "PKT": 300, "WIB": 420}
 # what a statement in words, with no stamp in it, names; the first phrase found counts (more specific ones first)
-WORDS = (("central european", "CET"), ("eastern european", "EET"), ("western european", "WET"), ("british", "BST"),
+WORDS = (("central europe", "CET"), ("eastern europe", "EET"), ("western europe", "WET"), ("british", "BST"),
          ("alaska", "AKST"), ("hawaii", "HST"), ("pacific", "PST"), ("mountain", "MST"), ("central", "CST"),
          ("eastern", "EST"), ("japan", "JST"), ("universal", "UTC"), ("utc", "UTC"), ("gmt", "GMT"))
 
+# a statement that names one of these places, or holds a "/" (a zone name such as Pacific/Auckland), is never read from its
+# words: "Eastern", "Central" and "Pacific" would name the United States for Australia, Africa and New Zealand
+ELSEWHERE = re.compile(r"australia|africa|asia|china|india|zealand|/")
 OFFSET = re.compile(r"UTC([+-])([0-9]{1,2})(?::([0-9]{2}))?")
 EXAMPLE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} ([A-Z]{2,5}|UTC[+-][0-9]{1,2}(?::[0-9]{2})?)(?![A-Za-z0-9+:-])")
 STAMP = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2}) ([0-9]{2}):([0-9]{2}) ([A-Z]{2,5}|UTC[+-][0-9]{1,2}(?::[0-9]{2})?)(?![A-Za-z0-9+:-])")
@@ -146,10 +149,12 @@ def named(label):
 def zone_of(text):
     """The Zone a statement of the record's time convention names, or None. The statement is the project file's `timezone`
     ("US Pacific time, written as 2026-03-04 14:10 PST"): the abbreviation of the example stamp counts first, then UTC with
-    an offset, then a bare abbreviation ("CET"), then the words (Pacific, Central European, ...). None when it names nothing
-    this table knows."""
+    an offset (GMT+1 is read as UTC+1), then a bare abbreviation ("CET"), then the words (Pacific, Central Europe, ...), unless
+    the statement names Australia, Africa, Asia, China, India or Zealand or holds a "/", which is unknown. None when it
+    names nothing this table knows."""
     if not isinstance(text, str):
         return None
+    text = re.sub(r"(?<![A-Za-z0-9])GMT(?=[+-][0-9])", "UTC", text)
     found = EXAMPLE.search(text)
     if found:
         return named(found.group(1))
@@ -160,6 +165,8 @@ def zone_of(text):
         if named(token) is not None:
             return named(token)
     lowered = text.lower()
+    if ELSEWHERE.search(lowered):
+        return None
     for phrase, label in WORDS:
         if phrase in lowered:
             return named(label)
