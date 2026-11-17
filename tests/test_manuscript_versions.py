@@ -1191,15 +1191,27 @@ class WriteTrustTests(VersionBox):
         self.assertIn("is not by an allowed account or is not the newest proposal", out)
         self.nothing_written()
 
-    def test_only_the_newest_proposal_of_a_topic_counts(self):
+    def test_only_the_newest_proposal_of_an_allowed_account_counts(self):
+        self.proposed()
+        self.merge()
+        newer = manuscript_record.proposal("2026-12-09T10:00-05:00", "Results", "Another change.", "Another reason.", self.pull,
+                                           "0" * 64, "1" * 64)
+        self.add_comment(9600, 5, newer, tp.later(self))   # a newer proposal by an allowed account: the older one is void
+        out = self.approvals("--apply").stdout
+        self.assertIn("merged with other text than proposed", out)   # the newest one is judged, and its text is not the merged one
+        self.nothing_written()
+
+    def test_a_newer_proposal_of_an_account_that_is_not_allowed_never_blocks_the_one_that_stands(self):
+        """Anyone who may comment can post a proposal-typed comment; it must not stop the author's approval."""
         self.proposed()
         self.merge()
         later = manuscript_record.proposal("2026-12-09T10:00-05:00", "Results", "Another change.", "Another reason.", self.pull,
                                            "0" * 64, "1" * 64)
-        self.add_comment(9600, 5, later, tp.later(self), "hubot")   # a newer proposal, by an account that is not allowed
-        out = self.approvals("--apply").stdout
-        self.assertIn("is not by an allowed account or is not the newest proposal on #5", out)
-        self.nothing_written()
+        self.add_comment(9600, 5, later, tp.later(self), "hubot")
+        done = self.approvals("--apply")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertNotIn("is not by an allowed account or is not the newest proposal on #5", done.stdout)
+        self.assertIn("The pooled fit", self.body(5))
 
     def test_a_file_edited_on_the_branch_makes_proposals_for_that_topic_wait(self):
         self.proposed()

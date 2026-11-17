@@ -219,12 +219,15 @@ def propose_command(args):
 # ---------------------------------------------------------------- approvals
 
 def newest_proposals(db, allowed):
-    """[(comment id, issue, author)] of the newest proposal comment of each topic, whoever wrote it."""
+    """[(comment id, issue, author)] of the newest proposal comment of each topic written by an allowed account. A proposal
+    comment of any other account never counts, newer or not: anyone who can comment on a public repository could otherwise
+    block the author's approval with one comment (the brief counts only allowed accounts' proposals too)."""
     rows = db.execute("SELECT comment, issue, author, at, created_at FROM events WHERE type = 'proposal' "
                       "ORDER BY issue, created_at, comment").fetchall()
     newest = {}
     for row in rows:
-        newest[row["issue"]] = row
+        if (row["author"] or "").lower() in allowed:
+            newest[row["issue"]] = row
     return [(row["comment"], row["issue"], (row["author"] or "").lower()) for row in newest.values()]
 
 
