@@ -552,8 +552,9 @@ def render_command(words):
 def answers_file(repo, config):
     """The answers file that `setup.py apply` takes for the manuscript profile: the repository and one deliverable of
     kind paper, `prompt_hook` and `read_transcripts` copied from the project file when they fit (new_config would
-    otherwise reset them), and every optional flag false. Nothing else of the project file is repeated: apply keeps the
-    rest."""
+    otherwise reset them), and the optional flags that no question of the session asks false. The status line and the
+    observer are left out: apply reads an answer written in so many words as the user's own, and they have questions of
+    their own. Nothing else of the project file is repeated: apply keeps the rest."""
     import setup
     answers = {"repo": repo, "deliverables": [{"kind": "paper"}]}
     hook = config.get("prompt_hook")
@@ -565,9 +566,10 @@ def answers_file(repo, config):
             pass
     if isinstance(config.get("read_transcripts"), bool):
         answers["read_transcripts"] = config["read_transcripts"]
-    for flag in ("catch_up", "triage_workflow", "claude_md", "trust", "status_line"):
+    for flag in ("catch_up", "triage_workflow", "claude_md", "trust"):
         answers[flag] = False
-    answers["observer"] = {"mode": "off"}
+    # "status_line" and "observer" are left out (apply reads both as no): written as false, apply would record a "no" to
+    # two questions the user was not asked
     return answers
 
 

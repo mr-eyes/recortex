@@ -382,9 +382,10 @@ def session_lines(record, topic_limit, active_limit):
     return lines
 
 
-def session_payload(record, fresh):
-    """The SessionStart brief. Lists are shortened to fit the cap; the END and protocol lines are always there."""
-    limit = CAPS["session-start"]
+def session_payload(record, fresh, reserve=0):
+    """The SessionStart brief. Lists are shortened to fit the cap less `reserve`, the room of a fixed line that the hook puts
+    after the brief; the END and protocol lines are always there."""
+    limit = CAPS["session-start"] - reserve
     field = field_sheet.session_line(record.field)  # fixed wording; FIELD_ON holds only the checked day
     board = record.board_note()  # fixed wording, outside the data frame; empty for a project without a board
     head = ["recortex record brief for %s (%s)." % (record.repo, record.freshness(fresh)),

@@ -444,6 +444,72 @@ class HookLineTests(Box):
         self.assertGreater(out.index(brief.SETUP_QUESTIONS % (2, "s")), out.index(brief.END))
 
 
+class FullBriefTests(Box):
+    """A brief that fills its cap (a long resume block, many next actions) still carries the line: the brief's lists and
+    resume block make room for it, so that the writing question reaches the session at every start."""
+
+    KIND = "plan"
+
+    def long_resume(self):
+        with open(self.state) as handle:
+            data = json.load(handle)
+        focus = " ".join(["The work moved on, and this is a long sentence of the current focus."] * 60)
+        rows = [("Refit the model with the second season number %d" % k, "the first author", "#8") for k in range(25)]
+        data["comments"]["9600"] = {"issue": 1, "created_at": "2026-12-09T15:00:00Z",
+                                    "body": manuscript_record.resume("2026-12-09T10:00-05:00", focus, rows, "none")}
+        data["issues"]["1"]["updated_at"] = "2026-12-09T15:00:00Z"
+        with open(self.state, "w") as handle:
+            json.dump(data, handle)
+
+    def test_a_brief_at_its_cap_still_carries_the_line_and_stays_within_the_cap(self):
+        self.long_resume()
+        out = self.start()
+        self.assertIn("resume block cut", out)   # the brief is at its cap
+        self.assertEqual(1, len(self.lines(out)), out[-600:])   # and the setup question still reaches the session
+        self.assertLessEqual(len(out.rstrip("\n")), brief.CAPS["session-start"])
+        self.assertIn(brief.END, out)
+        self.assertNotIn(brief.WRITING_NOT_CHOSEN, out)   # the line stands in for that question while the questions are on
+
+    def test_the_questions_off_the_brief_has_its_room_back_and_the_writing_line_returns(self):
+        self.long_resume()
+        out = self.start(env={SWITCH: "0"})
+        self.assertEqual([], self.lines(out))
+        self.assertIn(brief.WRITING_NOT_CHOSEN, out)
+
+    def test_the_room_is_taken_only_when_a_line_is_made(self):
+        self.long_resume()
+        self.start(session="one")
+        again = self.start(session="one", source="compact")   # the line was shown: the brief has the whole cap again
+        self.assertEqual([], self.lines(again))
+        self.assertGreater(len(again), brief.CAPS["session-start"] - 40)
+
+
+class ProfileYesTests(Box):
+    """Yes to the manuscript profile is one answer: it settles nothing for the two questions nobody asked."""
+
+    def test_yes_to_the_profile_records_nothing_for_the_status_line_and_the_observer(self):
+        self.touch("paper/main.tex")
+        found = json.loads(self.tool("setup.py", "questions", "--json").stdout)
+        self.assertEqual(["manuscript-profile", "status-line", "observer"], [q["id"] for q in found["open"]])
+        answers = next(q["answers_file"] for q in found["open"] if q["id"] == "manuscript-profile")
+        self.assertNotIn("status_line", answers)
+        self.assertNotIn("observer", answers)
+        path = self.write("answers-profile.json", json.dumps(answers))
+        done = self.tool("setup.py", "apply", "--answers", path, "--yes")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertNotIn("status-line no", done.stdout)
+        self.assertNotIn("observer no", done.stdout)
+        self.assertEqual(["status-line", "observer"], self.open_ids())   # still the user's to answer
+
+    def test_an_answer_the_user_gave_is_still_recorded(self):
+        path = self.write("answers.json", json.dumps({"repo": REPO, "deliverables": [{"kind": "paper"}], "status_line": False,
+                                                       "observer": {"mode": "off"}}))
+        done = self.tool("setup.py", "apply", "--answers", path, "--yes")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertNotIn("status-line", self.open_ids())
+        self.assertNotIn("observer", self.open_ids())
+
+
 # ---------------------------------------------------------------- the checks, one state at a time
 
 class StatusLineTests(Box):
@@ -473,6 +539,13 @@ class StatusLineTests(Box):
         self.assertNotIn("status-line", self.groups().get("open", []))
         self.assertNotIn("status-line", self.open_ids())
         self.assertEqual({"theme": "dark"}, load_json(target))
+
+    def test_a_pipe_in_place_of_the_settings_file_never_blocks_the_hook(self):
+        os.makedirs(os.path.dirname(self.settings), exist_ok=True)
+        os.mkfifo(self.settings)   # opening it for reading would wait for a writer until the hook's budget ended
+        out = self.start(env={"RECORTEX_HOOK_TIMEOUT": "6"})
+        self.assertEqual([brief.SETUP_QUESTIONS % (1, "")], self.lines(out), out)   # the observer; the status line is not asked
+        self.assertIn("status-line", self.groups().get("not-asked", []))
 
     def test_a_hostile_string_in_the_settings_file_is_never_printed(self):
         self.settings_file({"theme": HOSTILE, "statusLine_not": HOSTILE})
@@ -568,7 +641,7 @@ class ProfileCheckTests(Box):
         answers = question["answers_file"]
         self.assertEqual({"repo": REPO, "deliverables": [{"kind": "paper"}], "prompt_hook": {"enabled": False, "every": 20},
                           "read_transcripts": True, "catch_up": False, "triage_workflow": False, "claude_md": False,
-                          "trust": False, "status_line": False, "observer": {"mode": "off"}}, answers)
+                          "trust": False}, answers)   # no answer for the status line and the observer: nobody asked
         path = self.write("answers-profile.json", json.dumps(answers))
         dry = self.tool("setup.py", "apply", "--answers", path, "--dry-run")
         self.assertEqual(0, dry.returncode, dry.stdout + dry.stderr)
@@ -809,7 +882,9 @@ class StateFileTests(Box):
             "Octo-Org/Octo-Repo": {"observer": {"answer": "no", "day": day(0)}}}})
         yield "a bad repository", dict(value={"form": 1, "machine": {}, "repos": {"no-slash": {}}})
         yield "mode 0644", dict(value={"form": 1, "machine": {}, "repos": {}}, mode=0o644)
-        yield "too large", dict(raw=json.dumps({"form": 1, "machine": {}, "repos": {}, "pad": "x" * 20001}))
+        letters = str.maketrans("0123456789", "ghijklmnop")   # a valid file of the form, only too large: 700 ids this version does not know
+        yield "too large", dict(value={"form": 1, "repos": {}, "machine": {
+            "q" + format(k, "x").translate(letters): {"answer": "no", "day": day(0)} for k in range(700)}})
         yield "hostile text", dict(raw=json.dumps({"form": 1, "machine": {"observer": HOSTILE}, "repos": {}}))
 
     def test_a_file_that_cannot_be_read_gives_the_fixed_line_asks_nothing_and_is_left_as_it_was(self):

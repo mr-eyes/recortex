@@ -518,9 +518,10 @@ def produce(event, data, budget, config, repo, hub):
         record = brief.Record(db, config, repo)
         LAST.update(synced_at=record.synced or "", fresh=fresh)
         if event == "session-start":
-            text = brief.session_payload(record, fresh)
+            # the line about the setup questions is made first, so that the brief's lists and resume block make room for it
+            questions, held = setup_line(repo, config, record, session, brief.CAPS["session-start"] // 2)
+            text = brief.session_payload(record, fresh, reserve=len(questions) + 1 if questions else 0)
             remember(repo, session, digest(record.key()), brief=True)
-            questions, held = setup_line(repo, config, record, session, brief.CAPS["session-start"] - len(text))
             text += "\n" + questions if questions else ""
             signal = new_signal(repo, config, brief.CAPS["session-start"] - len(text), held)
             text += "\n" + signal if signal else ""
