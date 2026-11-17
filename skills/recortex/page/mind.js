@@ -72,7 +72,10 @@
     mark(null);
     if (lastFocus && document.contains(lastFocus)) { lastFocus.focus({ preventScroll: true }); }
   }
+  var kept = {};
   function route() {
+    var was = root.getAttribute('data-view');
+    if (was) { kept[was] = window.scrollY; }
     var h = location.hash.slice(1) || 'now';
     if (/^m-[0-9]+$/.test(h)) {
       if (!views.some(function (v) { return v.classList.contains('on'); })) { show('now'); }
@@ -91,7 +94,10 @@
       if (pane) { showPane(pane.id.slice(4)); }
       unfold(el);
     } else { show('now'); }
-    function settle() { if (el && view && el !== view) { el.scrollIntoView(); } else { window.scrollTo(0, 0); } }
+    if (el && el.classList && el.classList.contains('histbox') && el.hidden) { toggleBox(el.id); }
+    function settle() {
+      if (el && view && el !== view) { el.scrollIntoView(); } else { window.scrollTo(0, (view && kept[view.id]) || 0); }
+    }
     settle();
     setTimeout(settle, 0);
     var side = $('.side');
@@ -308,11 +314,12 @@
         });
         if (found) { row.classList.add('r-' + found); }
       });
+      sideNotes();
     });
   }
   function setMode(mode) {
     if (!paper || MODES.indexOf(mode) < 0) { return; }
-    atTop(function () { paper.setAttribute('data-mode', mode); });
+    atTop(function () { paper.setAttribute('data-mode', mode); sideNotes(); });
   }
   function changes() {
     return $$('.rw.r-added, .rw.r-reworded, .rw.r-changed, .r-removed.on', paper).filter(function (el) { return el.offsetParent !== null; });
@@ -325,9 +332,34 @@
       list = list.filter(function (el) { return el.getBoundingClientRect().top < offset - 1; });
       target = list[list.length - 1];
     }
-    if (!target) { return; }
+    if (!target) { say(step > 0 ? 'No later change' : 'No earlier change'); return; }
     var calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     window.scrollBy({ top: target.getBoundingClientRect().top - offset, behavior: calm ? 'auto' : 'smooth' });
+    say('Change ' + (changes().indexOf(target) + 1) + ' of ' + changes().length);
+  }
+  // The notes of the margin sit beside their rows. A note taller than its row would leave a hole in the text, so each note
+  // takes no room of its own (its bottom margin is as negative as it is tall) and a note that would overlap the one before it
+  // is moved down, with no change to the text. Without the script, or in a narrow window, the layout is the style's.
+  var laid = '', soon = 0;
+  function sideNotes() {
+    var host = $('#paper-text', paper), wide = window.matchMedia && window.matchMedia('(min-width: 1181px)').matches;
+    if (!host) { return; }
+    var units = $$('.row > .mn, .row > .mnotes', host);
+    units.forEach(function (u) { u.style.position = ''; u.style.top = ''; u.style.marginBottom = ''; });
+    host.style.paddingBottom = '';
+    if (!wide) { return; }
+    var shown = units.filter(function (u) { return u.offsetHeight > 0; });
+    var heights = shown.map(function (u) { return u.offsetHeight; });
+    shown.forEach(function (u, i) { u.style.marginBottom = (-heights[i]) + 'px'; });
+    var bottom = -1e9, base = window.pageYOffset;
+    shown.forEach(function (u, i) {
+      var top = u.getBoundingClientRect().top + base, push = Math.max(0, bottom + 10 - top);
+      if (push > 0) { u.style.position = 'relative'; u.style.top = push + 'px'; }
+      bottom = top + push + heights[i];
+    });
+    var end = host.getBoundingClientRect().bottom + base;
+    if (bottom > end) { host.style.paddingBottom = Math.ceil(bottom - end + 10) + 'px'; }
+    laid = host.offsetWidth + 'x' + host.offsetHeight;
   }
   function toggleBox(id) {
     if (!ID.test(id || '')) { return; }
@@ -339,7 +371,12 @@
     if (!box.hidden) { box.focus(); } else if (opener) { opener.focus(); }
   }
   var told = $('#copystatus');
-  function say(words) { if (told) { told.textContent = words; } }
+  function say(words) {
+    // the text is cleared first, so that the same words said twice are announced twice
+    if (!told) { return; }
+    told.textContent = '';
+    setTimeout(function () { told.textContent = words; }, 50);
+  }
   function copyRequest(button) {
     var req = button.previousElementSibling;
     if (!req || !req.classList.contains('req')) { return; }
@@ -369,7 +406,13 @@
     $$('.histbox', paper).forEach(function (box) { box.hidden = true; });
     if (narrow()) { $$('.legend', paper).forEach(function (d) { d.open = false; }); }
     var pick = $('#pick');
-    if (pick) { pick.addEventListener('change', function () { pickVersion(pick.value); }); }
+    if (pick) {
+      pick.addEventListener('change', function () {
+        var changes = $('input[name=pmode][value=changes]', paper);
+        if (paper.getAttribute('data-mode') === 'clean' && changes) { changes.checked = true; setMode('changes'); }
+        pickVersion(pick.value);
+      });
+    }
     $$('input[name=pmode]', paper).forEach(function (radio) {
       radio.addEventListener('change', function () { if (radio.checked) { setMode(radio.value); } });
     });
@@ -387,11 +430,30 @@
       var spy = new IntersectionObserver(function (found) {
         found.forEach(function (entry) {
           if (!entry.isIntersecting) { return; }
-          $$('.subnav a').forEach(function (a) { a.classList.toggle('here', a.getAttribute('href') === '#' + entry.target.id); });
+          var head = $('.sech', entry.target), id = head ? head.id : '';
+          if (!ID.test(id)) { return; }
+          $$('.subnav a').forEach(function (a) {
+            var here = a.getAttribute('href') === '#' + id;
+            a.classList.toggle('here', here);
+            if (here) { a.setAttribute('aria-current', 'location'); } else { a.removeAttribute('aria-current'); }
+          });
         });
-      }, { rootMargin: '-10% 0px -75% 0px' });
-      $$('.sech', paper).forEach(function (h) { spy.observe(h); });
+      }, { rootMargin: '-120px 0px -70% 0px' });
+      $$('.psec', paper).forEach(function (section) { spy.observe(section); });
     }
+    // the notes of the margin, laid out beside the text (see sideNotes)
+    var side = window.matchMedia ? window.matchMedia('(min-width: 1181px)') : null;
+    if (side) { if (side.addEventListener) { side.addEventListener('change', sideNotes); } else if (side.addListener) { side.addListener(sideNotes); } }
+    if ('ResizeObserver' in window && $('#paper-text', paper)) {
+      new ResizeObserver(function () {
+        var host = $('#paper-text', paper), now = host.offsetWidth + 'x' + host.offsetHeight;
+        if (now === laid || soon) { return; }
+        soon = window.requestAnimationFrame(function () { soon = 0; sideNotes(); });
+      }).observe($('#paper-text', paper));
+    }
+    sideNotes();
+    // a link to a history box opens it (the boxes were shut above, after the first route)
+    if (/^#hist-[0-9]+-[0-9]+$/.test(location.hash)) { route(); }
   }
   // a window that was narrow and is wide again shows the ways in
   var wide = window.matchMedia ? window.matchMedia('(max-width: 860px)') : null;
@@ -426,7 +488,12 @@
     if (button && window.print) { window.print(); }
   });
   document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape') { if (box.open) { return; } if (opened) { closeMem(); } else if (!tour.hidden) { endTour(); } }
+    if (event.key === 'Escape') {
+      if (box.open) { return; }
+      var shownBox = paper && document.activeElement && document.activeElement.closest ? document.activeElement.closest('.histbox') : null;
+      if (shownBox && !shownBox.hidden) { toggleBox(shownBox.id); return; }
+      if (opened) { closeMem(); } else if (!tour.hidden) { endTour(); }
+    }
     if (event.key === '/' && document.activeElement !== q) { event.preventDefault(); location.hash = '#ask'; q.focus(); }
   });
 }());

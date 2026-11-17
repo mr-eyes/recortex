@@ -152,14 +152,21 @@ class VersionPageTests(VersionBox):
         text = self.page()   # gh is `false`: nothing can be asked of GitHub
         self.assertEqual([], ts.page_problems(text))
         words = self.words(text)
-        self.assertIn("History (3 versions)", words) if "History (3 versions)" in words else self.assertIn("History (2 versions)", words)
+        # the History is drawn once, in the box of the manuscript view; the text view says so and links to the box
+        text_view = text[text.index('<section class="view" id="text"'):text.index('<section class="view" id="paper"')]
+        self.assertIn("The history of this part, with each version, is in Read the manuscript.", self.words(text_view))
+        self.assertRegex(text_view, r'<a class="lk" href="#hist-[0-9]+-[0-9]+">Read the manuscript</a>')
+        self.assertNotIn("<ins>", text_view)
+        self.assertNotIn("History (", self.words(text_view))
+        self.assertRegex(words, r"History \([23]\)")
         self.assertIn("<ins>A second look, by hand.</ins>", text)
         self.assertIn("by you by hand", words)
         self.assertIn("by the plugin without asking", words)
         self.assertIn("What changed", words)
         self.assertRegex(words, r"[0-9]+ paragraphs are the same")
-        self.assertIn("To go back to a version, ask in the chat, for example: restore the Results of", words)
-        self.assertEqual(2, text.count("<ins>"))   # only the sentence that was added by hand, in the History of the text view and in the box of the manuscript view: the first version has no before
+        self.assertRegex(words, r"Version [0-9]+ · [A-Za-z]+ [0-9]+, by the plugin")   # each entry is headed by its version
+        self.assertIn("Restore the Results of", words)
+        self.assertEqual(1, text.count("<ins>"))   # only the sentence that was added by hand: the first version has no before
 
     def test_a_version_whose_fetched_file_has_another_hash_shows_the_sentence_and_none_of_its_text(self):
         self.two_written()
@@ -284,10 +291,10 @@ class VersionPageTests(VersionBox):
         self.assertNotIn("onclick", text.replace("&lt;ins onclick", "").replace("onclick=alert(1)&gt;", ""))
         self.assertNotIn("actions/", text)
         # the only ins and del elements are the ones made from a run of type add or del of a known operation: two runs of the
-        # add operation and one del run of the change operation per entry (drawn in the History of the text view and in the box
-        # of the manuscript view), and one add run of the versions block
-        self.assertEqual(2 * 2 * len(found) + 1, text.count("<ins>"))
-        self.assertEqual(2 * len(found), text.count("<del>"))
+        # add operation and one del run of the change operation per entry (drawn once, in the box of the manuscript view), and one
+        # add run of the versions block
+        self.assertEqual(2 * len(found) + 1, text.count("<ins>"))
+        self.assertEqual(len(found), text.count("<del>"))
         self.assertEqual([], re.findall(r"<(?:ins|del) [^>]*>", text))
 
     def test_ins_and_del_are_made_by_page_diff_only(self):
