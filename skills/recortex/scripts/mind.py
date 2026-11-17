@@ -243,7 +243,7 @@ def good_path(path):
 def github_url(kind, repo, *parts):
     """An address on GitHub built from checked parts only, or None when a part fails. The forms: issue (repo, n),
     memory (repo, n, comment id), pull (repo, n), lines (repo, commit, path, first, last), picture (repo, ref,
-    path), run (repo, run id: the latest build of the paper)."""
+    path)."""
     if not recortex.valid_repo(repo):
         return None
     base = SCHEME + "github.com/" + repo

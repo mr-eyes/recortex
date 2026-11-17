@@ -12296,6 +12296,22 @@ class DocsTests(unittest.TestCase):
         self.assertIn("From the record: the decision of March 7", text)
         self.assertIn("needs no mark", text)
 
+    def test_nothing_in_the_skill_mentions_the_dropped_manuscript_workflow(self):
+        """Owner decision of 16 November 2026: nothing is built or run on GitHub, so no reference, script or comment says that
+        a workflow is added, built, refused or shipped for the manuscript (the triage labeler is another workflow)."""
+        found = []
+        for root, _, names in os.walk(SKILL):
+            for name in names:
+                if not name.endswith((".md", ".py", ".json", ".js", ".html", ".txt")):
+                    continue
+                text = " ".join(recortex.read_text(os.path.join(root, name)).split())   # a phrase may span two lines
+                for words in ("build.json", "workflow was refused", "builds the paper", "Actions allowance",
+                              "whether the workflow", "the branch, the workflow", "no workflow exists", "latest build of the paper",
+                              "to build it there", "fetch and builds"):
+                    if words in text:
+                        found.append((os.path.relpath(os.path.join(root, name), SKILL), words))
+        self.assertEqual([], found)
+
     """The README and the five pages in docs/: size, links, pictures, names and the files they bring."""
 
     PAGES = ("how-it-works.md", "install.md", "existing-work.md", "security.md", "reference.md")

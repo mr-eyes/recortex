@@ -1146,7 +1146,7 @@ def restore_command(args):
 WRITE_UNTOLD = "someone outside your allowed list changed this text, so recortex does not write it; ask the user"
 
 
-# ---------------------------------------------------------------- fetch and builds
+# ---------------------------------------------------------------- fetch
 
 FETCH_BYTES = 300 * 1024
 FETCH_FILES = 200

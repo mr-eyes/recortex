@@ -8,8 +8,8 @@ loose permissions, not JSON, not of the form) counts as off, and the hooks say s
 hooks.py --doctor. The hooks and write.py only read it; setup.py writing set is the one writer, and the session runs
 it only on the user's own answer in the conversation.
 
-The mode is also the consent to keep the versions of the plugin's own manuscript in the record's repository and to
-build it there (references/writing.md has the lines the user is shown).
+The mode is also the consent to keep the versions of the plugin's own manuscript in the record's repository
+(references/writing.md has the lines the user is shown).
 """
 
 import datetime

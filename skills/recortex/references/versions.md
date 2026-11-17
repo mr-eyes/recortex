@@ -6,7 +6,7 @@ The files are a copy, as the board is. Nothing is read from them into the record
 
 ## What is kept, and when
 
-Versions are kept exactly when this machine's writing mode is review or autonomous. `setup.py writing set` with either mode, and the first write on a machine that has none yet, call `versions.ensure()`: it checks that the sign-in may write files, makes the branch with a first commit of the current text, and says so in one line. With the mode off or not chosen nothing is written to the branch and no workflow exists; the commands that need a version say "versions are kept once you choose review or autonomous writing."
+Versions are kept exactly when this machine's writing mode is review or autonomous. `setup.py writing set` with either mode, and the first write on a machine that has none yet, call `versions.ensure()`: it checks that the sign-in may write files, makes the branch with a first commit of the current text, and says so in one line. With the mode off or not chosen nothing is written to the branch; the commands that need a version say "versions are kept once you choose review or autonomous writing."
 
 The branch has no parent in the project's history, so it holds none of the project's code and none of its workflows. What it holds, in Manubot's layout:
 
@@ -29,7 +29,7 @@ Every write goes through `recortex.gh()` to the git data endpoints: read the bra
 
 | Command | Does | Writes to GitHub |
 |---|---|---|
-| `versions.py status` | per topic: in step, the text changed since its last version, or the file changed without the text; the names; whether the workflow is the one shipped | no |
+| `versions.py status` | per topic: in step, the text changed since its last version, or the file changed without the text; the names | no |
 | `versions.py sync` | for each text that changed outside the plugin: one commit and one text change that says who edited it and when ("Edited by (login) on GitHub, (stamp).", Why "Not recorded: the text was edited by hand."); a file changed on the branch alone is never taken | yes |
 | `versions.py log [--issue N] [--json]` | the versions, newest first: day, how it came about, the plain line, the names on it | no |
 | `versions.py diff A B [--issue N]` | the difference between two versions (a commit, `HEAD` or a name), made from the two files, then the text changes between them | no |
@@ -38,7 +38,7 @@ Every write goes through `recortex.gh()` to the git data endpoints: read the bra
 | `versions.py put-back --issue N --yes` | puts a file that was changed on the branch alone back to the text, as a new commit | yes |
 | `versions.py fetch [--issue N]` | brings the vouched versions' files into the private cache for the mind page (`mind.py --sync` and `--versions` call it) | no |
 | `versions.py meta --authors A --keywords K --yes` | the authors and keywords of the paper's metadata | yes |
-| `versions.py doctor` | the mode, the permission, the branch, the workflow, the last refusal with its reason | no |
+| `versions.py doctor` | the mode, the permission, the branch, the last refusal with its reason | no |
 | `compile.py --version NAME [--layout manubot] --out DIR` | the deliverable of a named version; `--layout manubot` also writes `content/` | no |
 
 ## Names, and the exact paper back
