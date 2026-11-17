@@ -117,6 +117,7 @@ def due_parts(db, config, allowed, state):
     for memory in items.values():
         for key, target in memory["links"]:
             pointing.setdefault(target, []).append((key, memory))
+
     def covered(row, heading, target):
         """True when a told text change newer than `row` for the same topic and heading links what replaced `target`, or what
         replaced that in turn: the text already says what the record now holds, so nothing is due for it."""
