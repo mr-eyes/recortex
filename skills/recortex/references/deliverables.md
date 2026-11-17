@@ -20,7 +20,7 @@ Do not copy text from comments, from the former bodies kept as "Record: former i
 
 ## Per profile
 
-- **Manuscript.** One pass per section label, in order: `ms:background`, `ms:methods`, `ms:results`, `ms:limitations`, `ms:supplement`. Keep a table in the hub mapping each figure and table to its topic. Record submission, reviews and responses as events on a "Submission" topic; quote reviewer comments exactly.
+- **Manuscript.** One pass per section label, in order: `ms:introduction`, `ms:background`, `ms:methods`, `ms:results`, `ms:discussion`, `ms:limitations`, `ms:supplement`. Keep a table in the hub mapping each figure and table to its topic. Record submission, reviews and responses as events on a "Submission" topic; quote reviewer comments exactly.
 - **Software.** Group the release notes by `rel:` label and take each line from the matching section of the topic bodies. Known issues come from the "Known issues" sections. The hub's pull-request table lists what merged since the last tag, to check that every merged change is covered by a body.
 - **Research report.** Follow the `rd:` labels in order; the report's recommended next work is the union of the "Recommendations" sections. Open work that is not a recommendation stays in `active` issues.
 - **Prototype recommendation.** The "Recommendation" sections state the go or no-go with the acceptance criterion as decided, "Measurements" the evidence against it, and "Limitations" what was not tried.

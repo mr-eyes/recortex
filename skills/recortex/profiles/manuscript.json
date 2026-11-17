@@ -11,9 +11,15 @@
   ],
   "labels": [
     {
+      "name": "ms:introduction",
+      "color": "1d76db",
+      "description": "Issue body is manuscript text for: introduction",
+      "heading": "Introduction"
+    },
+    {
       "name": "ms:background",
       "color": "1d76db",
-      "description": "Issue body is manuscript text for: introduction and background",
+      "description": "Issue body is manuscript text for: background",
       "heading": "Background"
     },
     {
@@ -29,9 +35,15 @@
       "heading": "Results"
     },
     {
+      "name": "ms:discussion",
+      "color": "1d76db",
+      "description": "Issue body is manuscript text for: discussion",
+      "heading": "Discussion"
+    },
+    {
       "name": "ms:limitations",
       "color": "1d76db",
-      "description": "Issue body is manuscript text for: limitations and discussion",
+      "description": "Issue body is manuscript text for: limitations",
       "heading": "Limitations"
     },
     {

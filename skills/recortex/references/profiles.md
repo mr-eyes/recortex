@@ -62,10 +62,12 @@ Deliverable: a paper, with main text, figures, tables and supplement.
 
 | Section label | Body heading | The body is the text for |
 |---|---|---|
-| `ms:background` | `## Background` | Introduction and background |
+| `ms:introduction` | `## Introduction` | Introduction |
+| `ms:background` | `## Background` | Background |
 | `ms:methods` | `## Methods` | Methods |
 | `ms:results` | `## Results` | Results, figures and tables |
-| `ms:limitations` | `## Limitations` | Limitations and discussion |
+| `ms:discussion` | `## Discussion` | Discussion |
+| `ms:limitations` | `## Limitations` | Limitations |
 | `ms:supplement` | `## Supplement` | Supplement |
 
 Topics are analyses, figures, tables or claims. Events: a result that enters a figure, table or sentence; a decision on a claim, an analysis or wording; a reviewer or co-author comment and its response; a frozen version of data or code; a submission, revision or resubmission.

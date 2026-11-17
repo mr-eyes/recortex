@@ -324,6 +324,22 @@ class LintTests(unittest.TestCase):
         self.assertEqual([], codes(self.lint(speed, labels=["ms:methods", "ms:results", "ms:limitations"], **mixed)))
         self.assertEqual(["profile"], codes(self.lint(speed, kind="final-record", config={"profiles": ["nosuch"]})))
 
+    def test_a_manuscript_body_may_hold_an_introduction_and_a_discussion(self):
+        speed = recortex.read_text(os.path.join(EXAMPLE, "topic-speed.md"))
+        text = speed.replace("## Methods", "## Introduction\n\nWe ask how fast the reader is.\n\n## Methods", 1)
+        text = text.replace("## Limitations", "## Discussion\n\nThe reader is slower than the standard library.\n\n"
+                            "## Limitations", 1)
+        labels = ["final-record", "ms:introduction", "ms:methods", "ms:results", "ms:discussion", "ms:limitations",
+                  "topic:speed"]
+        ok = dict(kind="final-record", config={"profiles": ["manuscript"]})
+        self.assertEqual([], codes(self.lint(text, labels=labels, **ok)))
+        self.assertEqual([], codes(self.lint(text, **ok)))
+        found = self.lint(text, labels=[l for l in labels if l != "ms:discussion"], **ok)
+        self.assertEqual(["section-labels"], codes(found))
+        self.assertIn("ms:discussion", str(found[0]))
+        self.assertEqual(["section-heading"], codes(self.lint(text, kind="final-record",
+                                                              config={"profiles": ["research"]})))
+
     def test_decision_needs_exact_words(self):
         text = recortex.read_text(os.path.join(EXAMPLE, "decision-reader-1.md"))
         self.assertEqual([], codes(self.lint(text, kind="decision")))
@@ -496,7 +512,8 @@ class HelperTests(unittest.TestCase):
 
     def test_profiles_name_a_heading_for_every_section_label(self):
         expected = {
-            "manuscript": ["ms:background", "ms:methods", "ms:results", "ms:limitations", "ms:supplement"],
+            "manuscript": ["ms:introduction", "ms:background", "ms:methods", "ms:results", "ms:discussion",
+                           "ms:limitations", "ms:supplement"],
             "software": ["rel:added", "rel:changed", "rel:fixed", "rel:docs", "rel:known-issues"],
             "research": ["rd:question", "rd:methods", "rd:results", "rd:limitations", "rd:next"],
             "prototyping": ["proto:hypothesis", "proto:setup", "proto:results", "proto:limitations", "proto:go-no-go"],
@@ -586,14 +603,31 @@ class LabelTests(Sandbox):
         self.assertNotIn("label create hub", result.stdout)
         self.assertIn("would create 20, would update 0, already correct 1, different and left alone 1", result.stdout)
 
+    def test_a_record_made_with_the_old_manuscript_profile_gains_two_labels_and_loses_none(self):
+        old = [("ms:background", "introduction and background"), ("ms:methods", "methods"),
+               ("ms:results", "results, figures and tables"), ("ms:limitations", "limitations and discussion"),
+               ("ms:supplement", "supplement")]
+        have = [{"name": name, "color": "1d76db", "description": "Issue body is manuscript text for: " + what}
+                for name, what in old]
+        existing = self.write("existing.json", json.dumps(have))
+        result = self.run_script("setup_labels.py", "--repo", REPO, "--profile", "manuscript", "--existing", existing,
+                                 "--dry-run", gh="false")
+        self.assertEqual(0, result.returncode, result.stderr)
+        created = re.findall(r"would run: gh label create (ms:[a-z-]+)", result.stdout)
+        self.assertEqual(["ms:introduction", "ms:discussion"], created)
+        self.assertNotIn("delete", result.stdout)
+        self.assertIn("differs, left alone: ms:background", result.stdout)  # setup_labels never edits without --update
+        self.assertIn("differs, left alone: ms:limitations", result.stdout)
+        self.assertNotIn("would run: gh label edit", result.stdout)
+
     def test_create_is_idempotent_and_never_deletes(self):
         first = self.run_script("setup_labels.py", "--repo", REPO, "--profile", "research,manuscript")
         self.assertEqual(0, first.returncode, first.stderr)
-        self.assertEqual(25, len(self.calls("label create")))  # core 15, research 5 + 1 type, manuscript 5 + 1 type
+        self.assertEqual(27, len(self.calls("label create")))  # core 15, research 5 + 1 type, manuscript 7 + 1 type
         names = {l["name"] for l in self.repo()["labels"]}
         self.assertTrue({"bug", "final-record", "ms:methods", "rd:results"} <= names)
         second = self.run_script("setup_labels.py", "--repo", REPO, "--profile", "research,manuscript")
-        self.assertEqual(25, len(self.calls("label create")))
+        self.assertEqual(27, len(self.calls("label create")))
         self.assertIn("created 0", second.stdout)
         third = self.run_script("setup_labels.py", "--repo", REPO, "--profile", "research", "--update")
         self.assertEqual(1, len(self.calls("label edit")), third.stdout)
@@ -3918,6 +3952,26 @@ class CompileTests(RecordSandbox):
         self.assertEqual(4, manifest["counts"]["other_comments"])  # three in the fixture repository, one added
         self.assertIn("thanks, looks good", recortex.read_text(os.path.join(out, "history", "timeline.md")).lower())
 
+    def test_the_two_new_manuscript_sections_are_written_in_their_place(self):
+        data = self.repo()
+        body = ("# A paper\n\n## Introduction\n\nWhy this matters.\n\n## Methods\n\nHow it was done.\n\n"
+                "## Discussion\n\nWhat it means.\n\n## Limitations\n\nWhat it misses.\n")
+        data["issues"]["8"] = {"title": "A paper", "body": body, "state": "open", "created_at": "2026-04-05T10:00:00Z",
+                               "updated_at": "2026-04-05T10:00:00Z",
+                               "labels": ["final-record", "ms:introduction", "ms:methods", "ms:discussion",
+                                          "ms:limitations", "topic:paper"]}
+        data["next_issue"] = 9
+        self.save(data)
+        self.write_config(dict(self.config, profiles=["manuscript"]))
+        out = os.path.join(self.dir, "compiled")
+        result = self.tool("compile.py", "--out", out)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        files = [name for name in sorted(os.listdir(os.path.join(out, "deliverable"))) if name.endswith(".md")]
+        self.assertEqual(["01-ms-introduction.md", "02-ms-methods.md", "03-ms-discussion.md", "04-ms-limitations.md"],
+                         files)
+        self.assertIn("Why this matters.", recortex.read_text(os.path.join(out, "deliverable", files[0])))
+        self.assertIn("What it means.", recortex.read_text(os.path.join(out, "deliverable", files[2])))
+
     def test_a_hub_cell_that_names_several_issues_places_all_of_them_in_its_order(self):
         data = self.repo()
         data["issues"]["6"]["labels"].append("rel:fixed")
@@ -6595,6 +6649,16 @@ class MindSandbox(RecordSandbox):
         found = json.loads(self.tool("index.py", "query", "recall", "--issue", "5", "--json").stdout)
         return {m["id"]: m for m in found["memories"] + found["others"]}
 
+    def states(self):
+        """{comment id: state} of every told memory, as index.memories decides, read in this process."""
+        self.in_process()
+        import index as index_module
+        db = index_module.connect(REPO, create=False)
+        try:
+            return {cid: m["state"] for cid, m in index_module.memories(db, {"octocat"})["items"].items()}
+        finally:
+            db.close()
+
     def lookup(self, number):
         self.in_process()
         import lookup as lookup_module
@@ -6649,16 +6713,6 @@ class MindIndexTests(MindSandbox):
         self.ready()
         whole = self.mind_rows()
         self.assertEqual(5, len([row for row in whole["links"]]))  # checks, because, instead, because, replaces
-    def states(self):
-        """{comment id: state} of every told memory, as index.memories decides, read in this process."""
-        self.in_process()
-        import index as index_module
-        db = index_module.connect(REPO, create=False)
-        try:
-            return {cid: m["state"] for cid, m in index_module.memories(db, {"octocat"})["items"].items()}
-        finally:
-            db.close()
-
         self.assertIn((9105, "because", 9104), whole["links"])
         self.assertIn((9105, 0, "plain", "rewrite the reader so that it reads one character at a time, and stop "
                                          "patching the line splitter"), whole["event_fields"])
@@ -6907,6 +6961,36 @@ class MindIndexTests(MindSandbox):
         self.assertIn("This repository is not in your trusted list, so memories of every account are listed.",
                       untrusted)
 
+    def test_an_idea_that_a_decision_or_a_result_took_up_is_taken_up_and_not_untried(self):
+        self.add_chain()
+        self.put(9120, 6, memory_draft("idea", "2026-03-14T10:00-08:00"))  # taken up by a decision
+        self.put(9121, 6, memory_draft("idea", "2026-03-14T10:01-08:00"))  # taken up by a result
+        self.put(9122, 6, memory_draft("idea", "2026-03-14T10:02-08:00"))  # a failure points at it
+        self.put(9123, 6, memory_draft("idea", "2026-03-14T10:03-08:00"))  # a question points at it
+        self.put(9124, 6, memory_draft("idea", "2026-03-14T10:04-08:00"))  # tried and taken up
+        self.put(9125, 6, memory_draft("idea", "2026-03-14T10:05-08:00"))  # taken up by a decision of another account
+        self.put(9130, 6, memory_draft("decision", "2026-03-15T10:00-08:00", "because=9120"))
+        self.put(9131, 6, memory_draft("result", "2026-03-15T10:01-08:00", "because=9121"))
+        self.put(9132, 6, memory_draft("failure", "2026-03-15T10:02-08:00", "because=9122"))
+        self.put(9133, 6, memory_draft("question", "2026-03-15T10:03-08:00", "because=9123"))
+        self.put(9134, 6, memory_draft("decision", "2026-03-15T10:04-08:00", "because=9124"))
+        self.put(9135, 6, memory_draft("result", "2026-03-15T10:05-08:00", "checks=9124"))
+        self.put(9136, 6, memory_draft("decision", "2026-03-15T10:06-08:00", "because=9125"), user="ghost")
+        self.ready()
+        states = self.states()
+        self.assertEqual({9120: "taken up", 9121: "taken up", 9122: "untried", 9123: "untried", 9124: "tried",
+                          9125: "untried"}, {cid: states[cid] for cid in range(9120, 9126)})
+        own = self.query("recall", "--issue", "6")
+        self.assertEqual("taken up", {m["id"]: m["state"] for m in own["memories"]}[9120])
+        other = self.query("recall", "--issue", "5")
+        self.assertEqual([9122, 9123, 9125, 9133], sorted(m["id"] for m in other["others"] if m["id"] >= 9120))
+        self.assertIn("9120  2026-03-14  idea      taken up   ", self.recall(6).stdout)
+        listed = self.recall(5).stdout.split("Open questions and untried ideas in other threads:")[1].split("Words")[0]
+        self.assertNotRegex(listed, r"9120|9121")
+        self.put(9140, 6, memory_draft("decision", "2026-03-16T10:00-08:00", "instead=9121"))
+        self.ready()
+        self.assertEqual("set aside", self.states()[9121])  # set aside comes before taken up
+
     def test_recall_keeps_to_its_limits_and_cleans_what_it_prints(self):
         for n in range(13):  # the thread of #5 holds 9102 and these 13 ideas on #7: 14
             self.put(9130 + n, 7, memory_draft("idea", "2026-03-%02dT10:00-08:00" % (n + 5)))
@@ -6961,36 +7045,6 @@ class MindIndexTests(MindSandbox):
         self.assertEqual(before, after)
         self.assertNotIn("HOSTILE", after)
         self.assertNotIn("HOSTILE", self.hook("session-start").stdout + self.hook("subagent-start").stdout)
-    def test_an_idea_that_a_decision_or_a_result_took_up_is_taken_up_and_not_untried(self):
-        self.add_chain()
-        self.put(9120, 6, memory_draft("idea", "2026-03-14T10:00-08:00"))  # taken up by a decision
-        self.put(9121, 6, memory_draft("idea", "2026-03-14T10:01-08:00"))  # taken up by a result
-        self.put(9122, 6, memory_draft("idea", "2026-03-14T10:02-08:00"))  # a failure points at it
-        self.put(9123, 6, memory_draft("idea", "2026-03-14T10:03-08:00"))  # a question points at it
-        self.put(9124, 6, memory_draft("idea", "2026-03-14T10:04-08:00"))  # tried and taken up
-        self.put(9125, 6, memory_draft("idea", "2026-03-14T10:05-08:00"))  # taken up by a decision of another account
-        self.put(9130, 6, memory_draft("decision", "2026-03-15T10:00-08:00", "because=9120"))
-        self.put(9131, 6, memory_draft("result", "2026-03-15T10:01-08:00", "because=9121"))
-        self.put(9132, 6, memory_draft("failure", "2026-03-15T10:02-08:00", "because=9122"))
-        self.put(9133, 6, memory_draft("question", "2026-03-15T10:03-08:00", "because=9123"))
-        self.put(9134, 6, memory_draft("decision", "2026-03-15T10:04-08:00", "because=9124"))
-        self.put(9135, 6, memory_draft("result", "2026-03-15T10:05-08:00", "checks=9124"))
-        self.put(9136, 6, memory_draft("decision", "2026-03-15T10:06-08:00", "because=9125"), user="ghost")
-        self.ready()
-        states = self.states()
-        self.assertEqual({9120: "taken up", 9121: "taken up", 9122: "untried", 9123: "untried", 9124: "tried",
-                          9125: "untried"}, {cid: states[cid] for cid in range(9120, 9126)})
-        own = self.query("recall", "--issue", "6")
-        self.assertEqual("taken up", {m["id"]: m["state"] for m in own["memories"]}[9120])
-        other = self.query("recall", "--issue", "5")
-        self.assertEqual([9122, 9123, 9125, 9133], sorted(m["id"] for m in other["others"] if m["id"] >= 9120))
-        self.assertIn("9120  2026-03-14  idea      taken up   ", self.recall(6).stdout)
-        listed = self.recall(5).stdout.split("Open questions and untried ideas in other threads:")[1].split("Words")[0]
-        self.assertNotRegex(listed, r"9120|9121")
-        self.put(9140, 6, memory_draft("decision", "2026-03-16T10:00-08:00", "instead=9121"))
-        self.ready()
-        self.assertEqual("set aside", self.states()[9121])  # set aside comes before taken up
-
 
     # ------------------------------------------------------------ timeline, compile, new kinds
 
