@@ -86,6 +86,9 @@ KINDS = {
         ],
     },
     "final-record": {"sections": FINAL_RECORD_SECTIONS},
+    "plan-body": {
+        "sections": ["## Message", "## Claims", "## Figures and tables", "## Discussion", "## Open gaps"],
+    },
     "active": {
         "sections": ["## Goal", "## Destination topic", "## Done when", "## Plan", "## Result"],
     },
@@ -164,6 +167,44 @@ KINDS = {
             "**Why it matters:**",
             "**What would answer it:**",
             "**Next step:**",
+        ],
+    },
+    "plan": {
+        "header": "Plan",
+        "sections": [
+            plain_field("plan"),
+            "**Part:**",
+            "**Section:**",
+            "**Topic:**",
+            "**Statement:**",
+            "**It needs:**",
+            "**We have:**",
+            "**If it does not hold:**",
+            "**Next step:**",
+        ],
+    },
+    "text": {
+        "header": "Text",
+        "sections": [
+            plain_field("text"),
+            "**Section:**",
+            "**What changed:**",
+            "**Why:**",
+            "**Approved:**",
+            "**Kept from the author:**",
+            "**Body:**",
+            "**Version:**",
+        ],
+    },
+    "proposal": {
+        "header": "Proposal",
+        "sections": [
+            "**Section:**",
+            "**What would change:**",
+            "**Why:**",
+            "**Pull request:**",
+            "**Base:**",
+            "**Text:**",
         ],
     },
     "triage": {
@@ -492,7 +533,8 @@ def check_event_marker(text, kind, template, add):
 
 
 ARTICLE = {"result": "a result", "decision": "a decision", "failure": "a failure", "correction": "a correction",
-           "idea": "an idea", "question": "a question", "checkpoint": "a checkpoint", "triage": "a triage comment"}
+           "idea": "an idea", "question": "a question", "checkpoint": "a checkpoint", "triage": "a triage comment",
+           "plan": "a planned part", "text": "a change of the text", "proposal": "a proposal"}
 EVIDENCE_KINDS = record_format.EVIDENCE_TYPES
 STEM_REPEATS = {
     "result": ("that", "we found"),
@@ -502,10 +544,12 @@ STEM_REPEATS = {
     "correction": ("we corrected",),
     "checkpoint": ("we paused",),
     "question": ("we asked",),
+    "plan": ("to", "we plan"),
+    "text": ("that", "we changed"),
 }
 QUESTION_WORDS = ("whether", "why", "how", "what", "which", "who", "when", "where", "if")
 PLAIN_RANGE = (20, 200)
-NOT_CHECKED = ("links", "comment addresses", "evidence", "explanations")
+NOT_CHECKED = ("links", "comment addresses", "evidence", "explanations", "plan topic")
 
 
 def is_reconstructed(text):
@@ -643,6 +687,275 @@ def check_quoted_fields(text, add):
                 "GitHub shows it inside the quote; leave a blank line before it" % match.group(1))
 
 
+# ---------------------------------------------------------------- planned parts, changes of the text, proposals
+
+FIELD_CAP = 800            # characters of a planned part's or a text change's free field
+TOPIC_FIELD = re.compile(r"#[1-9][0-9]{0,8}|None yet")
+DISPLAY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,59}")
+SHA_FIELD = re.compile(r"sha256 `[0-9a-f]{64}`")
+PULL_FIELD = re.compile(r"#[1-9][0-9]{0,8}")
+NOT_KEPT_FIELD = re.compile(r"Not kept: (.+)")
+
+
+def field_map(text):
+    """{label: field} of the first field of each label, and the labels that stand more than once."""
+    found, repeated = {}, set()
+    for field in record_format.scan_fields(text):
+        if field["label"] in found:
+            repeated.add(field["label"])
+        else:
+            found[field["label"]] = field
+    return found, repeated
+
+
+def need_text(found, label, add, cap=FIELD_CAP, one_line=False):
+    """The text of a required field, or None after an error when it is empty, too long or (one_line) not one line."""
+    field = found.get(label)
+    if field is None:
+        return None  # check_sections reports a missing field
+    value = field["text"].strip()
+    if not value:
+        add("error", "field-empty", field["line"] + 1, "'**%s:**' is empty; say what it holds" % label)
+        return None
+    if len(value) > cap:
+        add("error", "field-length", field["line"] + 1, "'**%s:**' is %d characters; at most %d" % (label, len(value), cap))
+    if one_line and "\n" in value:
+        add("error", "field-form", field["line"] + 1, "'**%s:**' is one line" % label)
+    return value
+
+
+def plan_of(profiles):
+    """The plan of the project's profiles, else the manuscript's when the project names none (a draft linted alone)."""
+    return recortex.plan_profile(profiles) or (None if profiles else recortex.plan_profile(["manuscript"]))
+
+
+def check_plan(text, template, profiles, add):
+    """A planned part: its part and section belong to the profile's plan, its topic is #N or None yet, a display part
+    carries the id of its block, and a revision says what it does to the part it replaces."""
+    found, repeated = field_map(text)
+    for label in sorted(repeated):
+        add("error", "field-repeat", found[label]["line"] + 1, "'**%s:**' stands more than once" % label)
+    plan = plan_of(profiles)
+    first, _ = record_format.first_lines(text)
+    marker = record_format.parse_marker(first) or {}
+    if template:
+        return
+    if plan is None:
+        add("error", "plan-profile", 0, "none of this project's profiles has a plan (a profile's \"plan\" key names its "
+            "parts); a planned part is written for a project that writes a paper")
+        return
+    part = need_text(found, "Part", add, 40, True)
+    if part is not None and part not in plan["parts"]:
+        add("error", "plan-part", found["Part"]["line"] + 1, "the part is one of %s, not '%s'" % (
+            ", ".join(plan["parts"]), part[:40]))
+        part = None
+    section = need_text(found, "Section", add, 60, True)
+    if section is not None and part is not None:
+        if part == "message" and section != "All":
+            add("error", "plan-section", found["Section"]["line"] + 1, "the message belongs to the whole paper: "
+                "'**Section:** All'")
+        elif part != "message" and section not in plan["sections"]:
+            add("error", "plan-section", found["Section"]["line"] + 1, "the section is one of %s, not '%s'" % (
+                ", ".join(plan["sections"]), section[:60]))
+    topic = need_text(found, "Topic", add, 20, True)
+    if topic is not None and not TOPIC_FIELD.fullmatch(topic):
+        add("error", "plan-topic", found["Topic"]["line"] + 1, "the topic is '#N' (the issue that holds the text of "
+            "this part) or 'None yet'")
+    ident = found.get("Id")
+    if part is not None:
+        if part in plan["display"] and ident is None:
+            add("error", "plan-id", 0, "a %s carries the id its block will have: '**Id:** <id>' after the topic" % part)
+        elif part not in plan["display"] and ident is not None:
+            add("error", "plan-id", ident["line"] + 1, "only a %s carries an id" % listed(plan["display"]).replace(
+                " and ", " or "))
+    if ident is not None and not DISPLAY_ID.fullmatch(ident["text"].strip()):
+        add("error", "plan-id", ident["line"] + 1, "an id is letters, digits, '.', '_' or '-', starting with a letter "
+            "or digit, at most 60 characters")
+    if ident is not None and topic is not None and part in (plan["display"] if part else ()):
+        order = [field["label"] for field in record_format.scan_fields(text)]
+        if order.index("Id") != order.index("Topic") + 1:
+            add("error", "plan-id", ident["line"] + 1, "the id follows the topic directly")
+    for label in ("Statement", "It needs", "We have", "If it does not hold"):
+        need_text(found, label, add)
+    need_text(found, "Next step", add, 300)
+    change = found.get("Change")
+    replaces = "replaces" in marker
+    if change is not None and not replaces:
+        add("error", "plan-change", change["line"] + 1, "'**Change:**' belongs to a revision: the marker carries "
+            "replaces=<the part it revises>")
+    elif replaces and change is None:
+        add("error", "plan-change", 1, "a revision says what it does to the part it replaces: '**Change:** %s'"
+            % "', '".join(record_format.PLAN_CHANGES))
+    elif change is not None and change["text"].strip() not in record_format.PLAN_CHANGES:
+        add("error", "plan-change", change["line"] + 1, "the change is exactly one of %s" % ", ".join(
+            record_format.PLAN_CHANGES))
+    elif change is not None:
+        order = [field["label"] for field in record_format.scan_fields(text)]
+        if order.index("Change") != order.index("If it does not hold") + 1:
+            add("error", "plan-change", change["line"] + 1, "the change follows 'If it does not hold' directly")
+
+
+def check_text(text, template, profiles, add):
+    """A change of the text: its sections, how it was approved, what the body was and became, which version holds it."""
+    found, repeated = field_map(text)
+    for label in sorted(repeated):
+        add("error", "field-repeat", found[label]["line"] + 1, "'**%s:**' stands more than once" % label)
+    if template:
+        return
+    headings = [heading for _, heading in recortex.section_labels(profiles)] if profiles else []
+    section = need_text(found, "Section", add, 200, True)
+    if section is not None and headings:
+        for name in [part.strip() for part in section.split(",")]:
+            if name not in headings:
+                add("error", "text-section", found["Section"]["line"] + 1, "'%s' is not a section heading of this "
+                    "project's profiles (%s)" % (name[:60], ", ".join(headings)))
+    need_text(found, "What changed", add)
+    need_text(found, "Why", add)
+    approved = found.get("Approved")
+    if approved is not None:
+        form = record_format.approved_form(approved["text"])
+        if form is None:
+            add("error", "text-approved", approved["line"] + 1, "'**Approved:**' starts with one of five forms: 'Written "
+                "without asking, under the autonomous mode.'; 'By <name or role> in the chat, <date time zone>:' and a "
+                "quote; 'By <login> on GitHub, by merging pull request <n>.'; 'Edited by <login> on GitHub, <date time "
+                "zone>.'; or 'Restored by <name or role> in the chat, <date time zone>:' and a quote")
+    kept = need_text(found, "Kept from the author", add, 200, True)
+    if kept is not None and not record_format.KEPT_FROM_AUTHOR.fullmatch(kept):
+        add("error", "text-kept", found["Kept from the author"]["line"] + 1, "'**Kept from the author:**' is '<n> "
+            "paragraphs were changed by hand and were left as they are.' or 'Nothing was changed by hand.'")
+    body = need_text(found, "Body", add, 200, True)
+    if body is not None and record_format.sha_pair(body) is None:
+        add("error", "text-body", found["Body"]["line"] + 1, "'**Body:**' is 'before sha256 `<64 hex>`; after sha256 "
+            "`<64 hex>`', with `none` for the before of a first text")
+    version = need_text(found, "Version", add, 200, True)
+    if version is not None:
+        commit = re.fullmatch(r"`([0-9a-f]{40})`", version)
+        reason = NOT_KEPT_FIELD.fullmatch(version)
+        if not commit and not (reason and reason.group(1).rstrip(".") in record_format.NOT_KEPT):
+            add("error", "text-version", found["Version"]["line"] + 1, "'**Version:**' is a 40-character commit id in "
+                "backticks, or 'Not kept: ' and one of: %s" % "; ".join(record_format.NOT_KEPT))
+
+
+def check_proposal(text, template, profiles, add):
+    """A proposal of a change of the text, the anchor of an approval on GitHub."""
+    found, repeated = field_map(text)
+    for label in sorted(repeated):
+        add("error", "field-repeat", found[label]["line"] + 1, "'**%s:**' stands more than once" % label)
+    if template:
+        return
+    headings = [heading for _, heading in recortex.section_labels(profiles)] if profiles else []
+    section = need_text(found, "Section", add, 60, True)
+    if section is not None and headings and section not in headings:
+        add("error", "text-section", found["Section"]["line"] + 1, "'%s' is not a section heading of this project's "
+            "profiles (%s)" % (section[:60], ", ".join(headings)))
+    need_text(found, "What would change", add)
+    need_text(found, "Why", add)
+    pull = need_text(found, "Pull request", add, 20, True)
+    if pull is not None and not PULL_FIELD.fullmatch(pull):
+        add("error", "proposal-pull", found["Pull request"]["line"] + 1, "'**Pull request:**' is '#<number>'")
+    for label in ("Base", "Text"):
+        value = need_text(found, label, add, 100, True)
+        if value is not None and not SHA_FIELD.fullmatch(value):
+            add("error", "proposal-hash", found[label]["line"] + 1, "'**%s:**' is 'sha256 `<64 hex>`'" % label)
+
+
+def check_plan_body(text, template, add):
+    """The readable copy of the plan, kept in the body of the plan issue: a title line, the role sentence, the time the
+    copy was made, then the sections. It holds no history and no comment text beyond the plan's own lines."""
+    rows = [(n, l) for n, l, region in split_regions(text) if region == "prose"]
+    first = next(((n, l) for n, l in rows if l.strip()), (0, ""))
+    if not re.match(r"^# The plan of the \S", first[1]):
+        add("error", "title-line", first[0], "the plan's body starts with '# The plan of the <paper>'")
+    if template:
+        return
+    if "This body is a readable copy of the plan." not in text:
+        add("error", "plan-role", 0, "the plan's body says what it is: 'This body is a readable copy of the plan.'")
+    if record_format.copy_made(text) is None:
+        add("error", "plan-copy", 0, "the plan's body has a line 'Copy made: <date time zone>'")
+    for number, line in rows:
+        if re.search(r"<details\b", line, re.I):
+            add("error", "details-block", number, "no <details> block in the copy of the plan")
+
+
+def check_plan_record(text, lookup, add, skipped):
+    """What only the record can tell about a planned part: its topic is a topic issue, the message and every change
+    that widens, reverses or drops an agreed part link a decision."""
+    unknown = lookup.UNKNOWN
+    first, _ = record_format.first_lines(text)
+    marker = record_format.parse_marker(first) or {}
+    found, _ = field_map(text)
+    topic = found.get("Topic")
+    topic_text = topic["text"].strip() if topic else ""
+    if re.fullmatch(r"#[1-9][0-9]{0,8}", topic_text):
+        target = lookup.issue(int(topic_text[1:]))
+        if target is unknown:
+            skipped.add("plan topic")
+        elif target is None:
+            add("error", "plan-topic", topic["line"] + 1, "%s: there is no issue %s in %s" % (topic_text, topic_text,
+                                                                                            lookup.repo))
+        elif "final-record" not in {label.lower() for label in target["labels"]}:
+            add("error", "plan-topic", topic["line"] + 1, "%s is not a topic issue (labeled final-record), so it holds no "
+                "text for this part" % topic_text)
+    part = (found.get("Part") or {}).get("text", "").strip()
+    change = (found.get("Change") or {}).get("text", "").strip()
+    pairs = record_format.links(marker)
+    decisions = False
+    for key, target in pairs:
+        if key != "because":
+            continue
+        memory = lookup.memory(target)
+        if memory is unknown:
+            skipped.add("links")
+        elif memory is not None and memory["type"] == "decision":
+            decisions = True
+    needs = []
+    if part == "message":
+        needs.append("the message of the paper is agreed in a decision of the author")
+    for key, target in pairs:
+        if key == "replaces" and change in ("widens", "reverses"):
+            needs.append("a revision that %s a claim is agreed in a decision of the author" % change)
+        if key == "instead":
+            agreed = lookup.plan_agreed(target)
+            if agreed is unknown:
+                skipped.add("links")
+            elif agreed:
+                needs.append("only a decision drops an agreed part, and comment %d is agreed" % target)
+    if needs and not decisions:
+        add("error", "plan-decision", 1, "%s: link that decision with because=<its comment id>" % needs[0])
+    elif needs and any(key == "instead" and lookup.plan_agreed(target) is True for key, target in pairs):
+        add("error", "plan-decision", 1, "a planned part never drops an agreed part; a decision of the author does")
+
+
+def check_citations(text, add):
+    """Citations in Manubot's forms in a final record: a key of a form Manubot reads passes (doi:, pmc:, pubmed:,
+    arxiv:, isbn:, wikidata:, the spellings pmid:, pmcid: and url: that Manubot's code accepts, an address, with or
+    without braces, and a name the body defines). A name that nothing defines, a reference to a figure, table or
+    equation the body does not hold and a key of no known form warn. A citation is never checked against the
+    literature."""
+    defined = record_format.manubot_definitions(text)
+    ids = {"fig": {b["id"] for b in record_format.blocks(text) if b["kind"] == "figure"},
+           "tbl": {b["id"] for b in record_format.blocks(text) if b["kind"] == "table"},
+           "eq": set(re.findall(r"\{#eq:([A-Za-z0-9_.-]+)\}", record_format.masked(text)))}
+    for item in record_format.citations_manubot(text):
+        key = item["key"]
+        prefix, _, rest = key.partition(":")
+        braced = re.fullmatch(r"\{(https?://[^\s{}]+)\}", key)
+        if record_format.manubot_identifier(prefix, rest) or braced or re.fullmatch(r"https?://[^\s{}]+", key) \
+                or re.fullmatch(r"10\.[0-9]{4,9}/[^\s;\[\]]+", key):
+            continue  # an unprefixed DOI is one Manubot infers
+        if prefix in ids and ":" in key:
+            if rest not in ids[prefix]:
+                add("warning", "citation-ref", item["line"], "'@%s' refers to a %s that this body does not hold" % (
+                    key[:60], {"fig": "figure", "tbl": "table", "eq": "equation"}[prefix]))
+        elif re.fullmatch(r"[A-Za-z0-9_-]+", key):
+            if key not in defined:
+                add("warning", "citation-name", item["line"], "'@%s' is a named reference that nothing in this body "
+                    "defines; define it in a paragraph of its own as '[@%s]: doi:...'" % (key[:60], key[:60]))
+        else:
+            add("warning", "citation-form", item["line"], "'@%s' is not a citation form this check knows (doi:, pmc:, "
+                "pubmed:, arxiv:, isbn:, wikidata:, url:, an address, or a named reference)" % key[:60])
+
+
 NOTHING_TO_SHOW = re.compile(r"(?:- )?(?:none|n/a|nothing)\b.*", re.I)
 
 
@@ -751,6 +1064,8 @@ def needs_record(text, kind):
         found.add("evidence")
     if record_format.explanations(text):
         found.add("explanations")
+    if kind == "plan" and re.search(r"^\*\*Topic:\*\* *#[1-9]", text, re.M):
+        found.add("plan topic")
     return found
 
 
@@ -800,6 +1115,8 @@ def check_record(text, kind, lookup, add):
                 add("error", "link-target", 1, "%s=%d: memory %d was edited after it was posted, so it is not told and "
                     "the link would lead nowhere; link to the memory that corrects it, or leave the link out"
                     % (key, target, target))
+    if kind == "plan" and not is_reconstructed(text):
+        check_plan_record(text, lookup, add, skipped)
     for item in record_format.citations(text, repo):
         if item["kind"] != "memory":
             continue
@@ -1005,6 +1322,10 @@ def lint_text(text, kind="generic", template=False, allow_placeholders=False,
     if kind == "final-record":
         check_final_record(text, template, labels, profiles, add)
         check_blocks(text, template, add)
+        check_citations(text, add)
+
+    if kind == "plan-body":
+        check_plan_body(text, template, add)
 
     if KINDS[kind].get("header") and kind != "resume":
         text = text.replace("\r\n", "\n")
@@ -1015,6 +1336,12 @@ def lint_text(text, kind="generic", template=False, allow_placeholders=False,
             check_quoted_fields(text, add)
         check_evidence(text, kind, template, add)
         check_folds(text, kind, add)
+        if kind == "plan":
+            check_plan(text, template, profiles, add)
+        elif kind == "text":
+            check_text(text, template, profiles, add)
+        elif kind == "proposal":
+            check_proposal(text, template, profiles, add)
         not_checked(needs_record(text, kind) if lookup is None else check_record(text, kind, lookup, add), add)
 
     if kind != "resume" and (recortex.RESUME_START in text or recortex.RESUME_END in text):

@@ -6442,7 +6442,7 @@ class MemoryFormatTests(unittest.TestCase):
         self.assertEqual("question", parse(QUESTION_060)["type"])
 
     def test_link_rules_are_exactly_the_table(self):
-        kinds = self.rf.MEMORY_TYPES + ("triage", "record", "other")
+        kinds = self.rf.MEMORY_TYPES + ("triage", "record", "proposal", "other")
         allowed = {(a, key, b) for a in kinds for key in self.rf.LINK_KINDS for b in kinds
                    if self.rf.link_allowed(a, key, b)}
         six = ("result", "decision", "failure", "correction", "idea", "question")
@@ -6451,6 +6451,15 @@ class MemoryFormatTests(unittest.TestCase):
         expected |= {(a, "instead", b) for a in ("decision", "idea", "result") for b in ("idea", "decision")}
         expected |= {(a, "checks", b) for a in ("result", "failure") for b in ("question", "idea", "decision")}
         expected |= {("decision", "checks", "question")}
+        # 1.3.0: the plan and the text. A plan memory links what it follows from and the parts it depends on; any of
+        # the six links to a part (an experiment, a question, an agreeing decision); a finding bears a part out
+        # (checks) or speaks against it (against); a revision replaces a part; a decision or a part drops one
+        # (instead); a change of the text follows from findings, decisions, corrections and parts, and nothing links
+        # to a change of the text.
+        expected |= {(a, "because", "plan") for a in six + ("plan",)} | {("plan", "because", b) for b in six}
+        expected |= {("text", "because", b) for b in ("result", "decision", "correction", "plan")}
+        expected |= {("plan", "replaces", "plan"), ("decision", "instead", "plan"), ("plan", "instead", "plan")}
+        expected |= {(a, "checks", "plan") for a in ("result", "failure")} | {("result", "against", "plan")}
         self.assertEqual(expected, allowed)
 
     def test_fields_evidence_and_folds_read_the_same_with_crlf(self):
@@ -12321,7 +12330,7 @@ class PackagingTests(unittest.TestCase):
             command = entries[0]["hooks"][0]["command"]
             script = re.search(r"^\"\$HOME/\.claude/skills/recortex/scripts/([a-z_]+\.sh)\"", command).group(1)
             self.assertTrue(os.path.isfile(os.path.join(SCRIPTS, script)), command)
-        for name in ("record-drafter", "record-reviewer", "record-auditor"):
+        for name in ("record-drafter", "record-reviewer", "record-auditor", "record-planner", "record-planner-session"):
             self.assertIn("\nskills: recortex\n", recortex.read_text(os.path.join(ROOT, "agents", name + ".md")))
         self.assertIn("\nname: recortex\n", recortex.read_text(os.path.join(SKILL, "SKILL.md")))
         self.assertEqual("skills/recortex", os.path.relpath(SKILL, ROOT))
@@ -12428,13 +12437,19 @@ class PackagingTests(unittest.TestCase):
     def test_agents_have_restricted_tools_and_preload_the_skill(self):
         expected = {"record-drafter": {"Read", "Write", "Edit", "Glob", "Grep"},
                     "record-reviewer": {"Read", "Glob", "Grep", "Bash"},
-                    "record-auditor": {"Read", "Glob", "Grep", "Bash"}}
+                    "record-auditor": {"Read", "Glob", "Grep", "Bash"},
+                    "record-planner": {"Read", "Write", "Edit", "Glob", "Grep"},
+                    "record-planner-session": {"Read", "Write", "Edit", "Glob", "Grep"}}
+        models = {"record-planner": "fable", "record-planner-session": "inherit"}  # every other agent names no model
         for name, tools in expected.items():
             text = recortex.read_text(os.path.join(ROOT, "agents", name + ".md"))
             front = text.split("---\n")[1]
             self.assertIn("name: %s\n" % name, front)
             self.assertIn("skills: recortex\n", front)
-            self.assertNotIn("model:", front)
+            if name in models:
+                self.assertIn("\nmodel: %s\n" % models[name], "\n" + front)
+            else:
+                self.assertNotIn("model:", front)
             listed = {t.strip() for t in re.search(r"^tools: (.*)$", front, re.M).group(1).split(",")}
             self.assertEqual(tools, listed, name)
             self.assertIn("start no other agent", text)
@@ -12450,7 +12465,7 @@ class PackagingTests(unittest.TestCase):
         auditor = " ".join(recortex.read_text(os.path.join(ROOT, "agents", "record-auditor.md")).split())
         self.assertIn("10. A record with results and no `fields` entry in `.recortex.json`: say that the briefs can be "
                       "fitted to the project's field, to be put to the user once.", auditor)
-        self.assertEqual(3, len([n for n in os.listdir(os.path.join(ROOT, "agents")) if n.endswith(".md")]))
+        self.assertEqual(5, len([n for n in os.listdir(os.path.join(ROOT, "agents")) if n.endswith(".md")]))
 
     def test_hook_configuration(self):
         hooks = self.read_json("hooks", "hooks.json")["hooks"]["SessionStart"]

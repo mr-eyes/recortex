@@ -4,7 +4,7 @@ A profile sets three things: the deliverable and its sections (which become sect
 
 Label definitions live in `profiles/*.json`. The `core` profile (role labels) is always applied.
 
-The kinds of memory are the same in every profile: result, decision, failure, checkpoint, correction, idea and question. A profile's "Events" line says which happenings count; ideas and questions raised inside a thread's work are memories in any profile.
+The kinds of memory are the same in every profile: result, decision, failure, checkpoint, correction, idea and question; a profile with a plan (below) adds two more, the plan and the text. A profile's "Events" line says which happenings count; ideas and questions raised inside a thread's work are memories in any profile.
 
 ## Software development (`software`)
 
@@ -73,6 +73,21 @@ Deliverable: a paper, with main text, figures, tables and supplement.
 Topics are analyses, figures, tables or claims. Events: a result that enters a figure, table or sentence; a decision on a claim, an analysis or wording; a reviewer or co-author comment and its response; a frozen version of data or code; a submission, revision or resubmission.
 
 Emphasis: each body is manuscript text, ready to paste. Each figure and table has a topic whose "Sources" names the script, commit and input files that produce it, and each number in the text has its source there. Reviewer comments are quoted word for word in comments, like decisions.
+
+### The plan of a deliverable
+
+A profile may name the plan of its deliverable in a `plan` key of its JSON file; the manuscript profile is the only one that does in 1.3.0 (the thesis is next). The key says what the linter and the plan accept:
+
+| Key | Holds | The manuscript's |
+|---|---|---|
+| `noun` | what the deliverable is called in the plan's title | paper |
+| `parts` | the kinds of planned part | message, claim, figure, table, interpretation, limitation, comparison, implication |
+| `evidence` | the parts a finding can back | claim |
+| `display` | the parts that carry the id of their block | figure, table |
+| `write` | the headings the plugin may write for the author (`writing.md` (stage 4)) | Methods, Results, Discussion, Limitations |
+| `write_from_record` | the headings among them written from decisions and results directly, with no planned part | Methods |
+
+`recortex.plan_profile` returns the first shipped profile of the project that has the key; a project entry with sections of its own keeps its profile's parts, and `write` is cut to the headings the project has. Only shipped profiles are read: a project file cannot name a part. The `core` profile has the role label `plan`: the plan of the deliverable, whose comments are the planned parts ([issue-model.md](issue-model.md), "The plan of the deliverable").
 
 ## Thesis (`thesis`), dataset (`dataset`), proposal (`proposal`), documentation (`docs`)
 

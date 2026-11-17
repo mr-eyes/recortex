@@ -9,6 +9,7 @@ The model rests on one split. The body of a topic issue that carries a deliverab
 - The hub
 - Final-record issues
 - Events
+- The plan of the deliverable
 - Changing the deliverable text
 - Active tasks
 - Labels
@@ -73,7 +74,7 @@ A body is at most 65,536 characters. A deliverable section that needs more is sp
 
 ## Events
 
-An event is something that happened and will matter later. Each one becomes a dated comment on its topic issue, never a new top-level issue and never text in a body. Seven kinds of memory, and the triage comment, each with a template:
+An event is something that happened and will matter later. Each one becomes a dated comment on its topic issue, never a new top-level issue and never text in a body. Nine kinds of memory, and two typed comments that are not memories (the triage comment and the proposal), each with a template:
 
 | Kind | When | Template |
 |---|---|---|
@@ -84,7 +85,10 @@ An event is something that happened and will matter later. Each one becomes a da
 | Correction | A posted statement or number was wrong | `templates/comment-correction.md` |
 | Idea | A thought raised inside a thread's work that might help, not yet tried | `templates/comment-idea.md` |
 | Question | A question raised inside a thread's work, not yet answered | `templates/comment-question.md` |
+| Plan | A part of the plan of the deliverable: what the paper will claim, show or concede ([The plan of the deliverable](#the-plan-of-the-deliverable)) | `templates/comment-plan.md` |
+| Text | The text of a topic body changed, by the plugin or by hand | `templates/comment-text.md` |
 | Triage | An issue opened by hand was given a type and a route | `templates/comment-triage.md` |
+| Proposal | The plugin proposed a change of the text and waits for a merge on GitHub (not a memory; the anchor of an approval) | `templates/comment-proposal.md` |
 
 Every event comment starts with a machine-readable marker line, then its heading:
 
@@ -97,7 +101,7 @@ The heading keeps the comment list of an issue readable as a timeline; the marke
 
 Comments are append-only. They are the history: results, decisions with the decider's exact words, failures, corrections. The decision record lives only in decision comments. Nobody rewrites them, and none of them is deliverable text. A memory edited on GitHub after it was posted is no longer told (in `query recall` and on the mind page) and no new memory may link to it, unless only your allowed accounts edited it, which the sync checks and the page notes; post a correction instead ([mind.md](mind.md), "Edited memories").
 
-A memory is written in a fixed order: marker, heading, the plain line, the kind's fields, `**Evidence:**` when there is something to show, then the folds, then nothing. A memory recorded before 0.6.0 has no plain line and no links; it stays as it is.
+A memory is written in a fixed order: marker, heading, the plain line, the kind's fields, `**Evidence:**` when there is something to show (never on a plan or a text change), then the folds, then nothing. A memory recorded before 0.6.0 has no plain line and no links; it stays as it is.
 
 ### The plain line
 
@@ -112,6 +116,8 @@ Directly under the heading, one line in plain words that completes a fixed label
 | Question | `**In plain words, we asked:**` | a clause that starts with whether, why, how, what, which, who, when, where or if |
 | Correction | `**In plain words, we corrected ourselves:**` | a statement |
 | Checkpoint | `**In plain words, we paused here:**` | a statement of where things stand |
+| Plan | `**In plain words, we plan to:**` | a verb phrase |
+| Text | `**In plain words, we changed the text to say that:**` | a statement |
 
 The linter refuses a plain line that is missing, longer than one line, under 20 or over 200 characters, ends with a period, holds a backtick, an issue number (`#N`), a URL, a path or file name, or a commit hash, repeats its label ("we decided to we decided"), or holds a number that stands in no field of the same memory, neither as written nor rounded ("about 3 times" stands for a field's 3.05, "2 million" for 2,000,000). The heading, the marker and the folds do not count as fields: put the number in a field, with its source, or leave it out of the line. The line is a summary written for someone who was away for a month; the fields stay the record, and in a decision the quote stays the decision.
 
@@ -131,6 +137,7 @@ The value is one to four comment ids separated by commas: the number after `#iss
 | `replaces` | Did that once stand, and does this now stand in its place? | "Later that changed: this." | replaced |
 | `instead` | Was that an attempt or an idea that never held, and is this what we did in its place? | "That was set aside. Instead, this." | set aside |
 | `checks` | Does this put that question, idea or decision to the test? | "The answer came later" (question), "We tried it" (idea), "We checked it" (decision) | a question answered, an idea tried |
+| `against` | Does this finding speak against that planned claim? | "A later finding spoke against it." | the planned part is in doubt |
 
 Who may link to what (`LINK_RULES` in `scripts/record_format.py`, used by the linter and by every reader):
 
@@ -141,10 +148,17 @@ Who may link to what (`LINK_RULES` in `scripts/record_format.py`, used by the li
 | `instead` | decision, idea, result | idea, decision |
 | `checks` | result, failure | question, idea, decision |
 | `checks` | decision | question |
+| `because` | plan | result, decision, failure, correction, idea, question, plan |
+| `because` | result, decision, failure, correction, idea, question | plan |
+| `because` | text | result, decision, correction, plan |
+| `replaces` | plan | plan |
+| `instead` | decision, plan | plan |
+| `checks` | result, failure | plan |
+| `against` | result | plan |
 
 An idea has one of four states from the links that point at it, the first that applies: set aside (`instead`), tried (`checks`, a result or a failure put it to a test), taken up (a decision or a result made `because` of it, and no result has tested the idea itself), else not tested yet. `index.py query recall` prints `taken up` in its state column and leaves such an idea out of its list of untried ideas in other threads. The state is worked out when the index is read: an older version of the plugin on the same index calls the same idea untried.
 
-A result never replaces a decision: it `checks` it, and a new decision replaces it. A checkpoint carries no link and is never a target; triage and record comments carry none; a reconstructed memory carries none in this version. A key appears once, and an id stands under one key. The marker accepts only `type`, `at`, `recorded`, `source`, `eventkey` (32 lowercase hexadecimal characters, written by the observer's publisher) and the four link keys, so a misspelled key is an error. Add a link only when its sentence read aloud is true; link to the nearest cause, not to its ancestors. Most memories have one link, and none is better than a guess: a posted link cannot be edited away (a correction can replace the memory that carried a wrong one).
+A result never replaces a decision: it `checks` it, and a new decision replaces it. A change of the text (`text`) carries `because` and nothing links to it. A correction never `replaces` a plan memory: a plan is revised, not corrected. A failure that `checks` a planned claim does not put it in doubt: not tested is not negative. A checkpoint carries no link and is never a target; triage and record comments carry none; a reconstructed memory carries none in this version. A key appears once, and an id stands under one key. The marker accepts only `type`, `at`, `recorded`, `source`, `eventkey` (32 lowercase hexadecimal characters, written by the observer's publisher) and the five link keys, so a misspelled key is an error. Add a link only when its sentence read aloud is true; link to the nearest cause, not to its ancestors. Most memories have one link, and none is better than a guess: a posted link cannot be edited away (a correction can replace the memory that carried a wrong one).
 
 When it can ask the record (`post_verified.py`, `lint_drafts.py --index` or `--online --issue N`), the linter checks each target: it exists in this repository, it is a memory, it is not later than the draft, the rules above allow it, and, when the repository is in your trusted list, it was written by an allowed account. A memory by any other account is not told on the mind page, so a link to it would lead nowhere; if that account belongs to the project, add its login to the repository's line in your trusted list.
 
@@ -206,6 +220,32 @@ Which words: only the project's own names for its test files, settings, earlier 
 
 `index.py query recall --issue 5` then shows the idea as set aside, the question as open and the first decision as replaced.
 
+## The plan of the deliverable
+
+A project that writes a paper (a profile with a `plan` key; only `manuscript` has one in 1.3.0) keeps the plan of the paper in the record: what it will claim, which figures and tables are worth making, what the discussion will argue and concede, and what is still missing. The plan issue carries the label `plan`, is a sub-issue of the hub, and has no section label; its number is in the project file (`"plans": {"manuscript": 12}`). Its comments are the planned parts, one dated comment of the kind `plan` each; its body is a readable copy of them that `plan.py render` writes again when they change. How the session plans is in [planning.md](planning.md).
+
+A planned part has a **Part** (message, claim, figure, table, interpretation, limitation, comparison or implication), the **Section** it belongs to (or All, for the message), the **Topic** issue that holds its text (or None yet), an **Id** for a figure or a table, the **Statement** as the paper would make it, what **It needs**, what **We have**, what the paper says **If it does not hold**, and, on a revision, a **Change** (narrows, rewords, widens or reverses). `templates/comment-plan.md` has the form; the profile's part list and headings decide what the linter accepts.
+
+The state of a part is computed from the links, never typed (`plan_rules.py`). A part is *agreed* when a told decision is linked to it with `because`, in either direction, or when it narrows or rewords an agreed part; otherwise it was *added by the session*. Then, the first that applies:
+
+| State | When | Shown as |
+|---|---|---|
+| dropped | an `instead` points at it | Dropped on (day) |
+| revised | a plan `replaces` it | Revised on (day) |
+| in doubt | a standing result links it with `against` | A finding speaks against it |
+| moved | a memory it rests on was replaced, corrected, set aside, or may no longer be told | What it rested on has changed |
+| waits | it links a planned part that is neither backed, in the text nor standing | Waits for (the part) |
+| in the text | a display part whose id is a block in a topic body; or a part that a later `text` comment links | In the text since (day) |
+| can be made | a figure or table whose claims are backed | Can be made now |
+| backed | a claim with a standing result linked (`because` from the claim, `checks` to it) | Backed by N findings |
+| attempt failed | a claim that only a failure `checks` | An attempt to show it failed |
+| planned | a claim, figure or table with none of the above | Planned; nothing backs it yet |
+| stands | any other part | no chip |
+
+"Backed" means a standing finding is linked. It can still turn out wrong. The author approves the first plan once; after that the session keeps the plan current and marks what it adds "added by the session". It asks before changing the paper's message and before widening, reversing or dropping a claim the author agreed.
+
+A change of the text is a `text` comment: it says which section changed, what and why, how it was approved (one of five fixed forms), what the body was and became (two SHA-256 values), and which version holds it. `writing.md` (stage 4) has the forms.
+
 ## Changing the deliverable text
 
 The body always says what the deliverable says now. When that changes:
@@ -234,7 +274,7 @@ On github.com each topic is a sub-issue of the hub and each task a sub-issue of 
 
 | Group | Labels | Use |
 |---|---|---|
-| Role | `hub`, `final-record`, `active`, `triage`, `needs-decision`, `migrated` | What kind of issue this is; `triage` marks an issue opened by hand that is not yet placed |
+| Role | `hub`, `final-record`, `active`, `plan`, `triage`, `needs-decision`, `migrated` | What kind of issue this is; `triage` marks an issue opened by hand that is not yet placed |
 | Type | `type:task`, `type:bug`, `type:question`, `type:docs`, `type:idea`, `type:data`, `type:decision-needed`, `type:duplicate`, `type:out-of-scope`, plus the profile's own | What an issue opened by hand is (see [triage.md](triage.md)) |
 | Deliverable section | From the profile, for example `ms:methods` or `rel:fixed` | Which part of the deliverable the issue's body is the text of; follows the body's `## ` headings |
 | Topic | `topic:<name>` | Which topic the issue or pull request belongs to |
@@ -255,6 +295,9 @@ Every pull request names its topic issue in its description ("Topic: #12"), carr
 | Work in development or an open question | An `active` issue that names its destination topic |
 | A thought or a question that comes up in the middle of a thread's work | An idea or question memory on that thread; a later result may `checks` it. Open work and the owner's decision list stay `active` issues |
 | A word that cannot be understood without this project | A fold in the memory that first uses it; afterwards it is used as written there |
+| A claim the paper will make, a figure it needs, what it will concede | A `plan` comment on the plan issue; the state follows from the links ([The plan of the deliverable](#the-plan-of-the-deliverable)) |
+| The text of a topic body changed | A `text` comment on that topic, written by whoever changed the text (`writing.md` (stage 4)) |
+| A version worth a name | The author asks in the chat; a decision on the plan issue names it (`versions.md` (stage 6)) |
 | A plan for the next hours | A new resume comment on the hub and, if work is in flight, a checkpoint comment |
 | A doubt about an earlier number | An `active` issue until checked; then a correction comment, and the body edited if the number was wrong |
 | A file, table, commit or tag behind a number | "Sources" of the body |
