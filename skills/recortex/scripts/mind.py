@@ -1301,7 +1301,7 @@ class Page:
         front = E("header", {"class": "front"},
                   E("h2", {"id": "paper-h", "class": "ptitle"}, title),
                   E("p", {"class": "psub"}, name) if name else "",
-                  E("p", {"class": "dateline"}, "As the record says on %s" % built),
+                  E("p", {"class": "dateline"}, mind_model.PHRASES["sheet.dateline"] % built),
                   E("p", {"class": "fronttools noprint"}, E("a", {"class": "lk", "href": anchor("text")}, mind_model.PHRASES["sheet.deliver"]),
                     E("button", {"type": "button", "data-print": "1"}, mind_model.PHRASES["sheet.print"])),
                   E("div", {"class": "row"},
@@ -1319,7 +1319,7 @@ class Page:
                        if self.sheet_default else "")),
                    front, *[E("p", {"class": "quiet noprint"}, words) for words in said],
                    E("div", {"id": "paper-text"}, *body), sourced,
-                   E("p", {"class": "sheetfoot noprint"}, mind_model.PHRASES["foot"])))
+                   E("p", {"class": "sheetfoot noprint"}, mind_model.PHRASES["sheet.hint"], " ", mind_model.PHRASES["foot"])))
 
     def sheet_bar(self, mode, listed):
         """The bar that stays at the top while the paper is read: the two ways to show it (the changes since a version, or a clean
@@ -1366,14 +1366,12 @@ class Page:
     def sheet_legend(self, plan, changes):
         """What the signs in the margin mean, in a fold that the script shuts on a phone; nothing when no sign is drawn. The line
         about change marks is there only when the text can be compared, and the one about dashed frames with a plan."""
-        signs = [("backed", "A planned part that a finding backs"), ("against", "A finding speaks against it"),
-                 ("planned", "Planned; nothing backs it yet"), ("now", "Can be written or made now"), ("open", "Still open")] \
-            if plan else []
-        rows = [E("p", None, self.sheet_mark(kind, words)) for kind, words in signs]
+        signs = ("backed", "against", "planned", "now", "open") if plan else ()
+        rows = [E("p", None, self.sheet_mark(kind, mind_model.PHRASES["leg." + kind])) for kind in signs]
         if changes:
-            rows.append(E("p", {"class": "lg-chg"}, self.sheet_mark("changed", "A paragraph that changed since the version chosen above")))
+            rows.append(E("p", {"class": "lg-chg"}, self.sheet_mark("changed", mind_model.PHRASES["leg.changed"])))
         if plan:
-            rows.append(E("p", {"class": "lg-slot"}, "A dashed frame is a part that the plan names and the text does not say yet."))
+            rows.append(E("p", {"class": "lg-slot"}, mind_model.PHRASES["leg.slot"]))
         if not rows:
             return ""
         return E("details", {"class": "mn legend noprint", "open": "open"}, E("summary", None, mind_model.PHRASES["sheet.legend"]), *rows)
@@ -1530,7 +1528,8 @@ class Page:
         entries = [e for e in history.get("entries", []) if isinstance(e, dict)] if isinstance(history.get("entries"), list) else []
         if entries:
             links.append(E("button", {"type": "button", "class": "lk", "data-toggle": "hist-" + ident, "aria-controls": "hist-" + ident,
-                                      "aria-expanded": "false"}, mind_model.PHRASES["part.history"] % len(entries)))
+                                      "aria-expanded": "false"}, mind_model.PHRASES["part.history"] % len(entries) if history.get("kept") is True
+                         else mind_model.PHRASES["part.history.days"]))
         if n in self.threads:
             links.append(E("a", {"class": "lk", "href": anchor("thread-%d" % n)}, mind_model.PHRASES["part.how"]))
         if links:
@@ -1735,7 +1734,7 @@ class Page:
     @staticmethod
     def read_line():
         """The line that stands where the print button was, once the manuscript has a view of its own."""
-        return E("p", {"class": "noprint"}, E("a", {"class": "lk", "href": anchor("paper")}, "Read it as a paper"))
+        return E("p", {"class": "noprint"}, E("a", {"class": "lk", "href": anchor("paper")}, mind_model.PHRASES["sheet.read"]))
 
     def text_view(self):
         outline = self.outline

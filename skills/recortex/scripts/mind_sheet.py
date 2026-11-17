@@ -43,6 +43,12 @@ PHRASES = {
     "sheet.plan": "See the plan", "sheet.deliver": "The plan and the text", "sheet.print": "Print or save as PDF",
     "sheet.legend": "What the marks mean", "sheet.rh": "%s, as the record says on %s",
     "sheet.rh.changes": "The text with its changes since version %d",
+    "sheet.read": "Read it as a paper", "sheet.dateline": "As the record says on %s",
+    "sheet.hint": "Print or save as PDF prints the clean text. mind.py --paper writes the paper as a page of its own.",
+    "leg.backed": "A planned part that a finding backs", "leg.against": "A finding speaks against it",
+    "leg.planned": "Planned; nothing backs it yet", "leg.now": "Can be written or made now", "leg.open": "Still open",
+    "leg.changed": "A paragraph that changed since the version chosen above",
+    "leg.slot": "A dashed frame is a part that the plan names and the text does not say yet.",
     "sheet.view": "Show", "sheet.changes": "Changes since", "sheet.clean": "Clean copy",
     "sheet.prev": "Previous change", "sheet.next": "Next change",
     "sheet.version": "Version %d \u00b7 %s", "sheet.previous": " (previous)",
@@ -70,7 +76,7 @@ PHRASES = {
     "mark.failures.one": "1 failure nothing followed", "mark.failures": "%d failures nothing followed",
     "mark.see": "See the finding",
     "sec.plan": "%d of %d planned parts backed", "sec.none": "Nothing is planned for it", "sec.link": "The plan for the %s",
-    "part.changed": "Last changed %s", "part.how": "How we got here", "part.history": "History (%d)",
+    "part.changed": "Last changed %s", "part.how": "How we got here", "part.history": "History (%d)", "part.history.days": "History",
     # a part against a version
     "since.same": "Same as version %d", "since.new": "New since version %d",
     "since.unfetched": "The text of version %d has not been fetched yet; build the page again with mind.py --versions.",
@@ -158,7 +164,7 @@ class SheetMixin:
                 for version in rows:
                     if version["version"] == row["commit"]:
                         named[version["n"]] = row   # a commit two changes share is named once, on the newer
-        found.update(kept=True, rows=rows, count=len(rows), line="first" if rows else "none")
+        found.update(kept=True, rows=rows, count=len(rows), line="none" if not rows else "first" if len(rows) == 1 else None)
         earlier = list(reversed(rows[:-1]))
         keep = earlier[:LISTED] + [version for version in earlier[LISTED:] if version["n"] in named]
         for version in keep:
@@ -234,9 +240,7 @@ class SheetMixin:
                     sources.append({"thread": n, "statement": row["statement"], "source": row["source"]})
         mode = "changes" if info["list"] and comparable else "plain"
         message = (self.plan or {}).get("message") if planned else None
-        line = None
-        if mode == "plain":
-            line = info["line"] if info["line"] in ("off", "none", "first") else None
+        line = info["line"] if mode == "plain" else None
         return {
             "profile": profile["profile"], "noun": noun, "title": noun.capitalize(), "name": self.repo.split("/")[1],
             "plan": planned, "message": message["plain"] if message else None, "mode": mode,

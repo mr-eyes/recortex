@@ -428,6 +428,7 @@ class TextAndOrderTests(PageBox):
         self.assertIn('<ol class="refs2">', view)
         self.assertIn("results/dry_spells.csv", self.words(view))
         self.assertLess(view.index("Where the numbers come from"), view.index("Written from the record by recortex"))
+        self.assertIn("mind.py --paper writes the paper as a page of its own.", self.words(view))
 
 
 class MarksAndSlotsTests(PageBox):
@@ -583,8 +584,8 @@ class VersionTests(Steps):
         self.assertNotIn("(previous)", options[1][2])
         self.assertIn("Changes since", self.words(view))
         self.assertIn("Clean copy", self.words(view))
-        self.assertNotIn("As submitted", self.words(view))
-        self.assertNotIn("submitted", self.words(view).lower())    # nothing here presumes a submission
+        self.assertNotIn("As named", self.words(view))
+        self.assertNotIn("submi", self.words(view).lower())    # nothing here presumes that a version was sent anywhere
 
     def test_a_named_version_shows_its_name_in_quotes_beside_its_number_and_a_hostile_name_arrives_as_nothing(self):
         commits = self.history()
@@ -770,6 +771,7 @@ class StateTests(Steps):
         self.assertNotIn("<ins>", view)
         self.assertNotIn('class="row rw r-', view)
         self.assertEqual("plain", model["sheet"]["mode"])    # nothing can be compared yet: no switch
+        self.assertNotIn("This is the first kept version", words)      # two versions are kept: that line is not told
 
     def test_a_part_past_the_cap_is_shown_as_it_is_with_its_cut_link_and_no_marks(self):
         self.mode("autonomous")
@@ -877,18 +879,32 @@ class ModeTests(Steps):
         self.assertIn('<span class="ml mln">The current text, with no marks</span>', view)
 
     def test_every_class_the_page_draws_has_a_rule_in_each_mode_and_in_print_and_no_rule_depends_on_has(self):
-        self.history()
+        self.mode("autonomous")
+        base = self.topic_body()
+        older = base.replace("the difference between cover and bare plots was small", "the difference between cover and bare plots was tiny").replace(
+            "| 8 to 12 days | 4 | 3 of 4 | 1 of 4 |", "| 8 to 12 days | 4 | 2 of 4 | 1 of 4 |")
+        older = add_after(older, FIGURE_LINE, "Bright zebras quietly vanish.")
+        newer = add_after(base, FIGURE_LINE, "Soil probes logged readings hourly.")
+        self.craft([{"body": older, "before": "c" * 64}, {"body": newer}])
         text = self.page()
         view = self.sheet_of(text)
         with open(os.path.join(PAGE, "mind.css"), encoding="utf-8") as handle:
             style = handle.read()
         self.assertNotIn(":has(", style)
         printed = style[style.rindex("@media print{"):]
-        for cls in ("r-added", "r-reworded", "r-changed", "v-now", "v-marks", "v-then", "r-removed"):
-            self.assertIn(cls, style, cls)
-        self.assertIn("r-added", view)
-        for hidden in (".v-marks", ".v-then", ".r-removed", ".holes", ".mn", ".sbar", ".histbox", ".sec-empty", ".pmsg", ".legend"):
-            self.assertIn(hidden, printed.split("{display:none!important}")[0], hidden)
+        self.assertIn("{display:none!important}", printed)
+        hidden = printed.split("{display:none!important}")[0]
+        for cls in ("r-added", "r-reworded", "r-changed", "r-removed", "v-now", "v-marks", "v-then"):
+            self.assertIn('class="' , view)
+            self.assertRegex(view, r'class="[^"]*\b%s\b' % cls, cls)    # the page draws it
+            self.assertIn("." + cls, style, cls)                           # and the style has a rule for it
+        for cls in ("r-removed", "v-marks", "v-then"):
+            self.assertIn("." + cls, hidden, cls)                          # print leaves the marks out
+        for mode in ("changes", "clean"):
+            self.assertIn("#paper[data-mode=%s]" % mode, style)
+        self.assertIn(".r-added", style)
+        for hidden_in_print in (".holes", ".mn", ".sbar", ".histbox", ".sec-empty", ".pmsg", ".legend"):
+            self.assertIn(hidden_in_print, hidden, hidden_in_print)
         self.assertIn("#paper[data-mode] .rw>.ptx>.v-now{display:block!important}", printed)    # print takes what is read, without marks
         self.assertIn("#paper[data-mode=changes] .rw.r-reworded>.ptx>.v-now{display:none}", style)
         self.assertIn("#paper[data-mode=clean] .holes", style)
@@ -922,7 +938,9 @@ class ModeTests(Steps):
             style = handle.read()
         self.assertIn(".sbar{position:sticky;top:0;z-index:3;background:var(--fog);padding:12px 0;margin:0 0 20px;border-bottom:1px solid var(--rule);max-width:1060px", style)
         self.assertIn(".ptx{font:19px/1.68 var(--serif);hyphens:auto;text-wrap:pretty;max-width:35em", style)
-        self.assertIn("@media (max-width:1180px){.row{display:block}", style)
+        self.assertIn("@media (max-width:1180px){", style)
+        self.assertIn(".row{display:block}", style.split("@media (max-width:1180px){", 1)[1])
+        self.assertIn(".mn{border-left:0;padding:0;margin:0 0 18px;display:flex;flex-wrap:wrap;gap:3px 14px}.mn .lab,.meter{display:none}", style)
         self.assertIn("@media (max-width:420px){main{padding:0}.sheet{border-radius:0;box-shadow:none;padding:18px 16px}}", style)
         self.assertIn(".st-against::before{background:none;border:2px solid var(--c);border-radius:1px}", style)
         self.assertIn(".hole{border:1.5px dashed var(--asked);border-radius:10px;padding:8px 14px;font:14.5px/1.5 var(--sans);color:var(--ink)}", style)
