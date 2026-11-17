@@ -371,7 +371,8 @@ class PlanMixin:
             if text["id"] not in self.m:
                 continue
             memory = self.m[text["id"]]
-            entry = {"id": text["id"], "day": memory["day"], "how": text["form"], "plain": memory["plain"],
+            entry = {"id": text["id"], "day": memory["day"], "time": memory["wall"][11:16] or None, "how": text["form"],
+                     "plain": memory["plain"],
                      "why": self.field(text["id"], "Why"), "diff": None, "no_diff": "unfetched",
                      "names": [{"name": n["name"], "day": n["day"]} for n in names if text["version"] and n["commit"] == text["version"]]}
             if made >= mind_versions.MAX_PARTS:

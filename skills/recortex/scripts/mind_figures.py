@@ -317,6 +317,10 @@ def wanted(model):
         blocks = thread.get("blocks") if isinstance(thread, dict) else None
         for block in blocks if isinstance(blocks, list) else []:
             add(block)
+    sheet = model.get("sheet") if isinstance(model, dict) else None
+    then = sheet.get("then_figures") if isinstance(sheet, dict) else None
+    for item in then if isinstance(then, list) else []:   # the figures that an earlier text of the manuscript view had
+        add(item)
     memories = model.get("memories") if isinstance(model, dict) else None
     for memory in memories if isinstance(memories, list) else []:
         evidence = memory.get("evidence") if isinstance(memory, dict) else None

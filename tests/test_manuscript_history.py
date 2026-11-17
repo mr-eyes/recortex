@@ -159,7 +159,7 @@ class VersionPageTests(VersionBox):
         self.assertIn("What changed", words)
         self.assertRegex(words, r"[0-9]+ paragraphs are the same")
         self.assertIn("To go back to a version, ask in the chat, for example: restore the Results of", words)
-        self.assertEqual(1, text.count("<ins>"))   # only the sentence that was added by hand: the first version has no before
+        self.assertEqual(2, text.count("<ins>"))   # only the sentence that was added by hand, in the History of the text view and in the box of the manuscript view: the first version has no before
 
     def test_a_version_whose_fetched_file_has_another_hash_shows_the_sentence_and_none_of_its_text(self):
         self.two_written()
@@ -284,9 +284,10 @@ class VersionPageTests(VersionBox):
         self.assertNotIn("onclick", text.replace("&lt;ins onclick", "").replace("onclick=alert(1)&gt;", ""))
         self.assertNotIn("actions/", text)
         # the only ins and del elements are the ones made from a run of type add or del of a known operation: two runs of the
-        # add operation and one del run of the change operation per entry, and one add run of the versions block
-        self.assertEqual(2 * len(found) + 1, text.count("<ins>"))
-        self.assertEqual(len(found), text.count("<del>"))
+        # add operation and one del run of the change operation per entry (drawn in the History of the text view and in the box
+        # of the manuscript view), and one add run of the versions block
+        self.assertEqual(2 * 2 * len(found) + 1, text.count("<ins>"))
+        self.assertEqual(2 * len(found), text.count("<del>"))
         self.assertEqual([], re.findall(r"<(?:ins|del) [^>]*>", text))
 
     def test_ins_and_del_are_made_by_page_diff_only(self):

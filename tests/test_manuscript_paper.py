@@ -74,13 +74,16 @@ class PaperExportTests(tv.VersionBox):
     def words(self, text):
         return re.sub(r" ([.,;:])", r"\1", " ".join(" ".join(ts.PageReader(text).texts).split()))
 
-    def test_the_manuscript_view_has_a_print_button_and_the_page_keeps_its_rules(self):
+    def test_the_manuscript_view_has_the_print_button_and_the_text_view_points_to_it(self):
         text = self.mind_page()
         self.assertEqual([], ts.page_problems(text))
-        text_view = text[text.index('<section class="view" id="text"'):text.index('<section class="view" id="threads"')]
-        self.assertEqual(1, text_view.count('data-print="1"'))
-        self.assertIn("Print or save as PDF", self.words(text_view))
-        self.assertEqual(1, text.count('data-print="1"'))   # only in the Manuscript view
+        text_view = text[text.index('<section class="view" id="text"'):text.index('<section class="view" id="paper"')]
+        self.assertEqual(0, text_view.count('data-print="1"'))
+        self.assertIn("Read it as a paper", self.words(text_view))
+        paper_view = text[text.index('<section class="view" id="paper"'):text.index('<section class="view" id="threads"')]
+        self.assertEqual(2, paper_view.count('data-print="1"'))   # the bar, and the line under the title on a phone
+        self.assertEqual(2, text.count('data-print="1"'))          # nowhere else
+        self.assertIn("Print or save as PDF", self.words(paper_view))
 
     def test_paper_html_holds_the_paper_alone_in_the_dashboards_design_under_the_same_policy(self):
         self.written()

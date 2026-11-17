@@ -26,6 +26,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import index  # noqa: E402
 import mind_plan  # noqa: E402
+import mind_sheet  # noqa: E402
 import mind_text  # noqa: E402
 import recortex  # noqa: E402
 import record_format  # noqa: E402
@@ -116,6 +117,7 @@ PHRASES = {
 }
 
 PHRASES.update(mind_plan.PHRASES)
+PHRASES.update(mind_sheet.PHRASES)
 
 FIELD_NAMES = {
     "Exact words": "In their exact words",
@@ -306,7 +308,7 @@ def build(db, repo, allowed, today, profiles=(), config=None):
             db.execute("ROLLBACK")
 
 
-class Build(mind_plan.PlanMixin):
+class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
     def __init__(self, db, repo, allowed, today, profiles=(), config=None):
         self.db, self.repo, self.allowed, self.today, self.profiles = db, repo, allowed, today, list(profiles)
         self.config = config
@@ -976,6 +978,7 @@ class Build(mind_plan.PlanMixin):
         outline = self.outline_model(threads)
         self.threads_for_versions = threads
         self.versions = self.versions_model(outline)
+        self.sheet = self.sheet_model(outline, threads)
         tree = self.tree_model(outline)
         self.read_word_uses(threads)
         words = [self.word_model(n, rows) for n, rows in self.word_rows]
@@ -995,7 +998,7 @@ class Build(mind_plan.PlanMixin):
             "since": [m["id"] for m in self.order if self.last and self.last["time"] and m["time"] > self.last["time"]],
             "latest_of": self.latest_of(),
             "cited": [self.cited[n] for n in sorted(self.cited)],
-            "open": opened, "map": self.map_model(), "plan": self.plan, "versions": self.versions,
+            "open": opened, "map": self.map_model(), "plan": self.plan, "versions": self.versions, "sheet": self.sheet,
             "counts": {"memories": len(self.order), "threads": len(self.threads), "words": len(words),
                        "open": sum(1 for m in self.order if m["css"] == "open")},
             "not_told": not_told,
@@ -1202,6 +1205,8 @@ class Build(mind_plan.PlanMixin):
         if len(names) == 1 and names[0] in self.NOUNS:
             aux, noun = self.NOUNS[names[0]]
             nav, title = "What %s %s say?" % (aux, noun), noun.capitalize()
+            if recortex.plan_profile(self.profiles) is not None:
+                nav = title = mind_sheet.PHRASES["sheet.deliver"]   # the manuscript has a view of its own: this one holds the plan
         else:
             noun, nav, title = None, "What do we deliver?", "What we deliver"
         other, unplaced = [], []

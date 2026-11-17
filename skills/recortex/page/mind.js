@@ -14,6 +14,7 @@
 
   function show(id) {
     views.forEach(function (v) { v.classList.toggle('on', v.id === id); });
+    root.setAttribute('data-view', id);
     $$('[data-nav]').forEach(function (a) {
       var on = a.getAttribute('data-nav') === id;
       a.classList.toggle('on', on);
@@ -276,6 +277,127 @@
       });
     });
   }
+
+  // the manuscript read as a paper: which text the sheet shows (the changes since a version, or a clean copy), which version, the
+  // next change, the boxes of history and the copy buttons. Everything it shows is already in the page; the script holds no record
+  // text, and a version number is read as a whole number before it is used.
+  var paper = $('#paper'), VERSION = /^[0-9]{1,6}$/, MODES = ['changes', 'clean'];
+  function tokens(el, name) { return (el.getAttribute(name) || '').split(' ').filter(function (t) { return VERSION.test(t); }); }
+  function atTop(fn) {
+    // keep what the reader is looking at where it is while the text around it changes
+    var host = null, top = 0;
+    $$('.partrow, .rw, .sechead', paper).some(function (el) {
+      var r = el.getBoundingClientRect();
+      if (r.bottom > 90 && el.offsetParent !== null) { host = el; top = r.top; return true; }
+      return false;
+    });
+    fn();
+    if (host) { window.scrollBy(0, host.getBoundingClientRect().top - top); }
+  }
+  function pickVersion(k) {
+    if (!paper || !VERSION.test(k || '')) { return; }
+    atTop(function () {
+      $$('[data-for]', paper).forEach(function (el) { el.classList.toggle('on', tokens(el, 'data-for').indexOf(k) >= 0); });
+      $$('.kv', paper).forEach(function (el) { el.textContent = k; });
+      $$('.rw', paper).forEach(function (row) {
+        var found = null;
+        ['added', 'reworded', 'changed'].forEach(function (kind) {
+          var has = tokens(row, 'data-' + kind).indexOf(k) >= 0;
+          row.classList.toggle('r-' + kind, false);
+          if (has && !found) { found = kind; }
+        });
+        if (found) { row.classList.add('r-' + found); }
+      });
+    });
+  }
+  function setMode(mode) {
+    if (!paper || MODES.indexOf(mode) < 0) { return; }
+    atTop(function () { paper.setAttribute('data-mode', mode); });
+  }
+  function changes() {
+    return $$('.rw.r-added, .rw.r-reworded, .rw.r-changed, .r-removed.on', paper).filter(function (el) { return el.offsetParent !== null; });
+  }
+  function goChange(step) {
+    var bar = $('.sbar', paper), offset = (bar ? bar.offsetHeight : 0) + 16, list = changes(), target = null;
+    if (step > 0) {
+      target = list.filter(function (el) { return el.getBoundingClientRect().top > offset + 1; })[0];
+    } else {
+      list = list.filter(function (el) { return el.getBoundingClientRect().top < offset - 1; });
+      target = list[list.length - 1];
+    }
+    if (!target) { return; }
+    var calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    window.scrollBy({ top: target.getBoundingClientRect().top - offset, behavior: calm ? 'auto' : 'smooth' });
+  }
+  function toggleBox(id) {
+    if (!ID.test(id || '')) { return; }
+    var box = document.getElementById(id);
+    if (!box) { return; }
+    box.hidden = !box.hidden;
+    var opener = $('[aria-controls="' + id + '"]');
+    if (opener) { opener.setAttribute('aria-expanded', box.hidden ? 'false' : 'true'); }
+    if (!box.hidden) { box.focus(); } else if (opener) { opener.focus(); }
+  }
+  var told = $('#copystatus');
+  function say(words) { if (told) { told.textContent = words; } }
+  function copyRequest(button) {
+    var req = button.previousElementSibling;
+    if (!req || !req.classList.contains('req')) { return; }
+    var text = req.textContent, shown = req.nextElementSibling;
+    function failed() {
+      var box = document.createElement('textarea');
+      box.className = 'copybox'; box.readOnly = true; box.value = text; box.rows = 2;
+      box.setAttribute('aria-label', 'The request, to copy by hand');
+      if (shown && shown.classList.contains('copybox')) { shown.parentNode.replaceChild(box, shown); }
+      else { req.parentNode.insertBefore(box, req.nextSibling); }
+      box.focus(); box.select();
+      say('Copy did not work; press Ctrl+C.');
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { say('Request copied. Paste it in the chat.'); }, failed);
+      return;
+    }
+    var area = document.createElement('textarea');
+    area.value = text; area.setAttribute('readonly', 'readonly'); area.className = 'copyaside';
+    document.body.appendChild(area); area.select();
+    var done = false;
+    try { done = document.execCommand('copy'); } catch (error) { done = false; }
+    document.body.removeChild(area);
+    if (done) { say('Request copied. Paste it in the chat.'); } else { failed(); }
+  }
+  if (paper) {
+    $$('.histbox', paper).forEach(function (box) { box.hidden = true; });
+    if (narrow()) { $$('.legend', paper).forEach(function (d) { d.open = false; }); }
+    var pick = $('#pick');
+    if (pick) { pick.addEventListener('change', function () { pickVersion(pick.value); }); }
+    $$('input[name=pmode]', paper).forEach(function (radio) {
+      radio.addEventListener('change', function () { if (radio.checked) { setMode(radio.value); } });
+    });
+    var prev = $('#chgprev'), next = $('#chgnext');
+    if (prev) { prev.addEventListener('click', function () { goChange(-1); }); }
+    if (next) { next.addEventListener('click', function () { goChange(1); }); }
+    document.addEventListener('click', function (event) {
+      var t = event.target && event.target.closest ? event.target.closest('[data-toggle]') : null;
+      if (t) { event.preventDefault(); toggleBox(t.getAttribute('data-toggle')); return; }
+      var c = event.target && event.target.closest ? event.target.closest('[data-copy]') : null;
+      if (c) { event.preventDefault(); copyRequest(c); }
+    });
+    // the sections in the side bar, marked as the paper is read
+    if ('IntersectionObserver' in window) {
+      var spy = new IntersectionObserver(function (found) {
+        found.forEach(function (entry) {
+          if (!entry.isIntersecting) { return; }
+          $$('.subnav a').forEach(function (a) { a.classList.toggle('here', a.getAttribute('href') === '#' + entry.target.id); });
+        });
+      }, { rootMargin: '-10% 0px -75% 0px' });
+      $$('.sech', paper).forEach(function (h) { spy.observe(h); });
+    }
+  }
+  // a window that was narrow and is wide again shows the ways in
+  var wide = window.matchMedia ? window.matchMedia('(max-width: 860px)') : null;
+  function widened(event) { var side = $('.side'); if (side && !event.matches) { setShut(side, false); } }
+  if (wide) { if (wide.addEventListener) { wide.addEventListener('change', widened); } else if (wide.addListener) { wide.addListener(widened); } }
+
 
   // first visit
   var tour = $('#tour'), steps = $$('.step', tour), at = 0;
