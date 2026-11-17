@@ -1589,7 +1589,8 @@ class OwnPaperTests(WritingBox):
             text = open(os.path.join(ts.SCRIPTS, name), encoding="utf-8").read()
             if regex.search(r"own_manuscript|OWN_PAPER|own-paper", text) and name not in ("own_paper.py", "recortex.py",
                                                                                           "brief.py", "hooks.py", "setup.py",
-                                                                                          "names.py", "write_rules.py"):
+                                                                                          "names.py", "write_rules.py",
+                                                                                          "setup_questions.py"):
                 writers.append(name)
         self.assertEqual([], writers)
         hook_text = " ".join(open(os.path.join(ts.SCRIPTS, name)).read() for name in ("brief.py", "hooks.py"))
