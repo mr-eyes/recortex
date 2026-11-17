@@ -1091,7 +1091,7 @@ class Page:
         items = []
         for entry in names:
             lines = [E("p", {"class": "histhead"}, E("b", None, text_of(entry.get("name"))), "  ",
-                       mind_model.PHRASES["ver.named"] % (text_of(entry.get("name")), text_of(entry.get("day"))))]
+                       mind_model.PHRASES["ver.named"] % text_of(entry.get("day")))]
             if text_of(entry.get("words")):
                 lines.append(E("p", {"class": "quiet"}, "\u201c" + text_of(entry.get("words")) + "\u201d"))
             build = entry.get("build") if isinstance(entry.get("build"), dict) else None

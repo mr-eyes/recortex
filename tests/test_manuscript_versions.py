@@ -1209,11 +1209,15 @@ class VersionPageTests(VersionBox):
         words = self.words(text)
         self.assertEqual([], ts.page_problems(text))
         self.assertIn("Versions of the paper", words)
-        self.assertIn("Named first on", words)
-        self.assertIn("Named second on", words)
+        self.assertRegex(words, r"first Named on [A-Z][a-z]+ [0-9]+\.")
+        self.assertRegex(words, r"second Named on [A-Z][a-z]+ [0-9]+\.")
+        self.assertIn("The paper was last built on December 3, 2026 (HTML, PDF and Word).", words)
         self.assertIn("“Call this first”", words)
         self.assertIn("What changed since first", words)
         self.assertIn("<ins>A second look, by hand.</ins>", text)
+        since = text[text.index('id="versions-of-the-paper"'):text.index("</section>", text.index('id="versions-of-the-paper"'))]
+        self.assertIn("<ins>A second look, by hand.</ins>", since)   # drawn in the block of the names, not only in the part's fold
+        self.assertRegex(self.words(since), r"[0-9]+ parts? did not change")
         self.assertRegex(words, r"[0-9]+ parts? did not change\.")
         self.assertIn("The paper was last built on", words)
         self.assertIn('href="https://github.com/octo-org/sample-project/actions/runs/4242"', text)

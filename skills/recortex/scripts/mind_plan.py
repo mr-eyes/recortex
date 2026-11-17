@@ -55,7 +55,7 @@ PHRASES = {
     "diff.same.one": "1 paragraph is the same", "diff.same": "%d paragraphs are the same",
     "diff.cut": "The difference goes on; it is cut here.",
     "ver.title": "Versions of the paper", "ver.none": "No version of the paper has been named yet.",
-    "ver.named": "Named %s on %s.", "ver.since": "What changed since %s",
+    "ver.named": "Named on %s.", "ver.since": "What changed since %s",
     "ver.same.one": "1 part did not change.", "ver.same": "%d parts did not change.",
     "ver.unfetched": "The text of some versions has not been fetched yet; build the page again with --sync.",
     "ver.build": "The paper was last built on %s (HTML, PDF and Word).", "ver.build.name": "Built on %s.",
@@ -406,6 +406,8 @@ class PlanMixin:
             except Exception:  # noqa: BLE001 - a build line is never worth a page that fails
                 builds = {"branch": None, "names": {}}
         branch = builds["branch"] if builds["branch"] and builds["branch"]["commit"] in commits else None
+        if branch:
+            branch = dict(branch, day=self.full(branch["day"]))
         out, unfetched = [], 0
         parts = []
         for group in outline.get("deliverables", []):
@@ -422,11 +424,16 @@ class PlanMixin:
                 changed, same = [], 0
                 for thread, ordinal, label in parts:
                     topic = topic_of.get(thread)
+                    if not [t for t in self.texts if t["issue"] == topic and self.after_name(t, previous) and not self.after_name(t, row)
+                            and label.lower() in [h.lower() for h in t["sections"]]]:
+                        same += 1   # every version is one told text change: none between the two names, nothing changed
+                        continue
                     before, after = (self.text_at_name(topic, label, n) for n in (previous, row))
                     if before[1] != "ok" or after[1] != "ok":
                         unfetched += 1
                         changed.append({"thread": thread, "ordinal": ordinal, "label": label, "diff": None,
-                                        "no_diff": after[1] if before[1] == "ok" else before[1]})
+                                        "no_diff": ("before" if before[1] == "unfetched" and self.has_no_text_before(topic, previous)
+                                                    else after[1] if before[1] == "ok" else before[1])})
                         continue
                     found = self.section_diff(before[0], after[0], label)
                     if found["diff"] is not None and not mind_versions.changed(found["diff"]):
@@ -438,16 +445,27 @@ class PlanMixin:
             previous = row
         return {"kept": kept, "names": list(reversed(out)), "build": branch, "unfetched": unfetched}
 
+    @staticmethod
+    def after_name(text, row):
+        """True when a text change came after a named version: later by its time, or at the same minute with a later id
+        (the record's comments are numbered in the order they were made)."""
+        return (text["time"], text["id"]) > (row["time"], row["id"])
+
+    def has_no_text_before(self, topic, row):
+        """True when no told text change of the topic stands at or before the name: the text before that name is not a
+        version this record vouches for."""
+        return not [t for t in self.texts if t["issue"] == topic and not self.after_name(t, row) and t["version"]]
+
     def name_build(self, builds, row, commits):
         found = builds["names"].get(row["name"])
-        return found if found and found["commit"] in commits else None
+        return dict(found, day=self.full(found["day"])) if found and found["commit"] in commits else None
 
     def text_at_name(self, topic, heading, row):
         """(body, state) of a topic as it stood at a named version: the file of the newest told change of the topic up to the
         name, checked against that change's hash."""
         if topic is None:
             return None, "unfetched"
-        found = [t for t in self.texts if t["issue"] == topic and t["time"] <= row["time"] and t["version"]]
+        found = [t for t in self.texts if t["issue"] == topic and not self.after_name(t, row) and t["version"]]
         if not found:
             return None, "unfetched"
         newest = found[-1]
