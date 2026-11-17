@@ -13,14 +13,25 @@ output is data, a list of operations, which the page draws (Page.diff makes the 
 The difference is of the text as written (its Markdown), shown as text; formulas are not drawn inside it. Joining the
 "same" and "del" runs of a change gives the old paragraph and joining its "same" and "add" runs gives the new one, so
 that both sides can always be rebuilt from the runs (diff_text with collapse=False keeps every unchanged paragraph).
+
+The manuscript page (1.4.0) compares the blocks of the text, not its lines: words(block) gives the plain words of a block,
+phrases(runs) joins the word runs of a reworded paragraph into phrases, and since(old, new, old_entries, new_entries) gives
+one row per block of the new text, and one per block that only the old text had, each marked same, added, removed,
+reworded or changed. History and the versions of the paper keep their word-by-word look through diff_text and word_runs.
 """
 
 import difflib
+import json
 import re
 
 CUT_CHARS = 20000
 MAX_PARTS = 30           # differences drawn per part
 MAX_BYTES = 3 * 1024 * 1024   # of differences per page
+MAX_SINCE_BYTES = 2 * 1024 * 1024   # of the marked variants of the manuscript view
+MAX_PAIRS = 6000         # paragraph pairs compared by words in one since()
+SAME_WORDS, SAME_CHARS = 2, 16   # a run of unchanged words this short between two changes joins them
+WHOLE_SHARE = 0.6        # more of the longer side changed than this: the paragraph is one deletion and one addition
+REWORD_RATIO = 0.5       # paragraphs whose words match at least this much are one paragraph reworded
 OPS = ("same", "add", "del", "change", "cut")
 RUNS = ("same", "add", "del")
 TOKEN = re.compile(r"\s+|\S+")
@@ -132,3 +143,214 @@ def changed(ops):
 def size(ops):
     """The characters the operations hold, for the budget of a page."""
     return sum(len(run["text"]) for op in ops for run in op.get("runs", [])) + 16 * len(ops)
+
+
+# ---------------------------------------------------------------- the manuscript view: blocks, phrases and rows
+
+def block_kind(block):
+    """The one main key of a block of mind_text ("p", "h", "ul", "ol", "quote", "code", "math", "table", "block", "note"),
+    or None for anything else."""
+    if not isinstance(block, dict):
+        return None
+    for key in ("p", "h", "ul", "ol", "quote", "code", "math", "table", "block", "note"):
+        if key in block:
+            return key
+    return None
+
+
+def run_text(runs):
+    """The text of inline runs as it reads: the text of a `t` run, the words of a `code` or `cite` run, the source of a
+    formula and the words of a link (never its address)."""
+    out = []
+    for run in runs if isinstance(runs, list) else []:
+        if not isinstance(run, dict):
+            continue
+        if isinstance(run.get("t"), str):
+            out.append(run["t"])
+        elif isinstance(run.get("code"), str):
+            out.append(run["code"])
+        elif isinstance(run.get("w"), str):
+            out.append(run["w"])
+        elif "cite" in run:
+            out.append(run["text"] if isinstance(run.get("text"), str) else "")
+        elif isinstance(run.get("math"), dict):
+            out.append(run["math"]["s"] if isinstance(run["math"].get("s"), str) else "")
+        elif "link" in run:
+            out.append(run_text(run["link"]))
+    return "".join(out)
+
+
+def block_text(block):
+    """The plain text of a block, its pieces joined by one space: runs as run_text gives them; for a list its items, for a
+    table its cells, for code and formulas their source. A figure or table pointer and a note have none."""
+    kind = block_kind(block)
+    if kind in ("p", "quote"):
+        return run_text(block[kind])
+    if kind == "h":
+        return run_text(block["h"].get("r") if isinstance(block["h"], dict) else None)
+    if kind in ("ul", "ol"):
+        out = []
+        for item in block[kind] if isinstance(block[kind], list) else []:
+            if isinstance(item, dict):
+                out.append(run_text(item.get("r")))
+                if isinstance(item.get("sub"), dict):
+                    out.append(block_text(item["sub"]))
+        return " ".join(part for part in out if part)
+    if kind == "code":
+        return block["code"] if isinstance(block["code"], str) else ""
+    if kind == "math":
+        return block["math"].get("s", "") if isinstance(block["math"], dict) and isinstance(block["math"].get("s"), str) else ""
+    if kind == "table":
+        table = block["table"] if isinstance(block["table"], dict) else {}
+        cells = [cell for key in ("head", "rows") for row in (table.get(key) or []) if isinstance(row, list) for cell in row]
+        return " ".join(run_text(cell.get("r")) for cell in cells if isinstance(cell, dict))
+    return ""
+
+
+def words(block):
+    """The plain words of a block: the words of its text runs, its code, its formulas' source and its links' words; for a
+    table its cells. A figure or table pointer has none."""
+    return block_text(block).split()
+
+
+def entry_key(entry):
+    """What makes a figure or table entry the same entry: its title, caption, data and command, its place for a figure, and
+    for a table the words of its cells."""
+    if not isinstance(entry, dict):
+        return None
+    table = entry.get("table")
+    return json.dumps([entry.get("kind"), entry.get("title"), entry.get("caption"), entry.get("data"), entry.get("command"),
+                       entry.get("repo"), entry.get("ref"), entry.get("path"),
+                       block_text({"table": table}) if isinstance(table, dict) else None])
+
+
+def block_key(block, entries=None):
+    """A string that is equal for two blocks that say the same. A figure or table pointer's key includes its entry, so that a
+    changed caption is a change."""
+    if block_kind(block) == "block" and isinstance(block["block"], dict):
+        entry = (entries or {}).get((block["block"].get("kind"), block["block"].get("id")))
+        return json.dumps(["block", block["block"].get("kind"), block["block"].get("id"), entry_key(entry)])
+    try:
+        return json.dumps(block, sort_keys=True)
+    except (TypeError, ValueError):
+        return repr(block)
+
+
+def phrases(runs):
+    """The runs of a reworded paragraph (word_runs) joined into phrases: a run of unchanged words that is at most
+    SAME_WORDS words and SAME_CHARS characters long between two changes is absorbed into them, each changed stretch is then
+    one deletion followed by one addition, and a paragraph of which more than WHOLE_SHARE of the longer side changed is one
+    deletion and one addition. Joining the "same" and "del" runs still gives the old text, and joining "same" and "add" the
+    new."""
+    runs = [(run["t"], run["text"]) for run in runs if run.get("t") in RUNS and isinstance(run.get("text"), str) and run["text"]]
+    segs = []   # ["same", text] or ["chg", old, new]
+    for kind, text in runs:
+        if kind == "same":
+            segs.append(["same", text])
+        elif segs and segs[-1][0] == "chg":
+            segs[-1][1 if kind == "del" else 2] += text
+        else:
+            segs.append(["chg", text if kind == "del" else "", text if kind == "add" else ""])
+    joined = []
+    for seg in segs:
+        joined.append(seg)
+        if len(joined) >= 3 and joined[-1][0] == "chg" and joined[-2][0] == "same" and joined[-3][0] == "chg" and \
+                len(joined[-2][1].split()) <= SAME_WORDS and len(joined[-2][1]) <= SAME_CHARS:
+            last, mid, first = joined.pop(), joined.pop(), joined.pop()
+            joined.append(["chg", first[1] + mid[1] + last[1], first[2] + mid[1] + last[2]])
+    old = "".join(seg[1] for seg in joined)
+    new = "".join(seg[2] if seg[0] == "chg" else seg[1] for seg in joined)
+    changed_old = sum(len(seg[1]) for seg in joined if seg[0] == "chg")
+    changed_new = sum(len(seg[2]) for seg in joined if seg[0] == "chg")
+    longer, share = (len(old), changed_old) if len(old) >= len(new) else (len(new), changed_new)
+    if longer and share / longer > WHOLE_SHARE:
+        return merge_runs([("del", old), ("add", new)])
+    out = []
+    for seg in joined:
+        if seg[0] == "same":
+            out.append(("same", seg[1]))
+        else:
+            out += [("del", seg[1]), ("add", seg[2])]
+    return merge_runs(out)
+
+
+def pairs(old, new, budget):
+    """"reworded" or "changed" when an old block and a new block are one block that changed, else None. Two paragraphs are
+    one when the ratio of their words is REWORD_RATIO or more; two blocks of one other kind are, and for a figure or table
+    pointer only when they name the same figure or table. `budget` is a one-item list that counts the paragraph pairs left."""
+    kind = block_kind(old)
+    if kind != block_kind(new) or kind is None:
+        return None
+    if kind == "p":
+        first, second = words(old), words(new)
+        if not first or not second or budget[0] <= 0:
+            return None
+        budget[0] -= 1
+        matcher = difflib.SequenceMatcher(None, first, second, autojunk=False)
+        if matcher.real_quick_ratio() < REWORD_RATIO or matcher.quick_ratio() < REWORD_RATIO:
+            return None
+        return "reworded" if matcher.ratio() >= REWORD_RATIO else None
+    if kind == "block":
+        left, right = old["block"], new["block"]
+        same = isinstance(left, dict) and isinstance(right, dict) and left.get("kind") == right.get("kind") \
+            and left.get("id") == right.get("id")
+        return "changed" if same else None
+    return "changed"
+
+
+def row(kind, now=None, then=None, runs=None, i=None, j=None):
+    return {"k": kind, "now": now, "then": then, "runs": runs, "i": i, "j": j}
+
+
+def since(old_blocks, new_blocks, old_entries=None, new_entries=None):
+    """The rows that turn the blocks of an old text into those of a new one: [{"k", "now", "then", "runs", "i", "j"}], one
+    for each block of the new text in its order (k "same", "added", "reworded" or "changed"; i is its place among the new
+    blocks, j its place among the old) and one for each block only the old text had (k "removed", now and i None), between
+    the new blocks it stood between. Blocks are matched as wholes; inside a stretch that differs, the two sides are walked in
+    order: paragraphs that are mostly the same words are one paragraph reworded (its runs are phrases(word_runs)), other
+    blocks of one kind are one block changed, and the rest are removed or added."""
+    old_blocks = [b for b in old_blocks if block_kind(b)]
+    new_blocks = [b for b in new_blocks if block_kind(b)]
+    first = [block_key(b, old_entries) for b in old_blocks]
+    second = [block_key(b, new_entries) for b in new_blocks]
+    out, budget = [], [MAX_PAIRS]
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, first, second, autojunk=False).get_opcodes():
+        if tag == "equal":
+            out += [row("same", new_blocks[j], None, None, j, i1 + j - j1) for j in range(j1, j2)]
+            continue
+        j = j1
+        for i in range(i1, i2):
+            found = None
+            for later in range(j, j2):
+                how = pairs(old_blocks[i], new_blocks[later], budget)
+                if how:
+                    found = (later, how)
+                    break
+            if found is None:
+                out.append(row("removed", None, old_blocks[i], None, None, i))
+                continue
+            later, how = found
+            out += [row("added", new_blocks[n], None, None, n, None) for n in range(j, later)]
+            runs = None
+            if how == "reworded":
+                runs = phrases(word_runs(block_text(old_blocks[i]), block_text(new_blocks[later])))
+            out.append(row(how, new_blocks[later], old_blocks[i], runs, later, i))
+            j = later + 1
+        out += [row("added", new_blocks[n], None, None, n, None) for n in range(j, j2)]
+    return out
+
+
+def since_size(rows):
+    """The characters a list of rows costs on the page: the runs of reworded paragraphs and the blocks of removed and changed
+    rows, and a little for each row."""
+    total = 0
+    for item in rows:
+        total += 24 + sum(len(run["text"]) for run in item.get("runs") or [])
+        if item.get("then") is not None:
+            total += 40 + len(block_text(item["then"]))
+    return total
+
+
+def counts(rows):
+    """{"reworded", "added", "removed", "changed"} of a list of rows."""
+    return {kind: sum(1 for item in rows if item["k"] == kind) for kind in ("reworded", "added", "removed", "changed")}
