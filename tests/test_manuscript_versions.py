@@ -251,6 +251,22 @@ class VersionTests(VersionBox):
         cid, memory = self.text_memories()[-1]
         self.assertEqual("Edited by octocat on GitHub, 2026-12-02 10:00 UTC.", dict(record_format.fields(memory))["Approved"])
 
+    def test_the_authors_and_keywords_go_into_the_metadata_of_the_next_commits_and_need_the_authors_yes(self):
+        self.ready()
+        self.mode("autonomous")
+        refused = self.cmd("versions.py", "meta", "--authors", "Ada Lovelace; Grace Hopper")
+        self.assertNotEqual(0, refused.returncode)
+        done = self.cmd("versions.py", "meta", "--authors", "Ada Lovelace; Grace Hopper", "--keywords", "soil, cover crops", "--yes")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        meta = self.files_at()["content/metadata.yaml"]
+        self.assertIn('  - name: "Ada Lovelace"', meta)
+        self.assertIn('keywords: ["soil", "cover crops"]', meta)
+        folder = self.start(5)
+        self.draft(folder)
+        self.assertEqual(0, self.cmd("write.py", "apply", "--dir", folder).returncode)
+        again = self.files_at()["content/metadata.yaml"]
+        self.assertEqual(meta, again)   # a later commit keeps what the author gave
+
     def test_a_hand_edit_is_recorded_by_sync_with_its_login_and_stamp(self):
         self.ready()
         self.mode("autonomous")
@@ -655,6 +671,17 @@ class CompileVersionTests(VersionBox):
         self.written()
         self.assertEqual(0, self.cmd("versions.py", "name", "submitted", "--words-file", self.words("submit")).returncode)
         self.ready()
+
+    def test_the_manifest_holds_the_head_and_the_names_when_versions_are_kept_and_neither_when_they_are_not(self):
+        self.named()
+        out, done = self.compiled("kept")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        manifest = json.load(open(os.path.join(out, "MANIFEST.json")))
+        self.assertEqual({"branch": BRANCH, "head": self.head(), "names": [{"name": "submitted", "commit": self.head()}]},
+                         manifest["versions"])
+        self.mode("off")
+        out, done = self.compiled("off")
+        self.assertNotIn("versions", json.load(open(os.path.join(out, "MANIFEST.json"))))
 
     def test_a_named_version_compiles_to_the_bytes_an_ordinary_compile_gave_at_that_moment(self):
         self.named()

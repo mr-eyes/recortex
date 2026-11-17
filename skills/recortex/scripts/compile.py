@@ -21,7 +21,8 @@ see deletions) and --no-sync uses the index as it is. Then it writes, under --ou
   history/timeline.md         the issue events (opened, labeled, unlabeled, renamed,
                               closed, reopened, pinned) and body edits; a comment
                               that is not a typed event is kept with type "other"
-  MANIFEST.json               repository, hub, time of compilation, counts, --ref
+  MANIFEST.json               repository, hub, time of compilation, counts, --ref; with a plan, its counts; with versions
+                              kept, the branch's head commit and the names
 
 Files of the same name are replaced; nothing else in --out is touched.
 
@@ -158,6 +159,30 @@ def write_tsv(path, columns, rows):
             handle.write("\t".join(cell(row.get(c)) for c in columns) + "\n")
 
 
+def kept_versions(db, config, repo):
+    """{"branch", "head", "names"} for the manifest when versions are kept on this machine (a mode of review or autonomous): the
+    names come from the told decisions in the index, the head from one read of GitHub, left out when it cannot be read.
+    None otherwise."""
+    try:
+        import versions  # noqa: E402
+        if not versions.kept_here(repo):
+            return None
+        allowed = recortex.allowed_users(repo)
+        plan = recortex.plan_profile(recortex.shipped_profiles(config.get("profiles")))
+        state, items = versions.told_items(db, config, allowed, plan)
+        out = {"branch": versions.BRANCH, "names": [{"name": row["name"], "commit": row["commit"]}
+                                                    for row in versions.named_versions(db, items)]}
+        try:
+            head = versions.head_of(repo)
+        except versions.GitError:
+            head = None
+        if head:
+            out["head"] = head
+        return out
+    except Exception:  # noqa: BLE001 - a manifest line is never worth a compile that fails
+        return None
+
+
 def build(db, config, repo, hub, out, ref=None, dry_run=False, bodies=None, cut=None, version=None):
     profiles = recortex.shipped_profiles(config.get("profiles"))
     plan = index.deliverable_order(db, hub, profiles)
@@ -248,6 +273,10 @@ def build(db, config, repo, hub, out, ref=None, dry_run=False, bodies=None, cut=
         manifest["plan"] = plan_counts
     if version is not None:
         manifest["version"] = version
+    elif plan_counts is not None:
+        kept = kept_versions(db, config, repo)
+        if kept is not None:
+            manifest["versions"] = kept
     files.append(os.path.join(out, "MANIFEST.json"))
     if not dry_run:
         with open(files[-1], "w", encoding="utf-8") as handle:
