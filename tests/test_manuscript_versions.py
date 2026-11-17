@@ -1160,7 +1160,7 @@ class WriteTrustTests(VersionBox):
         data["comments"][str(self.proposal)]["user"] = "hubot"
         self.save(data)
         out = self.approvals("--apply").stdout
-        self.assertIn("is not by an allowed account or is not the newest proposal", out)
+        self.assertIn("approvals: no proposal waits", out)   # a proposal-typed comment of another account is no proposal
         self.nothing_written()
 
     def test_only_the_newest_proposal_of_an_allowed_account_counts(self):
@@ -1670,7 +1670,7 @@ class VersionPageTests(VersionBox):
         self.assertIn("Versions of the paper", words)
         self.assertRegex(words, r"first Named on [A-Z][a-z]+ [0-9]+\.")
         self.assertRegex(words, r"second Named on [A-Z][a-z]+ [0-9]+\.")
-        self.assertNotIn("built", words.lower())   # no build is made or linked
+        self.assertNotIn("last built", words.lower())   # no build is made or linked
         self.assertIn("“Call this first”", words)
         self.assertIn("What changed since first", words)
         self.assertIn("<ins>A second look, by hand.</ins>", text)

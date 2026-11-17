@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import index  # noqa: E402
 import mind_figures  # noqa: E402
 import mind_model  # noqa: E402
+import mind_paper  # noqa: E402
 import mind_plan  # noqa: E402
 import mind_versions  # noqa: E402
 import recortex  # noqa: E402
@@ -83,7 +84,7 @@ MATH_TAGS = frozenset("math mrow mi mn mo mtext mspace msub msup msubsup mfrac m
 ATTRS = frozenset("""class id href rel type hidden role tabindex lang charset name content http-equiv placeholder
 autocomplete disabled aria-label aria-labelledby aria-hidden aria-live aria-expanded viewBox x y x1 x2 y1 y2 cx cy r
 width height transform points text-anchor d rowspan colspan start display mathvariant accent src alt loading data-m data-term
-data-issue data-nav data-ask data-go data-kind data-group data-a data-b data-explain data-fold""".split())
+data-issue data-nav data-ask data-go data-kind data-group data-a data-b data-explain data-fold data-print""".split())
 VALUE = re.compile(r"[A-Za-z0-9 _.,:;#/()'+=?-]*")
 ANCHOR = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,80}")
 KEY = re.compile(r"[a-z][a-z0-9-]{0,40}")   # a key the page made: of an explanation, of a fold
@@ -1145,6 +1146,14 @@ class Page:
                  E("p", {"class": "partlinks"}, E("a", {"href": anchor("settled-%d" % n)}, "Why it says this"), "  ",
                    E("a", {"href": anchor("thread-%d" % n)}, "How we got here")))
 
+    @staticmethod
+    def print_line():
+        """The button that asks the browser to print the text: the page's own style leaves the paper alone on the sheet (no
+        side bar, no folds, a page break before each section), and the browser's dialog offers "Save as PDF"."""
+        return E("p", {"class": "noprint"}, E("button", {"type": "button", "class": "primary", "data-print": "1"},
+                                               "Print or save as PDF"), "  ",
+                 E("span", {"class": "quiet"}, "Prints the text alone. mind.py --paper writes it as a page of its own."))
+
     def text_view(self):
         outline = self.outline
         groups = [g for g in outline.get("deliverables", []) if isinstance(g, dict)] \
@@ -1190,7 +1199,7 @@ class Page:
                 numbers.append(self.show(J("Where the numbers of ", self.thread_name(n), " come from"), E("ul", {
                     "class": "srcs"}, *[E("li", None, E("b", None, self.runs(row.get("statement"))), ": ",
                                           self.runs(row.get("source"))) for row in sources])))
-        return self.view("text", title, TEXT_LEDE, self.plan_summary(), self.versions_block(),
+        return self.view("text", title, TEXT_LEDE, self.print_line(), self.plan_summary(), self.versions_block(),
                          E("ul", {"class": "contents", "aria-label": "The parts of the text, in order"}, *contents),
                          *body, E("h3", None, "Where the numbers come from") if numbers else "", *numbers,
                          self.untold_line())
@@ -1970,6 +1979,43 @@ class Page:
                    E("button", {"type": "button", "id": "tournext", "class": "primary"}, "Next"),
                    E("button", {"type": "button", "id": "tourend"}, "Leave the tour")))
 
+    def paper_page(self, paper, style, script):
+        """The paper alone as a page of its own (mind.py --paper): its title, the sections with each topic's text, the lists of
+        where the numbers come from. Same style, same Content-Security-Policy form and the same rules as the mind page; the one
+        script only asks the browser to print. `paper` is mind_paper.paper(); its text is drawn as text through blocks()."""
+        digest = lambda text: "'sha256-%s'" % base64.b64encode(hashlib.sha256(text.encode("utf-8")).digest()).decode()
+        policy = POLICY % (digest(style), digest(script))
+        title = text_of(paper.get("title"))
+        head = E("head", None, E("meta", {"charset": "utf-8"}),
+                 E("meta", {"http-equiv": "Content-Security-Policy", "content": policy}),
+                 E("meta", {"name": "referrer", "content": "no-referrer"}),
+                 E("meta", {"name": "viewport", "content": VIEWPORT}), E("title", None, title),
+                 Safe("<style>%s</style>" % style))
+        sections = []
+        for section in paper.get("sections", []) if isinstance(paper.get("sections"), list) else []:
+            parts = [p for p in section.get("parts", []) if isinstance(p, dict)] if isinstance(section, dict) else []
+            inner = []
+            for part in parts:
+                n = integer(part.get("topic"))
+                if len(parts) > 1 and text_of(part.get("name")):
+                    inner.append(E("h4", {"class": "sub"}, text_of(part.get("name"))))
+                inner.append(E("div", {"class": "parttext"}, self.blocks(part.get("doc"), github_url("issue", self.repo, n),
+                                                                          self.stores.get(n), n)))
+            sections.append(E("section", {"class": "sec papersec"}, E("h3", None, text_of(section.get("heading"))), *inner))
+        rows = [r for r in paper.get("sources", []) if isinstance(r, dict)] if isinstance(paper.get("sources"), list) else []
+        sourced = E("section", {"class": "sec papersec"}, E("h3", None, "Where the numbers come from"),
+                    E("ul", {"class": "srcs"}, *[E("li", None, E("b", None, text_of(r.get("statement"))), ": ",
+                                                    text_of(r.get("source"))) for r in rows])) if rows else ""
+        main = E("main", {"id": "main", "class": "paperdoc"},
+                 E("div", {"class": "papertop noprint"},
+                   E("button", {"type": "button", "class": "primary", "data-print": "1"}, "Print or save as PDF"),
+                   E("span", {"class": "quiet"}, "The browser's print dialog offers \"Save as PDF\".")),
+                 E("h2", {"class": "papertitle"}, title), E("p", {"class": "papernote"}, text_of(paper.get("note"))),
+                 *sections, sourced,
+                 E("p", {"class": "paperfoot"}, "Written from the record by recortex. Every word is the record's own text."))
+        body = E("body", {"class": "paper"}, main, Safe("<script>%s</script>" % script))
+        return "<!doctype html>\n%s\n<html lang=\"en\">%s%s</html>\n" % (NOTICE, head, body)
+
     def page(self, style, script, icon):
         digest = lambda text: "'sha256-%s'" % base64.b64encode(hashlib.sha256(text.encode("utf-8")).digest()).decode()
         policy = POLICY % (digest(style), digest(script))
@@ -2028,11 +2074,86 @@ def fixed_files():
     return style, script, icon[:2]
 
 
+def paper_script():
+    """The fixed script of paper.html, read from ../page; refused when it could end its element or open a comment."""
+    with open(os.path.join(PAGE, "paper.js"), encoding="utf-8") as handle:
+        script = handle.read()
+    if "</" in script or "<!--" in script:
+        raise ValueError("the fixed paper script holds </ or <!--")
+    return script
+
+
+def render_paper(paper, pictures=None):
+    """paper.html for mind_paper.paper() data, as a string. Pure, like render(): the same data and pictures give the same
+    text. The pictures are the ones mind_figures.load() kept, checked again by the page."""
+    style, _, _ = fixed_files()
+    model = {"repo": paper.get("repo"), "threads": paper.get("threads", [])}
+    return Page(model, pictures).paper_page(paper, style, paper_script())
+
+
 def render(model, pictures=None):
     """The whole page for a model, as a string. Pure: the same model and pictures give the same text. `pictures` maps
     (repository, ref, path) to the bytes of a figure that mind_figures loaded; the page checks them again."""
     style, script, icon = fixed_files()
     return Page(model, pictures).page(style, script, icon)
+
+
+PAPER_UNVOUCHED = "mind: %s"
+
+
+def write_paper(db, config, repo, args):
+    """mind.py --paper [--version NAME]: the paper alone as paper.html (or paper-NAME.html for a named version), beside mind.html in
+    the private folder. The current paper is the topics' text that the page tells; a named version is only what the record vouches
+    for (versions.vouched_version: the decision, the tag, VERSION.json and every topic file by hash) in the sections it had. The
+    text is drawn as the page draws it, under the same policy. Returns the exit code."""
+    allowed = recortex.allowed_users(repo)
+    profiles = recortex.shipped_profiles(config.get("profiles"))
+    hub = config.get("hub") if type(config.get("hub")) is int and config.get("hub") >= 1 else None
+    probe = mind_model.Build(db, repo, {name.lower() for name in allowed}, None)
+    probe.read_issues()
+    names = {n: issue["title"] for n, issue in probe.issues.items() if probe.title_shown(n)}
+    title = names.get(hub) or repo.split("/")[-1]
+    if args.version:
+        import versions  # noqa: E402 - the versions the record vouches for (references/versions.md)
+        plan = recortex.plan_profile(profiles)
+        if plan is None:
+            print("mind: this project has no plan, so no version of its paper is named")
+            return 1
+        try:
+            bodies, decision, _, _, layout = versions.vouched_version(config, repo, db, allowed, plan, args.version)
+        except versions.NotVouched as error:
+            print(str(error).replace("compile:", "mind:", 1))
+            return 1
+        order = layout if layout is not None else index.deliverable_order(db, hub, profiles)
+        note = "Version %s, named on %s." % (args.version, mind_model.full_day(decision["time"]))
+        target = "paper-%s.html" % args.version
+    else:
+        told = index.told_bodies(db, allowed)
+        bodies = {row["number"]: row["body"] or "" for row in db.execute("SELECT number, body FROM issues")
+                  if row["number"] in told}
+        order = index.deliverable_order(db, hub, profiles)
+        note = "As the record says on %s." % mind_model.full_day(datetime.date.today().isoformat() + "T00:00:00Z")
+        target = "paper.html"
+    paper = mind_paper.paper(repo, title, note, order, bodies, names)
+    wanted = mind_figures.wanted({"repo": repo, "threads": paper["threads"]})
+    pictures, reasons = mind_figures.load(wanted, repo, None, fetch=bool(args.sync or args.figures))
+    text = render_paper(paper, pictures)
+    path = os.path.join(index.index_dir(repo), target)
+    try:
+        storage.write_file(path, text)
+    except storage.StorageError as error:
+        print(NOT_WRITTEN % error.kind)
+        return 1
+    print("wrote %s (%d KB): %s" % (path, (len(text.encode("utf-8")) + 1023) // 1024,
+                                    plural(len(paper["sections"]), "1 section", "%d sections")))
+    for line in mind_figures.lines(reasons):
+        print(line)
+    address = pathlib.Path(path).as_uri()
+    print("open it in a browser: %s" % address)
+    if args.open:
+        print("asked the browser to open it" if webbrowser.open(address) else
+              "no browser could be started; open the address above yourself")
+    return 0
 
 
 def main(argv=None):
@@ -2044,6 +2165,9 @@ def main(argv=None):
     parser.add_argument("--versions", action="store_true", help="bring the versions of the text that the record vouches for "
                                                                 "into the cache first (--sync does too)")
     parser.add_argument("--open", action="store_true", help="ask the browser to open the page")
+    parser.add_argument("--paper", action="store_true", help="write the paper alone as paper.html beside the page (print it or "
+                                                              "save it as PDF from the browser); the mind page is left as it is")
+    parser.add_argument("--version", help="with --paper: the paper as of this named version, written as paper-NAME.html")
     args = parser.parse_args(argv)
     config = recortex.load_config()
     repo = recortex.resolve_repo(args.repo, config)
@@ -2075,6 +2199,11 @@ def main(argv=None):
         if not index.mind_ready(db):
             print(index.NOT_READY)
             return 1
+        if args.version and not args.paper:
+            print("mind: --version goes with --paper")
+            return 1
+        if args.paper:
+            return write_paper(db, config, repo, args)
         model = mind_model.build(db, repo, allowed, datetime.date.today(),
                                  recortex.shipped_profiles(config.get("profiles")), config)
     finally:

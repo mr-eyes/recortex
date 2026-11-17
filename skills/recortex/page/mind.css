@@ -199,7 +199,26 @@ h2{font-size:28px}.focus{font-size:21px;padding-left:16px}
 .two,.latest,.notes{grid-template-columns:1fr}.lesson{grid-template-columns:1fr}.arrow{display:none}.did{margin-top:16px}
 .station.deadend{margin-left:20px}.station.deadend::after{display:none}}
 @media (prefers-reduced-motion:reduce){.js .panel{transition:none}}
-@media print{.side,.tour,.close{display:none}body{display:block}}
+body.paper{display:block;min-height:0}
+.paperdoc{max-width:780px;margin:0 auto;padding:46px 28px 90px}
+.papertop{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:0 0 30px}
+.papertitle{margin-top:0}
+.papernote{color:var(--quiet);margin:0 0 30px}
+.papersec{margin:0 0 36px}
+.paperfoot{margin-top:40px;color:var(--quiet);font-size:13px;border-top:1px solid var(--rule);padding-top:12px}
+@page{margin:2cm}
+@media print{html,body{background:#fff;color:#000}body{display:block;font-size:11pt}
+.side,.tour,.close,.panel,.wordtip,.wordbox,.noprint,#text .lede,#text .contents,#text .partlinks,#text .status,#text details,#text .versions,#text .plansum,#text .untold,.paperdoc .noprint{display:none!important}
+main{padding:0}.view{max-width:none;margin:0}
+.js .view{display:none}.js .view.on{display:block}
+#text .sec,.paperdoc .papersec{break-before:page}#text .sec:first-of-type,.paperdoc .papersec:first-of-type{break-before:auto}
+h2,h3,h4,h5{break-after:avoid}
+.blockfig,.formula,table,blockquote,pre,img{break-inside:avoid}
+img.figpic{max-width:100%;height:auto}
+a{text-decoration:none;color:#000}
+.parttext{margin:0 0 14pt}
+h2{font-size:22pt}h3{font-size:15pt;margin:0 0 8pt}
+.papertitle{margin-top:0}}
 
 .term{text-decoration:underline dotted;text-decoration-color:var(--thread);text-decoration-thickness:1.5px;text-underline-offset:4px;cursor:help}
 .cite{color:var(--thread);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}

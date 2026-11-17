@@ -40,7 +40,7 @@ All are in `skills/recortex/scripts/`, use only the Python standard library and 
 | `sub_issues.py` | Links the hub's topics and each task as sub-issues, from the record; `plan` shows the difference | `apply` |
 | `board.py` | The private board of the work: `setup`, `plan`, `apply` (and `--restore N` for a card moved by hand) | `setup`, `apply` |
 | `statusline.py` | An optional status line segment: whether recortex is on for the project folder, and the age of the record; `setup.py apply` offers it | no |
-| `mind.py` | Builds the mind page: one private local file that tells the project's memory in sentences, from the index; `--sync` or `--figures` also embeds the pictures of its figures | no |
+| `mind.py` | Builds the mind page: one private local file that tells the project's memory in sentences, from the index; `--sync` or `--figures` also embeds the pictures of its figures; `--paper [--version NAME]` writes the paper alone as a page to print or save as PDF | no |
 | `hooks.py`, `run_hook.sh`, `session_start_hook.sh` | The four hooks; `hooks.py --print` shows their payloads | no |
 | `observer.py`, `observer_hooks.py`, `run_observer_hook.sh` | Experimental, off by default: local capture, independent checks, task context, explicit holds and pending receipts | approved worker event comments only |
 | `setup.py` | `preflight` checks `gh` and Python before the first question; `detect` suggests deliverables and fields from file names; `apply` makes the setup from answers you confirmed; `fields` shows, sets and approves the field sheet | `apply` |

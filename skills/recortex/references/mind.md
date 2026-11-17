@@ -133,6 +133,12 @@ An edit made in the same second as the post is not seen. It leaves the two times
 
 Every page of an edit history is read, for memories and for the text of a topic, 100 entries at a time. A history of more than 5,000 entries is not read to its end and counts as an edit by someone unknown, so that text is not shown.
 
+## Printing the paper, and the paper as a page of its own
+
+The Manuscript view has a "Print or save as PDF" button that asks the browser to print. The page's own print style leaves the paper alone on the sheet: no side bar, no tour, no folds (History, "Why it says this", the plan against the text, the versions), a page break before each section, and figures, tables and equations kept whole. The browser's print dialog offers "Save as PDF". The style holds no record text, so there is no running header; the browser adds the page number.
+
+`mind.py --paper` writes the paper alone as `paper.html`, beside `mind.html` in the private folder, and prints its address; `mind.py --paper --version NAME` writes `paper-NAME.html`, the paper as of a named version. It makes no mind page and needs no model: it takes each told topic's text for each section in the deliverable's order (the sections a named version had, from its own `VERSION.json`), with its figures, tables and formulas, and "Where the numbers come from" at the end. A named version is written only when the record vouches for it (the decision, the tag, `VERSION.json` and every topic file by hash, as `compile.py --version` checks), else one fixed line and nothing is written. The page is built by the same builder under the same Content-Security-Policy and the same rules as the mind page; its one fixed script (`page/paper.js`) only asks the browser to print. Pictures are embedded only after `--sync` or `--figures` fetched them. The page of a private repository holds private text: do not copy it anywhere shared. For a journal's format, the Manubot-format files on the versions branch stay ([versions.md](versions.md)).
+
 ## What the session does
 
 When you ask to see or open the project's memory, the session runs `index.py sync`, then `mind.py --open`, and gives you the address. It does not read `mind.html`: to answer a question about the history it uses `index.py query recall`, `query timeline` and the issues.

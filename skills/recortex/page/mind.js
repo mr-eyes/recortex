@@ -299,6 +299,10 @@
       (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
     root.setAttribute('data-theme', dark ? 'light' : 'dark');
   });
+  document.addEventListener('click', function (event) {
+    var button = event.target && event.target.closest ? event.target.closest('[data-print]') : null;
+    if (button && window.print) { window.print(); }
+  });
   document.addEventListener('keydown', function (event) {
     if (event.key === 'Escape') { if (box.open) { return; } if (opened) { closeMem(); } else if (!tour.hidden) { endTour(); } }
     if (event.key === '/' && document.activeElement !== q) { event.preventDefault(); location.hash = '#ask'; q.focus(); }
