@@ -64,6 +64,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -1221,9 +1222,9 @@ def status_line_step(answers, dry):
     folder = os.path.join(recortex.config_home(), names.NAME)
     target = os.path.join(folder, "statusline.py")
     source = os.path.join(os.path.dirname(os.path.abspath(__file__)), "statusline.py")
-    command = "python3 %s" % target
+    command = "python3 %s" % shlex.quote(target)   # the user's settings run it through a shell: a space must not split it
     if os.path.islink(folder) or os.path.islink(target) or (os.path.lexists(target) and not os.path.isfile(target)):
-        print("not written: %s is a symlink or not a file; %s" % (target, STATUS_SNIPPET % source))
+        print("not written: %s is a symlink or not a file; %s" % (target, STATUS_SNIPPET % shlex.quote(source)))
         return
     text = recortex.read_text(source)
     if dry:
@@ -1243,7 +1244,7 @@ def status_line_step(answers, dry):
         print("wrote: %s   # the status line segment" % target)
     settings = claude_settings_file()
     if os.path.islink(settings):
-        print("not written: %s is a symlink. %s" % (settings, STATUS_SNIPPET % target))
+        print("not written: %s is a symlink. %s" % (settings, STATUS_SNIPPET % shlex.quote(target)))
         return
     current = {}
     if os.path.lexists(settings):
@@ -1252,10 +1253,10 @@ def status_line_step(answers, dry):
         except (OSError, ValueError):
             current = None
         if not isinstance(current, dict):
-            print("not written: %s does not hold a JSON object. %s" % (settings, STATUS_SNIPPET % target))
+            print("not written: %s does not hold a JSON object. %s" % (settings, STATUS_SNIPPET % shlex.quote(target)))
             return
     if "statusLine" in current:
-        print("kept: %s already has a status line. %s" % (settings, STATUS_SNIPPET % target))
+        print("kept: %s already has a status line. %s" % (settings, STATUS_SNIPPET % shlex.quote(target)))
         return
     current = dict(current, statusLine={"type": "command", "command": command})
     body = json.dumps(current, indent=2) + "\n"

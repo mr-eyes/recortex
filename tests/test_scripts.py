@@ -4748,6 +4748,27 @@ class SetupTests(Sandbox):
         self.assertEqual(0, again.returncode, again.stdout + again.stderr)
         self.assertEqual({"statusLine": {"type": "command", "command": "python3 %s" % copy}}, json.load(open(settings)))
 
+    def test_the_status_line_command_quotes_a_path_with_a_space_or_a_shell_character(self):
+        """Codex review of 1.3.0: Claude Code runs the command through a shell, so an unquoted path would be split."""
+        import shlex
+        root = self.project(["pyproject.toml"])
+        env, settings, _ = self.status_env()
+        folder = os.path.join(self.dir, "Application Support; echo 'x'")
+        env = dict(env, XDG_CONFIG_HOME=folder)
+        copy = os.path.join(folder, "recortex", "statusline.py")
+        answers = self.answers("single", status_line=True)
+        dry = self.setup_script("apply", "--answers", answers, "--root", root, "--dry-run", env=env)
+        self.assertEqual(0, dry.returncode, dry.stdout + dry.stderr)
+        self.assertIn("adds the statusLine entry python3 %s" % shlex.quote(copy), dry.stdout)
+        done = self.setup_script("apply", "--answers", answers, "--root", root, "--yes", gh=FAKE, env=env)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        command = json.load(open(settings))["statusLine"]["command"]
+        self.assertEqual(["python3", copy], shlex.split(command))
+        self.assertTrue(os.path.isfile(copy))
+        json.dump({"statusLine": {"type": "command", "command": "mine.sh"}}, open(settings, "w"))
+        again = self.setup_script("apply", "--answers", answers, "--root", root, "--yes", gh=FAKE, env=env)
+        self.assertIn("python3 %s" % shlex.quote(copy), again.stdout)   # the snippet to combine is quoted too
+
     def test_apply_leaves_settings_json_alone_for_a_status_line_that_exists_a_file_that_does_not_parse_a_symlink_and_a_no(self):
         root = self.project(["pyproject.toml"])
         env, settings, copy = self.status_env()
