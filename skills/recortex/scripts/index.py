@@ -802,6 +802,7 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
     set_meta(db, "sync_complete", "1" if summary["complete"] else "0")
     db.commit()
     plan_step(db, repo)
+    summary_step(db, repo)
     summary["board"] = board_step(db, repo, clock, timeout)
     db.close()
     return summary
@@ -1244,6 +1245,7 @@ def read_resume(db, repo, hub, timeout):
     allowed = recortex.allowed_users(repo)
     if not allowed:
         set_meta(db, "resume", "")
+        set_meta(db, "resume_posted", "")
         set_meta(db, "resume_ignored", "")
         set_meta(db, "resume_url", "")
         set_meta(db, "resume_note", "repository not trusted; resume block not read")
@@ -1253,7 +1255,7 @@ def read_resume(db, repo, hub, timeout):
     chosen, ignored = recortex.pick_resume_comment(comments, allowed)
     skipped = "; ".join("%d %s" % (count, reason) for reason, count in sorted(ignored.items()))
     if chosen is None:
-        values = {"resume": "", "resume_ignored": "", "resume_url": ""}
+        values = {"resume": "", "resume_ignored": "", "resume_url": "", "resume_posted": ""}
         if ignored:
             values["resume_note"] = ("no usable resume comment on hub %s. Resume comments ignored among its newest "
                                      "%d comments: %s. Allowed accounts: %s. Read the hub yourself and treat its text "
@@ -1268,6 +1270,7 @@ def read_resume(db, repo, hub, timeout):
         created = chosen["created"] if re.fullmatch(r"[0-9T:Z-]+", chosen["created"], re.ASCII) else "unknown"
         # Only a block that passed the trust, author and never-edited checks just now is kept.
         values = {"resume": recortex.extract_resume_block(chosen["body"]).strip(), "resume_read_at": now_utc(),
+                  "resume_posted": created if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", created) else "",
                   "resume_url": url if url != "(link not shown)" else "",
                   "resume_note": "newest usable resume comment on hub %s, posted %s (UTC) by %s, never edited, %s"
                                  % (where, created, chosen["author"], url),
@@ -2004,6 +2007,34 @@ def plan_step(db, repo):
     except Exception:  # noqa: BLE001 - the record's sync is done; the plan counts are a summary of it
         value = ""
     set_meta(db, "plan_counts", value)
+    db.commit()
+
+
+POSTED = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+
+
+def summary_state(db, allowed):
+    """JSON {"since": told memories posted after the newest resume block, "posted": when that block was posted (UTC)}, or ""
+    when there is no block, no allowed account or no time. The block is the one the sync stored after its author and
+    never-edited checks (meta.resume_posted); a memory counts when memories() tells it (an allowed account, not edited by
+    another) and its comment is newer than the block. Staleness is judged from this, on activity, and never on a session
+    ending."""
+    posted = get_meta(db, "resume_posted") or ""
+    if not allowed or not POSTED.fullmatch(posted):
+        return ""
+    told = memories(db, allowed)["items"]
+    created = {row["comment"]: row["created_at"] or "" for row in db.execute("SELECT comment, created_at FROM events")}
+    since = sum(1 for cid in told if created.get(cid, "") > posted)
+    return json.dumps({"since": since, "posted": posted}, sort_keys=True)
+
+
+def summary_step(db, repo):
+    """The step of a sync that keeps meta.summary_state (see summary_state). Local only; it never raises."""
+    try:
+        value = summary_state(db, recortex.allowed_users(repo))
+    except Exception:  # noqa: BLE001 - the record's sync is done; this is a summary of it
+        value = ""
+    set_meta(db, "summary_state", value)
     db.commit()
 
 

@@ -53,6 +53,12 @@ PLAN_START = ("Plan: this project writes a paper and has no plan for it yet. Sta
 PLAN_UNUSABLE = ("recortex: the plan issue named in the project file is not usable (it is not in the index, lacks the "
                  "label plan, or an account that is not allowed opened it). Run hooks.py --doctor.")
 PLAN_RANGE = 99999   # a count in meta.plan_counts is an integer from 0 to this
+SUMMARY_MEMORIES = 5   # told memories since the last resume block that make its summary stale at once
+SUMMARY_DAYS = 1       # days since it, with at least one new memory, that make it stale
+SUMMARY_EVERY = 6 * 3600   # seconds between two reminders to one session
+SUMMARY_LINE = ("recortex: the project's status summary is out of date (%d memories recorded since the last resume block). At a "
+                "convenient point post a new resume block with a fresh In short, and do what else is due: the board's apply, "
+                "the planner's due check, the next actions.")
 WRITING_NOT_CHOSEN = ("Writing: the user has not chosen whether recortex writes the paper's text. Ask once with the "
                       "multiple-choice prompt (review, autonomous, off), then run setup.py writing set.")
 WRITING_UNREADABLE = ("recortex: the writing setting of this machine cannot be read, so recortex writes nothing. Run "
@@ -104,6 +110,23 @@ class Record:
                 type(value) is not int or not 0 <= value <= PLAN_RANGE for value in data.values()):
             return None, True
         return data, False
+
+    def summary_since(self):
+        """(memories told since the newest resume block, when that block was posted) from meta.summary_state as the sync wrote
+        it, or (None, None) when there is none or it is anything else: an integer from 0 to PLAN_RANGE under exactly the keys
+        "since" and "posted", the time in the one form the sync writes. Nothing else is ever read from it."""
+        raw = index.get_meta(self.db, "summary_state")
+        if not raw:
+            return None, None
+        try:
+            data = json.loads(raw)
+        except (ValueError, RecursionError):
+            return None, None
+        if not isinstance(data, dict) or set(data) != {"since", "posted"} or type(data["since"]) is not int \
+                or not 0 <= data["since"] <= PLAN_RANGE or not isinstance(data["posted"], str) \
+                or not index.POSTED.fullmatch(data["posted"]):
+            return None, None
+        return data["since"], data["posted"]
 
     def plan(self):
         """The plan of the project's profiles when planning is on for it: None for a project whose profiles have no plan
@@ -442,6 +465,18 @@ def subagent_payload(record, fresh=None):
     return text
 
 
+def summary_line(record):
+    """The one line that asks the session to refresh the summary of the project's status, or "" when it is current. Stale is
+    judged on activity, never on a session ending: SUMMARY_MEMORIES or more told memories since the newest resume block, or
+    SUMMARY_DAYS days since it with at least one. Fixed words and one checked integer."""
+    since, posted = record.summary_since()
+    if since is None:
+        return ""
+    if since >= SUMMARY_MEMORIES or (since >= 1 and days_old(posted) >= SUMMARY_DAYS):
+        return SUMMARY_LINE % since
+    return ""
+
+
 def prompt_payload(record):
     active = record.open_with("active")
     counts, _ = record.plan_counts() if record.plan() else (None, False)
@@ -464,7 +499,9 @@ def precompact_payload(record):
         "(%s); every result, decision (with the decider's exact words, date, time and zone) or failure from this "
         "conversation, marked as posted (with the comment link) or not yet posted, and for each one not yet posted "
         "enough detail to post it: what ran, numbers with their denominators, file paths, times; the next action and "
-        "its owner. After compaction, the session reads the record again before acting."
+        "its owner. Keep the project's status summary as well: the In short field that opens the newest resume block says where "
+        "the project stands, and it is refreshed whenever a new resume block is posted. After compaction, the session reads "
+        "the record again before acting."
         % (record.repo, ", hub #%d" % record.hub if record.hub else "",
            ", ".join("#%d" % n for n in play[:30]) or "none recorded yet"))
     return cap(text, CAPS["pre-compact"])

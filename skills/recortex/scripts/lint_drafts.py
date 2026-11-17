@@ -55,6 +55,7 @@ AS_OF = re.compile(r"^\s*(?:(?:[-*+]|[0-9]+\.)\s+)?[*_]*as of\s+[*_]*"
                    r"|nov(?:ember)?|dec(?:ember)?)\b)", re.I)
 
 RESUME_FIELDS = [
+    "**In short:**",
     "**Last updated:**",
     "**Current focus:**",
     "**Active issues:**",
@@ -1397,6 +1398,19 @@ def lint_resume_block(block, template=False):
     for field in RESUME_FIELDS:
         if field not in block:
             findings.append(Finding("error", "resume-field", 0, "resume block lacks '%s' between the markers" % field))
+    if not template and "**In short:**" in block:
+        text = record_format.resume_in_short(block)
+        if text is None:
+            findings.append(Finding("error", "resume-in-short", 0, "'**In short:**' is empty; write two short plain paragraphs"))
+        else:
+            if len(text) > record_format.IN_SHORT_LIMIT:
+                findings.append(Finding("error", "resume-in-short", 0, "'In short' is %d characters; keep it under %d"
+                                        % (len(text), record_format.IN_SHORT_LIMIT)))
+            if len(text.split("\n\n")) > 2:
+                findings.append(Finding("error", "resume-in-short", 0, "'In short' is two paragraphs: where the project stands, "
+                                        "then what changed lately, what comes next and what is in doubt"))
+            if record_format.ISSUE_NUMBER_IN_PROSE.search(text):
+                findings.append(Finding("error", "resume-in-short", 0, "'In short' names no issue number; say it in words"))
     if not template:
         match = re.search(r"\*\*Last updated:\*\*\s*(.*)", block)
         if match and not re.match(STAMP, match.group(1).strip()):

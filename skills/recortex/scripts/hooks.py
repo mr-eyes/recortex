@@ -535,11 +535,31 @@ def produce(event, data, budget, config, repo, hub):
         show = entry.get("key") != key or entry["count"] % every == 0
         if show:
             entry["key"] = key
+        nudge = ""
+        line = brief.summary_line(record)
+        last = entry.get("summary_nudge")
+        if line and not (isinstance(last, (int, float)) and time.time() - last < brief.SUMMARY_EVERY) \
+                and not observer_refreshes(repo, config):
+            entry["summary_nudge"] = time.time()   # at most once in six hours for this session
+            nudge = line
         state[session] = entry
         save_state(repo, state)
-        return brief.prompt_payload(record) if show else ""
+        return "\n".join(part for part in (brief.prompt_payload(record) if show else "", nudge) if part)
     finally:
         db.close()
+
+
+def observer_refreshes(repo, config):
+    """True when the observer is on for this folder and posts what it reviews (automatic mode): its worker then refreshes the
+    status summary in the background, and the hook says nothing about it. Any doubt (no approval, a setting that does not
+    validate, an error) is False: the session is told."""
+    try:
+        import observer_runtime as runtime
+        effective = runtime.local_config(config)
+        options = runtime.settings(effective)
+        return bool(options["enabled"] and options["mode"] == "automatic" and runtime.approval_valid(repo, effective))
+    except Exception:  # noqa: BLE001 - a hook never fails over a reminder
+        return False
 
 
 def remember(repo, session, key, brief):

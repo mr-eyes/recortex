@@ -111,6 +111,8 @@ PHRASES = {
     "cite.pull": "A pull request",
     "account": "an account",
     "day.unknown": "an unknown day",
+    "short.title": "In short", "short.asof": "As of %s.",
+    "short.none": "No summary of where the project stands has been written yet. The next resume block carries one.",
 }
 
 PHRASES.update(mind_plan.PHRASES)
@@ -924,9 +926,14 @@ class Build(mind_plan.PlanMixin):
                     cell = lambda i: row[i] if i < len(row) else ""
                     next_rows.append({"action": self.runs(cell(spots[0]), seen), "owner": short(cell(spots[1])),
                                       "where": self.runs(cell(spots[2]), seen)})
+            summary = record_format.resume_in_short(resume)
             self.last = {"id": last_id, "day": last["day"], "wall": last["wall"],
                          "focus": self.doc(values.get("Current focus", ""), seen),
-                         "next": next_rows, "holds": self.doc(values["Holds"], seen) if values.get("Holds") else None}
+                         "next": next_rows, "holds": self.doc(values["Holds"], seen) if values.get("Holds") else None,
+                         # the "In short" of the block, as text: two paragraphs at most, each cut like a field, marked with
+                         # the day the block says it was written (told like the block: allowed author, never edited)
+                         "summary": {"paras": [short(paragraph, CAP_FIELD) for paragraph in summary.split("\n\n")[:2]],
+                                     "asof": full_day(last["at"])} if summary else None}
 
     # ------------------------------------------------------------ the model
 

@@ -65,6 +65,8 @@ a.said:hover,a.inl:hover{color:var(--thread)}
 .nothing{color:var(--idea);font:italic 17px/1.5 var(--serif)}
 
 .paused{color:var(--quiet);font-size:16px;margin:18px 0 10px}
+.summary{background:var(--sheet);border-left:3px solid var(--brand);border-radius:14px;padding:16px 22px 8px;margin:0 0 30px}
+.summary h3{margin:0 0 8px}.summary p{font:17.5px/1.55 var(--serif);max-width:62ch}.summary .quiet{font:14px/1.4 var(--sans)}
 .focus{font:25px/1.42 var(--serif);margin:0 0 30px;padding:2px 0 2px 24px;border-left:3px solid var(--brand);max-width:30em}
 .two{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:34px}
 .two h3{margin-top:8px}

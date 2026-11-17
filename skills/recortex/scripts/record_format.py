@@ -686,6 +686,39 @@ def field_text(body, label):
     return None
 
 
+RESUME_LABELS = ("**In short:**", "**Last updated:**", "**Current focus:**", "**Active issues:**", "**Last decisions:**",
+                 "**Next actions:**", "**Holds:**")
+IN_SHORT_LIMIT = 1200   # characters of the "In short" field of a resume block: two short plain paragraphs
+ISSUE_NUMBER_IN_PROSE = re.compile(r"#[0-9]")
+
+
+def resume_in_short(block):
+    """The "In short" field of a resume block (the text between its markers), its paragraphs joined by one blank line, or
+    None when the block has none or it is empty. The field runs from after its label to the line that starts the next
+    field of the block. Untrusted text: the caller cleans it before it is shown."""
+    lines = (block or "").replace("\r\n", "\n").split("\n")
+    out, inside = [], False
+    for line in lines:
+        if not inside:
+            if line.startswith(RESUME_LABELS[0]):
+                inside = True
+                out.append(line[len(RESUME_LABELS[0]):])
+            continue
+        if line.startswith(RESUME_LABELS[1:]):
+            break
+        out.append(line)
+    paragraphs, current = [], []
+    for line in out:
+        if line.strip():
+            current.append(line.strip())
+        elif current:
+            paragraphs.append(" ".join(current))
+            current = []
+    if current:
+        paragraphs.append(" ".join(current))
+    return "\n\n".join(paragraphs) if paragraphs else None
+
+
 def approved_form(text):
     """The key of the form that the text of an Approved field starts with ("autonomous", "chat", "merged", "edited",
     "restored" or "kept"), or None. Only the first line is read; a form that wants a quote needs one after it."""

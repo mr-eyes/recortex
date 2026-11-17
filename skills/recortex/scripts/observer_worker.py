@@ -1,9 +1,11 @@
 """Finite selection and fresh review. Unreviewed source/draft text stays in memory."""
 import hashlib
+import datetime
 import json
 import os
 import re
 import sqlite3
+import subprocess
 import time
 
 import index
@@ -18,6 +20,7 @@ import observer_sources as sources
 import observer_store
 import recortex
 import record_format
+import storage
 
 KINDS = ("result", "decision", "failure", "correction", "idea", "question", "checkpoint")
 STRING = {"type": "string", "maxLength": 24000}
@@ -36,6 +39,15 @@ REVIEW = {"type": "object", "properties": {
     "reason": {"type": "string", "enum": ["supported", "unsupported", "attribution", "privacy", "duplicate", "uncertain",
                                           "withheld"]}},
     "required": ["candidate_hash", "accepted", "reason"], "additionalProperties": False}
+
+
+SUMMARY = {"type": "object", "properties": {
+    "paragraphs": {"type": "array", "items": {"type": "string", "maxLength": 1200}, "minItems": 1, "maxItems": 2}},
+    "required": ["paragraphs"], "additionalProperties": False}
+SUMMARY_REVIEW = {"type": "object", "properties": {
+    "summary_hash": ID, "accepted": {"type": "boolean"},
+    "reason": {"type": "string", "enum": ["supported", "unsupported", "numbers", "privacy", "form"]}},
+    "required": ["summary_hash", "accepted", "reason"], "additionalProperties": False}
 
 
 def privacy_problem(text, config):
@@ -533,6 +545,166 @@ def _process(repo, config, project_root=None, invoke_fn=None):
     return dict(report, code="ok")
 
 
+# ---------------------------------------------------------------- the summary of the project's status (spec 1.3.0, section 21)
+
+SUMMARY_MEMORIES = 30   # the newest told memories since the last resume block that the summary may rest on
+SUMMARY_SOURCES = 6     # the newest typed prompts and agent messages shown to it
+
+
+def summary_wanted(repo, config):
+    """True when the summary of the project's status is stale by the brief's own rule (brief.summary_line): enough told
+    memories since the newest resume block, or a day since it with at least one. Judged from the index; nothing is read from
+    GitHub here."""
+    import brief
+    db = index.connect(repo, create=False)
+    if db is None:
+        return False
+    try:
+        return bool(index.mind_ready(db) and brief.summary_line(brief.Record(db, config, repo)))
+    finally:
+        db.close()
+
+
+def summary_material(repo, config):
+    """What a refreshed summary may rest on, from the checked index: the newest resume block (the allowed, never edited one the
+    sync stored), the memories told since it, as kind, day and plain line, and the plan's integers. None when there is no
+    block to refresh."""
+    db = index.connect(repo, create=False)
+    if db is None:
+        return None
+    try:
+        allowed = recortex.allowed_users(repo)
+        block, posted = index.get_meta(db, "resume") or "", index.get_meta(db, "resume_posted") or ""
+        if not allowed or not block or not index.POSTED.fullmatch(posted):
+            return None
+        told = index.memories(db, allowed)["items"]
+        created = {row["comment"]: row["created_at"] or "" for row in db.execute("SELECT comment, created_at FROM events")}
+        since = [(item["time"], cid, item) for cid, item in told.items() if created.get(cid, "") > posted]
+        memories = [{"kind": item["kind"], "day": (item["at"] or "")[:10],
+                     "plain": mind_model.short(mind_model.clean(item["plain"] or item["title"] or ""), 300)}
+                    for _, _, item in sorted(since, key=lambda row: (row[0], row[1]))[-SUMMARY_MEMORIES:]]
+        plan = {}
+        try:
+            plan = {k: v for k, v in json.loads(index.get_meta(db, "plan_counts") or "{}").items() if type(v) is int}
+        except (ValueError, AttributeError):
+            plan = {}
+        return {"block": block[:4000], "posted": posted, "memories": memories, "plan": plan}
+    finally:
+        db.close()
+
+
+def summary_problem(paragraphs, config):
+    """Why a drafted summary is not posted, or "": one or two paragraphs with words in them, at most 1,200 characters in all,
+    no issue number, address or mention, and none of the mechanical refusals (secrets, the project's restricted patterns)."""
+    if not isinstance(paragraphs, list) or not 1 <= len(paragraphs) <= 2 or not all(isinstance(p, str) and p.strip() for p in paragraphs):
+        return "form"
+    text = "\n\n".join(p.strip() for p in paragraphs)
+    if len(text) > record_format.IN_SHORT_LIMIT or record_format.ISSUE_NUMBER_IN_PROSE.search(text) \
+            or re.search(r"https?://|www\.|@[A-Za-z]|\*\*|<", text) or re.search(r"(?m)^\s*(?:[-*]|[0-9]+\.)\s", text):
+        return "form"
+    return "privacy" if privacy_problem(text, config) else ""
+
+
+def summary_block(material, paragraphs, moment):
+    """The text of the new resume block: the newest block as written, with its In short replaced and its time stamp
+    renewed ("by the observer"). Every other field is the main session's, and stays as it was."""
+    keep, inside = [], False
+    for line in material["block"].replace("\r\n", "\n").split("\n"):
+        if line.startswith(record_format.RESUME_LABELS[0]):
+            inside = True
+            continue
+        if inside and line.startswith(record_format.RESUME_LABELS[1:]):
+            inside = False
+        if inside:
+            continue
+        if line.startswith("**Last updated:**"):
+            line = "**Last updated:** %s by the observer" % moment
+        keep.append(line)
+    return "**In short:** %s\n\n%s\n" % ("\n\n".join(p.strip() for p in paragraphs), "\n".join(keep).strip("\n"))
+
+
+def post_summary(repo, config, text):
+    """Post the new resume block through resume_block.py update (the linter, the post and the read back are its own); the
+    comment is the user's own account's, as every resume block is, and an allowed one. True when it was posted and read
+    back."""
+    import subprocess
+    import sys
+    import tempfile
+    hub = config.get("hub") if type(config.get("hub")) is int else None
+    if hub is None:
+        return False
+    with tempfile.TemporaryDirectory(prefix="summary-", dir=storage.folder(storage.state_top(), "observer-runtime")) as folder:
+        path = os.path.join(folder, "resume.md")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        done = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "resume_block.py"),
+                               "update", "--file", path, "--repo", repo, "--hub", str(hub)],
+                              capture_output=True, text=True, timeout=120)
+    return done.returncode == 0 and "posted:" in done.stdout and "MISMATCH" not in done.stdout
+
+
+def recent_views(store, repo, root, config):
+    """The newest typed prompts and agent messages the worker still holds, as the extraction sees them: the sources of a
+    session the user kept off the record are left out, and so is whatever the mechanical privacy check refuses."""
+    queued, _ = _queued(store)
+    holds, views = store.holds(), []
+    for item in sorted(queued, key=_order)[-SUMMARY_SOURCES * 3:]:
+        meta = item["metadata"]
+        if observer_holds.publication_withheld(holds, repo, {meta.get("session_id")}) \
+                or meta.get("role") not in ("user", "assistant") or os.sep + "subagents" + os.sep in meta.get("path", ""):
+            continue
+        try:
+            source = sources.resolve(meta, root)
+        except (sources.SourceError, OSError, ValueError):
+            continue
+        if _said(source) and not source_privacy_problem(source, config):
+            views.append(_view(source))
+    return views[-SUMMARY_SOURCES:]
+
+
+def refresh_summary(repo, config, store, options, invoke, root):
+    """One refresh of the project's status summary, by the observer: when it is stale, one call that writes it from the
+    index's told memories and the conversation the worker holds, one fresh call that reviews it, and the post of a new resume
+    block. Both calls are counted in the daily cap. Returns a code; nothing is posted unless every step passed."""
+    if not summary_wanted(repo, config):
+        return "current"
+    material = summary_material(repo, config)
+    if material is None:
+        return "no-block"
+    views = recent_views(store, repo, root, config)
+    payload = {"previous": material["block"], "memories": material["memories"], "plan": material["plan"], "sources": views}
+    if source_privacy_problem(payload, config):
+        return "privacy"
+    window = options["window_hours"] * 3600
+    reservation = store.reserve_invocation("summary", options["max_invocations"], window)
+    if reservation is None:
+        return "budget"
+    result = invoke(payload, SUMMARY, "summary", options)
+    valid = result.get("ok") is True and runtime.validate(result.get("structured"), SUMMARY)
+    store.complete_invocation(reservation, valid, runtime.candidate_hash(result["structured"]) if valid else "")
+    if not valid:
+        return "summary-failed"
+    paragraphs = [p.strip() for p in result["structured"]["paragraphs"]]
+    problem = summary_problem(paragraphs, config)
+    if problem:
+        return "summary-" + problem
+    review_id = store.reserve_invocation("summary_review", options["max_invocations"], window)
+    if review_id is None:
+        return "budget"
+    digest = runtime.candidate_hash({"paragraphs": paragraphs})
+    reviewed = invoke(dict(payload, summary=paragraphs, summary_hash=digest), SUMMARY_REVIEW, "summary_review", options)
+    answer = reviewed.get("structured")
+    valid = reviewed.get("ok") is True and runtime.validate(answer, SUMMARY_REVIEW) and answer["summary_hash"] == digest
+    store.complete_invocation(review_id, valid, digest if valid else "")
+    if not valid or not answer["accepted"] or answer["reason"] != "supported":
+        return "summary-rejected"
+    moment = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    if not post_summary(repo, config, summary_block(material, paragraphs, moment)):
+        return "post-failed"
+    store.set_control("sync_needed", True)   # the next refresh reads the new block, which makes the summary current
+    return "posted"
+
+
 SYNC_RETRY = 30  # seconds before the next worker tries again after a refresh that failed
 BUSY_WAITS = (3, 5, 8)  # seconds to wait for another process's sync (the brief's, at session start) to finish
 
@@ -647,6 +819,14 @@ def run_once(repo, config, project_root=None, invoke_fn=None, settle_first=False
                 approved = runtime.approval_valid(repo, config)
                 if (approved and runtime.gate_valid(store.get_control("runtime_gate"), options)
                         and options["mode"] == "automatic" and not store.get_control("publication_paused", False)):
+                    try:   # the status summary, when it is stale: the observer's own refresh (the hook stays silent)
+                        code = refresh_summary(repo, config, store, options, invoke_fn or runtime.invoke,
+                                               project_root or recortex.project_root())
+                    except (OSError, ValueError, sqlite3.Error, recortex.GhError, observer_store.StoreError,
+                            subprocess.TimeoutExpired):
+                        code = "summary-error"
+                    if code != "current":
+                        store.set_control("summary_last", {"at": time.time(), "code": code})
                     # Includes reviewed events left ready by a previous interrupted worker.
                     for event in store.events(states=["ready"], limit=4):
                         try:

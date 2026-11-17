@@ -880,8 +880,21 @@ class Page:
                                                             "%d things are not told on this page. "),
                  E("a", {"href": anchor("untold")}, "See why"))
 
+    @staticmethod
+    def summary_block(summary):
+        """The newest "In short" (the first field of the resume block), as text and marked with its day; one fixed line when
+        the record holds none."""
+        paras = [text_of(p) for p in summary.get("paras", []) if text_of(p)] if isinstance(summary, dict) \
+            and isinstance(summary.get("paras"), list) else []
+        if not paras:
+            return E("p", {"class": "quiet", "id": "in-short"}, mind_model.PHRASES["short.none"])
+        return E("section", {"class": "summary", "id": "in-short"}, E("h3", None, mind_model.PHRASES["short.title"]),
+                 *[E("p", None, words) for words in paras],
+                 E("p", {"class": "quiet"}, mind_model.PHRASES["short.asof"] % text_of(summary.get("asof"))))
+
     def now_view(self):
         last, out = self.model.get("last"), []
+        out.append(self.summary_block(last.get("summary") if isinstance(last, dict) else None))
         if last:
             day = text_of(last.get("day"))
             out.append(E("p", {"class": "paused"}, "We last paused on %s. This is how things stood:" % day if day else
