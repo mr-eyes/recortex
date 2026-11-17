@@ -2,6 +2,7 @@
 called. Deterministic boundary tests; the fake does not measure whether a summary is any good."""
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -98,6 +99,17 @@ class SummaryRefreshTests(SummaryBox):
         self.assertNotIn('The trial is in its second season.', text)               # the old In short is replaced
         with store.Store(REPO, config=self.config) as db:
             self.assertTrue(db.get_control('sync_needed'))                          # the next refresh reads the new block
+
+    def test_the_time_stamp_of_the_new_block_is_in_the_zone_the_record_states_and_in_utc_when_it_states_none(self):
+        stamp = re.compile(r'\*\*Last updated:\*\* ([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}) ([A-Z]+) by the observer')
+        self.config['timezone'] = 'US Eastern time, written as 2026-11-16 10:10 EST'
+        self.assertEqual('posted', self.refresh())
+        self.assertIn(stamp.search(self.posted[0]).group(2), ('EST', 'EDT'))
+        del self.config['timezone']
+        with store.Store(REPO, config=self.config) as db:
+            db.set_control('summary_last', None)
+        self.assertEqual('posted', self.refresh())
+        self.assertEqual('UTC', stamp.search(self.posted[1]).group(2))
 
     def test_it_rests_on_the_index_and_the_conversation_the_worker_holds(self):
         views = [{'id': 'a' * 64, 'role': 'user', 'at': '2026-04-10T09:00:00Z', 'direct_user': True, 'text': 'Add the dry-spell comparison.'}]
