@@ -10569,7 +10569,15 @@ class MindFigureTests(RecordSandbox):
                 os.environ[key] = value
 
     def fixture(self, name):
-        with open(os.path.join(self.FIGURES, name), "rb") as handle:
+        """A fixture's bytes. The pictures are kept as base64 text (name.b64), so that no binary file sits in the
+        tree: a PNG, a JPEG, a GIF and two WebP files, each written once by hand or with Pillow and a few hundred
+        bytes at most. drawing.svg and page.html are text."""
+        import base64
+        path = os.path.join(self.FIGURES, name)
+        if os.path.exists(path + ".b64"):
+            with open(path + ".b64", encoding="ascii") as handle:
+                return base64.b64decode(handle.read())
+        with open(path, "rb") as handle:
             return handle.read()
 
     def stash(self, ref, path, raw, size=None):
@@ -10609,7 +10617,7 @@ class MindFigureTests(RecordSandbox):
         # the name says nothing: a PNG called .svg is a PNG, a drawing called .png is refused as a drawing
         self.stash(self.COMMIT, "plots/looks-like.svg", self.fixture("figure.png"))
         self.stash(self.COMMIT, "plots/drawing.png", self.fixture("drawing.svg"))
-        self.stash(self.COMMIT, "plots/page.png", self.fixture("page-named.png"))
+        self.stash(self.COMMIT, "plots/page.png", self.fixture("page.html"))
         images, reasons = self.load([(REPO, self.COMMIT, "plots/looks-like.svg"), (REPO, self.COMMIT, "plots/drawing.png"),
                                      (REPO, self.COMMIT, "plots/page.png")])
         self.assertEqual({(REPO, self.COMMIT, "plots/looks-like.svg"): self.fixture("figure.png")}, images)
@@ -10622,7 +10630,7 @@ class MindFigureTests(RecordSandbox):
         mf = self.mf
         self.assertEqual((None, "svg"), mf.inspect(self.fixture("drawing.svg")))
         self.assertEqual((None, "svg"), mf.inspect(b"\xef\xbb\xbf<?xml version='1.0'?>\n<SVG xmlns='x'></SVG>"))
-        for raw in (self.fixture("page-named.png"), b"", b"\x00" * 64, b"GIF", b"RIFF\0\0\0\0WEBPVP9 ", None, "text",
+        for raw in (self.fixture("page.html"), b"", b"\x00" * 64, b"GIF", b"RIFF\0\0\0\0WEBPVP9 ", None, "text",
                     b"\xff\xd8\xff\xe0" + b"\xff" * 40):
             self.assertEqual((None, "not-an-image"), mf.inspect(raw), raw)
         for name in ("figure.png", "figure.jpg", "figure.gif", "figure.webp", "figure-lossy.webp", "figure-alpha.webp"):
@@ -10822,7 +10830,7 @@ class MindFigureTests(RecordSandbox):
         with open(other, "rb") as handle:
             self.assertEqual(self.fixture("figure.gif"), handle.read())
         # a file that is no picture (a page, a drawing, a cut header) is not used, and is fetched again
-        for damaged in (self.fixture("page-named.png"), self.fixture("drawing.svg"), png[:10], b""):
+        for damaged in (self.fixture("page.html"), self.fixture("drawing.svg"), png[:10], b""):
             with open(target, "wb") as handle:
                 handle.write(damaged)
             os.chmod(target, 0o600)
