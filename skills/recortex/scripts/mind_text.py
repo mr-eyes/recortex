@@ -46,7 +46,7 @@ MAX_DISPLAY = 2000
 MAX_DEPTH = 8              # levels of groups
 MAX_NODES = 300
 
-ASCII_SPACE = " \t\n\r\f\v "
+ASCII_SPACE = " \t\n\r\f\v\u00a0"
 
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*([^`\n]*)$")
 HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$")
@@ -903,21 +903,21 @@ def blocks(text):
 
 # ---------------------------------------------------------------- formulas
 
-GREEK = {"alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ϵ",
-         "varepsilon": "ε", "zeta": "ζ", "eta": "η", "theta": "θ", "iota": "ι",
-         "kappa": "κ", "lambda": "λ", "mu": "μ", "nu": "ν", "xi": "ξ", "pi": "π",
-         "rho": "ρ", "sigma": "σ", "tau": "τ", "upsilon": "υ", "phi": "ϕ", "varphi": "φ",
-         "chi": "χ", "psi": "ψ", "omega": "ω", "Gamma": "Γ", "Delta": "Δ", "Theta": "Θ",
-         "Lambda": "Λ", "Xi": "Ξ", "Pi": "Π", "Sigma": "Σ", "Upsilon": "Υ", "Phi": "Φ",
-         "Psi": "Ψ", "Omega": "Ω"}
-RELATIONS = {"sim": "∼", "le": "≤", "leq": "≤", "ge": "≥", "geq": "≥", "ne": "≠",
-             "neq": "≠", "pm": "±", "times": "×", "cdot": "⋅", "approx": "≈", "to": "→",
-             "rightarrow": "→", "in": "∈", "propto": "∝", "ldots": "…", "dots": "…",
-             "cdots": "⋯"}
-IDENTIFIERS = {"infty": "∞", "partial": "∂"}
-BIG = {"sum": "∑", "prod": "∏", "int": "∫"}
+GREEK = {"alpha": "\u03b1", "beta": "\u03b2", "gamma": "\u03b3", "delta": "\u03b4", "epsilon": "\u03f5",
+         "varepsilon": "\u03b5", "zeta": "\u03b6", "eta": "\u03b7", "theta": "\u03b8", "iota": "\u03b9",
+         "kappa": "\u03ba", "lambda": "\u03bb", "mu": "\u03bc", "nu": "\u03bd", "xi": "\u03be", "pi": "\u03c0",
+         "rho": "\u03c1", "sigma": "\u03c3", "tau": "\u03c4", "upsilon": "\u03c5", "phi": "\u03d5", "varphi": "\u03c6",
+         "chi": "\u03c7", "psi": "\u03c8", "omega": "\u03c9", "Gamma": "\u0393", "Delta": "\u0394", "Theta": "\u0398",
+         "Lambda": "\u039b", "Xi": "\u039e", "Pi": "\u03a0", "Sigma": "\u03a3", "Upsilon": "\u03a5", "Phi": "\u03a6",
+         "Psi": "\u03a8", "Omega": "\u03a9"}
+RELATIONS = {"sim": "\u223c", "le": "\u2264", "leq": "\u2264", "ge": "\u2265", "geq": "\u2265", "ne": "\u2260",
+             "neq": "\u2260", "pm": "\u00b1", "times": "\u00d7", "cdot": "\u22c5", "approx": "\u2248", "to": "\u2192",
+             "rightarrow": "\u2192", "in": "\u2208", "propto": "\u221d", "ldots": "\u2026", "dots": "\u2026",
+             "cdots": "\u22ef"}
+IDENTIFIERS = {"infty": "\u221e", "partial": "\u2202"}
+BIG = {"sum": "\u2211", "prod": "\u220f", "int": "\u222b"}
 FUNCTIONS = ("log", "ln", "exp", "sin", "cos", "tan", "max", "min", "lim", "Pr", "Var", "Cov")
-ACCENTS = {"hat": "^", "bar": "¯", "tilde": "~", "dot": "˙", "vec": "→", "overline": "¯"}
+ACCENTS = {"hat": "^", "bar": "\u00af", "tilde": "~", "dot": "\u02d9", "vec": "\u2192", "overline": "\u00af"}
 SPACES = {",": "0.1667em", ":": "0.2222em", ";": "0.2778em", "!": "-0.1667em", "quad": "1em", "qquad": "2em",
           " ": "0.5em"}
 ESCAPES = "%{}&#_$"
@@ -942,11 +942,11 @@ def alphabet(capital, small, digits, holes):
 
 ALPHABETS = {
     "mathbf": alphabet(0x1D400, 0x1D41A, 0x1D7CE, {}),
-    "mathcal": alphabet(0x1D49C, 0x1D4B6, 0, {"B": "ℬ", "E": "ℰ", "F": "ℱ", "H": "ℋ",
-                                              "I": "ℐ", "L": "ℒ", "M": "ℳ", "R": "ℛ",
-                                              "e": "ℯ", "g": "ℊ", "o": "ℴ"}),
-    "mathbb": alphabet(0x1D538, 0x1D552, 0x1D7D8, {"C": "ℂ", "H": "ℍ", "N": "ℕ", "P": "ℙ",
-                                                    "Q": "ℚ", "R": "ℝ", "Z": "ℤ"}),
+    "mathcal": alphabet(0x1D49C, 0x1D4B6, 0, {"B": "\u212c", "E": "\u2130", "F": "\u2131", "H": "\u210b",
+                                              "I": "\u2110", "L": "\u2112", "M": "\u2133", "R": "\u211b",
+                                              "e": "\u212f", "g": "\u210a", "o": "\u2134"}),
+    "mathbb": alphabet(0x1D538, 0x1D552, 0x1D7D8, {"C": "\u2102", "H": "\u210d", "N": "\u2115", "P": "\u2119",
+                                                    "Q": "\u211a", "R": "\u211d", "Z": "\u2124"}),
 }
 
 
@@ -1062,7 +1062,7 @@ class Formula(object):
             return self.command(depth)
         if char != "" and char in OPERATOR_CHARS:
             self.i += 1
-            return self.make("mo", t={"-": "−", "'": "′"}.get(char, char)), False
+            return self.make("mo", t={"-": "\u2212", "'": "\u2032"}.get(char, char)), False
         raise FormulaStop()
 
     def command(self, depth):
@@ -1161,7 +1161,7 @@ class Formula(object):
         # a space at either end would be trimmed by the browser, so it becomes a no-break space
         edge_left = len(words) - len(words.lstrip(" "))
         edge_right = len(words) - len(words.rstrip(" "))
-        words = " " * edge_left + words.strip(" ") + " " * edge_right if words.strip(" ") else words
+        words = "\u00a0" * edge_left + words.strip(" ") + "\u00a0" * edge_right if words.strip(" ") else words
         return self.make("mtext", t=words)
 
     def alphabetic(self, name):

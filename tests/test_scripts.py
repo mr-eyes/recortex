@@ -9332,6 +9332,208 @@ class MindTextTests(unittest.TestCase):
             began = time.time()
             self.t.blocks(text)
             self.assertLess(time.time() - began, 5, text[:12])
+    # ------------------------------------------------------------ formulas
+
+    REVIEW_FORMULAS = (
+        (True, r"\theta_{pt} = \beta_0 + \beta_1\,\mathrm{cover}_p + \beta_2\,\mathrm{rain}_{t-1} + "
+               r"\beta_3\,\mathrm{block}_p + u_p + \varepsilon_{pt}"),
+        (False, r"\theta"), (False, r"\Delta\theta = \theta_{cover} - \theta_{bare} > 0"), (False, r"u_p"),
+        (False, r"\theta_{pt}"), (False, r"p"), (False, r"t"), (False, r"u_p \sim \mathcal{N}(0, \sigma_u^2)"),
+        (False, r"\varepsilon_{pt} = \phi\,\varepsilon_{p,t-1} + \eta_{pt}"),
+        (False, r"\eta_{pt} \sim \mathcal{N}(0, \sigma^2)"), (False, r"\beta_1"), (False, r"\hat\phi"),
+        (False, r"\hat\sigma_u"), (False, r"\phi"), (False, r"0.004\,\mathrm{m^3/m^3}"),
+        (False, r"\theta_{pt} = \beta_0 + \beta_1 \mathrm{cover}_p + u_p + \varepsilon_{pt}"))
+    ELEMENTS = {"math", "mrow", "mi", "mn", "mo", "mtext", "mspace", "msub", "msup", "msubsup", "mfrac", "msqrt",
+                "mover", "munder", "munderover"}
+
+    def sexp(self, node):
+        """A tree as one line: name(children), name:text, name:text/normal for an upright identifier, name:width for
+        a space and name!(...) for an accent."""
+        if "c" in node:
+            return node["m"] + ("!" if node.get("acc") else "") + "(" + ",".join(self.sexp(c) for c in node["c"]) + ")"
+        if "w" in node:
+            return node["m"] + ":" + node["w"]
+        return node["m"] + ":" + node["t"] + ("/normal" if node.get("v") == "normal" else "")
+
+    def expr(self, source, display=False):
+        tree = self.t.tex(source, display)
+        return None if tree is None else self.sexp(tree)
+
+    def test_every_formula_of_the_review_record_converts_into_the_fifteen_elements(self):
+        for display, source in self.REVIEW_FORMULAS:
+            tree = self.t.tex(source, display)
+            self.assertIsNotNone(tree, source)
+            self.assertEqual("mrow", tree["m"])
+            self.assertEqual(tree, json.loads(json.dumps(tree)))
+
+            def names(node):
+                self.assertLessEqual({k for k in node}, {"m", "c", "t", "v", "w", "acc"}, source)
+                yield node["m"]
+                for child in node.get("c", []):
+                    for found in names(child):
+                        yield found
+
+            self.assertLessEqual(set(names(tree)), self.ELEMENTS, source)
+
+    def test_tokens_numbers_and_the_real_minus_sign(self):
+        self.assertEqual("mrow(mi:x,mo:+,mn:1,mo:=,mn:2)", self.expr("x+1=2"))
+        self.assertEqual("mrow(mi:a,mo:\u2212,mi:b)", self.expr("a-b"))
+        self.assertEqual("mrow(mn:0.004)", self.expr("0.004"))
+        self.assertEqual("mrow(mn:4,mo:,,mn:812)", self.expr("4,812"))
+        self.assertEqual("mrow(mi:f,mo:\u2032)", self.expr("f'"))
+        self.assertEqual("mrow(mo:<,mo:>,mo:/,mo:(,mo:),mo:[,mo:],mo:|,mo:;,mo::,mo:!,mo:*)",
+                         self.expr("< > / ( ) [ ] | ; : ! *".replace(" ", "")))
+        self.assertEqual("mrow(mi:a,mi:b)", self.expr("  a\n\t b "))  # spaces in the source are no tokens
+
+    def test_greek_letters_and_the_operators_of_the_list(self):
+        lower = ("alpha beta gamma delta epsilon varepsilon zeta eta theta iota kappa lambda mu nu xi pi rho sigma tau "
+                 "upsilon phi varphi chi psi omega").split()
+        upper = "Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega".split()
+        for name in lower + upper:
+            found = self.t.tex("\\" + name, False)
+            self.assertEqual(["mi"], [node["m"] for node in found["c"]], name)
+            self.assertEqual(1, len(found["c"][0]["t"]), name)
+        self.assertEqual("mrow(mi:\u03b1,mi:\u03a9,mi:\u03b5,mi:\u03f5,mi:\u03c6,mi:\u03d5)",
+                         self.expr(r"\alpha\Omega\varepsilon\epsilon\varphi\phi"))
+        for name in ("sim le leq ge geq ne neq pm times cdot approx to rightarrow in propto ldots dots cdots").split():
+            self.assertEqual("mrow(mo:" + self.t.RELATIONS[name] + ")", self.expr("\\" + name), name)
+        self.assertEqual("mrow(mo:\u2264,mo:\u2264,mo:\u2192,mo:\u2192,mo:\u2026,mo:\u22ef)",
+                         self.expr(r"\le\leq\to\rightarrow\ldots\cdots"))
+        self.assertEqual("mrow(mi:\u221e,mi:\u2202)", self.expr(r"\infty\partial"))
+
+    def test_subscripts_and_superscripts_take_one_token_or_one_group(self):
+        self.assertEqual("mrow(msub(mi:x,mi:i))", self.expr("x_i"))
+        self.assertEqual("mrow(msup(mi:x,mn:2))", self.expr("x^2"))
+        self.assertEqual("mrow(msubsup(mi:x,mi:i,mn:2))", self.expr("x_i^2"))
+        self.assertEqual("mrow(msubsup(mi:x,mi:i,mn:2))", self.expr("x^2_i"))
+        self.assertEqual("mrow(msub(mi:x,mrow(mi:i,mi:j)))", self.expr("x_{ij}"))
+        self.assertEqual("mrow(msup(mi:x,mrow(mi:a,mo:+,mi:b)))", self.expr("x^{a+b}"))
+        self.assertEqual("mrow(msup(mi:x,mn:1),mn:2)", self.expr("x^12"))  # one token, as TeX reads it
+        self.assertEqual("mrow(msup(mi:x,mi:\u03b1))", self.expr(r"x^\alpha"))
+        self.assertEqual("mrow(msub(msup(mi:x,mn:2),mi:i))", self.expr("{x^2}_i"))
+
+    def test_a_second_subscript_or_superscript_on_one_base_is_outside_the_subset(self):
+        for source in ("x_1_2", "x^2^3", "x_1^2_3", "x^2_1^3", "{x}_1_2", r"\hat x_1_2", "x_", "x^", "_1", "^2"):
+            self.assertIsNone(self.t.tex(source, False), source)
+        self.assertEqual("mrow(msub(mi:x,msub(mi:a,mi:b)))", self.expr("x_{a_b}"))  # nested is not second
+
+    def test_big_operators_take_limits_above_and_below_in_a_display_formula_only(self):
+        self.assertEqual("mrow(munderover(mo:\u2211,mrow(mi:i,mo:=,mn:1),mi:n),msub(mi:x,mi:i))",
+                         self.expr(r"\sum_{i=1}^{n} x_i", True))
+        self.assertEqual("mrow(msubsup(mo:\u2211,mrow(mi:i,mo:=,mn:1),mi:n),msub(mi:x,mi:i))",
+                         self.expr(r"\sum_{i=1}^{n} x_i", False))
+        self.assertEqual("mrow(munder(mo:\u220f,mi:i))", self.expr(r"\prod_i", True))
+        self.assertEqual("mrow(mover(mo:\u222b,mi:b))", self.expr(r"\int^b", True))
+        self.assertEqual("mrow(msub(mo:\u220f,mi:i),msup(mo:\u222b,mi:b))", self.expr(r"\prod_i\int^b", False))
+        self.assertEqual("mrow(mo:\u2211,mi:x)", self.expr(r"\sum x", True))  # no limits, no change
+
+    def test_named_functions_fractions_roots_and_accents(self):
+        for name in ("log", "ln", "exp", "sin", "cos", "tan", "max", "min", "lim", "Pr", "Var", "Cov"):
+            self.assertEqual("mrow(mi:%s/normal,mi:x)" % name, self.expr("\\%s x" % name), name)
+        self.assertEqual("mrow(mfrac(mi:a,mi:b))", self.expr(r"\frac{a}{b}"))
+        self.assertEqual("mrow(mfrac(mn:1,mn:2))", self.expr(r"\frac12"))
+        self.assertEqual("mrow(mfrac(mrow(mi:a,mo:+,mi:b),msqrt(mi:n)))", self.expr(r"\frac{a+b}{\sqrt{n}}"))
+        self.assertEqual("mrow(msqrt(mrow(mi:x,mo:+,mn:1)))", self.expr(r"\sqrt{x+1}"))
+        for name, mark in (("hat", "^"), ("bar", "\u00af"), ("tilde", "~"), ("dot", "\u02d9"), ("vec", "\u2192"),
+                           ("overline", "\u00af")):
+            self.assertEqual("mrow(mover!(mi:x,mo:%s))" % mark, self.expr("\\%s{x}" % name), name)
+        self.assertEqual("mrow(mover!(mi:\u03d5,mo:^))", self.expr(r"\hat\phi"))
+        self.assertEqual("mrow(msub(mover!(mi:\u03c3,mo:^),mi:u))", self.expr(r"\hat\sigma_u"))
+        tree = self.t.tex(r"\hat x", False)["c"][0]
+        self.assertEqual({"m": "mover", "c": tree["c"], "acc": True}, tree)
+
+    def test_left_and_right_delimiters(self):
+        self.assertEqual("mrow(mrow(mo:(,mi:x,mo:)))", self.expr(r"\left( x \right)"))
+        self.assertEqual("mrow(mrow(mi:x,mo:|))", self.expr(r"\left. x \right|"))
+        self.assertEqual("mrow(mrow(mo:[,mrow(mo:|,mi:a,mo:|),mo:]))", self.expr(r"\left[ \left| a \right| \right]"))
+        self.assertEqual("mrow(msup(mrow(mo:(,mfrac(mi:a,mi:b),mo:)),mn:2))", self.expr(r"\left( \frac{a}{b} \right)^2"))
+        self.assertEqual("mrow(mrow(mi:x))", self.expr(r"\left. x \right."))  # a dot is an empty side
+        for source in (r"\left( x", r"x \right)", r"\left\{ x \right\}", r"\left< x \right>", r"\left. \right.",
+                       r"\left( x \right", r"\left"):
+            self.assertIsNone(self.t.tex(source, False), source)
+
+    def test_upright_identifiers_text_and_the_alphabets(self):
+        self.assertEqual("mrow(msub(mi:cover/normal,mi:p))", self.expr(r"\mathrm{cover}_p"))
+        self.assertEqual("mrow(mi:Var/normal,mo:(,mi:x,mo:))", self.expr(r"\operatorname{Var}(x)"))
+        self.assertEqual("mrow(mrow(msup(mi:m/normal,mn:3),mo:/,msup(mi:m/normal,mn:3)))",
+                         self.expr(r"\mathrm{m^3/m^3}"))
+        self.assertEqual("mrow(mi:d/normal,mi:x)", self.expr(r"\mathrm{d}x"))
+        self.assertEqual("mrow(mtext:if\u00a0,mi:x)", self.expr(r"\text{if } x"))
+        self.assertEqual("mrow(mtext:a b)", self.expr(r"\textrm{a b}"))
+        self.assertEqual("mrow(mtext:plain, 1 (2) + 3 = 4!)", self.expr(r"\text{plain, 1 (2) + 3 = 4!}"))
+        for source in (r"\text{a$b}", r"\text{<b>}", r"\text{a\b}", r"\text{a{b}c}", r"\text{}", r"\text", r"\text{abc"):
+            self.assertIsNone(self.t.tex(source, False), source)
+        self.assertEqual("mrow(mi:%s)" % chr(0x1D4A9), self.expr(r"\mathcal{N}"))
+        self.assertEqual("mrow(mi:%s)" % chr(0x1D4A9), self.expr(r"\mathcal N"))
+        self.assertEqual("mrow(mi:\u212c,mi:\u212f)", self.expr(r"\mathcal{B}\mathcal{e}"))  # the letters Unicode moved
+        self.assertEqual("mrow(mi:\u211d,mi:\u2115,mi:%s)" % chr(0x1D538), self.expr(r"\mathbb{R}\mathbb{N}\mathbb{A}"))
+        self.assertEqual("mrow(mi:%s)" % chr(0x1D431), self.expr(r"\mathbf{x}"))
+        self.assertEqual("mrow(mrow(mn:%s,mn:%s))" % (chr(0x1D7CF), chr(0x1D7D0)), self.expr(r"\mathbf{12}"))
+        self.assertEqual("mrow(mn:%s)" % chr(0x1D7D9), self.expr(r"\mathbb{1}"))
+        for source in (r"\mathcal{1}", r"\mathbb{a b}", r"\mathbf{\alpha}", r"\mathcal{}", r"\mathbb{ab"):
+            self.assertIsNone(self.t.tex(source, False), source)
+
+    def test_spaces_and_escaped_characters(self):
+        self.assertEqual("mrow(mi:a,mspace:0.1667em,mi:b,mspace:0.2222em,mi:c,mspace:0.2778em,mi:d,mspace:-0.1667em,"
+                         "mi:e,mspace:1em,mi:f,mspace:2em,mi:g,mspace:0.5em,mi:h)",
+                         self.expr(r"a\,b\:c\;d\!e\quad f\qquad g\ h"))
+        self.assertEqual({"m": "mspace", "w": "1em"}, self.t.tex(r"\quad", False)["c"][0])
+        self.assertEqual({"0.1667em", "0.2222em", "0.2778em", "-0.1667em", "1em", "2em", "0.5em"},
+                         set(self.t.SPACES.values()))
+        self.assertEqual("mrow(mo:%,mo:{,mo:},mo:&,mo:#,mo:_,mo:$)", self.expr(r"\%\{\}\&\#\_\$"))
+        self.assertIsNone(self.t.tex(r"\,_1", False))  # a space takes no script
+
+    def test_the_limits_of_a_formula(self):
+        self.assertIsNotNone(self.t.tex("1" * 400, False))
+        self.assertIsNone(self.t.tex("1" * 401, False))  # characters, inline
+        self.assertIsNotNone(self.t.tex("1" * 2000, True))
+        self.assertIsNone(self.t.tex("1" * 2001, True))  # characters, display
+        self.assertIsNotNone(self.t.tex("1" * 401, True))
+        self.assertIsNotNone(self.t.tex("{" * 8 + "x" + "}" * 8, False))
+        self.assertIsNone(self.t.tex("{" * 9 + "x" + "}" * 9, False))  # levels of groups
+        self.assertIsNone(self.t.tex(r"\left(" * 9 + "x" + r"\right)" * 9, False))
+        self.assertIsNotNone(self.t.tex(r"\left(" * 8 + "x" + r"\right)" * 8, False))
+        self.assertIsNotNone(self.t.tex("+".join("x" * 150), False))  # 150 identifiers, 149 signs and the root: 300
+        self.assertEqual(300, len(self.t.tex("+".join("x" * 150), False)["c"]) + 1)
+        self.assertIsNone(self.t.tex("+".join("x" * 151), False))  # 302 nodes
+        self.assertIsNone(self.t.tex("", False))
+        self.assertIsNone(self.t.tex("   ", True))
+        self.assertIsNone(self.t.tex(None, False))
+        self.assertIsNone(self.t.tex(5, True))
+
+    def test_a_command_off_the_lists_and_a_broken_formula_give_none(self):
+        for source in (r"\begin{matrix} a & b \end{matrix}", r"\href{javascript:alert(1)}{x}", r"\def\x{1}",
+                       r"\newcommand{\x}{1}", r"\color{red}{x}", r"\unknown", r"\frac{a}", r"\frac", r"\sqrt[3]{x}",
+                       r"\sqrt", "a & b", r"a \\ b", "x_{", "x}", "{x", "{}", "x{}y", r"\right)", "$x$", "x % y", "x # y",
+                       "a ~ b", '"x"', "x`y", "caf\u00e9", "\u03b8", r"\mathrm{", r"\left", "\\", "x\\",
+                       r"\mathit{x}", r"\mathsf{x}", r"\boldsymbol{x}", r"\underline{x}", r"\widehat{x}", r"\binom{a}{b}",
+                       r"\over", r"\limits", r"\not=", r"\leftarrow", r"\{x\}_", r"\vspace{1em}", r"\input{x}",
+                       r"\write18", r"\mathbb{R}^{n \times m}_"):
+            self.assertIsNone(self.t.tex(source, False), source)
+            self.assertIsNone(self.t.tex(source, True), source)
+
+    def test_the_converter_never_raises_on_random_text(self):
+        import random
+        rng = random.Random(20261116)
+        alphabet = "\\ {}_^$&abxyz1"
+        pieces = ["\\frac", "\\sqrt", "{", "}", "_", "^", "x", "y", "\\left", "\\right", "(", ")", "\\mathrm", "\\text",
+                  "&", "$", " ", "\\", "\\alpha", "1", "\\sum", "\\hat", "\\mathcal", "\\,", "|", ".", "\\\\"]
+        sources = ["".join(rng.choice(alphabet) for _ in range(rng.randint(0, 40))) for _ in range(250)]
+        sources += ["".join(rng.choice(pieces) for _ in range(rng.randint(0, 30))) for _ in range(250)]
+        self.assertEqual(500, len(sources))
+        converted = 0
+        for number, source in enumerate(sources):
+            display = number % 2 == 1
+            try:
+                direct = self.t.formula(source, display)  # raises FormulaStop for the subset, nothing else
+            except self.t.FormulaStop:
+                direct = None
+            self.assertEqual(direct, self.t.tex(source, display), source)
+            converted += direct is not None
+            if direct is not None:
+                json.dumps(direct)
+        self.assertGreater(converted, 5)  # the strings are not all outside the subset
+
 
 
 COMPAT = os.path.join(FIXTURES, "compat-0.5.0")
