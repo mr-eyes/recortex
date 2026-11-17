@@ -9425,7 +9425,8 @@ class MindPageTests(MindSandbox):
         self.assertEqual(set(mind_model.KINDS), set(mind.KIND_WORD))
         self.assertEqual({"k-" + kind for kind in mind_model.KINDS}, set(mind.KIND_CLASS.values()))
         script = recortex.read_text(os.path.join(SKILL, "page", "mind.js"))
-        for word in [word for _, word, _ in mind.KIND_TABLE] + [title for _, _, title, _ in mind.STATE_TABLE]:
+        for word in [word for _, word, _ in mind.KIND_TABLE] + ["Still stands", "Not tested yet", "Taken up",
+                                                               "Nothing followed yet", "Led to a change"]:
             self.assertNotIn(word, script)
         self.assertEqual({key for _, key, _, _ in mind.STATE_TABLE} | {"thread-open", "thread-clear", "thread-aside"} |
                          {"kind-" + kind for kind in mind_model.KINDS}, set(mind.EXPLAIN_TEXT))
