@@ -468,25 +468,151 @@ class WriteTests(WritingBox):
         for command in (("check",), ("apply",)):
             done = self.cmd("write.py", command[0], "--dir", folder)
             self.assertEqual(1, done.returncode)
-            self.assertIn("this folder's base.md is not one that write.py start made on this machine", done.stdout + done.stderr)
+            self.assertIn("is not one that this folder's own write.py start made on this machine", done.stdout + done.stderr)
         self.assertEqual([], self.text_memories())
 
-    def test_a_forged_state_file_runs_every_check(self):
+    FORGED = ({"body": record_format.body_sha("another draft"), "version": "x", "memory": 1},
+              {"memory": 7, "version": "x"},
+              {"body": 5, "memory": 7})
+
+    def record_file(self, issue, folder):
+        """The private record write.py start kept for this folder's base."""
+        base = record_format.body_sha(self.base(folder))
+        return os.path.join(self.data, "private", self.slug(), "write", str(issue), base + ".json")
+
+    def forged_forms(self, folder):
+        before = self.body(5)
+        return self.FORGED + ({"body": record_format.body_sha(self.read(folder, "draft.md")), "memory": 7},   # not the live body
+                              {"body": record_format.body_sha(before), "memory": 7})                          # the base, not the draft
+
+    def test_a_forged_resume_state_in_the_working_folder_is_ignored(self):
         self.ready()
         self.mode("autonomous")
         folder = self.start(5)
         base = self.base(folder)
         self.draft(folder, base.replace("Over the whole season the difference", "Over the whole season the pooled difference", 1))
         before = self.body(5)
-        for forged in ({"body": record_format.body_sha("another draft"), "version": "x", "memory": 1},
-                       {"body": record_format.body_sha(self.read(folder, "draft.md")), "memory": 7},   # the draft's hash, not live
-                       {"body": record_format.body_sha(before), "memory": 7},   # the live body's hash, not the draft's
-                       {"body": 5, "memory": 7}):
+        self.assertFalse(os.path.exists(os.path.join(folder, "write.state.json")))   # nothing of the state is kept there
+        for forged in self.forged_forms(folder):
             self.write_file(folder, "write.state.json", forged)
             done = self.cmd("write.py", "apply", "--dir", folder)
             self.assertEqual(1, done.returncode, forged)
             self.assertIn("not written (check 5): protected paragraph", done.stdout)
             self.assertEqual((before, []), (self.body(5), self.text_memories()), forged)
+
+    def test_a_forged_resume_state_in_the_record_runs_every_check(self):
+        self.ready()
+        self.mode("autonomous")
+        folder = self.start(5)
+        base = self.base(folder)
+        self.draft(folder, base.replace("Over the whole season the difference", "Over the whole season the pooled difference", 1))
+        before = self.body(5)
+        path = self.record_file(5, folder)
+        record = json.load(open(path))
+        for forged in self.forged_forms(folder):
+            json.dump(dict(record, state=forged), open(path, "w"))
+            os.chmod(path, 0o600)
+            done = self.cmd("write.py", "apply", "--dir", folder)
+            self.assertEqual(1, done.returncode, forged)
+            self.assertIn("not written (check 5): protected paragraph", done.stdout)
+            self.assertEqual((before, []), (self.body(5), self.text_memories()), forged)
+
+    def test_a_resume_is_believed_only_for_text_this_plugin_wrote_and_kept(self):
+        self.ready()
+        self.mode("autonomous")
+        folder = self.start(5)
+        self.draft(folder)
+        draft = self.read(folder, "draft.md")
+        # somebody outside the allowed list put the draft's text into the topic; a state that says "the plugin wrote it"
+        # does not make it the plugin's text, because this machine kept no copy of it
+        data = self.repo()
+        issue = data["issues"]["5"]
+        issue["body"] = draft
+        issue["edits"] = [{"at": "2026-12-02T10:00:00Z", "by": "hubot"}, {"at": issue["created_at"], "by": "octocat"}]
+        issue["last_edited_at"] = issue["updated_at"] = "2026-12-02T10:00:00Z"
+        self.save(data)
+        self.ready()
+        path = self.record_file(5, folder)
+        record = json.load(open(path))
+        json.dump(dict(record, state={"body": record_format.body_sha(draft)}), open(path, "w"))
+        os.chmod(path, 0o600)
+        done = self.cmd("write.py", "apply", "--dir", folder)
+        self.assertEqual(1, done.returncode, done.stdout)
+        self.assertIn("someone outside your allowed list changed this text", done.stderr)
+        self.assertEqual([], self.text_memories())
+
+    def test_a_state_that_says_written_is_not_believed_for_a_draft_that_is_the_base(self):
+        self.ready()
+        self.mode("autonomous")
+        folder = self.start(5)
+        self.draft(folder)
+        self.assertEqual(0, self.cmd("write.py", "apply", "--dir", folder).returncode)
+        self.ready()
+        written = self.body(5)   # the plugin wrote it and kept a copy: a draft equal to it is no change at all
+        forged = os.path.join(self.dir, "forged")
+        os.makedirs(forged)
+        for name in ("base.md", "draft.md"):
+            self.write_file(forged, name, written)
+        self.write_file(forged, "used.json", {"parts": [9302], "results": [9140], "decisions": []})
+        self.write_file(forged, "memory.json", json.loads(self.read(folder, "memory.json")))
+        nonce = "a" * 32
+        self.write_file(forged, "start.json", {"issue": 5, "nonce": nonce})
+        path = self.record_file(5, forged)
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        sha = record_format.body_sha(written)
+        json.dump({"form": 1, "issue": 5, "base": sha, "nonce": nonce, "protected": [], "state": {"body": sha}}, open(path, "w"))
+        os.chmod(path, 0o600)
+        done = self.cmd("write.py", "apply", "--dir", forged)
+        self.assertEqual(1, done.returncode, done.stdout)
+        self.assertIn("not written (check", done.stdout)
+        self.assertEqual(1, len(self.text_memories()))
+
+    def test_a_record_of_another_issue_with_the_same_body_is_never_used(self):
+        self.ready()
+        self.mode("autonomous")
+        folder = self.start(5)
+        self.draft(folder)
+        data = self.repo()
+        data["issues"]["6"]["body"] = data["issues"]["5"]["body"]   # a second topic whose body is the same text
+        self.save(data)
+        start = json.loads(self.read(folder, "start.json"))
+        self.write_file(folder, "start.json", dict(start, issue=6))   # the folder of #5 is pointed at #6
+        for command in ("check", "apply"):
+            done = self.cmd("write.py", command, "--dir", folder)
+            self.assertEqual(1, done.returncode, command)
+            self.assertIn("is not one that this folder's own write.py start made on this machine", done.stdout + done.stderr)
+        # even a record that exists for #6 (made by another start, with its own nonce) is not this folder's
+        record = json.load(open(self.record_file(5, folder)))
+        other = os.path.join(os.path.dirname(os.path.dirname(self.record_file(5, folder))), "6")
+        os.makedirs(other, mode=0o700, exist_ok=True)
+        copied = os.path.join(other, os.path.basename(self.record_file(5, folder)))
+        json.dump(dict(record, issue=6, nonce="1" * 32), open(copied, "w"))
+        os.chmod(copied, 0o600)
+        done = self.cmd("write.py", "check", "--dir", folder)
+        self.assertEqual(1, done.returncode)
+        self.assertIn("is not one that this folder's own write.py start made on this machine", done.stdout + done.stderr)
+        self.assertEqual([], self.text_memories())
+
+    def test_a_folder_with_the_nonce_of_another_start_is_refused(self):
+        self.ready()
+        self.mode("autonomous")
+        first = self.start(5, "first")
+        self.draft(first)
+        self.assertEqual(0, self.cmd("write.py", "check", "--dir", first).returncode)
+        second = self.start(5, "second")   # a later start for the same base replaces the record and its nonce
+        self.draft(second)
+        refused = self.cmd("write.py", "check", "--dir", first)
+        self.assertEqual(1, refused.returncode)
+        self.assertIn("is not one that this folder's own write.py start made on this machine", refused.stdout + refused.stderr)
+        self.assertEqual(0, self.cmd("write.py", "check", "--dir", second).returncode)
+        forged = json.loads(self.read(second, "start.json"))
+        for nonce in ("0" * 32, "", 5, None):
+            self.write_file(second, "start.json", dict(forged, nonce=nonce))
+            done = self.cmd("write.py", "apply", "--dir", second)
+            self.assertEqual(1, done.returncode, repr(nonce))
+            self.assertEqual([], self.text_memories())
+        self.write_file(second, "start.json", forged)
+        self.assertEqual(0, self.cmd("write.py", "apply", "--dir", second).returncode)
 
     # ------------------------------------------------------------ the checks
 

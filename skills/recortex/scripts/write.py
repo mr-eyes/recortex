@@ -24,9 +24,11 @@ Examples:
 
 import argparse
 import datetime
+import hmac
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 
@@ -45,7 +47,7 @@ WORDS_CAP = 600
 OFF = "write: writing is %s on this machine, so nothing is written. Ask the user to choose a mode (setup.py writing set)."
 UNREADABLE = "write: the writing setting of this machine cannot be read, so nothing is written. Run hooks.py --doctor."
 UNTOLD = ("someone outside your allowed list changed this text, so recortex does not write it; ask the user")
-MODE_FILES = ("base.md", "draft.md", "used.json", "memory.json")   # what check and apply read from the working folder
+MODE_FILES = ("base.md", "draft.md", "used.json", "memory.json", "start.json")   # what check and apply read from the folder
 # The working folder is written by a drafting agent. material.json and protected.json in it are for that agent to read:
 # check and apply never trust them. The issue and the author's paragraphs come from the record write.py start left
 # in the private folder under the hash of the base, and the material is worked out again from the index.
@@ -249,8 +251,12 @@ def start_command(args):
                        blocks=["%s %s" % (b["kind"], b["id"]) for b in blocks]), handle, indent=1)
     with open(os.path.join(args.out, "protected.json"), "w", encoding="utf-8") as handle:
         json.dump({"paragraphs": protected}, handle, indent=1)
-    storage.write_cached(repo, (storage.WRITE,), record_format.body_sha(live) + ".json",
-                         json.dumps({"form": 1, "issue": args.issue, "protected": protected}))
+    nonce = secrets.token_hex(16)
+    earlier = read_record(repo, args.issue, record_format.body_sha(live))
+    write_record(repo, {"form": 1, "issue": args.issue, "base": record_format.body_sha(live), "nonce": nonce,
+                        "protected": protected, "state": earlier["state"] if earlier else {}})
+    with open(os.path.join(args.out, "start.json"), "w", encoding="utf-8") as handle:
+        json.dump({"issue": args.issue, "nonce": nonce}, handle)
     say("start: #%d, %d due part%s; base.md, material.md and protected.json (%d paragraph%s of the author's) in %s" % (
         args.issue, len(due), "" if len(due) == 1 else "s", len(protected), "" if len(protected) == 1 else "s", args.out))
     return 0
@@ -266,7 +272,7 @@ def read_dir(folder):
             sys.exit("error: %s is missing from %s (start writes the base, the drafter writes the rest)" % (name, folder))
         found[name] = recortex.read_text(path)
     try:
-        for name in ("used.json", "memory.json"):
+        for name in ("used.json", "memory.json", "start.json"):
             found[name] = json.loads(found[name])
             if not isinstance(found[name], dict):
                 raise ValueError("not an object")
@@ -279,28 +285,51 @@ def read_dir(folder):
     return found
 
 
+def record_parts(issue):
+    return (storage.WRITE, str(issue))
+
+
+def read_record(repo, issue, base_sha):
+    """The record write.py start left on this machine for this issue and this base body, or None: the issue, the author's
+    paragraphs, the nonce of that start and the resume state. Invalid, unreadable or missing gives None."""
+    try:
+        found = json.loads(storage.read_cached(repo, record_parts(issue), base_sha + ".json") or "")
+    except (storage.StorageError, OSError, ValueError, UnicodeDecodeError, RecursionError):
+        return None
+    if not isinstance(found, dict) or found.get("form") != 1 or found.get("issue") != issue or type(found.get("issue")) is not int \
+            or found.get("base") != base_sha or not isinstance(found.get("nonce"), str) \
+            or not re.fullmatch(r"[0-9a-f]{32}", found["nonce"]) or not isinstance(found.get("protected"), list) \
+            or not all(isinstance(p, str) for p in found["protected"]):
+        return None
+    if not isinstance(found.get("state"), dict):
+        found["state"] = {}
+    return found
+
+
+def write_record(repo, record):
+    storage.write_cached(repo, record_parts(record["issue"]), record["base"] + ".json", json.dumps(record, sort_keys=True))
+
+
 def trusted_inputs(repo, db, config, allowed, plan, state, files):
     """Replace what the working folder says of the issue, the author's paragraphs and the material by what the record and the
-    index say: files["material.json"] and files["protected.json"] are set here, from the private record that write.py start
-    left under the hash of base.md (no record: the base is not one start made here) and from due_parts, worked out again
-    now. Whatever the folder holds under those names is never read."""
-    base_sha = record_format.body_sha(files["base.md"])
-    try:
-        found = json.loads(storage.read_cached(repo, (storage.WRITE,), base_sha + ".json") or "")
-    except (storage.StorageError, OSError, ValueError, UnicodeDecodeError):
-        found = None
-    if not isinstance(found, dict) or found.get("form") != 1 or type(found.get("issue")) is not int \
-            or not isinstance(found.get("protected"), list) or not all(isinstance(p, str) for p in found["protected"]):
-        sys.exit("write: this folder's base.md is not one that write.py start made on this machine (or it was changed); "
-                 "run write.py start again")
-    issue = found["issue"]
+    index say: files["material.json"] and files["protected.json"] are set here, from the record that write.py start left
+    in the private folder (under the issue and the hash of base.md) and from due_parts, worked out again now. The record
+    is used only by the folder whose start made it: start.json holds the nonce of that start, and the two must match, so a
+    folder cannot use the record of another start (another folder, or another issue with the same body). Whatever else
+    the folder holds under those names is never read. Returns (issue, record)."""
+    start = files["start.json"]
+    issue, nonce = start.get("issue"), start.get("nonce")
+    record = read_record(repo, issue, record_format.body_sha(files["base.md"])) if type(issue) is int and issue > 0 else None
+    if record is None or not isinstance(nonce, str) or not hmac.compare_digest(record["nonce"], nonce):
+        sys.exit("write: this folder's base.md is not one that this folder's own write.py start made on this machine (or it "
+                 "was changed, or a later start replaced it); run write.py start again")
     due = [entry for entry in write_rules.due_parts(db, config, allowed, state) if entry["topic"] == issue]
     material = {"issue": issue}
     for key in ("parts", "results", "decisions"):
         material[key] = sorted({cid for entry in due for cid in entry[key]})
     files["material.json"] = material
-    files["protected.json"] = {"paragraphs": found["protected"]}
-    return issue
+    files["protected.json"] = {"paragraphs": record["protected"]}
+    return issue, record
 
 
 def changed_paragraphs(base, draft):
@@ -412,7 +441,7 @@ def check_command(args):
     db = open_index(repo)
     try:
         state = index.planned(db, config, allowed, plan)
-        issue = trusted_inputs(repo, db, config, allowed, plan, state, files)
+        issue, _ = trusted_inputs(repo, db, config, allowed, plan, state, files)
         if not index.body_told(db, issue, allowed):
             sys.exit("write: " + UNTOLD)
         unprotect = unprotected_from(args)
@@ -520,27 +549,27 @@ def keep_version(config, repo, issue, files, after):
 def apply_command(args):
     config, repo, hub, plan, allowed, mode = load(args)
     files = read_dir(args.dir)
-    state_path = os.path.join(args.dir, "write.state.json")
-    done = {}
-    if os.path.isfile(state_path):
-        try:
-            done = json.load(open(state_path, encoding="utf-8"))
-        except (OSError, ValueError):
-            done = {}
     words, asked = read_words(args.words_file), read_words(getattr(args, "asked_file", None))
     unprotect = unprotected_from(args)
     fresh(repo, hub)
     db = open_index(repo)
     try:
         state = index.planned(db, config, allowed, plan)
-        issue = trusted_inputs(repo, db, config, allowed, plan, state, files)
-        # A saved state is a hint and never a permission: it is believed only when the body it says was written is the
-        # draft of this folder and the body the sync just read is that text. Otherwise it is dropped and every check runs.
-        if done.get("body"):
-            row = db.execute("SELECT body FROM issues WHERE number = ?", (issue,)).fetchone()
-            if not (isinstance(done.get("body"), str) and done["body"] == record_format.body_sha(files["draft.md"])
-                    and row is not None and record_format.body_sha(row["body"] or "") == done["body"]):
-                done = {}
+        issue, record = trusted_inputs(repo, db, config, allowed, plan, state, files)
+        # The resume state lives in the record of this machine, never in the working folder. It is a hint and never a
+        # permission: it is believed only when the body it says was written is the draft of this folder, the body the sync
+        # just read is that text, the copy this plugin kept of the text it wrote equals the draft, and the draft is not the
+        # base. Otherwise it is dropped and every check runs.
+        done = record["state"]
+        row = db.execute("SELECT body FROM issues WHERE number = ?", (issue,)).fetchone()
+        draft_sha, base_sha = record_format.body_sha(files["draft.md"]), record_format.body_sha(files["base.md"])
+        wrote = row is not None and record_format.body_sha(row["body"] or "") == draft_sha and draft_sha != base_sha \
+            and kept_copy(repo, issue, draft_sha) == record_format.body_bytes(files["draft.md"])
+        if done.get("body") and not (done["body"] == draft_sha and wrote):
+            done = {}
+        if wrote and not done.get("body"):   # a stop between the write of the body and the saving of the state
+            done = {"body": draft_sha}
+        record["state"] = done
         if not index.body_told(db, issue, allowed) and not done.get("body"):
             sys.exit("write: " + UNTOLD)
         items = state["found"]["items"] if state else {}
@@ -591,6 +620,11 @@ def apply_command(args):
         return 1
     # 3. the body, through post_verified.py with the base the draft was made from, and a backup
     if not done.get("body"):
+        try:   # kept before the write, so that a stop right after it can be told from a body somebody else wrote
+            storage.write_cached(repo, (storage.TEXTS, str(issue)), after + ".md", files["draft.md"])
+        except (storage.StorageError, OSError) as error:
+            say("note: the copy of the written text could not be kept on this machine (%s); the next draft protects every "
+                "paragraph" % type(error).__name__)
         backup = os.path.join(args.dir, "backup.md")
         if os.path.exists(backup):
             backup = os.path.join(args.dir, "backup.%d.md" % os.getpid())
@@ -603,17 +637,13 @@ def apply_command(args):
             say("write: the body was not written")
             return 1
         done["body"] = after
-        save_state(state_path, done)
-    # 4. the body the plugin wrote, kept here, so that the next write can tell what the author changes
-    try:
-        storage.write_cached(repo, (storage.TEXTS, str(issue)), after + ".md", files["draft.md"])
-    except (storage.StorageError, OSError) as error:
-        say("note: the copy of the written text could not be kept on this machine (%s); the next draft protects every "
-            "paragraph" % type(error).__name__)
+        save_state(repo, record, done)
+    # 4. the body the plugin wrote is kept here (made just before the write), so that the next write can tell what the
+    #    author changes
     # 5. the version commit
     if "version" not in done:
         done["version"] = keep_version(config, repo, issue, files, after)
-        save_state(state_path, done)
+        save_state(repo, record, done)
     # 6. the text memory
     if "memory" not in done:
         text = memory_text(issue, title, headings, files, approved, kept_field(kept), before, after, done["version"],
@@ -629,17 +659,24 @@ def apply_command(args):
             say("write: the body is written and its comment is not; run write.py apply again to finish")
             return 1
         done["memory"] = int(match.group(1))
-        save_state(state_path, done)
+        save_state(repo, record, done)
     say("write: %s of #%d changed (%s mode); comment %d says why. See it on the mind page or with write.py log." % (
         ", ".join(headings), issue, mode, done["memory"]))
     return 0
 
 
-def save_state(path, state):
-    temporary = path + ".part"
-    with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump(state, handle, indent=1, sort_keys=True)
-    os.replace(temporary, path)
+def save_state(repo, record, state):
+    record["state"] = state
+    write_record(repo, record)
+
+
+def kept_copy(repo, issue, sha):
+    """body_bytes of the copy this machine kept of the text the plugin wrote with this hash, or None."""
+    try:
+        text = storage.read_cached(repo, (storage.TEXTS, str(issue)), sha + ".md")
+    except (storage.StorageError, OSError, UnicodeDecodeError):
+        return None
+    return record_format.body_bytes(text) if text is not None else None
 
 
 # ---------------------------------------------------------------- status and log
