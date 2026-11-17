@@ -339,6 +339,8 @@ def describe(path):
 
 TEXTS = "texts"        # texts/<issue>/<sha256>.md: the body the plugin last wrote, to tell what the author changed
 VERSIONS = "versions"  # versions/<commit>/<issue>.md: a vouched version of a topic body, fetched for the mind page
+WRITE = "write"        # write/<sha256 of the base>.json: what write.py start decided for that base (the issue, the paragraphs
+                       # that are the author's); a drafting agent can write the working folder, never this
 
 
 def cache_folder(repo, *parts, create=True):

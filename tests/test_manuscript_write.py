@@ -307,7 +307,10 @@ class WriteTests(WritingBox):
         fields = dict(record_format.fields(memory))
         self.assertTrue(fields["Approved"].startswith("By the author in the chat, "))
         self.assertIn("> Approve", fields["Approved"])
-        self.assertEqual("Nothing was changed by hand.", fields["Kept from the author"])
+        # no text change had been made yet, so every paragraph of the body is the author's and is kept (spec 7.6)
+        held = len(json.loads(self.read(folder, "protected.json"))["paragraphs"])
+        self.assertGreater(held, 1)
+        self.assertEqual("%d paragraphs were changed by hand and were left as they are." % held, fields["Kept from the author"])
         before, after = record_format.sha_pair(fields["Body"])
         self.assertEqual(record_format.body_sha(self.base(folder)), before)
         self.assertEqual(record_format.body_sha(self.body(5)), after)
@@ -417,6 +420,73 @@ class WriteTests(WritingBox):
                       done.stderr)
         self.assertEqual([], self.text_memories())
         self.assertNotEqual(0, self.cmd("write.py", "start", "--issue", "5", "--out", os.path.join(self.dir, "w5b")).returncode)
+
+    # ------------------------------------------------------------ what a drafting agent can write
+
+    def test_an_edited_protected_json_cannot_unprotect_the_authors_paragraphs(self):
+        self.ready()
+        self.mode("review")
+        folder = self.start(5)
+        self.draft(folder, self.base(folder).replace("Over the whole season the difference", "Over the whole season the pooled "
+                                                                                             "difference", 1))
+        self.write_file(folder, "protected.json", {"paragraphs": []})   # the agent empties the list it was given
+        checked = self.cmd("write.py", "check", "--dir", folder)
+        self.assertEqual(1, checked.returncode, checked.stdout)
+        self.assertIn("not ready (check 5): protected paragraph", checked.stdout)
+        before = self.body(5)
+        applied = self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words())
+        self.assertEqual(1, applied.returncode)
+        self.assertEqual((before, []), (self.body(5), self.text_memories()))
+
+    def test_an_edited_material_json_adds_no_material_and_cannot_move_the_write_to_another_topic(self):
+        self.ready()
+        self.mode("autonomous")
+        folder = self.start(5)
+        base = self.base(folder)
+        self.draft(folder, base.replace("\n### Figure: dryspell", "\nThe dry spells repeat 9 of 11 spells.\n\n### Figure: dryspell", 1),
+                   parts=(9302,), results=(9140, 9316))   # 9316 is no material of this part
+        meta = json.loads(self.read(folder, "material.json"))
+        meta["results"].append(9316)
+        meta["issue"] = 3
+        self.write_file(folder, "material.json", meta)
+        done = self.cmd("write.py", "check", "--dir", folder)
+        self.assertEqual(1, done.returncode)
+        self.assertIn("used.json names result 9316, which the material does not hold", done.stdout)
+        self.draft(folder, base.replace("\n### Figure: dryspell", "\nThe dry spells repeat 9 of 11 spells.\n\n### Figure: dryspell", 1))
+        self.write_file(folder, "material.json", dict(meta, results=[9140]))   # the agent points the write at #3
+        applied = self.cmd("write.py", "apply", "--dir", folder)
+        self.assertEqual(0, applied.returncode, applied.stdout + applied.stderr)
+        self.assertIn("The dry spells repeat", self.body(5))
+        self.assertEqual([5], [c["issue"] for c in self.repo()["comments"].values() if "type=text" in c["body"].split("\n")[0]])
+
+    def test_a_base_the_folder_was_not_started_with_is_refused(self):
+        self.ready()
+        self.mode("autonomous")
+        folder = self.start(5)
+        self.draft(folder)
+        self.write_file(folder, "base.md", self.base(folder).replace("Over the whole season", "Over the season"))
+        for command in (("check",), ("apply",)):
+            done = self.cmd("write.py", command[0], "--dir", folder)
+            self.assertEqual(1, done.returncode)
+            self.assertIn("this folder's base.md is not one that write.py start made on this machine", done.stdout + done.stderr)
+        self.assertEqual([], self.text_memories())
+
+    def test_a_forged_state_file_runs_every_check(self):
+        self.ready()
+        self.mode("autonomous")
+        folder = self.start(5)
+        base = self.base(folder)
+        self.draft(folder, base.replace("Over the whole season the difference", "Over the whole season the pooled difference", 1))
+        before = self.body(5)
+        for forged in ({"body": record_format.body_sha("another draft"), "version": "x", "memory": 1},
+                       {"body": record_format.body_sha(self.read(folder, "draft.md")), "memory": 7},   # the draft's hash, not live
+                       {"body": record_format.body_sha(before), "memory": 7},   # the live body's hash, not the draft's
+                       {"body": 5, "memory": 7}):
+            self.write_file(folder, "write.state.json", forged)
+            done = self.cmd("write.py", "apply", "--dir", folder)
+            self.assertEqual(1, done.returncode, forged)
+            self.assertIn("not written (check 5): protected paragraph", done.stdout)
+            self.assertEqual((before, []), (self.body(5), self.text_memories()), forged)
 
     # ------------------------------------------------------------ the checks
 
@@ -818,13 +888,98 @@ class OwnPaperTests(WritingBox):
             self.assertIn("own paper: no place is recorded", out, repr(bad)[:40])
         for symlinked, why in (("link.tex", "symlink"), ("dirlink/secret.tex", "symlinked folder"),
                                ("paper", "a folder")):
+            self.confirm(symlinked)   # confirmed on this machine, so that only the symlink rule can refuse it
             self.write_config(dict(self.config, own_manuscript={"path": symlinked, "brought": {}}))
             out = self.own("status").stdout
             self.assertIn("the recorded place is not used", out, why)
+            self.assertNotIn("not confirmed", out, why)
             self.assertNotIn("secret", out)
         refused = self.own("where", "--set", os.path.join(self.project, "link.tex"), "--yes")
         self.assertNotEqual(0, refused.returncode)
         self.assertIn("is not a plain file", refused.stderr)
+
+    def confirm(self, relative):
+        """What `where --set --yes` leaves on this machine for a place inside the project (written by hand, to show that
+        the other rules hold even for a place the author confirmed)."""
+        folder = os.path.join(self.dir, "xdg-config", "recortex", "private")
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        os.chmod(folder, 0o700)
+        descriptor = os.open(os.path.join(folder, "own-paper.json"), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w") as handle:
+            json.dump({"form": 1, "papers": {"octo-org/sample-project": {
+                "inside": hashlib.sha256(relative.encode()).hexdigest()}}}, handle)
+
+    def named_by_the_project_file(self, relative):
+        self.write_config(dict(self.config, own_manuscript={"path": relative, "brought": {}}))
+
+    def test_a_place_the_project_file_names_is_not_used_until_the_author_confirmed_it_on_this_machine(self):
+        self.ready()
+        path = self.paper()
+        before = self.sha_of(path)
+        self.place(path)
+        folder = self.bring()
+        # the project file now names another file than the one the author confirmed (a project file is not trusted)
+        other = self.paper("paper/other.tex", PAPER_TEX)
+        self.named_by_the_project_file("paper/other.tex")
+        self.assertIn("the author has not confirmed this place on this machine", self.own("status").stdout)
+        done = self.own("apply", "--dir", folder, "--words-file", self.words("Apply"), "--parts", "5:Results")
+        self.assertNotEqual(0, done.returncode)
+        self.assertIn("the author has not confirmed this place on this machine", done.stdout + done.stderr)
+        self.assertEqual((before, self.sha_of(other)), (self.sha_of(path), hashlib.sha256(PAPER_TEX.encode()).hexdigest()))
+        # the same for a project that was never confirmed here at all (a clone of a project whose file names a place)
+        os.unlink(os.path.join(self.dir, "xdg-config", "recortex", "private", "own-paper.json"))
+        self.named_by_the_project_file("paper/paper.tex")
+        done = self.own("apply", "--dir", folder, "--words-file", self.words("Apply"), "--parts", "5:Results")
+        self.assertNotEqual(0, done.returncode)
+        self.assertEqual(before, self.sha_of(path))
+        # confirming it (the author's yes) makes it usable
+        self.assertEqual(0, self.own("where", "--set", path, "--yes").returncode)
+        self.assertNotIn("not confirmed", self.own("status").stdout)
+
+    def test_a_project_file_naming_a_workflow_or_a_file_that_steers_a_tool_is_refused_even_when_confirmed(self):
+        self.ready()
+        folder = self.bring_folder()
+        for relative, text in ((".github/workflows/x.yml", "on: push\n"), (".github/notes.md", "notes\n"),
+                               (".git/hooks/pre-commit.md", "x\n"), (".claude/commands/x.md", "x\n"), ("CLAUDE.md", "rules\n"),
+                               ("sub/AGENTS.md", "rules\n"), (recortex.CONFIG_NAME, None), ("paper/run.sh", "#!/bin/sh\n"),
+                               ("paper/make.py", "print(1)\n"), ("paper/x.yaml", "a: 1\n")):
+            if text is not None:
+                self.paper(relative, text)
+            self.confirm(relative)   # the author's confirmation does not make these usable
+            self.named_by_the_project_file(relative)
+            before = open(os.path.join(self.project, relative), "rb").read()
+            status = self.own("status").stdout
+            self.assertIn("the recorded place is not used", status, relative)
+            done = self.own("apply", "--dir", folder, "--words-file", self.words("Apply"), "--parts", "5:Results")
+            self.assertNotEqual(0, done.returncode, relative)
+            self.assertEqual(before, open(os.path.join(self.project, relative), "rb").read(), relative)
+            refused = self.own("where", "--set", os.path.join(self.project, relative), "--yes")
+            self.assertNotEqual(0, refused.returncode, relative)
+        self.assertEqual({"on: push\n"}, {open(os.path.join(self.project, ".github/workflows/x.yml")).read()})
+
+    def test_the_project_file_is_never_the_place_even_when_the_user_named_it_with_a_manuscript_name(self):
+        self.ready()
+        notes = os.path.join(self.project, "notes.md")   # RECORTEX_CONFIG may name any file as the project file
+        with open(notes, "w") as handle:
+            json.dump(dict(self.config, own_manuscript={"path": "notes.md", "brought": {}}), handle)
+        self.confirm("notes.md")
+        done = self.own("status", env={"RECORTEX_CONFIG": notes})
+        self.assertIn("the recorded place is not used (the project file is never the author's paper)", done.stdout)
+        refused = self.own("where", "--set", notes, "--yes", env={"RECORTEX_CONFIG": notes})
+        self.assertNotEqual(0, refused.returncode)
+        self.assertIn("the project file is never the author's paper", refused.stderr)
+
+    def test_the_manuscript_kinds_of_file_are_places(self):
+        self.ready()
+        for name in ("a.tex", "a.md", "a.markdown", "a.txt", "a.rst", "a.qmd", "a.Rmd", "a.docx", "A.TEX"):
+            path = self.paper("papers/" + name, "text\n")
+            done = self.own("where", "--set", path, "--yes")
+            self.assertEqual(0, done.returncode, name + done.stdout + done.stderr)
+            self.assertNotIn("not used", self.own("where").stdout, name)
+
+    def bring_folder(self):
+        self.place(self.paper())
+        return self.bring()
 
     def test_a_project_file_cannot_point_at_a_file_outside_the_project(self):
         self.ready()

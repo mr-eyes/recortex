@@ -45,7 +45,10 @@ WORDS_CAP = 600
 OFF = "write: writing is %s on this machine, so nothing is written. Ask the user to choose a mode (setup.py writing set)."
 UNREADABLE = "write: the writing setting of this machine cannot be read, so nothing is written. Run hooks.py --doctor."
 UNTOLD = ("someone outside your allowed list changed this text, so recortex does not write it; ask the user")
-MODE_FILES = ("base.md", "draft.md", "material.json", "protected.json", "used.json", "memory.json")
+MODE_FILES = ("base.md", "draft.md", "used.json", "memory.json")   # what check and apply read from the working folder
+# The working folder is written by a drafting agent. material.json and protected.json in it are for that agent to read:
+# check and apply never trust them. The issue and the author's paragraphs come from the record write.py start left
+# in the private folder under the hash of the base, and the material is worked out again from the index.
 TAG = re.compile(r"\bv[0-9]+\.[0-9]+(?:\.[0-9]+)?\b")
 JOB = re.compile(r"\b(?:job|jobid|slurm|run id|run)[ #:_-]*[0-9]{4,}\b", re.I)
 SECTION_HEAD = re.compile(r"^## +(.*?)\s*#*\s*$")
@@ -246,6 +249,8 @@ def start_command(args):
                        blocks=["%s %s" % (b["kind"], b["id"]) for b in blocks]), handle, indent=1)
     with open(os.path.join(args.out, "protected.json"), "w", encoding="utf-8") as handle:
         json.dump({"paragraphs": protected}, handle, indent=1)
+    storage.write_cached(repo, (storage.WRITE,), record_format.body_sha(live) + ".json",
+                         json.dumps({"form": 1, "issue": args.issue, "protected": protected}))
     say("start: #%d, %d due part%s; base.md, material.md and protected.json (%d paragraph%s of the author's) in %s" % (
         args.issue, len(due), "" if len(due) == 1 else "s", len(protected), "" if len(protected) == 1 else "s", args.out))
     return 0
@@ -261,11 +266,41 @@ def read_dir(folder):
             sys.exit("error: %s is missing from %s (start writes the base, the drafter writes the rest)" % (name, folder))
         found[name] = recortex.read_text(path)
     try:
-        for name in ("material.json", "protected.json", "used.json", "memory.json"):
+        for name in ("used.json", "memory.json"):
             found[name] = json.loads(found[name])
+            if not isinstance(found[name], dict):
+                raise ValueError("not an object")
     except ValueError as error:
         sys.exit("error: %s in %s is not JSON (%s)" % (name, folder, error))
+    used = found["used.json"]
+    for key in ("parts", "results", "decisions"):
+        if not isinstance(used.get(key, []), list) or not all(type(i) is int for i in used.get(key, [])):
+            sys.exit("error: used.json names %s as a list of comment ids" % key)
     return found
+
+
+def trusted_inputs(repo, db, config, allowed, plan, state, files):
+    """Replace what the working folder says of the issue, the author's paragraphs and the material by what the record and the
+    index say: files["material.json"] and files["protected.json"] are set here, from the private record that write.py start
+    left under the hash of base.md (no record: the base is not one start made here) and from due_parts, worked out again
+    now. Whatever the folder holds under those names is never read."""
+    base_sha = record_format.body_sha(files["base.md"])
+    try:
+        found = json.loads(storage.read_cached(repo, (storage.WRITE,), base_sha + ".json") or "")
+    except (storage.StorageError, OSError, ValueError, UnicodeDecodeError):
+        found = None
+    if not isinstance(found, dict) or found.get("form") != 1 or type(found.get("issue")) is not int \
+            or not isinstance(found.get("protected"), list) or not all(isinstance(p, str) for p in found["protected"]):
+        sys.exit("write: this folder's base.md is not one that write.py start made on this machine (or it was changed); "
+                 "run write.py start again")
+    issue = found["issue"]
+    due = [entry for entry in write_rules.due_parts(db, config, allowed, state) if entry["topic"] == issue]
+    material = {"issue": issue}
+    for key in ("parts", "results", "decisions"):
+        material[key] = sorted({cid for entry in due for cid in entry[key]})
+    files["material.json"] = material
+    files["protected.json"] = {"paragraphs": found["protected"]}
+    return issue
 
 
 def changed_paragraphs(base, draft):
@@ -377,7 +412,8 @@ def check_command(args):
     db = open_index(repo)
     try:
         state = index.planned(db, config, allowed, plan)
-        if not index.body_told(db, files["material.json"]["issue"], allowed):
+        issue = trusted_inputs(repo, db, config, allowed, plan, state, files)
+        if not index.body_told(db, issue, allowed):
             sys.exit("write: " + UNTOLD)
         unprotect = unprotected_from(args)
         problems = check_files(db, config, plan, state, repo, files, unprotect)
@@ -484,7 +520,6 @@ def keep_version(config, repo, issue, files, after):
 def apply_command(args):
     config, repo, hub, plan, allowed, mode = load(args)
     files = read_dir(args.dir)
-    issue = files["material.json"]["issue"]
     state_path = os.path.join(args.dir, "write.state.json")
     done = {}
     if os.path.isfile(state_path):
@@ -498,17 +533,25 @@ def apply_command(args):
     db = open_index(repo)
     try:
         state = index.planned(db, config, allowed, plan)
+        issue = trusted_inputs(repo, db, config, allowed, plan, state, files)
+        # A saved state is a hint and never a permission: it is believed only when the body it says was written is the
+        # draft of this folder and the body the sync just read is that text. Otherwise it is dropped and every check runs.
+        if done.get("body"):
+            row = db.execute("SELECT body FROM issues WHERE number = ?", (issue,)).fetchone()
+            if not (isinstance(done.get("body"), str) and done["body"] == record_format.body_sha(files["draft.md"])
+                    and row is not None and record_format.body_sha(row["body"] or "") == done["body"]):
+                done = {}
         if not index.body_told(db, issue, allowed) and not done.get("body"):
             sys.exit("write: " + UNTOLD)
         items = state["found"]["items"] if state else {}
         if not done.get("body"):
+            if not stands(state, items, files["used.json"]):  # first: what it rests on is not what it was
+                say("not written: what this text rests on changed while it waited; draft it again.")
+                return 1
             problems = check_files(db, config, plan, state, repo, files, unprotect)
             if problems:
                 for number, line in problems:
                     say("not written (check %d): %s" % (number, line))
-                return 1
-            if not stands(state, items, files["used.json"]):
-                say("not written: what this text rests on changed while it waited; draft it again.")
                 return 1
         title = one_line(db.execute("SELECT title FROM issues WHERE number = ?", (issue,)).fetchone()["title"], 60)
     finally:

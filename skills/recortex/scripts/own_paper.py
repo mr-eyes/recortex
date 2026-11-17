@@ -9,9 +9,12 @@ names it. No command of the plugin other than `apply` here writes that file, `ap
 no hook, no agent and no other script opens it for writing, and nothing is staged, committed or pushed.
 
 where    [--set PATH --yes | --set no --yes]: the place, or record it. A path inside the project folder goes into the
-         project file (relative, no `..`, a plain file that is not a symlink); a path outside it is kept on this machine
-         only, and the project file holds {"outside": true}, so that a project file can never point at a file outside the
-         project. "no" says there is none and nothing of this part is shown again.
+         project file (relative, no `..`, a plain file that is not a symlink) and its hash is confirmed on this machine;
+         a path outside it is kept on this machine only, and the project file holds {"outside": true}, so that a project
+         file can never point at a file outside the project. The project file is untrusted: a place inside the project is
+         used only when this machine holds the author's confirmation of that very path, and never when it lies inside
+         .git, .github or .claude, is a file that steers a tool (CLAUDE.md, AGENTS.md, GEMINI.md, the project file) or is
+         no manuscript kind of file. "no" says there is none and nothing of this part is shown again.
 status   per part (a topic and a heading): never brought over, in step, or changed since.
 since    --issue N [--section H] --out DIR: what the file last received (when this machine kept it), what the record says
          now, and their difference, for the session to work from.
@@ -49,6 +52,12 @@ import write_rules  # noqa: E402
 FILE_CAP = 5 * 1024 * 1024
 LOCK = "own-paper.lock"
 BINARY = (".docx", ".doc", ".odt", ".pdf", ".rtf", ".pages", ".pptx", ".xlsx")
+# The kinds of file a place may be. A Word file is a place the plugin can read about but never writes (BINARY above).
+PLACE_EXTENSIONS = (".tex", ".md", ".markdown", ".txt", ".rst", ".qmd", ".rmd", ".docx")
+# Folders and files that steer a tool, never a manuscript: git's own files, a workflow, the session's instructions.
+KEPT_AWAY = (".git", ".github", ".claude")
+KEPT_NAMES = ("claude.md", "agents.md", "gemini.md",
+              names.CONFIG_NAME, names.OLD_CONFIG_NAME)
 NOT_EDITED = "recortex does not edit this kind of file"
 WORDS_CAP = 600
 
@@ -75,21 +84,38 @@ def outside_path():
     return os.path.join(storage.config_top(), storage.PRIVATE, names.OWN_PAPER)
 
 
-def read_outside(repo):
-    """The absolute path kept on this machine for `repo`, or None. A file that cannot be read gives None."""
+def read_place(repo):
+    """The entry kept on this machine for `repo` ({"path": absolute path} or {"inside": hash of a relative path}), or {}.
+    Only `where --set --yes` writes it, so it says what the author confirmed here; whatever the project file says is not
+    that. A file that cannot be read gives {}."""
     try:
         private = storage.folder(storage.config_top(), create=False, tighten=False)
         if private is None or not storage.check_path(os.path.join(private, names.OWN_PAPER), "file"):
-            return None
+            return {}
         data = json.loads(storage.read_file(os.path.join(private, names.OWN_PAPER)) or "")
     except (storage.StorageError, OSError, ValueError, RecursionError):
-        return None
+        return {}
     entry = data.get("papers", {}).get(repo.lower()) if isinstance(data, dict) and isinstance(data.get("papers"), dict) else None
-    path = entry.get("path") if isinstance(entry, dict) else None
+    return entry if isinstance(entry, dict) else {}
+
+
+def read_outside(repo):
+    """The absolute path kept on this machine for `repo`, or None."""
+    path = read_place(repo).get("path")
     return path if isinstance(path, str) and os.path.isabs(path) and "\0" not in path and len(path) <= 4000 else None
 
 
-def write_outside(repo, path):
+def inside_hash(relative):
+    return hashlib.sha256(relative.encode("utf-8")).hexdigest()
+
+
+def confirmed_inside(repo, relative):
+    """True when the author confirmed this relative path on this machine."""
+    kept = read_place(repo).get("inside")
+    return isinstance(kept, str) and re.fullmatch(r"[0-9a-f]{64}", kept) is not None and kept == inside_hash(relative)
+
+
+def write_place(repo, entry):
     with field_sheet.approvals_lock(name=LOCK):
         try:
             private = storage.folder(storage.config_top())
@@ -97,8 +123,24 @@ def write_outside(repo, path):
         except (ValueError, RecursionError):
             sys.exit("error: %s cannot be read; move it aside by hand and run again" % outside_path())
         papers = current.get("papers") if isinstance(current.get("papers"), dict) else {}
-        papers[repo.lower()] = {"path": path}
+        papers[repo.lower()] = entry
         storage.write_file(os.path.join(private, names.OWN_PAPER), json.dumps({"form": 1, "papers": papers}, indent=1) + "\n")
+
+
+def refusal(path, config=None):
+    """Why a path (relative with `/`, or absolute) may not be the author's own paper, or "": a folder or file that steers a
+    tool (.git, .github, .claude, the session's instruction files, the project file), or a kind of file that is no manuscript."""
+    parts = [part for part in re.split(r"[\\/]", path) if part]
+    if any(part.lower() in KEPT_AWAY for part in parts):
+        return "a file inside %s is never the author's paper" % ", ".join(KEPT_AWAY)
+    if not parts or parts[-1].lower() in KEPT_NAMES:
+        return "that file steers a tool and is never the author's paper"
+    if config and config.get("_path") and os.path.realpath(path if os.path.isabs(path) else os.path.join(
+            recortex.project_root(), path)) == os.path.realpath(config["_path"]):
+        return "the project file is never the author's paper"
+    if not parts[-1].lower().endswith(PLACE_EXTENSIONS):
+        return "only a manuscript file is a place (%s)" % ", ".join(PLACE_EXTENSIONS)
+    return ""
 
 
 def resolve(config, repo):
@@ -107,6 +149,13 @@ def resolve(config, repo):
     found = recortex.own_manuscript(config)
     state, path = found["state"], ""
     if state == "inside":
+        # the project file is not trusted to choose the file: the author must have confirmed this very path on this machine
+        why = refusal(found["path"], config)
+        if why:
+            return {"state": state, "path": "", "problem": why, "found": found}
+        if not confirmed_inside(repo, found["path"]):
+            return {"state": state, "path": "", "problem": "the author has not confirmed this place on this machine; ask them, "
+                    "then run where --set PATH --yes", "found": found}
         root = os.path.realpath(recortex.project_root())
         full = os.path.join(root, found["path"])
         if os.path.realpath(full) != os.path.normpath(full):
@@ -117,6 +166,9 @@ def resolve(config, repo):
         path = read_outside(repo) or ""
         if not path:
             return {"state": state, "path": "", "problem": "no place is kept on this machine", "found": found}
+        why = refusal(path, config)
+        if why:
+            return {"state": state, "path": "", "problem": why, "found": found}
     if path:
         try:
             info = os.lstat(path)
@@ -177,10 +229,15 @@ def where_command(args):
         relative = os.path.relpath(os.path.realpath(full), root).replace(os.sep, "/")
         if not recortex.own_path_ok(relative):
             sys.exit("error: that path is not usable (relative, at most %d characters, no '..')" % recortex.OWN_PATH_LIMIT)
+        if refusal(relative, config):
+            sys.exit("error: %s is not usable: %s" % (relative, refusal(relative, config)))
+        write_place(repo, {"inside": inside_hash(relative)})   # first: the confirmation on this machine, then the project file
         data["own_manuscript"] = {"path": relative, "brought": keep}
-        say("own paper: %s, inside the project; the path goes into the project file" % relative)
+        say("own paper: %s, inside the project; the path goes into the project file and is confirmed on this machine" % relative)
     else:
-        write_outside(repo, os.path.realpath(full))
+        if refusal(os.path.realpath(full), config):
+            sys.exit("error: %s is not usable: %s" % (given, refusal(os.path.realpath(full), config)))
+        write_place(repo, {"path": os.path.realpath(full)})
         data["own_manuscript"] = {"outside": True, "brought": keep}
         say("own paper: outside the project folder; the place is kept on this machine only")
     setup.write_text(path, json.dumps(data, indent=2) + "\n", False, "the own paper entry", os.path.dirname(path))

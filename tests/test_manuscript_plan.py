@@ -1232,10 +1232,10 @@ class PlanCommandTests(PaperSandbox):
         for key, ident in (("claim-dry", 9140), ("figure-dry", 9400), ("message", 99999)):
             self.assertIn("ignored: the saved comment id %d for %s.md is not a plan memory this record tells on the "
                           "plan issue" % (ident, key), result.stdout)
-        self.assertEqual(3, len([cid for cid, _ in self.posted_plans() if cid > 9400]))  # none skipped on a saved word
+        self.assertEqual(3, len([cid for cid, _ in self.posted_plans() if 9200 <= cid < 9300]))  # none skipped on a saved word
         state = json.load(open(os.path.join(folder, "plan.state.json")))
         self.assertEqual(3, len(set(state["posted"].values())))
-        self.assertTrue(all(ident > 9400 for ident in state["posted"].values()))
+        self.assertTrue(all(9200 <= ident < 9300 for ident in state["posted"].values()))
 
     def test_a_saved_id_that_is_a_told_plan_memory_of_the_plan_issue_counts(self):
         self.ready()
