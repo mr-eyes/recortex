@@ -11164,7 +11164,7 @@ class StatusLineTests(RecordSandbox):
                                                         self.sl.epoch("2026-03-04T12:00:00Z")))  # then the variable
 
     def test_a_folder_without_a_project_file_and_a_missing_state_file_give_their_lines(self):
-        self.assertEqual("recortex \u00b7 starting", self.line())  # a project file, no state file yet: no off state
+        self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.line())  # a project file, no state file, no sign of a start
         self.assertNotIn("off", self.sl.STARTING)
         self.assertNotIn("doctor", self.sl.STARTING)
         other = os.path.join(self.dir, "no-project")
@@ -11174,19 +11174,49 @@ class StatusLineTests(RecordSandbox):
         self.assertEqual("", self.line())
         with open(os.path.join(self.project, ".gh-issues-manager.json"), "w") as handle:
             handle.write("{}")
-        self.assertEqual("recortex \u00b7 starting", self.line())  # the earlier name counts
+        self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.line())  # the earlier name counts
         parent = os.path.join(self.dir, "parent")
         os.makedirs(os.path.join(parent, "child"))
         with open(os.path.join(parent, recortex.CONFIG_NAME), "w") as handle:
             handle.write("{}")
         self.assertEqual("", self.line({"workspace": {"project_dir": os.path.join(parent, "child")}}))  # never a parent
 
+    def started(self, **fields):
+        """The input of a status line at a session's start: the project folder, and what Claude Code shows of the session."""
+        return dict({"workspace": {"project_dir": self.root}}, **fields)
+
+    def test_no_state_file_is_starting_only_when_the_input_shows_that_no_request_was_answered(self):
+        starting = "recortex \u00b7 starting"
+        doctor = "recortex off \u00b7 run hooks.py --doctor"
+        self.assertEqual(starting, self.line(self.started(cost={"total_api_duration_ms": 0})))
+        self.assertEqual(starting, self.line(self.started(cost={"total_api_duration_ms": 0.0, "total_cost_usd": 0})))
+        self.assertEqual(starting, self.line(self.started(context_window={"current_usage": None, "total_input_tokens": 0})))
+        for shown in ({"cost": {"total_api_duration_ms": 2300}}, {"cost": {"total_api_duration_ms": None}},
+                      {"cost": {"total_api_duration_ms": False}}, {"cost": {"total_api_duration_ms": "0"}},
+                      {"cost": {"total_cost_usd": 0}}, {"cost": 0}, {"cost": []},
+                      {"context_window": {"current_usage": {"input_tokens": 8500}}}, {"context_window": {}},
+                      {"context_window": {"total_input_tokens": 0}}, {"context_window": None}, {}):
+            self.assertEqual(doctor, self.line(self.started(**shown)), shown)   # answered, or cannot be told: the old line
+        self.assertEqual(starting, self.line(self.started(cost={"total_api_duration_ms": 2300},
+                                                          context_window={"current_usage": None})))   # either sign is enough
+        self.assertEqual(doctor, self.sl.line("not json", dict(self.environ, CLAUDE_PROJECT_DIR=self.root), 0))   # no input at all
 
     def test_a_state_folder_that_is_not_there_yet_is_the_same_as_no_state_file(self):
         fresh = {"XDG_STATE_HOME": os.path.join(self.dir, "never-seen"), "HOME": self.dir}
-        text = json.dumps({"workspace": {"project_dir": self.root}})
+        text = json.dumps(self.started(cost={"total_api_duration_ms": 0}))
         self.assertEqual("recortex \u00b7 starting", self.sl.line(text, fresh, 0))
+        self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.sl.line(json.dumps(self.started()), fresh, 0))
 
+    def test_a_state_file_that_is_there_is_never_the_starting_word_whatever_the_input_says(self):
+        self.put(state="off", reason="not-trusted", repo="")
+        self.assertEqual("recortex off \u00b7 not trusted", self.line(self.started(cost={"total_api_duration_ms": 0})))
+        with open(self.path, "w") as handle:
+            handle.write("{not json")
+        self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.line(self.started(cost={"total_api_duration_ms": 0})))
+
+    def test_something_else_where_the_state_file_belongs_is_not_the_starting_word(self):
+        os.mkdir(self.path)
+        self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.line(self.started(cost={"total_api_duration_ms": 0})))
 
     def test_a_state_file_that_does_not_pass_its_checks_gives_the_doctor_line_and_none_of_its_text(self):
         fallback = "recortex off \u00b7 run hooks.py --doctor"

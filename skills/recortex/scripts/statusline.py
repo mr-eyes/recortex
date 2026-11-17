@@ -4,9 +4,12 @@
     python3 statusline.py < the JSON that Claude Code gives a status line command
 
 Prints one line, `recortex on · read 2 h ago`, `recortex on · reading`, `recortex off · not trusted` and the like, or
-nothing at all when the folder holds no project file (.recortex.json, or the name from before the rename). Before the hooks
-have written their file for the folder (a folder not seen before) it prints `recortex · starting`: that is no off state,
-and the first hook replaces it. It reads one
+nothing at all when the folder holds no project file (.recortex.json, or the name from before the rename). With no state
+file for the folder it prints `recortex · starting` only when the JSON Claude Code gives shows that no request has been
+answered yet (`cost.total_api_duration_ms` is 0, or `context_window.current_usage` is null, which Claude Code's
+documentation says it is before the first API call); the first hook replaces it. When the JSON does not show that, or
+cannot (a field is absent), a missing file gives the `off` line below, since hooks that never run must not look like a
+start. It reads one
 small file that the plugin's session-start and prompt hooks write (see hooks.py write_status) and nothing else: no
 plugin module, no index, no network, no git. setup.py apply copies it to <config home>/recortex/statusline.py, so that
 the command in settings.json survives plugin updates; the hooks keep that copy current.
@@ -35,7 +38,7 @@ SHORT = {  # the same codes as hooks.STATUS_REASONS, in a few words (a test hold
     "error": "error",
 }
 FALLBACK = "recortex off · run hooks.py --doctor"
-STARTING = "recortex · starting"   # a configured folder whose hooks have not written their file yet
+STARTING = "recortex · starting"   # no state file yet, and no request answered yet in this session
 MISSING = {}   # what read_state returns for no file at all, as against None for a file that fails its checks
 KEYS = ("v", "state", "reason", "repo", "synced_at")
 MAX_BYTES = 2048
@@ -154,6 +157,19 @@ def read_state(path):
     return data
 
 
+def unanswered(payload):
+    """True when the JSON of the status line shows that no request has been answered in the session yet: the total time
+    spent waiting for API responses is 0, or the current usage of the context window is null. A field that is absent, or of
+    another type, shows nothing."""
+    if not isinstance(payload, dict):
+        return False
+    cost, window = payload.get("cost"), payload.get("context_window")
+    spent = cost.get("total_api_duration_ms") if isinstance(cost, dict) else None
+    if type(spent) in (int, float) and spent == 0:
+        return True
+    return isinstance(window, dict) and "current_usage" in window and window["current_usage"] is None
+
+
 def line(stdin_text="", environ=None, now=None):
     """The status line for the JSON text Claude Code gave: "" when the folder holds no project file."""
     environ = os.environ if environ is None else environ
@@ -165,8 +181,10 @@ def line(stdin_text="", environ=None, now=None):
     if not any(os.path.isfile(os.path.join(root, name)) for name in CONFIG_NAMES):
         return ""
     data = read_state(status_file(root, environ))
-    if data is MISSING:
+    if data is MISSING and unanswered(payload):
         return STARTING
+    if data is MISSING:
+        return FALLBACK
     if data is None:
         return FALLBACK
     if data["state"] == "off":
