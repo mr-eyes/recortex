@@ -4571,8 +4571,8 @@ class SetupTests(Sandbox):
         self.assertIn("pass --dry-run to see the changes, or --yes", refused.stderr)
 
     def test_the_trust_a_setup_reports_counts_the_variable_that_trusts_a_repository(self):
-        """Live check of 1.3.0: a wizard said that a repository was not trusted while RECORTEX_TRUSTED_REPOS trusted it. The
-        scripts read the variable as a trusted list does; what they print says so."""
+        """A repository that RECORTEX_TRUSTED_REPOS trusts is never reported as not trusted: the scripts read the variable as
+        a trusted list, and what a setup prints says so, whatever was answered about adding the repository."""
         root = self.project()
         listed = self.setup_script("apply", "--answers", self.answers("single"), "--root", root, "--dry-run",
                                    env={"RECORTEX_TRUSTED_REPOS": REPO, "RECORTEX_TRUSTED_FILE": os.path.join(self.dir, "absent")})
@@ -4582,6 +4582,18 @@ class SetupTests(Sandbox):
         absent = self.setup_script("apply", "--answers", self.answers("single"), "--root", root, "--dry-run",
                                    env={"RECORTEX_TRUSTED_FILE": os.path.join(self.dir, "absent")})
         self.assertIn("would add: %s" % REPO, absent.stdout)   # without it the same setup would add the entry
+        for env, present in (({"RECORTEX_TRUSTED_REPOS": REPO}, True), ({}, False)):     # nothing was answered about adding it
+            declined = self.setup_script("apply", "--answers", self.answers("single", trust=False), "--root", root, "--dry-run",
+                                         env=dict(env, RECORTEX_TRUSTED_FILE=os.path.join(self.dir, "absent")))
+            self.assertEqual(0, declined.returncode, declined.stdout + declined.stderr)
+            self.assertEqual(present, "trusted: %s is already in RECORTEX_TRUSTED_REPOS" % REPO in declined.stdout, env)
+            self.assertEqual(not present, "trusted: not changed; the hooks stay silent until the user adds" in declined.stdout, env)
+        listed_in_file = os.path.join(self.dir, "listed-repos")
+        with open(listed_in_file, "w") as handle:
+            handle.write(REPO + "\n")
+        both = self.setup_script("apply", "--answers", self.answers("single", trust=False), "--root", root, "--dry-run",
+                                 env={"RECORTEX_TRUSTED_FILE": listed_in_file})
+        self.assertIn("trusted: %s is already in %s" % (REPO, listed_in_file), both.stdout)   # a list counts as the variable does
 
     NOT_FOUND = ("not ready: the GitHub CLI gh was not found. Install it from https://cli.github.com, then run "
                  "`gh auth login` in a terminal, and start setup again.\n")

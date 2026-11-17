@@ -1447,13 +1447,11 @@ def apply(answers, root, dry, drafts):
             for label, heading in recortex.section_labels([entry]):
                 print("  | %s | none yet | `%s` |   (%s)" % (heading, label, title))
 
-    if answers["trust"]:
-        trusted = recortex.trusted_target()
-        present = answers["repo"].lower() in recortex.trusted_repos()
-        if present:
-            print("trusted: %s is already in %s" % (answers["repo"], ", ".join(recortex.trusted_sources(answers["repo"]))))
-        elif dry:
-            print("would add: %s to %s   # the user agreed" % (answers["repo"], trusted))
+    if answers["repo"].lower() in recortex.trusted_repos():   # in a list or in RECORTEX_TRUSTED_REPOS, whatever was answered
+        print("trusted: %s is already in %s" % (answers["repo"], ", ".join(recortex.trusted_sources(answers["repo"]))))
+    elif answers["trust"]:
+        if dry:
+            print("would add: %s to %s   # the user agreed" % (answers["repo"], recortex.trusted_target()))
         else:
             print("added: %s to %s" % (answers["repo"], add_trusted(answers["repo"])))
     else:
