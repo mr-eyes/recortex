@@ -84,7 +84,7 @@ A profile may name the plan of its deliverable in a `plan` key of its JSON file;
 | `parts` | the kinds of planned part | message, claim, figure, table, interpretation, limitation, comparison, implication |
 | `evidence` | the parts a finding can back | claim |
 | `display` | the parts that carry the id of their block | figure, table |
-| `write` | the headings the plugin may write for the author (`writing.md` (stage 4)) | Methods, Results, Discussion, Limitations |
+| `write` | the headings the plugin may write for the author ([writing.md](writing.md)) | Methods, Results, Discussion, Limitations |
 | `write_from_record` | the headings among them written from decisions and results directly, with no planned part | Methods |
 
 `recortex.plan_profile` returns the first shipped profile of the project that has the key; a project entry with sections of its own keeps its profile's parts, and `write` is cut to the headings the project has. Only shipped profiles are read: a project file cannot name a part. The `core` profile has the role label `plan`: the plan of the deliverable, whose comments are the planned parts ([issue-model.md](issue-model.md), "The plan of the deliverable").

@@ -42,7 +42,7 @@ All templates are in `templates/`. Fields to fill are written `{{like this}}`; t
 
 **A planned part.** One comment of the kind `plan` on the plan issue ([planning.md](planning.md)). Part, Section and Topic are in the form the profile names; the Id of a figure or a table is the id its block will carry (`### Figure: <id> - <title>`); a statement holds a number only when a finding it links holds it. A part that stands in the paper's text for another needs `because=` to the claim it shows. A revision carries `replaces=<the part>` and says in **Change** whether it narrows, rewords, widens or reverses it; a revision that widens or reverses a claim, and the paper's message, link the decision of the author with `because=`. A planned part lists no Evidence. Use `plan.py check` on a folder of drafts, with `NEW-<file name>` where one draft links another, and `plan.py post` to post them.
 
-**A change of the text.** One comment of the kind `text` on the topic whose body changed, written by `write.py apply` or `versions.py sync` (`writing.md` (stage 4)). **Approved** starts with one of five fixed forms, **Body** holds two SHA-256 values and **Version** a commit id or the reason it was not kept.
+**A change of the text.** One comment of the kind `text` on the topic whose body changed, written by `write.py apply` or `versions.py sync` ([writing.md](writing.md)). **Approved** starts with one of five fixed forms, **Body** holds two SHA-256 values and **Version** a commit id or the reason it was not kept.
 
 **The note at the end of a template.** The HTML comment at the end of the memory templates says which parts are optional. Delete it; the linter rejects a draft that still holds its `{{delete this note}}` field.
 

@@ -244,7 +244,7 @@ The state of a part is computed from the links, never typed (`plan_rules.py`). A
 
 "Backed" means a standing finding is linked. It can still turn out wrong. The author approves the first plan once; after that the session keeps the plan current and marks what it adds "added by the session". It asks before changing the paper's message and before widening, reversing or dropping a claim the author agreed.
 
-A change of the text is a `text` comment: it says which section changed, what and why, how it was approved (one of five fixed forms), what the body was and became (two SHA-256 values), and which version holds it. `writing.md` (stage 4) has the forms.
+A change of the text is a `text` comment: it says which section changed, what and why, how it was approved (one of five fixed forms), what the body was and became (two SHA-256 values), and which version holds it. [writing.md](writing.md) has the forms.
 
 ## Changing the deliverable text
 
@@ -296,7 +296,7 @@ Every pull request names its topic issue in its description ("Topic: #12"), carr
 | A thought or a question that comes up in the middle of a thread's work | An idea or question memory on that thread; a later result may `checks` it. Open work and the owner's decision list stay `active` issues |
 | A word that cannot be understood without this project | A fold in the memory that first uses it; afterwards it is used as written there |
 | A claim the paper will make, a figure it needs, what it will concede | A `plan` comment on the plan issue; the state follows from the links ([The plan of the deliverable](#the-plan-of-the-deliverable)) |
-| The text of a topic body changed | A `text` comment on that topic, written by whoever changed the text (`writing.md` (stage 4)) |
+| The text of a topic body changed | A `text` comment on that topic, written by whoever changed the text ([writing.md](writing.md)) |
 | A version worth a name | The author asks in the chat; a decision on the plan issue names it (`versions.md` (stage 6)) |
 | A plan for the next hours | A new resume comment on the hub and, if work is in flight, a checkpoint comment |
 | A doubt about an earlier number | An `active` issue until checked; then a correction comment, and the body edited if the number was wrong |
