@@ -30,6 +30,11 @@ is shown, or why it is not, with no text of the sheet. In a project with no
 fields entry, the session start carries one fixed line, once per project and
 machine, that offers to set the field.
 
+At session start the brief may also carry one fixed line, once per session, saying how many setup questions an update
+added that this project and this machine have not answered yet (setup_questions.py); it holds a number and fixed words,
+reads only local files and makes no GitHub call. Off with RECORTEX_SETUP_QUESTIONS=0 or "setup_questions": false in the
+settings file of the plugin.
+
 --print shows the four payloads and their sizes, for the user to check.
 --doctor says why a brief is not shown: configuration, trust, whether gh is
 found and signed in, the storage folders with owner and mode, the index and its
@@ -340,17 +345,17 @@ def discovery():
     return DISCOVERY
 
 
-def new_signal(repo, config, room):
+def new_signal(repo, config, room, skip=()):
     """One fixed line naming a deliverable that files now suggest and the setup does not cover, once per kind. The
     line is optional: any failure (a malformed setup, refused storage, an unreadable folder) gives no line, and the
-    brief is shown as usual."""
+    brief is shown as usual. A kind in `skip` is left out: a setup question already asks about it."""
     try:
         import setup
         path = setup.told_path(repo)
         told = setup.read_told(path)
         covered = setup.covered_profiles(config)
         pending = {kind for kind, (profile, _) in setup.KINDS.items()
-                   if kind in SIGNAL_WORDS and kind not in told and profile not in covered}
+                   if kind in SIGNAL_WORDS and kind not in told and profile not in covered and kind not in skip}
         if not pending:
             return ""  # every kind is covered or already mentioned: the project folder is not looked at
         for item in setup.uncovered_signals(os.path.realpath(recortex.project_root()), config):
@@ -365,6 +370,17 @@ def new_signal(repo, config, room):
     except Exception:  # noqa: BLE001 - the line is optional; the brief does not depend on it
         return ""
     return ""
+
+
+def setup_line(repo, config, record, session, room):
+    """(line, skip): the one fixed line about the setup questions an update added, and the kinds of deliverable whose
+    signal line stays quiet because a question asks about them (see setup_questions.py). Never raises: any failure gives no
+    line and no skip, and the brief is shown as usual."""
+    try:
+        import setup_questions
+        return setup_questions.hook_parts(repo, config, record, session, room, state_io=(load_state, save_state))
+    except Exception:  # noqa: BLE001 - the line is optional; the brief does not depend on it
+        return "", set()
 
 
 def field_offer(repo, record, room):
@@ -504,7 +520,9 @@ def produce(event, data, budget, config, repo, hub):
         if event == "session-start":
             text = brief.session_payload(record, fresh)
             remember(repo, session, digest(record.key()), brief=True)
-            signal = new_signal(repo, config, brief.CAPS["session-start"] - len(text))
+            questions, held = setup_line(repo, config, record, session, brief.CAPS["session-start"] - len(text))
+            text += "\n" + questions if questions else ""
+            signal = new_signal(repo, config, brief.CAPS["session-start"] - len(text), held)
             text += "\n" + signal if signal else ""
             offer = field_offer(repo, record, brief.CAPS["session-start"] - len(text))
             return text + ("\n" + offer if offer else "")
@@ -775,6 +793,16 @@ def versions_doctor_lines(repo):
     return lines
 
 
+def setup_doctor_lines(repo, config, record):
+    """For --doctor: one line on the setup questions an update added (setup_questions.doctor_lines): ids and fixed words
+    only. Never a problem."""
+    try:
+        import setup_questions
+        return setup_questions.doctor_lines(repo, config, record)
+    except Exception as error:  # noqa: BLE001 - --doctor says what it could not do
+        return ["setup questions: could not be checked (an unexpected %s)" % type(error).__name__]
+
+
 GH_STATES = {
     "ready": "signed in to github.com as %s",
     "signed-out": "not signed in to github.com; run `gh auth login` in a terminal",
@@ -879,6 +907,8 @@ def doctor():
             print("index: none yet")
     if db is None:
         print(field_line(config, repo))  # after the storage rows, also when there is no index
+        for line in setup_doctor_lines(repo, config, None):
+            print(line)
     if db is not None:
         synced = index.get_meta(db, "synced_at")
         print("index: synced %s (%s)%s; %s" % (synced or "never", index.age_text(synced),
@@ -896,6 +926,8 @@ def doctor():
         for line in plan_doctor_lines(db, config, repo):
             print(line)
         for line in writing_doctor_lines(db, config, repo):
+            print(line)
+        for line in setup_doctor_lines(repo, config, brief.Record(db, config, repo)):
             print(line)
         if synced:
             for event, text in brief.all_payloads(db, config, repo).items():

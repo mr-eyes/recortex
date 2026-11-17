@@ -61,6 +61,13 @@ SUMMARY_LINE = ("recortex: the project's status summary is out of date (%d memor
                 "the planner's due check, the next actions.")
 WRITING_NOT_CHOSEN = ("Writing: the user has not chosen whether recortex writes the paper's text. Ask once with the "
                       "multiple-choice prompt (review, autonomous, off), then run setup.py writing set.")
+# The two lines of the setup questions (setup_questions.py), in the session-start payload only and outside the data frame:
+# fixed words and one checked integer from 1 to 6.
+SETUP_QUESTIONS = ("recortex: %d setup question%s to check, added since this project was set up. At the first pause, "
+                   "not before the user's first task, run setup.py questions and follow \"Setup questions\" in the "
+                   "recortex skill.")
+SETUP_UNREADABLE = ("recortex: the setup answers of this machine cannot be read, so no setup question is asked. Run "
+                    "hooks.py --doctor.")
 WRITING_UNREADABLE = ("recortex: the writing setting of this machine cannot be read, so recortex writes nothing. Run "
                       "hooks.py --doctor.")
 
@@ -196,7 +203,9 @@ class Record:
         if found["state"] == "unreadable":
             return [WRITING_UNREADABLE]
         if found["state"] == "none":
-            return [WRITING_NOT_CHOSEN]
+            import setup_questions
+            # The question joins the setup questions, which ask it at a pause; with those switched off, the brief asks it.
+            return [WRITING_NOT_CHOSEN] if setup_questions.off() else []
         if found["mode"] == "off":
             return []
         said = []
