@@ -10,7 +10,8 @@ only when every row of this table holds, each read live from GitHub at that mome
   not edited      the comment was never edited (its edit history is empty); an edited proposal is void for good
   approved        the pull request is merged into the manuscript branch and `merged_by` is an allowed login
   what we sent    the topic's file at the merge commit has the sha256 of the proposal's Text
-  not moved       the live body has the sha256 of the proposal's Base
+  not moved       the live body has the sha256 of the proposal's Base (a body that already is the proposal's text, or a text
+                  change that records it as written, means the proposal was applied: it is done and nothing more is said)
   still fit       write.py check passes again on that text against the live body, and what it rests on still stands
   this machine    the mode here is review or autonomous and the repository is trusted
 
@@ -239,8 +240,17 @@ def newest_proposals(db, allowed):
     return [(row["comment"], row["issue"], (row["author"] or "").lower()) for row in newest.values()]
 
 
+def applied(db, state, allowed, issue, base, text):
+    """True when a told text change of the topic records this proposal as written: its body went from the proposal's Base to
+    the proposal's Text (what write.apply_command records). The body may have moved on since."""
+    items = state["found"]["items"] if state else index.memories(db, allowed)["items"]
+    return any(row["issue"] == issue and row["before"] == base and row["after"] == text
+               for row in write_rules.text_memories(db, items))
+
+
 def evaluate(config, repo, hub, plan, allowed, db, state, cid, issue, author):
-    """(status key, detail) for one proposal; status "ready" carries the folder facts in the detail."""
+    """(status key, detail) for one proposal; status "ready" carries the folder facts in the detail, and "done" says that the
+    proposal was applied already (approvals says nothing of it and closes nothing)."""
     if author not in allowed:
         return "not-ours", cid
     live = live_comment(repo, cid)
@@ -275,6 +285,8 @@ def evaluate(config, repo, hub, plan, allowed, db, state, cid, issue, author):
     if merged is None or record_format.body_sha(merged) != text.group(1):
         return "other", number
     current = recortex.read_issue_body(repo, issue)
+    if record_format.body_sha(current) == text.group(1) or applied(db, state, allowed, issue, base.group(1), text.group(1)):
+        return "done", number   # the text is in the body, or a told text change says it was written: nothing is left to judge
     if record_format.body_sha(current) != base.group(1):
         return "moved", number
     if topic_file_differs(config, repo, hub, allowed, issue, text.group(1)):
@@ -300,6 +312,7 @@ def approvals_command(args):
             results.append((issue,) + evaluate(config, repo, hub, plan, allowed, db, state, cid, issue, author))
     finally:
         db.close()
+    results = [found for found in results if found[1] != "done"]
     refused = 0
     written = 0
     for issue, status, detail in results:

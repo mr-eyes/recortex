@@ -223,6 +223,72 @@ class WriteTrustTests(VersionBox):
                 self.assertIn("recortex: the text of this topic changed after this change was proposed", said)
                 self.assertEqual("closed", self.repo()["issues"][str(self.pull)]["state"])
 
+    def quiet(self, out, pull):
+        """What a proposal that was applied leaves in the output of approvals: nothing about it."""
+        self.assertNotIn("changed after the proposal was made", out)
+        self.assertNotIn("would close", out)
+        self.assertNotIn("pull request #%d" % pull, out)
+        self.assertIn("approvals: no proposal waits", out)
+
+    def test_a_merged_proposal_that_was_applied_is_done_and_approvals_says_nothing_and_closes_nothing(self):
+        self.proposed()
+        self.merge()
+        self.assertEqual(0, self.approvals("--apply").returncode)
+        self.assertIn("The pooled fit", self.body(5))
+        self.ready()
+        for extra in ((), ("--apply", "--dry-run"), ("--apply",)):
+            done = self.approvals(*extra)
+            self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+            self.quiet(done.stdout, self.pull)
+        self.assertEqual(1, len(self.text_memories()))
+        said = " ".join(c["body"] for c in self.repo()["comments"].values() if c["issue"] == self.pull)
+        self.assertEqual("", said)                                                   # nothing was posted on the pull request
+        self.assertEqual([], [c for c in self.repo()["comments"].values() if c["issue"] == 5 and "type=checkpoint" in c["body"].split("\n")[0]])
+
+    def test_a_proposal_whose_text_is_already_the_body_is_done_with_no_text_change_at_all(self):
+        self.proposed()
+        self.merge()
+        data = self.repo()
+        git = data["git"]
+        name = data["issues"][str(self.pull)]["head"]["ref"]
+        data["issues"]["5"]["body"] = git["trees"][git["commits"][git["refs"]["heads/" + name]]["tree"]]["topics/5.md"]
+        data["issues"]["5"]["updated_at"] = "2026-12-09T10:00:00Z"
+        self.save(data)
+        self.ready()
+        for extra in ((), ("--apply", "--dry-run"), ("--apply",)):
+            self.quiet(self.approvals(*extra).stdout, self.pull)
+        self.assertEqual([], self.text_memories())    # nothing was written, and nothing was needed
+
+    def test_a_proposal_that_a_text_change_records_as_applied_stays_done_after_the_body_moves_on(self):
+        self.proposed()
+        self.merge()
+        self.assertEqual(0, self.approvals("--apply").returncode)
+        data = self.repo()
+        data["issues"]["5"]["body"] = data["issues"]["5"]["body"] + "\nAn edit made by hand after the write.\n"
+        data["issues"]["5"]["updated_at"] = "2026-12-09T10:00:00Z"
+        self.save(data)
+        self.ready()
+        for extra in ((), ("--apply", "--dry-run"), ("--apply",)):
+            self.quiet(self.approvals(*extra).stdout, self.pull)
+        self.assertEqual(1, len(self.text_memories()))
+
+    def test_a_text_change_that_does_not_go_from_the_base_to_the_text_does_not_make_it_done(self):
+        """Only a text change whose body went from the proposal's Base to its Text records the proposal as written."""
+        self.proposed()
+        self.merge()
+        fields = dict(record_format.fields(self.repo()["comments"][str(self.proposal)]["body"]))
+        text = re.search(r"[0-9a-f]{64}", fields["Text"]).group(0)
+        other = manuscript_record.text_memory("2026-12-01T10:00-05:00", "Results", "another text change", "It changed.", "It was due.",
+                                              "Written without asking, under the autonomous mode.", before="c" * 64, after=text)
+        self.add_comment(9610, 5, other, "2026-12-01T15:00:00Z")
+        data = self.repo()
+        data["issues"]["5"]["body"] = data["issues"]["5"]["body"] + "\nAn edit the proposal knows nothing about.\n"
+        data["issues"]["5"]["updated_at"] = "2026-12-09T10:00:00Z"
+        self.save(data)
+        self.ready()
+        out = self.approvals("--apply").stdout
+        self.assertIn("changed after the proposal was made; the proposal is not applied", out)   # the real moved case stays
+
     def test_a_text_that_no_longer_passes_the_checks_writes_nothing(self):
         self.proposed()
         self.merge()
