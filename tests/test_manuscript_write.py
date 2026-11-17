@@ -314,7 +314,7 @@ class WriteTests(WritingBox):
         before, after = record_format.sha_pair(fields["Body"])
         self.assertEqual(record_format.body_sha(self.base(folder)), before)
         self.assertEqual(record_format.body_sha(self.body(5)), after)
-        self.assertEqual("Not kept: versions are not kept here", fields["Version"])
+        self.assertRegex(fields["Version"], r"^`[0-9a-f]{40}`$")   # the version is kept as a commit (references/versions.md)
         marker = record_format.parse_marker(memory.split("\n")[0])
         self.assertEqual("9302,9140", marker["because"])
         kept = os.path.join(self.data, "private", self.slug(), "texts", "5", after + ".md")

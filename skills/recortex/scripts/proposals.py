@@ -111,18 +111,28 @@ def pull_of(repo, number):
 
 # ---------------------------------------------------------------- propose
 
-def topic_file_differs(config, repo, hub, allowed, issue):
+def topic_file_differs(config, repo, hub, allowed, issue, merged=None):
     """True when the file of a topic on the branch was changed on its own (or both changed): until the author answers, the
-    proposals for that topic wait (references/versions.md)."""
+    proposals for that topic wait (references/versions.md). `merged` is the SHA-256 of the text a merged proposal put in the
+    file: a file that holds exactly that text is the proposal's own merge, not a change somebody made on the side."""
     db = write.open_index(repo)
     try:
         try:
             head, _, found = versions.compare(repo, db, config, hub, allowed)
         except versions.GitError:
             return False
+        if found.get(issue) not in ("file changed", "both changed"):
+            return False
+        if merged:
+            try:
+                text = versions.file_at(repo, head, "topics/%d.md" % issue)
+            except versions.GitError:
+                return False
+            if text is not None and record_format.body_sha(text) == merged:
+                return False
+        return True
     finally:
         db.close()
-    return found.get(issue) in ("file changed", "both changed")
 
 
 def proposal_text(heading, changed, why, pull, base, text, moment):
@@ -256,7 +266,7 @@ def evaluate(config, repo, hub, plan, allowed, db, state, cid, issue, author):
     current = recortex.read_issue_body(repo, issue)
     if record_format.body_sha(current) != base.group(1):
         return "moved", number
-    if topic_file_differs(config, repo, hub, allowed, issue):
+    if topic_file_differs(config, repo, hub, allowed, issue, text.group(1)):
         return "waits", number
     return "ready", {"pull": number, "login": found["merged_by"], "text": merged, "base": current, "base_sha": base.group(1),
                      "comment": cid, "issue": issue}
