@@ -1678,7 +1678,9 @@ def memories(db, allowed):
     account and is not reconstructed, its target is another memory that is not later, and record_format.link_allowed
     holds. State, from the
     counted links that point at a memory, the first that applies: replaced, set aside, answered (a question) or
-    tried (an idea) by a checks link; else open (a question), untried (an idea) or stands.
+    tried (an idea) by a checks link, taken up (an idea that a decision or a result points at with because); else
+    open (a question), untried (an idea) or stands. A taken up idea is not untried: a later memory was made because
+    of it, but no result has put the idea itself to a test.
     """
     kinds = record_format.MEMORY_TYPES
     counts = counts_for(allowed)
@@ -1713,6 +1715,8 @@ def memories(db, allowed):
     for item in items.values():
         for key, target in item["links"]:
             pointing.setdefault(target, set()).add(key)
+            if key == "because" and item["kind"] in ("decision", "result"):
+                pointing[target].add("taken up")  # a decision or a result made because of it
     for cid, item in items.items():
         keys = pointing.get(cid, set())
         if "replaces" in keys:
@@ -1721,6 +1725,8 @@ def memories(db, allowed):
             item["state"] = "set aside"
         elif "checks" in keys and item["kind"] in ("question", "idea"):
             item["state"] = "answered" if item["kind"] == "question" else "tried"
+        elif "taken up" in keys and item["kind"] == "idea":
+            item["state"] = "taken up"
         else:
             item["state"] = {"question": "open", "idea": "untried"}.get(item["kind"], "stands")
     return {"everyone": not allowed, "items": items, "hidden": hidden, "edited": len(edited),

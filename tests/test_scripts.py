@@ -6649,6 +6649,16 @@ class MindIndexTests(MindSandbox):
         self.ready()
         whole = self.mind_rows()
         self.assertEqual(5, len([row for row in whole["links"]]))  # checks, because, instead, because, replaces
+    def states(self):
+        """{comment id: state} of every told memory, as index.memories decides, read in this process."""
+        self.in_process()
+        import index as index_module
+        db = index_module.connect(REPO, create=False)
+        try:
+            return {cid: m["state"] for cid, m in index_module.memories(db, {"octocat"})["items"].items()}
+        finally:
+            db.close()
+
         self.assertIn((9105, "because", 9104), whole["links"])
         self.assertIn((9105, 0, "plain", "rewrite the reader so that it reads one character at a time, and stop "
                                          "patching the line splitter"), whole["event_fields"])
@@ -6951,6 +6961,36 @@ class MindIndexTests(MindSandbox):
         self.assertEqual(before, after)
         self.assertNotIn("HOSTILE", after)
         self.assertNotIn("HOSTILE", self.hook("session-start").stdout + self.hook("subagent-start").stdout)
+    def test_an_idea_that_a_decision_or_a_result_took_up_is_taken_up_and_not_untried(self):
+        self.add_chain()
+        self.put(9120, 6, memory_draft("idea", "2026-03-14T10:00-08:00"))  # taken up by a decision
+        self.put(9121, 6, memory_draft("idea", "2026-03-14T10:01-08:00"))  # taken up by a result
+        self.put(9122, 6, memory_draft("idea", "2026-03-14T10:02-08:00"))  # a failure points at it
+        self.put(9123, 6, memory_draft("idea", "2026-03-14T10:03-08:00"))  # a question points at it
+        self.put(9124, 6, memory_draft("idea", "2026-03-14T10:04-08:00"))  # tried and taken up
+        self.put(9125, 6, memory_draft("idea", "2026-03-14T10:05-08:00"))  # taken up by a decision of another account
+        self.put(9130, 6, memory_draft("decision", "2026-03-15T10:00-08:00", "because=9120"))
+        self.put(9131, 6, memory_draft("result", "2026-03-15T10:01-08:00", "because=9121"))
+        self.put(9132, 6, memory_draft("failure", "2026-03-15T10:02-08:00", "because=9122"))
+        self.put(9133, 6, memory_draft("question", "2026-03-15T10:03-08:00", "because=9123"))
+        self.put(9134, 6, memory_draft("decision", "2026-03-15T10:04-08:00", "because=9124"))
+        self.put(9135, 6, memory_draft("result", "2026-03-15T10:05-08:00", "checks=9124"))
+        self.put(9136, 6, memory_draft("decision", "2026-03-15T10:06-08:00", "because=9125"), user="ghost")
+        self.ready()
+        states = self.states()
+        self.assertEqual({9120: "taken up", 9121: "taken up", 9122: "untried", 9123: "untried", 9124: "tried",
+                          9125: "untried"}, {cid: states[cid] for cid in range(9120, 9126)})
+        own = self.query("recall", "--issue", "6")
+        self.assertEqual("taken up", {m["id"]: m["state"] for m in own["memories"]}[9120])
+        other = self.query("recall", "--issue", "5")
+        self.assertEqual([9122, 9123, 9125, 9133], sorted(m["id"] for m in other["others"] if m["id"] >= 9120))
+        self.assertIn("9120  2026-03-14  idea      taken up   ", self.recall(6).stdout)
+        listed = self.recall(5).stdout.split("Open questions and untried ideas in other threads:")[1].split("Words")[0]
+        self.assertNotRegex(listed, r"9120|9121")
+        self.put(9140, 6, memory_draft("decision", "2026-03-16T10:00-08:00", "instead=9121"))
+        self.ready()
+        self.assertEqual("set aside", self.states()[9121])  # set aside comes before taken up
+
 
     # ------------------------------------------------------------ timeline, compile, new kinds
 

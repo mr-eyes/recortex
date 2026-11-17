@@ -125,7 +125,7 @@ The value is one to four comment ids separated by commas: the number after `#iss
 
 | Key | Ask | Read as | Effect on the earlier memory |
 |---|---|---|---|
-| `because` | Did this happen as a consequence of that? | "That, so this." | none |
+| `because` | Did this happen as a consequence of that? | "That, so this." | none; an idea that a decision or a result points at with `because` is taken up |
 | `replaces` | Did that once stand, and does this now stand in its place? | "Later that changed: this." | replaced |
 | `instead` | Was that an attempt or an idea that never held, and is this what we did in its place? | "That was set aside. Instead, this." | set aside |
 | `checks` | Does this put that question, idea or decision to the test? | "The answer came later" (question), "We tried it" (idea), "We checked it" (decision) | a question answered, an idea tried |
@@ -139,6 +139,8 @@ Who may link to what (`LINK_RULES` in `scripts/record_format.py`, used by the li
 | `instead` | decision, idea, result | idea, decision |
 | `checks` | result, failure | question, idea, decision |
 | `checks` | decision | question |
+
+An idea has one of four states from the links that point at it, the first that applies: set aside (`instead`), tried (`checks`, a result or a failure put it to a test), taken up (a decision or a result made `because` of it, and no result has tested the idea itself), else not tested yet. `index.py query recall` prints `taken up` in its state column and leaves such an idea out of its list of untried ideas in other threads. The state is worked out when the index is read: an older version of the plugin on the same index calls the same idea untried.
 
 A result never replaces a decision: it `checks` it, and a new decision replaces it. A checkpoint carries no link and is never a target; triage and record comments carry none; a reconstructed memory carries none in this version. A key appears once, and an id stands under one key. The marker accepts only `type`, `at`, `recorded`, `source`, `eventkey` (32 lowercase hexadecimal characters, written by the observer's publisher) and the four link keys, so a misspelled key is an error. Add a link only when its sentence read aloud is true; link to the nearest cause, not to its ancestors. Most memories have one link, and none is better than a guess: a posted link cannot be edited away (a correction can replace the memory that carried a wrong one).
 
