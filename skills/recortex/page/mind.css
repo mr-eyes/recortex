@@ -73,13 +73,8 @@ a.said:hover,a.inl:hover{color:var(--thread)}
 .latest{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
 .latest .said{font-size:16.5px}
 
-.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:26px}
-.tab{padding:6px 15px;border-radius:999px;border:1px solid var(--rule);text-decoration:none;background:var(--sheet)}
-.tab.on{background:var(--thread);border-color:var(--thread);color:var(--sheet)}
 .thread>h3{font-size:26px;margin-top:0}
 .thread>h3 .chip{margin-left:6px}
-.nowsay{background:var(--sheet);border-radius:14px;padding:14px 18px;margin-bottom:30px}
-.nowsay p{font:17px/1.5 var(--serif);margin:0}
 .chain{list-style:none;margin:0;padding:0;position:relative}
 .chain::before{content:"";position:absolute;left:9px;top:10px;bottom:10px;width:2px;background:var(--brand);opacity:.45;border-radius:2px}
 .station{position:relative;padding:0 0 0 38px}
@@ -158,7 +153,8 @@ a.said:hover,a.inl:hover{color:var(--thread)}
 
 .panel{grid-column:1/-1;padding:40px 56px;border-top:1px solid var(--rule)}
 .js .panel{position:fixed;top:0;right:0;bottom:0;width:min(470px,100vw);background:var(--sheet);border:0;border-left:1px solid var(--rule);
-padding:22px 28px 60px;overflow-y:auto;transform:translateX(102%);transition:transform .22s ease;z-index:5;box-shadow:-18px 0 40px rgba(48,41,39,.14)}
+padding:22px 28px 60px;overflow-y:auto;transform:translateX(102%);z-index:5;box-shadow:-18px 0 40px rgba(48,41,39,.14)}
+.js.ready .panel{transition:transform .22s ease}
 .js .panel.on{transform:none}
 .js .noscript-h{display:none}
 .close{float:right}
@@ -189,11 +185,14 @@ border-radius:18px;padding:18px 22px 14px;z-index:9;box-shadow:0 14px 40px rgba(
 .tour button.primary{background:var(--fog);color:var(--ink);border-color:var(--fog)}
 
 @media (max-width:860px){body{display:block}
-.side{position:static;height:auto;padding:18px 16px;border-right:0;border-bottom:1px solid var(--rule)}
-.logo{width:40px;height:40px;margin-bottom:8px}
-.mindsub{margin-bottom:12px}.side ul{display:flex;flex-wrap:wrap;gap:4px}.side li a{margin:0;padding:6px 10px}
-.sidefoot{margin-top:12px;flex-direction:row;flex-wrap:wrap}.sidefoot p{display:none}
-main{padding:26px 16px 120px}.panel{padding:26px 16px}
+.side{position:static;height:auto;padding:10px 16px;border-right:0;border-bottom:1px solid var(--rule);display:grid;grid-template-columns:40px minmax(0,1fr) auto;align-items:center;gap:0 10px}
+.logo{width:34px;height:34px;margin:0}
+.mindname{font-size:22px}.mindsub{display:none}
+.foldbtn.waysbtn{display:block;width:auto;padding:4px 12px;font-size:14px}
+.side .foldbody{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}.side li a{margin:0;padding:6px 10px}
+.sidefoot{grid-column:1/-1;margin-top:8px;flex-direction:row;flex-wrap:wrap}.sidefoot p{display:none}
+.side.shut .foldbody,.side.shut .sidefoot{display:none}
+main{padding:18px 16px 120px}.panel{padding:26px 16px}
 h2{font-size:28px}.focus{font-size:21px;padding-left:16px}
 .two,.latest,.notes{grid-template-columns:1fr}.lesson{grid-template-columns:1fr}.arrow{display:none}.did{margin-top:16px}
 .station.deadend{margin-left:20px}.station.deadend::after{display:none}}
@@ -240,8 +239,8 @@ button.term{font:inherit;color:inherit;background:none;border:0;border-radius:3p
 table{border-collapse:collapse;font-size:14.5px;min-width:60%}
 th,td{text-align:left;padding:6px 14px 6px 0;border-bottom:1px solid var(--rule)}
 th{color:var(--quiet);font-weight:600;font-size:13px}
-td+td,th+th{text-align:right;font-variant-numeric:tabular-nums}
-tbody tr:last-child td{font-weight:600;border-bottom:0}
+td,th{vertical-align:top}
+.al{text-align:left}.ac{text-align:center}.ar{text-align:right;font-variant-numeric:tabular-nums}
 code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono","DejaVu Sans Mono",monospace;font-size:.88em}
 .refs{margin:4px 0 6px}
 .srcs{list-style:none;padding:0;margin:0}
@@ -255,3 +254,73 @@ code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono","DejaVu
 .why .lab{margin-top:8px}
 .said p,.hold p,.focus p{margin:0 0 6px}
 .focus p,.hold p{font:inherit}
+
+button.chip{padding:1px 9px;background:transparent;cursor:pointer;line-height:1.45}
+button.chip.s-stands,button.chip.s-tried,button.chip.s-answered,button.chip.s-led,button.chip.s-taken{border-color:transparent;background:var(--wash)}
+.chip.s-taken{border-color:transparent;background:var(--wash);color:var(--ink)}
+button.kw{background:none;border:0;border-radius:3px;padding:0;font:inherit;font-size:13px;color:var(--k);font-weight:600;cursor:help}
+button.kw:hover,button.chip:hover{text-decoration:underline}
+.meta .in{color:var(--quiet)}
+button.ask,button.howbtn{font-size:13px;padding:2px 12px}
+.howbtn{background:transparent}
+.foldbtn{display:flex;gap:10px;align-items:baseline;width:100%;text-align:left;border-radius:10px;font-size:14.5px}
+.foldbtn::before{content:"\25BE";color:var(--quiet);flex:none}
+.fold.shut>.foldbtn::before{content:"\25B8"}
+.fold.shut>.foldbody{display:none}
+.foldbtn.waysbtn::before{content:none}
+@media (min-width:861px){.foldbtn.waysbtn{display:none}}
+
+.outlines{margin-bottom:26px}
+.outl{margin:0 0 18px}
+.outline{list-style:none;margin:0;padding:0}
+.outline li{margin:6px 0;line-height:1.45}
+.outline .outline{margin:4px 0 4px 20px;font-size:14px}
+.outline a{text-decoration-color:var(--rule);text-underline-offset:3px}
+.deliv{font-size:24px;margin-top:44px;padding-top:18px;border-top:1px solid var(--rule)}
+.sh{font:600 17px/1.3 var(--serif);margin:26px 0 8px}
+.feeds{margin:-2px 0 14px}
+.standing .latest{margin-bottom:12px}
+.jump{font-size:14px}
+.chain .group{position:relative;list-style:none;margin:6px 0 10px 28px;padding:8px 12px;background:var(--sheet);border-radius:12px}
+.chain .group .chain{margin:6px 0 0}
+.chain .group .chain::before{display:none}
+.chain .group .station{padding-left:22px}
+.chain .group .station::before{left:0}
+.chain .group .conn{padding-left:22px}
+.foldbtn .gt{font:600 15.5px/1.4 var(--serif)}
+.foldbtn .gm{color:var(--quiet);font-size:13px;margin-left:auto;text-align:right}
+.chain .pause{list-style:none;margin:14px 0 14px 38px;padding:10px 14px;border:1px dashed var(--rule);border-radius:10px;color:var(--quiet)}
+.pausehead{font:600 15px var(--serif);margin:0 0 4px;color:var(--ink)}
+.pausefocus{font:15.5px/1.45 var(--serif);margin:0 0 6px}
+
+.contents{list-style:none;padding:0;margin:0 0 30px;columns:2 220px;column-gap:30px;font-size:14.5px}
+.contents li{break-inside:avoid;margin-bottom:6px}
+.contents ul{list-style:none;padding:0 0 0 14px;margin:2px 0 0;color:var(--quiet)}
+.sec{margin:0 0 30px}
+.sec>h3{font-size:26px;margin:46px 0 14px;padding-top:14px;border-top:1px solid var(--rule)}
+.part{margin:0 0 34px}
+.status{font-size:13.5px;line-height:1.55;color:var(--quiet);border-left:3px solid var(--rule);padding:2px 0 2px 12px;margin:0 0 14px;max-width:70ch}
+.status a{color:var(--thread)}
+.parttext{font:17.5px/1.62 var(--serif);max-width:68ch}
+.parttext p{margin:0 0 14px}
+.parttext h4.sub,.parttext h5.sub,.parttext h6.sub{font:600 18px/1.35 var(--serif);margin:22px 0 8px}
+.parttext h5.sub{font-size:16.5px}.parttext h6.sub{font-size:15.5px;font-style:italic}
+.parttext .plainlist,.f .plainlist{margin:0 0 14px}
+.plainlist li{margin-bottom:4px}.plainlist .plainlist{margin:4px 0 4px}
+pre{font:13.5px/1.5 ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono","DejaVu Sans Mono",monospace;background:var(--sheet);border:1px solid var(--rule);border-radius:10px;padding:10px 14px;overflow-x:auto;margin:0 0 14px;white-space:pre}
+pre code{font-size:inherit}
+.tex{background:var(--wash);color:var(--ink)}
+code.tex{padding:0 4px;border-radius:4px}
+math{font-family:"STIX Two Math","Cambria Math","Latin Modern Math","Noto Sans Math","DejaVu Math TeX Gyre","Noto Serif",serif;font-size:1.08em}
+.formula{overflow-x:auto;margin:6px 0 14px}
+.blockfig{background:var(--sheet);border-radius:12px;padding:12px 16px;margin:6px 0 16px}
+.blockfig .tbox{margin:6px 0}
+.partlinks{font-size:13.5px;margin:0 0 6px}
+.partlinks a{color:var(--thread);margin-right:14px}
+.f p{margin:0 0 10px}
+.untoldline{margin-top:34px}
+.restson{list-style:none;padding:0;margin:0 0 6px;border-top:0}
+.setsec>h3{font-size:22px;margin:34px 0 12px}
+.settled .sh{margin:0 0 8px}
+.struck{margin:0 0 6px}
+.tree{display:block}

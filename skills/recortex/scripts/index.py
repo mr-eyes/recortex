@@ -1982,7 +1982,8 @@ def main(argv=None):
                   "you allow")
             return 1
         import mind_model  # noqa: E402
-        model = mind_model.build(db, repo, allowed, datetime.date.today())
+        model = mind_model.build(db, repo, allowed, datetime.date.today(),
+                                 recortex.shipped_profiles(recortex.load_config().get("profiles")))
         if args.json:
             print(json.dumps(model, indent=1))
             return 0

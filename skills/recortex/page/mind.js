@@ -4,7 +4,7 @@
   // cloneNode, and new nodes get their words through textContent. An id read from the page is checked before it
   // goes into a selector or a hash.
   var MEMORY = /^[0-9]+$/, WORD = /^w[0-9]+$/, ISSUE = /^issue-[0-9]+$/, THREAD = /^thread-[0-9]+$/,
-    PLACE = /^#[A-Za-z][A-Za-z0-9-]*$/;
+    PLACE = /^#[A-Za-z][A-Za-z0-9-]*$/, ID = /^[A-Za-z][A-Za-z0-9-]{0,80}$/, KEY = /^[a-z][a-z0-9-]{0,40}$/;
   var root = document.documentElement;
   root.classList.add('js');
   function $(s, el) { return (el || document).querySelector(s); }
@@ -22,8 +22,20 @@
   }
   function showThread(id) {
     threads.forEach(function (t) { t.classList.toggle('on', t.id === id); });
-    $$('.tab').forEach(function (a) { a.classList.toggle('on', a.getAttribute('href') === '#' + id); });
   }
+  // a fold: a branch of the tree, a task group of a story, the ways in on a phone. The page is built open; only this
+  // script shuts what starts shut, so without it everything is open.
+  function setShut(host, shut) {
+    host.classList.toggle('shut', shut);
+    var button = $('[data-fold]', host);
+    if (button) { button.setAttribute('aria-expanded', shut ? 'false' : 'true'); }
+  }
+  function unfold(el) {
+    for (var n = el; n && n.classList; n = n.parentElement) {
+      if (n.classList.contains('fold') && n.classList.contains('shut')) { setShut(n, false); }
+    }
+  }
+  function narrow() { return !!(window.matchMedia && window.matchMedia('(max-width: 860px)').matches); }
   function mark(id) {
     $$('.cur').forEach(function (el) { el.classList.remove('cur'); });
     $$('.hot').forEach(function (el) { el.classList.remove('hot'); });
@@ -61,11 +73,20 @@
       return;
     }
     closeMem();
-    if (THREAD.test(h) && document.getElementById(h)) { show('threads'); showThread(h); }
-    else if (views.some(function (v) { return v.id === h; })) { show(h); }
-    else { show('now'); }
-    window.scrollTo(0, 0);
-    setTimeout(function () { window.scrollTo(0, 0); }, 0);
+    // a hash that names anything inside a view shows that view, and inside a thread that thread's article
+    var el = ID.test(h) ? document.getElementById(h) : null;
+    var view = el && el.closest ? el.closest('.view') : null;
+    if (view) {
+      show(view.id);
+      var thread = el.closest('.thread');
+      if (thread) { showThread(thread.id); }
+      unfold(el);
+    } else { show('now'); }
+    function settle() { if (el && view && el !== view) { el.scrollIntoView(); } else { window.scrollTo(0, 0); } }
+    settle();
+    setTimeout(settle, 0);
+    var side = $('.side');
+    if (narrow() && side) { setShut(side, true); }
   }
   // a project word: point at it for one line, choose it for the whole explanation in a box. The text is a copy of
   // its hidden entry; there is no page of words.
@@ -91,6 +112,12 @@
     tip.style.top = top + 'px';
   }
   function explain(term) { openBox(entryOf(term), 'A word from this project'); }
+  // a state, a kind or a mark: one fixed explanation, kept hidden in the page
+  function explainKey(key) {
+    if (KEY.test(key || '')) {
+      openBox(document.getElementById('x-' + key), key === 'how' ? 'About this page' : 'What this means');
+    }
+  }
   function openBox(entry, kind) {
     if (!entry) { return; }
     $('#wordkind').textContent = kind;
@@ -122,12 +149,29 @@
   });
 
   if (threads.length) { showThread(threads[0].id); }
+  $$('.fold.closed').forEach(function (host) { setShut(host, true); });
   window.addEventListener('hashchange', route);
   route();
+  // the panel slides only after the first frame, so that it does not slide off the page while it loads
+  window.requestAnimationFrame(function () { root.classList.add('ready'); });
 
   document.addEventListener('click', function (event) {
     var term = event.target.closest && event.target.closest('.term');
     if (term) { event.preventDefault(); explain(term); return; }
+    var why = event.target.closest && event.target.closest('[data-explain]');
+    if (why) { event.preventDefault(); explainKey(why.getAttribute('data-explain')); return; }
+    var fold = event.target.closest && event.target.closest('[data-fold]');
+    if (fold) {
+      event.preventDefault();
+      var key = fold.getAttribute('data-fold') || '';
+      if (key === 'open-all' || key === 'close-all') {
+        $$('.tree .fold').forEach(function (branch) { setShut(branch, key === 'close-all'); });
+      } else {
+        var host = fold.closest('.fold');
+        if (host) { setShut(host, !host.classList.contains('shut')); }
+      }
+      return;
+    }
     var cite = event.target.closest && event.target.closest('[data-issue]');
     if (cite) {
       event.preventDefault();
@@ -167,17 +211,19 @@
     return { el: m, id: m.id.slice(2), text: m.textContent.toLowerCase(), kind: m.getAttribute('data-kind'),
              group: m.getAttribute('data-group') };
   }).reverse();
-  var HEAD = [['stands', 'What stands'], ['open', 'Still open'], ['wrong', 'What went wrong'],
-              ['changed', 'Replaced or set aside']];
+  var HEAD = [['stands', 'What stands'], ['open', 'Still open'], ['done', 'Answered, tried or taken up'],
+              ['wrong', 'What went wrong'], ['changed', 'Replaced or set aside'], ['pause', 'Where we paused']];
   var SKIP = ' what did we the a an of in on to is are was were about do does have has had how why when where which who it that this and or for with our us any there ';
   function line(tag, cls, text) { var el = document.createElement(tag); el.className = cls; el.textContent = text; return el; }
   function answerNode(c) {
     var box = document.createElement('div');
     box.className = 'answer k-' + c.kind;
     box.appendChild($('.meta', c.el).cloneNode(true));
-    var a = line('a', 'said', $('.ans', c.el).textContent);
+    var own = $('.big', c.el).textContent, passage = $('.ans', c.el).textContent;
+    var a = line('a', 'said', own);
     a.setAttribute('href', '#m-' + c.id); a.setAttribute('data-m', c.id);
     box.appendChild(a);
+    if (passage && passage !== own) { box.appendChild(line('p', 'quiet', passage)); }
     return box;
   }
   function render(list, lead, grouped) {

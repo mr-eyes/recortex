@@ -6673,7 +6673,7 @@ class MindSandbox(RecordSandbox):
         """{comment id: state} of every told memory, as index.memories decides, read in this process."""
         self.in_process()
         import index as index_module
-        db = index_module.connect(REPO, create=False)
+        db = index_module.connect(self.config["repo"], create=False)
         try:
             return {cid: m["state"] for cid, m in index_module.memories(db, {"octocat"})["items"].items()}
         finally:
@@ -7859,21 +7859,21 @@ class MindModelTests(MindSandbox):
         model = self.chain_model()
         told = self.told(model)
         threads = {t["n"]: t for t in model["threads"]}
-        self.assertEqual([6, 5], [t["n"] for t in model["threads"]])  # in the order of their first memory
-        self.assertEqual(("Read speed against the standard library", "body", "Settled for now", False),
+        self.assertEqual([5, 6], [t["n"] for t in model["threads"]])  # in the order of the hub's table
+        self.assertEqual(("Read speed against the standard library", "body", "Nothing open", False),
                          tuple(threads[6][k] for k in ("name", "name_from", "status", "set_aside")))
-        self.assertEqual(("Reader: quoted fields and line endings", "body", "1 open thought", False),
+        self.assertEqual(("Reader: quoted fields and line endings", "body", "1 open point", False),
                          tuple(threads[5][k] for k in ("name", "name_from", "status", "set_aside")))
         self.assertEqual([9102, 9103, 9104, 9105, 9106, 9107], threads[5]["memories"])
         self.assertEqual({
-            9101: ("stands", "stands", "Still stands", "The latest result here"),
+            9101: ("stands", "stands", "Still stands", "The latest result"),
             9102: ("replaced", "replaced", "Replaced on March 12", ""),
             9103: ("set aside", "aside", "Set aside on March 7", ""),
             9104: ("stands", "led", "Led to a change", ""),
             9105: ("stands", "stands", "Still stands", ""),
             9106: ("open", "open", "Still open", ""),
-            9107: ("stands", "stands", "Still stands", "The latest decision here; it replaced an earlier one"),
-        }, {cid: (m["state"], m["css"], m["chip"], m["latest"]) for cid, m in told.items()})
+            9107: ("stands", "stands", "Still stands", "The latest decision; it replaced an earlier one"),
+        }, {cid: (m["state"], m["css"], m["chip"], (m["latest"] + m["latest_note"]).strip()) for cid, m in told.items()})
         self.assertEqual({
             9101: "On March 4 we found that octo-repo read the 100 MB file in a median of 1.84 s, against 1.21 s for the "
                   "standard library.",
@@ -7966,10 +7966,10 @@ class MindModelTests(MindSandbox):
             return [(sentence["words"][start:end], n) for start, end, n in sentence["marks"]]
 
         self.assertEqual([("the splitter", 1), ("QF", 2)], marked(9120))
-        self.assertEqual([], marked(9121))  # "qf" in another letter case, "splitters" a longer word
+        self.assertEqual([("line splitters", 1)], marked(9121))  # a plural matches; "qf" in another case does not
         self.assertEqual([], marked(9124))  # explained only by another account and by an edited memory
         self.assertEqual([("line splitter", 1)], marked(9105))
-        self.assertEqual([9105, 9120], words["line splitter"]["uses"])
+        self.assertEqual([9105, 9120, 9121], words["line splitter"]["uses"])
         story = json.dumps(words["line splitter"]["story"])
         self.assertIn('{"cite": "issue", "n": 7, "text": "Task: support newlines inside quoted fields"}', story)
 
@@ -8058,10 +8058,11 @@ class MindModelTests(MindSandbox):
         told = self.told(self.model())
         table, code, pull = told[9105]["evidence"]
         self.assertEqual(("table", "conformance", True), (table["kind"], table["id"], table["found"]))
-        self.assertEqual([[{"t": "Kind of file"}], [{"t": "Passing"}], [{"t": "Files"}]], table["table"]["head"])
+        self.assertEqual([[[{"t": "Kind of file"}], [{"t": "Passing"}], [{"t": "Files"}]]],
+                         [[cell["r"] for cell in row] for row in table["table"]["head"]])
         self.assertEqual([["Mixed line endings", "6", "6"], ["Newline inside a quoted field", "0", "12"],
                           ["All other files", "35", "35"], ["All files", "41", "53"]],
-                         [[cell[0]["t"] for cell in row] for row in table["table"]["rows"]])
+                         [[cell["r"][0]["t"] for cell in row] for row in table["table"]["rows"]])
         self.assertEqual(("data", "tests/conformance/report-4f2a9c1.txt"), ("data", table["data"]))
         self.assertEqual({"kind": "code", "repo": REPO, "ref": "9c3e1ab", "path": "octo_repo/reader.py", "from": 41,
                           "to": 59}, code)
@@ -8118,7 +8119,7 @@ class MindModelTests(MindSandbox):
         self.assertEqual(["table"], [list(block)[0] for block in blocks])  # no half row left over as a line of text
         table = blocks[0]["table"]
         self.assertGreater(len(table["rows"]), 20)
-        self.assertEqual([["1.84 s"]] * len(table["rows"]), [[row[1][0]["t"]] for row in table["rows"]])
+        self.assertEqual([["1.84 s"]] * len(table["rows"]), [[row[1]["r"][0]["t"]] for row in table["rows"]])
         self.assertEqual({3}, {len(row) for row in table["rows"]})
 
     def test_a_short_first_line_does_not_cut_a_long_paragraph_after_it(self):
@@ -8177,6 +8178,227 @@ class MindModelTests(MindSandbox):
         built = self.tool("mind.py", gh="false")
         self.assertEqual(0, built.returncode, built.stdout + built.stderr)
         return recortex.read_text(os.path.join(self.data, "private", "octo-org__octo-repo", "mind.html"))
+
+    # ------------------------------------------------------------ the manuscript record (round 1.2.0)
+
+    def ms_model(self):
+        self.manuscript_record()
+        self.ready()
+        return self.model()
+
+    @staticmethod
+    def parts(model):
+        """[(section key, [(thread, ordinal, first)])] in the outline's order."""
+        return [(s["key"], [(p["thread"], p["ordinal"], p["first"]) for p in s["parts"]])
+                for g in model["outline"]["deliverables"] for s in g["sections"]]
+
+    def test_the_outline_follows_the_hubs_table_and_a_topic_appears_under_each_section_it_feeds(self):
+        model = self.ms_model()
+        outline = model["outline"]
+        self.assertEqual(("hub", "What does the report say?", "The report", "the report"),
+                         (outline["order_from"], outline["nav"], outline["title"], outline["noun"]))
+        self.assertEqual([("rd:question", [(2, 0, True)]), ("rd:methods", [(3, 0, True), (4, 0, True)]),
+                          ("rd:results", [(4, 1, False), (5, 0, True)]),
+                          ("rd:limitations", [(4, 2, False), (5, 1, False), (6, 0, True)]),
+                          ("rd:next", [(6, 1, False)])], self.parts(model))
+        threads = {t["n"]: t for t in model["threads"]}
+        self.assertEqual(["Methods", "Results", "Limitations"], [f["label"] for f in threads[4]["feeds"]])
+        self.assertEqual(["Methods", "Results", "Limitations"], [s["heading"] for s in threads[4]["sections"]])
+        self.assertEqual([2, 3, 4, 5, 6, 7, 0], [t["n"] for t in model["threads"]])  # the outline, set aside, the rest
+        self.assertEqual([1, 2, 3, 4, 5], [s["n"] for g in outline["deliverables"] for s in g["sections"]])
+        self.assertEqual(([], []), (outline["other"], outline["unplaced"]))
+        for section in [s for g in outline["deliverables"] for s in g["sections"]]:
+            self.assertIsNone(section["before"])  # a section can hold a block before its parts: nothing does yet
+
+    def test_a_hub_whose_text_may_not_be_shown_gives_the_order_of_the_profile(self):
+        self.manuscript_record()
+        data = self.repo()
+        hub = data["issues"]["1"]
+        hub["body"] = hub["body"].replace("| Question | #2 |\n| Methods | #3, #4 |",
+                                          "| Methods | #4, #3 |\n| Question | #2 |")
+        self.save(data)
+        self.ready()
+        shown = self.model()
+        self.assertEqual("hub", shown["outline"]["order_from"])
+        self.assertEqual(["rd:methods", "rd:question"], [k for k, _ in self.parts(shown)][:2])
+        self.assertEqual([4, 3], [t for t, _, _ in self.parts(shown)[0][1]])
+        data = self.repo()
+        data["issues"]["1"]["edits"] = [{"at": "2026-11-15T10:00:00Z", "by": "ghost"},
+                                        {"at": data["issues"]["1"]["created_at"], "by": "octocat"}]
+        data["issues"]["1"]["updated_at"] = "2026-11-15T10:00:00Z"
+        self.save(data)
+        self.ready()
+        hidden = self.model()
+        self.assertEqual("profile", hidden["outline"]["order_from"])
+        self.assertEqual(["rd:question", "rd:methods", "rd:results", "rd:limitations", "rd:next"],
+                         [k for k, _ in self.parts(hidden)])
+        self.assertEqual([3, 4], [t for t, _, _ in self.parts(hidden)[1][1]])  # by issue number, the fallback
+
+    def test_a_project_without_section_labels_gives_one_group_per_topic(self):
+        self.manuscript_record()
+        self.write_config(dict(self.config, profiles=["core"]))
+        self.ready()
+        model = self.model()
+        outline = model["outline"]
+        self.assertEqual(([], "What do we deliver?", [2, 3, 4, 5, 6]),
+                         (outline["deliverables"], outline["nav"], outline["unplaced"]))
+        self.assertEqual([2, 3, 4, 5, 6], sorted({o["thread"] for o in outline["other"]}))
+        threads = {t["n"]: t for t in model["threads"]}
+        self.assertEqual(len(threads[4]["sections"]), len([o for o in outline["other"] if o["thread"] == 4]))
+        self.assertEqual([2, 3, 4, 5, 6, 7, 0], [t["n"] for t in model["threads"]])  # in the order they began
+        # more than one profile: the same title, and a group for each deliverable
+        self.write_config(dict(self.config, profiles=["research", "manuscript"]))
+        self.assertEqual("What do we deliver?", self.model()["outline"]["nav"])
+
+    def test_a_part_says_when_its_text_changed_and_what_was_recorded_after_that(self):
+        model = self.ms_model()
+        threads = {t["n"]: t for t in model["threads"]}
+        found = {f["issue"]: f for f in self.query("consistency") if f["kind"] == "stale-body"}
+        for n in (2, 3, 4, 5, 6):
+            text = threads[n]["text"]
+            self.assertEqual("August 31, 2026", text["changed"])
+            self.assertEqual(n in found, bool(text["after"]), n)  # the page and `query consistency` agree
+        self.assertEqual("the finding of September 18", threads[4]["text"]["after"][0]["text"])
+        self.assertIn("the finding of October 20", " ".join(a["text"] for a in threads[4]["text"]["after"]))
+        self.assertEqual(([9131], [], 1), (threads[4]["text"]["questions"], threads[4]["text"]["failures"],
+                                           threads[4]["text"]["tasks"]))
+        self.assertEqual(([9141], [9143], 1), (threads[5]["text"]["questions"], threads[5]["text"]["failures"],
+                                               threads[5]["text"]["tasks"]))
+        # the sentences: from, changed, after, open; each a list of segments a later round can add to
+        part = [p for s in model["outline"]["deliverables"][0]["sections"] for p in s["parts"] if p["thread"] == 6][0]
+        self.assertEqual(["from", "changed", "after", "open"], [s["key"] for s in part["status"]])
+        self.assertEqual([{"t": "From "}, {"thread": 6}, {"t": "."}], part["status"][0]["segs"])
+        self.assertEqual("Nothing recorded since then bears on it.", part["status"][2]["segs"][0]["t"])
+        self.assertEqual([{"open": "questions", "t": "1 open question"}], [s for s in part["status"][3]["segs"] if "open" in s])
+        part2 = [p for s in model["outline"]["deliverables"][0]["sections"] for p in s["parts"] if p["thread"] == 2][0]
+        text = "".join(seg["t"] for seg in part2["status"][2]["segs"])
+        self.assertEqual("1 decision or finding was recorded in this thread after that change: the decision of "
+                         "September 1. Check that the text says what they changed.", text)
+        part5 = [p for s in model["outline"]["deliverables"][0]["sections"] for p in s["parts"] if p["thread"] == 5][0]
+        self.assertEqual("1 open question, 1 failure nothing followed and 1 task bear on it.",
+                         "".join(seg["t"] for seg in part5["status"][3]["segs"]))
+        links = [seg for seg in part5["status"][2]["segs"] if "m" in seg]
+        self.assertEqual(2, len(links))
+        self.assertTrue(all(seg["m"] in self.told(model) for seg in links))
+
+    def test_a_task_lands_in_the_thread_of_its_parent_and_its_memories_form_groups(self):
+        model = self.ms_model()
+        threads = {t["n"]: t for t in model["threads"]}
+        self.assertEqual([9], [t["issue"] for t in threads[5]["tasks"]])  # two topic labels, the parent says moisture
+        self.assertNotIn(9, [t["issue"] for t in threads[3]["tasks"]])
+        self.assertEqual([8], [t["issue"] for t in threads[4]["tasks"]])
+        self.assertEqual({12}, {t["issue"] for t in threads[3]["tasks"]})
+        groups = threads[4]["groups"]
+        self.assertEqual([(8, 3, True, True), (8, 1, True, False)], [(g["task"], g["count"], g["open"], g["anchor"])
+                                                                      for g in groups])  # two runs, one anchor
+        self.assertEqual("Task: refit the model with the second season", groups[0]["title"])
+        closed = threads[3]["groups"]
+        self.assertEqual([(12, False, "September 20, 2026")], [(g["task"], g["open"], g["closed"]) for g in closed])
+        self.assertEqual([None, None, 0, 0, 0, None, 1], [s["group"] for s in threads[4]["steps"]][-7:])
+        # an index without parents rows falls back to the labels, as before
+        self.sql("DELETE FROM parents")
+        flat = {t["n"]: t for t in self.model()["threads"]}
+        self.assertIn(9, [t["issue"] for t in flat[3]["tasks"]])  # the first label by name: design
+        # a loop in the parents ends
+        self.sql("INSERT INTO parents VALUES (4, 8)", "INSERT INTO parents VALUES (8, 4)")
+        looped = {t["n"]: t for t in self.model()["threads"]}
+        self.assertIn(8, [t["issue"] for t in looped[4]["tasks"]])
+
+    def test_a_pause_is_not_a_claim_and_an_idea_a_decision_took_up_is_not_untested(self):
+        model = self.ms_model()
+        told = self.told(model)
+        for cid in (9104, 9128, 9132):
+            self.assertEqual(("pause", "", "pause", "kind-checkpoint"), (told[cid]["css"], told[cid]["chip"],
+                                                                         told[cid]["group"], told[cid]["explain"]))
+        self.assertEqual(("taken", "Taken up on September 3", "done"), (told[9102]["css"], told[9102]["chip"],
+                                                                        told[9102]["group"]))
+        self.assertEqual(("open", "Not tested yet"), (told[9120]["css"], told[9120]["chip"]))
+        self.assertEqual([9120, 9150], [i["id"] for i in model["open"]["ideas"]])  # 9102 is taken up, not waiting
+        self.assertEqual("tried", told[9142]["css"])
+        self.assertEqual("taken up", self.states()[9102])
+        for memory in model["memories"]:
+            self.assertTrue(memory["explain"] is None or re.fullmatch(r"(kind|state)-[a-z]+", memory["explain"]))
+        threads = {t["n"]: t for t in model["threads"]}
+        self.assertEqual(("2 open points", "thread-open"), (threads[4]["status"], threads[4]["status_explain"]))
+        self.assertEqual(("Nothing open", "thread-clear"), (threads[2]["status"], threads[2]["status_explain"]))
+        self.assertEqual(("Set aside", "thread-aside"), (threads[7]["status"], threads[7]["status_explain"]))
+        self.assertEqual("Other notes", threads[0]["name"])
+        # a pause, in a story, knows what came next in its thread
+        steps = {s["id"]: s for s in threads[4]["steps"]}
+        self.assertEqual({"day": "October 10", "next": 9129, "next_day": "October 12"},
+                         {k: steps[9128]["pause"][k] for k in ("day", "next", "next_day")})
+        self.assertIsNone(steps[9132]["pause"]["next"])
+        self.assertIsNone(steps[9128]["conn"])
+
+    def test_a_set_aside_thread_is_named_by_its_closed_topic_under_the_title_rule(self):
+        self.manuscript_record()
+        self.ready()
+        aside = {t["n"]: t for t in self.model()["threads"]}[7]
+        self.assertEqual(("Low-cost sensor network", "title"), (aside["name"], aside["name_from"]))
+        data = self.repo()
+        data["issues"]["7"]["timeline"] = [{"event": "renamed", "created_at": "2026-11-20T10:00:00Z",
+                                            "actor": {"login": "ghost"}, "rename": {"from": "a", "to": "MARK-RENAMED"}}]
+        data["issues"]["7"]["title"] = "MARK-RENAMED"
+        data["issues"]["7"]["updated_at"] = "2026-11-20T10:00:00Z"
+        self.save(data)
+        self.ready()
+        model = self.model()
+        aside = {t["n"]: t for t in model["threads"]}[7]
+        self.assertEqual(("sensors", "label"), (aside["name"], aside["name_from"]))
+        self.assertNotIn("MARK-RENAMED", json.dumps(model))
+
+    def test_where_a_thread_stands_names_its_latest_decision_and_result_its_open_points_and_tasks(self):
+        model = self.ms_model()
+        threads = {t["n"]: t for t in model["threads"]}
+        stands = threads[4]["stands"]
+        self.assertEqual((9129, 9130, [9120, 9131]), (stands["decision"], stands["result"], stands["open"]))
+        self.assertEqual([(8, True)], [(t["issue"], t["open"]) for t in stands["tasks"]])
+        self.assertEqual("Refit the soil moisture model with both seasons and report the effect pooled and per season.",
+                         stands["tasks"][0]["goal"][0]["t"])
+        self.assertEqual([9143], threads[5]["stands"]["open"][-1:])
+        self.assertEqual(9112, threads[7]["stands"]["decision"])
+        # a result that something followed is listed after the ones nothing followed
+        self.assertEqual([(9140, None), (9122, 9123), (9130, 9140)], [(e["id"], e["followed"])
+                                                                       for e in model["open"]["unknown"]])
+        self.assertEqual([8, 9], [t["issue"] for t in model["open"]["tasks"]])
+
+    def test_words_match_with_a_space_or_a_hyphen_and_a_plural_and_never_inside_another_word(self):
+        words = mind_model_module().Words([(1, ["dry spell"]), (2, ["spell"]), (3, ["QF"])])
+
+        def found(text):
+            return [(text[start:end], n) for start, end, n in words.find(text, set())]
+
+        self.assertEqual([("dry-spell", 1)], found("a dry-spell"))
+        self.assertEqual([("dry spells", 1)], found("two dry spells"))
+        self.assertEqual([("dry  spell", 1)], found("a dry  spell"))
+        self.assertEqual([("spell", 2)], found("the spell"))
+        self.assertEqual([], found("a dry-spelling and respell and spelled"))
+        self.assertEqual([("QFs", 3)], found("the QFs"))
+        self.assertEqual([], found("the qf and xQF and QF-1 and QFx"))
+        lone = mind_model_module().Words([(2, ["spell"])])
+        self.assertEqual([], [(a, b) for a, b, _ in lone.find("dry-spell, spell-check", set())])
+
+    def test_a_comment_of_a_kind_the_page_does_not_know_is_left_out_and_counted(self):
+        self.manuscript_record()
+        plan = ("<!-- ghim:event type=plan at=2026-11-14T10:00-05:00 -->\n### Plan: 2026-11-14 10:00 EST - a planned "
+                "claim\n\nA planned claim that this version does not know.\n")
+        data = self.repo()
+        data["comments"]["9300"] = {"issue": 5, "body": plan, "created_at": "2026-11-14T15:00:00Z"}
+        data["comments"]["9301"] = {"issue": 5, "body": plan.replace("type=plan", "type=plan"), "user": "ghost",
+                                    "created_at": "2026-11-14T15:01:00Z"}
+        data["issues"]["5"]["updated_at"] = "2026-11-14T15:01:00Z"
+        self.save(data)
+        self.ready()
+        model = self.model()
+        self.assertEqual(32, model["counts"]["memories"])
+        self.assertEqual(1, model["not_told"]["kinds"])  # the account outside the list is not counted as a kind
+        self.assertNotIn("A planned claim", json.dumps(model))
+        self.assertEqual(2, model["not_told"]["count"])  # the other account's comment is one more thing not told
+        built = self.tool("mind.py", gh="false")
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        words = " ".join("".join(PageReader(recortex.read_text(os.path.join(
+            self.data, "private", self.slug(), "mind.html"))).texts).split())
+        self.assertIn("1 comment is of a kind this version of the plugin does not know, so it is not told here.", words)
 
     def test_the_last_pause_is_not_told_once_its_author_leaves_the_allowed_list(self):
         self.add_chain()
@@ -8323,7 +8545,7 @@ class MindModelTests(MindSandbox):
         model = self.model()
         tables = {f["label"]: f["doc"]["blocks"][0]["table"] for f in self.told(model)[9600]["fields"]
                   if f["label"] in ("Configuration", "Numbers")}
-        self.assertEqual((12, 12, True), (len(tables["Configuration"]["head"]), len(tables["Configuration"]["rows"][0]),
+        self.assertEqual((12, 12, True), (len(tables["Configuration"]["head"][0]), len(tables["Configuration"]["rows"][0]),
                                           tables["Configuration"]["cut"]))
         self.assertEqual((40, True), (len(tables["Numbers"]["rows"]), tables["Numbers"]["cut"]))
         self.assertEqual((400, 3), (len(model["words"]), model["not_told"]["words"]))
@@ -8353,6 +8575,12 @@ class MindModelTests(MindSandbox):
         thread = [t for t in model["threads"] if 9601 in t["memories"]][0]
         self.assertEqual((True, "Set aside", []), (thread["set_aside"], thread["status"], thread["rests"]))
         self.assertEqual([9101], [entry["id"] for entry in model["open"]["unknown"]])  # not what a set-aside thread lacks
+
+
+def mind_model_module():
+    sys.path.insert(0, SCRIPTS)
+    import mind_model
+    return mind_model
 
 
 def index_not_ready():
@@ -8504,13 +8732,64 @@ def page_problems(text, marker=None):
     for data in page.texts:
         if PAGE_HIDDEN.search(data):
             bad.append("a hidden character in the text")
-    return bad
+    return bad + math_problems(text)
+
+
+MATH_PAIR = ("msub", "msup", "mfrac", "mover", "munder")
+MATH_TRIPLE = ("msubsup", "munderover")
+
+
+class MathReader(__import__("html.parser").parser.HTMLParser):
+    """Where the math elements of a built page stand: each with its parent, its children and whether it holds text."""
+
+    def __init__(self, text):
+        super().__init__(convert_charrefs=True)
+        self.problems, self.stack = [], []
+        self.feed(text)
+        self.close()
+
+    def handle_starttag(self, tag, attrs):
+        import mind
+        if tag in mind.MATH_TAGS:
+            if tag != "math" and (not self.stack or self.stack[-1][0] not in mind.MATH_TAGS):
+                self.problems.append("math element %s outside math" % tag)
+            if self.stack and self.stack[-1][0] in ("mi", "mn", "mo", "mtext", "mspace"):
+                self.problems.append("an element inside a token")
+            if self.stack:
+                self.stack[-1][1].append(tag)
+        elif self.stack and self.stack[-1][0] in mind.MATH_TAGS:
+            self.problems.append("element %s inside math" % tag)
+        if tag not in ("meta", "input", "line", "path", "rect", "circle", "polygon"):
+            self.stack.append((tag, []))
+
+    def handle_endtag(self, tag):
+        import mind
+        while self.stack:
+            name, kids = self.stack.pop()
+            if name in MATH_PAIR and len(kids) != 2 or name in MATH_TRIPLE and len(kids) != 3 or \
+                    name in ("msqrt", "mrow") and not kids or name == "mspace" and kids:
+                self.problems.append("%s with %d children" % (name, len(kids)))
+            if name == tag:
+                break
+
+    def handle_data(self, data):
+        import mind
+        if self.stack and self.stack[-1][0] in mind.MATH_TAGS and self.stack[-1][0] not in (
+                "mi", "mn", "mo", "mtext") and data.strip():
+            self.problems.append("text inside the layout element %s" % self.stack[-1][0])
+
+
+def math_problems(text):
+    """The rules of the contract for math: a math element only inside math, nothing else inside math, a token holds text
+    only and a layout element the number of children its name requires."""
+    return MathReader(text).problems
 
 
 def hostile_model(model, payloads, everything=False):
     """`model` with every string from the record (with `everything`, every string of the model) replaced by
     HOSTILE-<n>, one of `payloads`, and the string. The repository at the top stays, so that addresses are built."""
-    structure = {"kind", "css", "group", "state", "type", "status_css", "name_from", "cite"}
+    structure = {"kind", "css", "group", "state", "type", "status_css", "name_from", "cite", "m", "v", "a", "key",
+                 "explain", "status_explain", "open"}
     count = [0]
 
     def walk(value, key=None, top=False):
@@ -8600,6 +8879,280 @@ class MindPageTests(MindSandbox):
             if not everything:
                 self.assertIn("HOSTILE-", text.split("<title>")[1].split("</title>")[0])  # the name in the title
 
+    # ------------------------------------------------------------ the manuscript page (round 1.2.0)
+
+    def ms_page(self):
+        self.manuscript_record()
+        self.ready()
+        built = self.build()
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        return recortex.read_text(self.page_file())
+
+    @staticmethod
+    def words_of(text):
+        return " ".join("".join(PageReader(text).texts).split())
+
+    def test_the_manuscript_page_keeps_the_contract_and_has_the_eight_ways_in(self):
+        text = self.ms_page()
+        self.assertEqual([], page_problems(text))
+        page = PageReader(text)
+        views = [dict(attrs)["id"] for tag, attrs in page.elements if tag == "section" and "view" in dict(attrs).get("class", "")]
+        self.assertEqual(["now", "text", "threads", "settled", "lessons", "open", "map", "ask"], views)
+        navs = [dict(attrs)["data-nav"] for tag, attrs in page.elements if "data-nav" in dict(attrs)]
+        self.assertEqual(views, navs)
+        words = self.words_of(text)
+        for said in ("What does the report say?", "The report", "How to read this page", "What is settled?",
+                     "The record keeps one current version of each part; it is not marked draft or final.",
+                     "What we hold today: the decisions, findings and corrections that nothing recorded later replaces "
+                     "or sets aside."):
+            self.assertIn(said, words)
+        tags = {tag for tag, _ in page.elements}
+        self.assertTrue({"h4", "ol", "math", "msub", "mrow", "table", "button", "th", "td"} <= tags, tags)
+        # the old pointers and names are gone
+        for old in ("The rest is under", "This is cut here; the whole text is on GitHub.", "What we say now",
+                    "Left out on purpose", "Loose thoughts", "Not tried yet", "open thoughts", "Settled for now",
+                    "The latest decision here", "Paused"):
+            self.assertNotIn(old, words)
+
+    def test_each_part_of_the_text_has_its_status_line_its_text_and_two_links(self):
+        text = self.ms_page()
+        words = self.words_of(text)
+        for said in ("Current text, last changed on August 31, 2026.", "Nothing recorded since then bears on it.",
+                     "1 decision or finding was recorded in this thread after that change: the decision of September 1.",
+                     "1 open question, 1 failure nothing followed and 1 task bear on it.", "Why it says this",
+                     "How we got here", "Where the numbers come from"):
+            self.assertIn(said, words)
+        for ident in ("sec-1", "sec-5", "text-2-0", "text-3-0", "text-4-0", "text-4-1", "text-4-2", "text-5-0", "text-5-1",
+                      "text-6-0", "text-6-1", "settled-4", "thread-4", "open-questions", "open-failures", "open-tasks",
+                      "task-8", "task-9", "task-12", "latest-4", "untold"):
+            self.assertIn('id="%s"' % ident, text, ident)
+        self.assertEqual(1, text.count('id="task-8"'))  # two runs of one task, one anchor
+        # text in place: a sub-heading, a numbered list, bold, a table block and an HTML table with spans
+        self.assertIn('<h4 class="sub">Plots</h4>', text)
+        self.assertIn("<b>5 cm</b>", text)
+        self.assertRegex(text, r'<ol class="plainlist"><li>install the probe')
+        self.assertIn('<th rowspan="2">Season</th>', text)
+        self.assertIn('<th colspan="2">Effect of cover at 5 cm (m³/m³)</th>', text)
+        self.assertIn("Plots by block and treatment", text)  # the table block stands where the author put it
+        self.assertLess(text.index("Plots by block and treatment"), text.index("Sampling</h4>"))
+        self.assertIn("Soil moisture through the longest dry spell", text)  # the figure block, in place
+
+    def test_a_formula_is_drawn_as_mathml_and_one_outside_the_subset_is_shown_as_its_source(self):
+        self.manuscript_record()
+        data = self.repo()
+        data["issues"]["6"]["body"] = data["issues"]["6"]["body"].replace(
+            "## Limitations", "## Limitations\n\nWe write $x^2$ and $\\begin{pmatrix} 1 \\end{pmatrix}$ and $5 and $10.\n\n"
+            "$$\\href{x}{y}$$\n", 1)
+        self.save(data)
+        self.ready()
+        built = self.build()
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        text = recortex.read_text(self.page_file())
+        self.assertEqual([], page_problems(text))
+        self.assertIn("<math display=\"block\"><mrow>", text)
+        self.assertIn('<math display="inline"><mrow><msup><mi>x</mi><mn>2</mn></msup></mrow></math>', text)
+        self.assertIn('<code class="tex">\\begin{pmatrix} 1 \\end{pmatrix}</code>', text)
+        self.assertIn('<pre class="tex">\\href{x}{y}</pre>', text)
+        self.assertIn("$5 and $10", self.words_of(text))
+        self.assertEqual(1, self.words_of(text).count("A formula the page cannot draw is shown as it was written."))
+
+    def test_a_pause_is_a_divider_with_what_came_next_and_no_state(self):
+        text = self.ms_page()
+        words = self.words_of(text)
+        self.assertIn("We paused here on October 10.", words)
+        self.assertIn("The work in this thread picked up again on October 12.", words)
+        self.assertIn("Nothing has been recorded in this thread since this pause.", words)
+        self.assertIn("What is a pause?", words)
+        pause = text[text.index('<li class="pause"'):]
+        pause = pause[:pause.index("</li>")]
+        self.assertNotIn("Still stands", pause)
+        self.assertNotIn('class="chip', pause)
+        self.assertRegex(text, r'<article class="mem k-checkpoint s-pause" id="m-9104"')
+        self.assertNotIn("k-checkpoint s-stands", text)
+
+    def test_every_chip_and_kind_word_is_a_button_with_one_fixed_explanation(self):
+        mind = self.mind()
+        text = self.ms_page()
+        keys = set(re.findall(r'<div class="entry" id="x-([a-z-]+)">', text))
+        self.assertTrue({"how"} | {key for key, _, _ in mind.EXPLAIN} == keys)
+        used = set(re.findall(r'<button type="button" class="[^"]*" data-explain="([a-z-]+)"', text))
+        self.assertLessEqual(used, keys)
+        self.assertTrue({"state-stands", "state-replaced", "state-aside", "state-open", "state-answered", "state-untested",
+                         "state-taken", "state-tried", "state-nothing", "state-led", "kind-checkpoint", "thread-open",
+                         "thread-clear", "thread-aside", "how"} <= used, sorted(used))
+        for kind in mind.KIND_WORD:
+            self.assertIn("kind-" + kind, keys)
+        for key in mind.STATE_CLASS:
+            if key not in ("plain", "pause"):
+                self.assertTrue(any(k.startswith("state-") and k in keys for k in mind.EXPLAIN_TEXT), key)
+        self.assertEqual(sorted(k for k in keys if k != "how"), sorted(mind.EXPLAIN_TEXT))
+        # the explanations are fixed words of mind.py: the same under a hostile model
+        payloads = json.loads(recortex.read_text(os.path.join(FIXTURES, "hostile-mind.json")))["payloads"]
+        hostile, _ = hostile_model(self.model(), payloads, everything=True)
+        store = lambda page: page[page.index('<div id="explain"'):page.index('<div id="issues"')]
+        self.assertEqual(store(text), store(mind.render(hostile)))
+        self.assertNotIn("HOSTILE-", store(mind.render(hostile)))
+
+    def test_every_thread_name_in_a_card_a_note_and_a_lesson_is_a_link_to_a_thread_that_exists(self):
+        text = self.ms_page()
+        ids = set(re.findall(r' id="([^"]+)"', text))
+        for span in re.findall(r'<span class="in">(.*?)</span>', text):
+            if not span.startswith(("in ", " in ")):
+                continue
+            self.assertRegex(span, r'<a href="#thread-[0-9]+">', span)
+        for target in re.findall(r'href="#(thread-[0-9]+)"', text):
+            self.assertIn(target, ids)
+        self.assertRegex(text, r'What went wrong, in <a href="#thread-3">Field design and sampling</a>')
+        self.assertRegex(text, r'The latest decision</button><span class="in"> in <a href="#thread-0">Other notes</a>')
+
+    def test_what_is_settled_is_grouped_by_section_then_topic_and_holds_none_of_the_text(self):
+        text = self.ms_page()
+        view = text[text.index('<section class="view" id="settled"'):text.index('<section class="view" id="lessons"')]
+        self.assertEqual(["Question", "Methods", "Results", "Limitations"],  # a topic sits under the first section it feeds
+                         re.findall(r'<h3><a href="#sec-[0-9]">([A-Za-z]+)</a></h3>', view))
+        self.assertIn("It replaced an earlier correction. See it", view)
+        self.assertIn("It replaced an earlier decision. See it", view)
+        self.assertIn("It replaced an earlier finding. See it", view)
+        self.assertNotIn("Cover crops are grown between cash crops", view)  # the text is in its own view
+        self.assertNotIn("Left out on purpose", view)
+        self.assertIn("Nothing here stands yet.", view)  # the discussion topic has nothing standing: only open points
+        self.assertRegex(view, r"Nothing here stands yet\. <a href=\"#thread-6\">2 points are open</a>")
+        self.assertRegex(view, r'<h3>About the project as a whole</h3>')
+        self.assertRegex(view, r'<h3>Set aside</h3><ul class="leftout"><li><a href="#thread-7">Low-cost sensor network</a>')
+
+    def test_the_last_lines_show_in_full_under_the_first_view_only(self):
+        text = self.ms_page()
+        pieces = text.split('<section class="view" id="')[1:]
+        views = {piece[:piece.index('"')]: piece for piece in pieces}
+        self.assertIn('id="untold"', views["now"])
+        for name in ("text", "threads", "settled", "lessons", "open", "map", "ask"):
+            self.assertNotIn('id="untold"', views[name])
+            self.assertIn('1 thing is not told on this page. <a href="#untold">See why</a>', views[name], name)
+        self.assertIn("1 memory by an account outside your allowed list is not told here.", views["now"])
+
+    def test_the_search_and_the_pause_groups_follow_what_a_memory_is(self):
+        text = self.ms_page()
+        groups = dict(re.findall(r'id="m-(9[0-9]+)"[^>]*data-group="([a-z]+)"', text))
+        self.assertEqual(("done", "done", "done", "pause", "stands"), (groups["9102"], groups["9121"], groups["9142"],
+                                                                      groups["9104"], groups["9103"]))
+        script = recortex.read_text(os.path.join(SKILL, "page", "mind.js"))
+        for head in ("'done'", "'pause'"):
+            self.assertIn(head, script)
+
+    def test_the_style_has_no_last_row_rule_and_the_panel_slides_only_after_the_first_frame(self):
+        style = recortex.read_text(os.path.join(SKILL, "page", "mind.css"))
+        script = recortex.read_text(os.path.join(SKILL, "page", "mind.js"))
+        self.assertNotIn("last-child", style)
+        self.assertNotIn("transition:transform .22s ease;z-index", style)
+        self.assertIn(".js.ready .panel{transition:transform .22s ease}", style)
+        self.assertIn("root.classList.add('ready')", script)
+        self.assertIn("@media (max-width:860px)", style)
+        self.assertIn(".side.shut .foldbody", style)
+
+    def test_a_link_run_of_the_record_is_an_anchor_only_for_an_address_the_page_builds(self):
+        mind = self.mind()
+        page = mind.Page({"repo": REPO})
+
+        def run(address, to):
+            return str(page.runs([{"link": [{"t": "words"}], "to": to, "said": address}]))
+
+        good = run("https://github.com/octo-org/octo-repo/issues/7", {"kind": "issue", "repo": REPO, "n": 7})
+        self.assertEqual('<a href="https://github.com/octo-org/octo-repo/issues/7" rel="noopener noreferrer">words</a>',
+                         good)
+        for address, to in (("javascript:alert(1)", None), ("data:text/html,x", None),
+                            ("https://evil.example/x", {"kind": "issue", "repo": "a b/c", "n": 7}),
+                            ("https://github.com/o/r/blob/9c3e1ab/../a.py#L1",
+                             {"kind": "lines", "repo": "o/r", "commit": "9c3e1ab", "path": "../a.py", "first": 1,
+                              "last": 1}),
+                            ("x", {"kind": "script", "repo": REPO}), ("x", {"kind": "issue", "repo": REPO, "n": "7;x"})):
+            drawn = run(address, to)
+            self.assertNotIn("href", drawn, address)
+            self.assertEqual("words (%s)" % address.replace("&", "&amp;"), drawn)
+
+    def test_a_math_tree_that_breaks_a_rule_of_the_contract_is_shown_as_its_source(self):
+        mind = self.mind()
+        page = mind.Page({"repo": REPO})
+        good = {"m": "mrow", "c": [{"m": "msub", "c": [{"m": "mi", "t": "x"}, {"m": "mn", "t": "1"}]}]}
+
+        def drawn(tree, display=False):
+            return str(page.math({"d": display, "m": tree, "s": "SRC"}, display))
+
+        self.assertEqual("<math display=\"inline\"><mrow><msub><mi>x</mi><mn>1</mn></msub></mrow></math>", drawn(good))
+        deep = {"m": "mn", "t": "1"}
+        for _ in range(9):
+            deep = {"m": "mrow", "c": [deep]}
+        wide = {"m": "mrow", "c": [{"m": "mn", "t": "1"}] * 301}
+        bad = [{"m": "script", "c": []}, {"m": "mrow", "c": [{"m": "a", "t": "x"}]}, {"m": "mi", "t": "x", "c": []},
+               {"m": "mi", "c": [{"m": "mn", "t": "1"}]}, {"m": "mi", "t": ["x"]}, {"m": "mspace", "w": "9em"},
+               {"m": "mspace", "t": "x"}, {"m": "msub", "c": [{"m": "mi", "t": "x"}]},
+               {"m": "msubsup", "c": [{"m": "mi", "t": "x"}, {"m": "mi", "t": "y"}]}, {"m": "mfrac", "c": []},
+               {"m": "mrow", "c": []}, {"m": "mrow", "t": "x"}, {"m": "msqrt", "c": "x"}, "x", ["x"], deep, wide,
+               {"m": "math", "c": [{"m": "mn", "t": "1"}]}, {"m": "mrow", "c": [{"m": "mn", "t": "x" * 81}]}]
+        for tree in bad:
+            self.assertEqual('<code class="tex">SRC</code>', drawn(tree), repr(tree)[:60])
+        self.assertEqual('<pre class="tex">SRC</pre>', str(page.math({"d": True, "m": wide, "s": "SRC"}, True)))
+        self.assertEqual('<code class="tex">SRC</code>', str(page.math({"d": False, "s": "SRC"}, False)))
+        self.assertEqual('<code class="tex"></code>', str(page.math("junk", False)))
+        node = {"m": "mover", "acc": True, "c": [{"m": "mi", "t": "x", "v": "normal"}, {"m": "mo", "t": "^"}]}
+        self.assertEqual('<math display="inline"><mover accent="true"><mi mathvariant="normal">x</mi><mo>^</mo></mover>'
+                         '</math>', str(page.math({"m": node, "s": ""}, False)))
+        self.assertEqual('<mspace width="0.1667em"></mspace>',
+                         str(page.math_node({"m": "mspace", "w": "0.1667em"}, 1, [0])))
+
+    def test_hostile_text_in_the_manuscript_reaches_the_page_as_text_only(self):
+        mind = self.mind()
+        payloads = json.loads(recortex.read_text(os.path.join(FIXTURES, "hostile-mind.json")))["payloads"]
+        clean_page = self.ms_page()
+        clean_tags = {tag for tag, _ in PageReader(clean_page).elements}
+        model = self.model()
+        for everything in (False, True):
+            hostile, count = hostile_model(model, payloads, everything)
+            self.assertGreater(count, 1500)
+            text = mind.render(hostile)
+            self.assertEqual([], page_problems(text, marker="HOSTILE-"), everything)
+            page = PageReader(text)
+            self.assertLessEqual({tag for tag, _ in page.elements} - clean_tags, {"pre"})  # a formula's source
+            self.assertNotIn("window.__pwned", "".join(page.raw["script"]))
+            if everything:
+                self.assertNotIn("<math", text)  # a hostile name gives the source, never an element
+                self.assertIn('<code class="tex">HOSTILE-', text)
+            else:
+                self.assertIn("<math", text)  # the tokens' text is text
+                self.assertIn("HOSTILE-", "".join(page.texts))
+
+    def test_html_in_the_text_is_never_passed_through(self):
+        self.manuscript_record()
+        data = self.repo()
+        cell = ('<table><tr><td onclick="window.__pwned=1" style="color:red">cell <b>one</b><script>window.__pwned2=1'
+                '</script><style>body{display:none}</style><img src=x onerror="y()"> <a href="javascript:z()">link '
+                'text</a></td><td>two</td></tr></table>')
+        nested = "<table><tr><td><table><tr><td>inner</td></tr></table></td></tr></table>"
+        data["issues"]["6"]["body"] = data["issues"]["6"]["body"].replace(
+            "## Limitations", "## Limitations\n\n" + cell + "\n\nBefore <iframe src=x></iframe> and <a href=\"x\">"
+            "link</a> after.\n\n" + nested + "\n\n<!-- MARK-HTML-COMMENT -->\n", 1)
+        self.save(data)
+        self.ready()
+        built = self.build()
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        text = recortex.read_text(self.page_file())
+        self.assertEqual([], page_problems(text))
+        for banned in ("onclick", "onerror", "<iframe", "<img", "javascript:", "__pwned", "display:none", "color:red",
+                       "MARK-HTML-COMMENT"):
+            self.assertNotIn(banned, text.split("<body>")[1], banned)
+        words = self.words_of(text)
+        self.assertIn("cell one link texttwo", words)  # the cells' text, with no element, attribute or script text
+        self.assertIn("Before <iframe src=x></iframe> and <a href=\"x\">link</a> after.", words)
+        self.assertIn("This table is written in a form the page cannot draw. Open it on GitHub", words)
+        self.assertNotIn("inner", words)
+
+    def test_the_manuscript_page_is_the_same_for_the_same_index_and_day(self):
+        mind = self.mind()
+        first = self.ms_page()
+        self.assertEqual(0, self.build().returncode)
+        self.assertEqual(first, recortex.read_text(self.page_file()))
+        model = self.model()
+        self.assertEqual(mind.render(model), mind.render(json.loads(json.dumps(model))))
+
     def test_a_missing_escape_breaks_the_contract(self):
         mind = self.mind()
         self.chain_page()
@@ -8628,6 +9181,26 @@ class MindPageTests(MindSandbox):
             mind.E("a", {"href": "#now"})  # a plain string is no address
         with self.assertRaises(ValueError):
             mind.E("a", {"href": "https://github.com/octo-org/octo-repo/issues/1"})
+        for tag, name, value in (("td", "rowspan", 41), ("td", "colspan", 0), ("th", "rowspan", "x"),
+                                 ("td", "colspan", 13), ("div", "rowspan", 2), ("div", "colspan", 2),
+                                 ("ol", "start", -1), ("ol", "start", 10000), ("ul", "start", 2),
+                                 ("math", "display", "none"), ("div", "display", "block"),
+                                 ("mi", "mathvariant", "script"), ("mn", "mathvariant", "normal"),
+                                 ("mover", "accent", "false"), ("munder", "accent", "true"),
+                                 ("mspace", "width", "9em"), ("mspace", "width", "100%"),
+                                 ("div", "aria-expanded", "true"), ("button", "aria-expanded", "maybe"),
+                                 ("div", "data-explain", "state-open"), ("button", "data-explain", "Bad Key"),
+                                 ("button", "data-fold", "a;b"), ("a", "data-fold", "tree")):
+            with self.assertRaises(ValueError, msg=(tag, name, value)):
+                mind.E(tag, {name: value})
+        self.assertEqual('<td rowspan="2" colspan="12"></td>', mind.E("td", {"rowspan": 2, "colspan": 12}))
+        self.assertEqual('<ol start="3"></ol>', mind.E("ol", {"start": 3}))
+        self.assertEqual('<mspace width="-0.1667em"></mspace>', mind.E("mspace", {"width": "-0.1667em"}))
+        self.assertEqual('<button type="button" data-explain="state-open" aria-expanded="false"></button>',
+                         mind.E("button", {"type": "button", "data-explain": "state-open", "aria-expanded": "false"}))
+        for tag in ("h4", "h5", "h6", "pre", "i", "sup", "sub", "math", "mrow", "mi", "mn", "mo", "mtext", "mspace", "msub",
+                    "msup", "msubsup", "mfrac", "msqrt", "mover", "munder", "munderover"):
+            self.assertTrue(mind.E(tag, None).startswith("<" + tag), tag)
         for value in ('a"b', "a<b", "a>b", "a&b", "a\nb", "a\u202eb", "a`b"):
             with self.assertRaises(ValueError, msg=value):
                 mind.E("div", {"class": value})
@@ -8746,7 +9319,7 @@ class MindPageTests(MindSandbox):
         self.assertEqual(1, body.count('class="logo"'))
         self.assertEqual(1, body.count('class="lg-a"'))
         self.assertEqual(1, body.count('class="lg-b"'))
-        side = body[body.index('<nav class="side"'):body.index("</nav>")]
+        side = body[body.index('<nav class="side fold"'):body.index("</nav>")]
         self.assertTrue(side.index("<svg") < side.index('<p class="mindname">'))  # first in the side bar
         found = re.findall(r'<svg viewBox="144 144 968 968" class="logo" aria-hidden="true">'
                            r'<path class="lg-a" d="([^"]*)"/><path class="lg-b" d="([^"]*)"/></svg>', side)
@@ -8965,7 +9538,7 @@ class MindPageTests(MindSandbox):
         self.assertEqual(0, built.returncode, built.stdout + built.stderr)
         text = recortex.read_text(self.page_file())
         self.assertEqual([], page_problems(text))
-        self.assertIn("These memories belong to no thread of what we deliver.", " ".join(PageReader(text).texts))
+        self.assertIn("Other notes", " ".join(PageReader(text).texts))
         mind = self.mind()
         for word in model.get("words", []):
             word.get("first", {}).pop("thread", None)  # a first use that names no thread

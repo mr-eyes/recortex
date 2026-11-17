@@ -65,19 +65,48 @@ class Href(str):
 
 
 TAGS = frozenset("""html head meta title body nav main aside section article div p span a button ul ol
-li h2 h3 blockquote details summary table thead tbody tr th td code b input dialog svg line text path rect circle
-polygon""".split())
+li h2 h3 h4 h5 h6 blockquote details summary table thead tbody tr th td code pre b i sup sub input dialog svg line text
+path rect circle polygon math mrow mi mn mo mtext mspace msub msup msubsup mfrac msqrt mover munder munderover""".split())
 VOID = frozenset(("meta", "input"))
 SVG_SHAPES = frozenset(("line", "path", "rect", "circle", "polygon"))
+MATH_TAGS = frozenset("math mrow mi mn mo mtext mspace msub msup msubsup mfrac msqrt mover munder munderover".split())
 ATTRS = frozenset("""class id href rel type hidden role tabindex lang charset name content http-equiv placeholder
-autocomplete disabled aria-label aria-labelledby aria-hidden aria-live viewBox x y x1 x2 y1 y2 cx cy r width height
-transform points text-anchor d data-m data-term data-issue data-nav data-ask data-go data-kind data-group data-a
-data-b""".split())
+autocomplete disabled aria-label aria-labelledby aria-hidden aria-live aria-expanded viewBox x y x1 x2 y1 y2 cx cy r
+width height transform points text-anchor d rowspan colspan start display mathvariant accent data-m data-term
+data-issue data-nav data-ask data-go data-kind data-group data-a data-b data-explain data-fold""".split())
 VALUE = re.compile(r"[A-Za-z0-9 _.,:;#/()'+=?-]*")
 ANCHOR = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,80}")
+KEY = re.compile(r"[a-z][a-z0-9-]{0,40}")   # a key the page made: of an explanation, of a fold
 FREE = ("content", "aria-label", "placeholder")   # take only the constants below (and the policy)
 CONSTANTS = frozenset((VIEWPORT, "no-referrer", "Ways into the mind", "One memory", "First visit",
-                       "Words to look for", "For example: memory, quote, speed", "Map of the threads of this mind over time"))
+                       "Words to look for", "For example: memory, quote, speed", "Map of the threads of this mind over time",
+                       "The parts of the text, in order", "The threads, by section", "The map of what we know",
+                       "Open or close every branch", "Which map to show"))
+MSPACE_WIDTHS = frozenset(("0.1667em", "0.2222em", "0.2778em", "-0.1667em", "1em", "2em", "0.5em"))
+
+
+def _whole(low, high):
+    def accepts(value):
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, str):
+            value = int(value) if re.fullmatch(r"[0-9]{1,6}", value) else None
+        return isinstance(value, int) and low <= value <= high
+    return accepts
+
+
+# an attribute that only some elements may carry, and with which values: attribute -> (tags, accepts a value)
+ATTR_RULES = {
+    "rowspan": (frozenset(("td", "th")), _whole(1, 40)),
+    "colspan": (frozenset(("td", "th")), _whole(1, 12)),
+    "start": (frozenset(("ol",)), _whole(1, 9999)),
+    "display": (frozenset(("math",)), lambda value: value in ("block", "inline")),
+    "mathvariant": (frozenset(("mi",)), lambda value: value == "normal"),
+    "accent": (frozenset(("mover",)), lambda value: value == "true"),
+    "aria-expanded": (frozenset(("button",)), lambda value: value in ("true", "false")),
+    "data-explain": (frozenset(("button",)), lambda value: isinstance(value, str) and bool(KEY.fullmatch(value))),
+    "data-fold": (frozenset(("button",)), lambda value: isinstance(value, str) and bool(KEY.fullmatch(value))),
+}
 
 
 def esc(value):
@@ -114,6 +143,11 @@ def E(tag, attrs=None, *children):
             continue
         if name not in ATTRS:
             raise ValueError("attribute %s is not on the list" % name)
+        rule = ATTR_RULES.get(name)
+        if rule is not None and (tag not in rule[0] or not rule[1](value)):
+            raise ValueError("attribute %s is not allowed on <%s> or not with that value" % (name, tag))
+        if name == "width" and tag == "mspace" and value not in MSPACE_WIDTHS:
+            raise ValueError("an mspace takes one of the fixed widths")
         if name == "href":
             if not isinstance(value, Href):
                 raise ValueError("an href is made by anchor() or github_url()")
@@ -199,20 +233,67 @@ def github_url(kind, repo, *parts):
 
 
 # ---------------------------------------------------------------- the page's own words
+# The kinds of memory, the states of a memory and the states of a thread are data: a row here, and a color in the
+# style, adds one; the script reads only the keys. Each row has one fixed explanation, opened by a button.
 
-KIND_CLASS = {kind: "k-" + kind for kind in ("result", "decision", "failure", "idea", "question", "correction",
-                                              "checkpoint")}
-STATE_CLASS = {state: "s-" + state for state in ("stands", "replaced", "aside", "answered", "tried", "open", "led",
-                                                 "plain")}
+KIND_TABLE = (  # (kind, the word, what it records)
+    ("result", "Found", "A finding: something we measured or checked, told with what was done and what the numbers say."),
+    ("decision", "Decided", "A decision: a choice the project made, in the words of the person who made it."),
+    ("failure", "Went wrong", "Something that went wrong: what failed and, when it is known, why."),
+    ("idea", "Idea", "An idea written down. It may be tested later, taken up in a decision, or set aside."),
+    ("question", "Asked", "A question the project asked. It stays open until a later result, failure or decision "
+                          "answers it."),
+    ("correction", "Corrected", "A correction: an earlier statement was wrong, and this says what is right."),
+    ("checkpoint", "Pause", "A pause is where a stretch of work ended and a note was left for whoever came next. It is "
+                            "not a claim, so it has no state. What came after it follows by time."),
+)
+STATE_TABLE = (  # (state, the key of its explanation, its title, what it means)
+    ("stands", "state-stands", "Still stands", "Nothing recorded later replaces it or sets it aside. It is what we hold "
+                                               "today; it can still turn out wrong."),
+    ("replaced", "state-replaced", "Replaced", "A later memory of the same kind says something else. The newer one is one "
+                                              "step away."),
+    ("aside", "state-aside", "Set aside", "We chose not to go this way. The memory that says what we did instead is "
+                                          "linked."),
+    ("open", "state-open", "Still open", "Asked, and no later memory answers it."),
+    ("answered", "state-answered", "Answered", "A later result, failure or decision answers it."),
+    ("untested", "state-untested", "Not tested yet", "Written down; nothing took it up and no result tested it."),
+    ("taken", "state-taken", "Taken up", "A later decision or finding was made because of this idea. No result has put "
+                                         "the idea itself to a test."),
+    ("tried", "state-tried", "Tried", "A result or a failure put it to a test."),
+    ("nothing", "state-nothing", "Nothing followed yet", "No decision or fix points back to this failure."),
+    ("led", "state-led", "Led to a change", "A later memory was made because of it."),
+)
+THREAD_TABLE = (  # (the key of its explanation, its title, what it means)
+    ("thread-open", "Open points", "Its open questions, untested ideas and failures nothing followed."),
+    ("thread-clear", "Nothing open", "Every question in it has an answer and every failure a follow-up. Its text can "
+                                     "still change."),
+    ("thread-aside", "Set aside", "Its topic was closed out; the story says why."),
+)
+KIND_CLASS = {kind: "k-" + kind for kind, _, _ in KIND_TABLE}
+STATE_CLASS = {css: "s-" + css for css in ("stands", "replaced", "aside", "answered", "tried", "taken", "open", "led",
+                                           "pause", "plain")}
 LINK_CLASS = {kind: "l-" + kind for kind in ("because", "instead", "replaces", "checks")}
-GROUPS = ("stands", "open", "wrong", "changed")
-KIND_WORD = {"result": "Found", "decision": "Decided", "failure": "Went wrong", "idea": "Idea", "question": "Asked",
-             "correction": "Corrected", "checkpoint": "Paused"}
-NAV = (("now", "Where are we?"), ("threads", "How did we get here?"), ("lessons", "What did we learn the hard way?"),
-       ("settled", "What is settled?"), ("open", "What is still open?"), ("map", "Show me the whole mind"),
-       ("ask", "Ask the mind"))
-CUT = "This is cut here; the whole text is on GitHub."
+GROUPS = ("stands", "open", "wrong", "changed", "done", "pause")
+KIND_WORD = {kind: word for kind, word, _ in KIND_TABLE}
+EXPLAIN = tuple(("kind-" + kind, word, text) for kind, word, text in KIND_TABLE) + \
+    tuple((key, title, text) for _, key, title, text in STATE_TABLE) + THREAD_TABLE
+EXPLAIN_TEXT = {key: (title, text) for key, title, text in EXPLAIN}
+HOW_TO_READ = (
+    ("A memory", "One thing the project recorded: a finding, a decision, something that went wrong, an idea, a question, "
+                 "a correction or a pause. Each is written once and never changed."),
+    ("A thread", "One line of thought, told from its first memory to its latest. It is one topic of the work."),
+    ("A part", "The current text of one section for one topic, with the day it last changed and what is still open on "
+               "it. The record keeps one current version of each part; it is not marked draft or final."),
+    ("A pause", EXPLAIN_TEXT["kind-checkpoint"][1]),
+)
+NAV = (("now", "Where are we?"), ("text", None), ("threads", "How did we get here?"),
+       ("settled", "What is settled?"), ("lessons", "What did we learn the hard way?"), ("open", "What is still open?"),
+       ("map", "Show me the whole mind"), ("ask", "Ask the mind"))
+CUT = "This part is long, so the page stops here."
+CUT_LINK = "Read the rest on GitHub."
 TABLE_CUT = "Only the first 40 rows and 12 columns are shown here."
+TEX_NOTE = "A formula the page cannot draw is shown as it was written."
+HTML_TABLE_NOTE = "This table is written in a form the page cannot draw. Open it on GitHub."
 PAUSE_UNTOLD = ("The last pause is not told here: the comment that holds it is not by one of your allowed accounts, was "
                 "changed after it was posted, or has not been read yet. Run index.py sync and build the page again.")
 NOT_SHOWN = ("The text of this thread is not shown here: someone outside your allowed accounts wrote or changed it, or "
@@ -221,6 +302,14 @@ OLD_NOTE = "Recorded before plain lines and links were kept, so this is told in 
 CHANGED_NOTE = "Changed on GitHub after it was posted."
 CHAIN_NOTE = ("The first memories here were recorded before links between memories were kept. They are in time order "
               "only.")
+TEXT_LEDE = ("This is the current text of each part, in the order of the deliverable. The record keeps one current "
+             "version of each part; it is not marked draft or final. Beside each part is the day it last changed and what "
+             "is still open on it.")
+MAX_MATH_NODES, MAX_MATH_DEPTH = 300, 8
+MATH_TOKENS = frozenset(("mi", "mn", "mo", "mtext"))
+MATH_PAIR = frozenset(("msub", "msup", "mfrac", "mover", "munder"))
+MATH_TRIPLE = frozenset(("msubsup", "munderover"))
+MATH_MANY = frozenset(("msqrt", "mrow"))
 
 
 def kind_class(memory):
@@ -247,6 +336,15 @@ def plural(count, one, many):
     return one if count == 1 else many % count
 
 
+def feeds_first(thread, feeds):
+    """The address in the page of the first part of the text that a thread feeds."""
+    feed = next((f for f in thread.get("feeds", []) if isinstance(f, dict)), {})
+    ordinal = feed.get("ordinal")
+    if isinstance(ordinal, int) and not isinstance(ordinal, bool):
+        return anchor("text-%d-%d" % (integer(thread.get("n")), ordinal))
+    return anchor("sec-%d" % integer(feed.get("n")))
+
+
 class Page:
     """Renders one model. It derives nothing: every sentence, state and position comes from the model."""
 
@@ -258,6 +356,10 @@ class Page:
         self.words = {integer(w.get("n")): w for w in model.get("words", []) if integer(w.get("n"))}
         self.cited = {integer(c.get("n")): c for c in model.get("cited", []) if integer(c.get("n"))}
         self.pauses = model.get("pauses", [])
+        self.outline = model.get("outline") if isinstance(model.get("outline"), dict) else {}
+        self.stores = {n: {(b.get("kind"), b.get("id")): b for b in t.get("blocks", []) if isinstance(b, dict)}
+                       for n, t in self.threads.items()}
+        self.fallbacks = 0
 
     # ------------------------------------------------------------ text
 
@@ -266,20 +368,57 @@ class Page:
             return text
         return E(tag, {"class": "term", "data-term": "w%d" % n, "type": "button" if tag == "button" else None}, text)
 
-    def runs(self, items, tag="span"):
+    @staticmethod
+    def styled(node, run):
+        """`node` inside the inline elements that the run's flags name."""
+        for flag, tag in (("sup", "sup"), ("sub", "sub"), ("i", "i"), ("b", "b")):
+            if run.get(flag) is True:
+                node = E(tag, None, node)
+        return node
+
+    def runs(self, items, tag="span", nested=False):
         out = []
         for run in items if isinstance(items, list) else []:
             if not isinstance(run, dict):
                 continue
             if "t" in run:
-                out.append(text_of(run["t"]))
+                out.append(self.styled(text_of(run["t"]), run))
             elif "code" in run:
                 out.append(E("code", None, text_of(run["code"])))
             elif "w" in run:
-                out.append(self.term(text_of(run["w"]), integer(run.get("n")), tag))
+                out.append(self.styled(self.term(text_of(run["w"]), integer(run.get("n")), tag), run))
             elif "cite" in run:
                 out.append(self.cite(run))
+            elif "math" in run:
+                out.append(self.math(run["math"], False))
+            elif "link" in run:
+                out.append(self.link_run(run, nested))
         return J(*out)
+
+    def link_run(self, run, nested):
+        """A link of the record's text: an anchor only when its address is one of the forms of github_url, built from
+        checked parts; else the words and the address written out as text, never an href."""
+        words = self.runs(run.get("link"), nested=True)
+        to = run.get("to") if isinstance(run.get("to"), dict) else None
+        address = None if nested or to is None else self.address(to)
+        if address:
+            return E("a", {"href": address}, words)
+        said = text_of(run.get("said"))
+        return J(words, " (", said, ")") if said else words
+
+    def address(self, to):
+        kind, repo = to.get("kind"), text_of(to.get("repo"))
+        if kind == "issue":
+            return github_url("issue", repo, to.get("n"))
+        if kind == "pull":
+            return github_url("pull", repo, to.get("n"))
+        if kind == "memory":
+            return github_url("memory", repo, to.get("n"), to.get("cid"))
+        if kind == "lines":
+            return github_url("lines", repo, to.get("commit"), to.get("path"), to.get("first"), to.get("last"))
+        if kind == "picture":
+            return github_url("picture", repo, to.get("ref"), to.get("path"))
+        return None
 
     def cite(self, run):
         n, words, kind = integer(run.get("n")), text_of(run.get("text")), run.get("cite")
@@ -291,33 +430,120 @@ class Page:
             return E("a", {"class": "cite", "href": anchor("m-%d" % n), "data-m": n}, words)
         return E("span", None, words)
 
+    # ------------------------------------------------------------ formulas
+
+    def math(self, data, display):
+        """A formula as MathML when its tree keeps every rule of the contract (fifteen element names, text only in
+        tokens, the number of children each name takes, at most 300 nodes and 8 levels); else its source as text."""
+        data = data if isinstance(data, dict) else {}
+        tree = data.get("m")
+        if isinstance(tree, dict):
+            try:
+                return E("math", {"display": "block" if display else "inline"}, self.math_node(tree, 1, [0]))
+            except ValueError:
+                pass
+        self.fallbacks += 1
+        source = text_of(data.get("s"))
+        return E("pre", {"class": "tex"}, source) if display else E("code", {"class": "tex"}, source)
+
+    def math_node(self, node, depth, count):
+        count[0] += 1
+        if depth > MAX_MATH_DEPTH or count[0] > MAX_MATH_NODES or not isinstance(node, dict):
+            raise ValueError("a formula over the limits")
+        name = node.get("m")
+        if name in MATH_TOKENS:
+            text = node.get("t")
+            if "c" in node or not isinstance(text, str) or len(text) > 80:
+                raise ValueError("a token holds text only")
+            return E(name, {"mathvariant": "normal"} if name == "mi" and node.get("v") == "normal" else None, text)
+        if name == "mspace":
+            if "c" in node or "t" in node:
+                raise ValueError("a space holds nothing")
+            return E("mspace", {"width": node.get("w")})
+        children = node.get("c")
+        if not isinstance(children, list) or "t" in node:
+            raise ValueError("a layout element holds elements")
+        wanted = 2 if name in MATH_PAIR else 3 if name in MATH_TRIPLE else None
+        if name not in MATH_PAIR | MATH_TRIPLE | MATH_MANY or (wanted is None and not children) or \
+                (wanted is not None and len(children) != wanted):
+            raise ValueError("an element with the wrong number of children")
+        return E(name, {"accent": "true"} if name == "mover" and node.get("acc") is True else None,
+                 *[self.math_node(child, depth + 1, count) for child in children])
+
+    # ------------------------------------------------------------ tables and blocks
+
+    def cell(self, cell, head):
+        cell = cell if isinstance(cell, dict) else {}
+        rs, cs = integer(cell.get("rs"), 1), integer(cell.get("cs"), 1)
+        shade = {"l": "al", "c": "ac", "r": "ar"}.get(cell.get("a"))
+        return E("th" if head or cell.get("h") is True else "td",
+                 {"rowspan": rs if rs > 1 else None, "colspan": cs if cs > 1 else None, "class": shade},
+                 self.runs(cell.get("r")))
+
     def table(self, table):
         if not isinstance(table, dict):
             return ""
-        head = [E("th", None, self.runs(cell)) for cell in table.get("head", [])]
-        rows = [E("tr", None, *[E("td", None, self.runs(cell)) for cell in row]) for row in table.get("rows", [])
-                if isinstance(row, list)]
-        return J(E("div", {"class": "tbox"}, E("table", None, E("thead", None, E("tr", None, *head)),
-                                                E("tbody", None, *rows))),
+        rows = lambda key, head: [E("tr", None, *[self.cell(c, head) for c in row]) for row in table.get(key, [])
+                                  if isinstance(row, list)]
+        caption = self.runs(table.get("caption")) if table.get("caption") else ""
+        return J(E("p", {"class": "quiet"}, caption) if caption else "",
+                 E("div", {"class": "tbox"}, E("table", None, E("thead", None, *rows("head", True)),
+                                               E("tbody", None, *rows("rows", False)))),
                  E("p", {"class": "quiet"}, TABLE_CUT) if table.get("cut") else "")
 
-    def blocks(self, doc, cut=CUT):
-        """The blocks of a doc of the model as paragraphs, lists, quotations and tables."""
-        out = []
+    def blocks(self, doc, cut_to=None, store=None, issue=None):
+        """The blocks of a doc of the model. `cut_to` is the address where a doc that was cut goes on (the topic or the
+        comment); `store` holds the figure and table blocks that stand in the text, by (kind, id); `issue` is the
+        topic's number, for the link of a table the page cannot draw."""
+        out, before = [], self.fallbacks
         for block in (doc or {}).get("blocks", []) if isinstance(doc, dict) else []:
-            if not isinstance(block, dict):
-                continue
-            if "p" in block:
-                out.append(E("p", None, self.runs(block["p"])))
-            elif "ul" in block:
-                out.append(E("ul", {"class": "plainlist"}, *[E("li", None, self.runs(item)) for item in block["ul"]]))
-            elif "quote" in block:
-                out.append(E("blockquote", None, self.runs(block["quote"])))
-            elif "table" in block:
-                out.append(self.table(block["table"]))
+            if isinstance(block, dict):
+                out.append(self.block(block, store, issue))
+        if self.fallbacks > before:
+            out.append(E("p", {"class": "quiet"}, TEX_NOTE))
         if isinstance(doc, dict) and doc.get("cut"):
-            out.append(E("p", {"class": "quiet"}, cut))
+            out.append(E("p", {"class": "quiet"}, CUT, " ", E("a", {"href": cut_to}, CUT_LINK) if cut_to else ""))
         return J(*out)
+
+    def block(self, block, store, issue):
+        if "p" in block:
+            return E("p", None, self.runs(block["p"]))
+        if "h" in block:
+            data = block["h"] if isinstance(block["h"], dict) else {}
+            return E({1: "h4", 2: "h5", 3: "h6"}.get(integer(data.get("level")), "h6"), {"class": "sub"},
+                     self.runs(data.get("r")))
+        for key, tag in (("ul", "ul"), ("ol", "ol")):
+            if key in block:
+                return self.list_block(block, key, tag)
+        if "quote" in block:
+            return E("blockquote", None, self.runs(block["quote"]))
+        if "code" in block:
+            return E("pre", None, E("code", None, text_of(block["code"])))
+        if "math" in block:
+            return E("div", {"class": "formula"}, self.math(block["math"], True))
+        if "table" in block:
+            return self.table(block["table"])
+        if "note" in block:
+            address = github_url("issue", self.repo, issue)
+            return E("p", {"class": "quiet"}, HTML_TABLE_NOTE, " ", E("a", {"href": address}, "Open it on GitHub")
+                     if address else "")
+        if "block" in block and store is not None:
+            data = block["block"] if isinstance(block["block"], dict) else {}
+            found = store.get((data.get("kind"), data.get("id")))
+            if found:
+                return self.table_block(found) if found.get("kind") == "table" else self.figure_block(found)
+        return ""
+
+    def list_block(self, block, key, tag):
+        items = []
+        for item in block[key] if isinstance(block[key], list) else []:
+            item = item if isinstance(item, dict) else {}
+            sub = item.get("sub") if isinstance(item.get("sub"), dict) else None
+            items.append(E("li", None, self.runs(item.get("r")),
+                           self.list_block(sub, "ul" if "ul" in sub else "ol", "ul" if "ul" in sub else "ol")
+                           if sub and ("ul" in sub or "ol" in sub) else ""))
+        start = integer(block.get("start"), 1) if tag == "ol" else 1
+        return E(tag, {"class": "plainlist", "start": start if start > 1 else None}, *items)
 
     def first_runs(self, doc):
         """The runs of the first paragraph of a doc (a meaning, an opening)."""
@@ -365,23 +591,42 @@ class Page:
         thread = self.threads.get(integer(n))
         return text_of(thread.get("name")) if thread else mind_model.PHRASES["thread.unnamed"]
 
+    def section_link(self, n, label):
+        return E("a", {"href": anchor("sec-%d" % integer(n))}, text_of(label))
+
     # ------------------------------------------------------------ pieces
+
+    @staticmethod
+    def explain_button(key, text, cls):
+        """A word that explains itself when chosen: a button whose key names a fixed explanation."""
+        if key in EXPLAIN_TEXT or key == "how":
+            return E("button", {"type": "button", "class": cls, "data-explain": key}, text)
+        return E("span", {"class": cls}, text)
 
     @staticmethod
     def mark(memory_or_kind):
         kind = memory_or_kind if isinstance(memory_or_kind, str) else memory_or_kind.get("kind")
         return E("span", {"class": "mk " + KIND_CLASS.get(kind, "k-other"), "aria-hidden": "true"})
 
-    @staticmethod
-    def chip(memory):
-        text = text_of(memory.get("latest")) or text_of(memory.get("chip"))
-        return E("span", {"class": "chip " + state_class(memory)}, text) if text else ""
+    def chip(self, memory, thread=False):
+        words = text_of(memory.get("latest")) + ("" if thread else text_of(memory.get("latest_note"))) \
+            or text_of(memory.get("chip"))
+        if not words:
+            return ""
+        return self.explain_button(text_of(memory.get("explain")), words, "chip " + state_class(memory))
 
     def meta(self, memory, thread=False, date=False):
+        """A card's first line: the kind, where, the day and the state. A latest decision or result says so in its
+        chip; on a page about the whole project it names its thread, as a link, after the chip."""
+        latest, note = text_of(memory.get("latest")), text_of(memory.get("latest_note"))
+        tail = E("span", {"class": "in"}, " in ", self.thread_link(memory.get("thread")), note) \
+            if latest and thread else ""
         return E("div", {"class": "meta"}, self.mark(memory),
-                 E("span", {"class": "kw"}, KIND_WORD.get(memory.get("kind"), "Noted")),
-                 E("span", {"class": "in"}, "in ", self.thread_name(memory.get("thread"))) if thread else "",
-                 E("span", {"class": "date"}, text_of(memory.get("day"))) if date else "", self.chip(memory))
+                 self.explain_button("kind-" + text_of(memory.get("kind")), KIND_WORD.get(memory.get("kind"), "Noted"),
+                                     "kw"),
+                 E("span", {"class": "in"}, "in ", self.thread_link(memory.get("thread"))) if thread and not latest
+                 else "", E("span", {"class": "date"}, text_of(memory.get("day"))) if date else "",
+                 self.chip(memory, thread), tail)
 
     def card(self, memory, thread=True):
         return E("div", {"class": "card %s %s" % (kind_class(memory), state_class(memory))},
@@ -404,22 +649,36 @@ class Page:
                  J(" with ", E("code", None, text_of(block.get("command")))) if text_of(block.get("command")) else "",
                  ".")
 
+    def table_block(self, block):
+        """A table block drawn open where the author put it."""
+        return E("div", {"class": "blockfig"}, E("p", {"class": "evtitle"}, text_of(block.get("title"))),
+                 E("p", None, text_of(block.get("caption"))), self.table(block.get("table")), self.made_from(block))
+
     def table_ref(self, block):
+        place = block.get("place") if isinstance(block.get("place"), dict) else {}
+        ordinal = place.get("ordinal")
+        where = E("a", {"href": anchor("text-%d-%d" % (integer(place.get("thread")), ordinal))}, "See it in the text") \
+            if isinstance(ordinal, int) and not isinstance(ordinal, bool) and integer(place.get("thread")) in self.threads \
+            else ""
         return self.show("Show the table", E("p", {"class": "evtitle"}, text_of(block.get("title"))),
                          E("p", None, text_of(block.get("caption"))), self.table(block.get("table")),
                          self.made_from(block),
-                         E("p", {"class": "quiet"}, "This is the table as it stands in what we say now."))
+                         E("p", {"class": "quiet"}, "This is the table as it is in the current text. ", where))
+
+    def figure_body(self, block):
+        address = github_url("picture", text_of(block.get("repo")) or self.repo, block.get("ref"), block.get("path"))
+        return [E("p", {"class": "evtitle"}, text_of(block.get("title"))), E("p", None, text_of(block.get("caption"))),
+                E("p", {"class": "quiet"}, "The picture is ", E("code", None, text_of(block.get("path"))),
+                  " at ", text_of(block.get("ref")), ".") if text_of(block.get("path")) else "",
+                self.made_from(block),
+                E("a", {"href": address}, "Open the picture on GitHub")
+                if address else E("p", {"class": "nothing"}, "This memory names a figure that this page cannot link to.")]
+
+    def figure_block(self, block):
+        return E("div", {"class": "blockfig"}, *self.figure_body(block))
 
     def figure_ref(self, block):
-        address = github_url("picture", text_of(block.get("repo")) or self.repo, block.get("ref"), block.get("path"))
-        return self.show("Show the figure", E("p", {"class": "evtitle"}, text_of(block.get("title"))),
-                         E("p", None, text_of(block.get("caption"))),
-                         E("p", {"class": "quiet"}, "The picture is ", E("code", None, text_of(block.get("path"))),
-                           " at ", text_of(block.get("ref")), ".") if text_of(block.get("path")) else "",
-                         self.made_from(block),
-                         E("a", {"href": address}, "Open the picture on GitHub")
-                         if address else E("p", {"class": "nothing"}, "This memory names a figure that this page cannot "
-                                                                       "link to."))
+        return self.show("Show the figure", *self.figure_body(block))
 
     def code_ref(self, item):
         first, last = integer(item.get("from")), integer(item.get("to"))
@@ -444,7 +703,7 @@ class Page:
             kind = item.get("kind")
             if kind in ("table", "figure") and not item.get("found"):
                 out.append(E("p", {"class": "quiet"}, (
-                    "This memory pointed to a %s that is no longer in what we say now." if item.get("shown") else
+                    "This memory pointed to a %s that is no longer in the current text." if item.get("shown") else
                     "This memory points to a %s in a text that this page does not show.") % kind))
             elif kind == "table":
                 out.append(self.table_ref(item))
@@ -484,11 +743,11 @@ class Page:
             return ""
         return E("details", {"class": "remind"}, E("summary", None, "Remind me what was going on"), *rows)
 
-    def field(self, entry):
+    def field(self, entry, cut_to=None):
         if entry.get("type") == "people":
             body = E("p", {"class": "people"}, text_of(entry.get("people")))
         else:
-            body = self.blocks(entry.get("doc"))
+            body = self.blocks(entry.get("doc"), cut_to)
         return E("div", {"class": "f"}, E("span", {"class": "lab"}, text_of(entry.get("name"))), body)
 
     def links(self, title, pairs):
@@ -519,7 +778,7 @@ class Page:
                  self.remind(memory),
                  E("p", {"class": "ans"}, text_of(memory.get("passage"))),
                  E("p", {"class": "inthread"}, "Part of the thread ", self.thread_link(memory.get("thread")), "."),
-                 *[self.field(entry) for entry in memory.get("fields", [])],
+                 *[self.field(entry, address) for entry in memory.get("fields", [])],
                  self.links("What led here", memory.get("out", [])),
                  self.links("What came of it", memory.get("in", [])),
                  E("div", {"class": "f refs"}, E("span", {"class": "lab"}, "If you want to see for yourself"), *refs)
@@ -534,6 +793,15 @@ class Page:
                    if address else ""))
 
     # ------------------------------------------------------------ the views
+
+    def untold_line(self):
+        """The last line of every view but the first: how many things the page does not tell, and where it says why."""
+        count = integer((self.model.get("not_told") or {}).get("count"))
+        if not count:
+            return ""
+        return E("p", {"class": "quiet untoldline"}, plural(count, "1 thing is not told on this page. ",
+                                                            "%d things are not told on this page. "),
+                 E("a", {"href": anchor("untold")}, "See why"))
 
     def now_view(self):
         last, out = self.model.get("last"), []
@@ -569,15 +837,164 @@ class Page:
                 latest.append(E("li", None, E("span", {"class": "lab"}, label), self.card(self.m[mid])))
         if latest:
             out += [E("h3", None, "The latest of each kind"), E("ul", {"class": "latest"}, *latest)]
-        return self.view("now", "Where we are", None, *out)
+        return self.view("now", "Where we are", None, *out, self.untold())
+
+    # ------------------------------------------------------------ the text
+
+    OPEN_GROUPS = ("questions", "ideas", "failures", "unknown", "holds", "tasks")
+
+    def sentences(self, items):
+        """The sentences of a part's status line, each a list of segments, as plain nodes."""
+        out = []
+        for sentence in items if isinstance(items, list) else []:
+            for seg in sentence.get("segs", []) if isinstance(sentence, dict) and isinstance(sentence.get("segs"), list) \
+                    else []:
+                if not isinstance(seg, dict):
+                    continue
+                words = text_of(seg.get("t"))
+                if "thread" in seg and integer(seg["thread"]) in self.threads:
+                    out.append(self.thread_link(seg["thread"]))
+                elif "m" in seg and integer(seg["m"]) in self.m:
+                    out.append(E("a", {"class": "inl", "href": anchor("m-%d" % integer(seg["m"])),
+                                       "data-m": integer(seg["m"])}, words))
+                elif "open" in seg and seg["open"] in self.OPEN_GROUPS:
+                    out.append(E("a", {"href": anchor("open-%s" % seg["open"])}, words))
+                else:
+                    out.append(words)
+            out.append(" ")
+        return out
+
+    def part_link(self, part):
+        n, ordinal = integer(part.get("thread")), part.get("ordinal")
+        if isinstance(ordinal, int) and not isinstance(ordinal, bool):
+            return E("a", {"href": anchor("text-%d-%d" % (n, ordinal))}, self.thread_name(n))
+        return self.thread_link(n)
+
+    def part(self, part):
+        n, ordinal = integer(part.get("thread")), part.get("ordinal")
+        thread = self.threads.get(n)
+        if not thread:
+            return ""
+        sections = thread.get("sections", [])
+        text = sections[ordinal] if isinstance(ordinal, int) and not isinstance(ordinal, bool) and \
+            0 <= ordinal < len(sections) and isinstance(sections[ordinal], dict) else None
+        topic = thread.get("topic")
+        address = github_url("issue", self.repo, topic)
+        if thread.get("shown") is True and text is not None:
+            body = self.blocks(text.get("doc"), address, self.stores.get(n), topic)
+            ident = "text-%d-%d" % (n, ordinal)
+        else:
+            body = J(E("p", None, NOT_SHOWN), E("a", {"href": address}, "Open it on GitHub") if address else "")
+            ident = None
+        return E("article", {"class": "part", "id": ident},
+                 E("p", {"class": "status"}, *self.sentences(part.get("status"))), E("div", {"class": "parttext"}, body),
+                 E("p", {"class": "partlinks"}, E("a", {"href": anchor("settled-%d" % n)}, "Why it says this"), "  ",
+                   E("a", {"href": anchor("thread-%d" % n)}, "How we got here")))
+
+    def text_view(self):
+        outline = self.outline
+        groups = [g for g in outline.get("deliverables", []) if isinstance(g, dict)] \
+            if isinstance(outline.get("deliverables"), list) else []
+        other = [o for o in outline.get("other", []) if isinstance(o, dict)] if isinstance(outline.get("other"), list) \
+            else []
+        title = text_of(outline.get("title")) or "What we deliver"
+        noun = text_of(outline.get("noun")) or "the deliverable"
+        if not groups and not other:
+            return self.view("text", title, TEXT_LEDE,
+                             E("p", {"class": "quiet"}, "No part of %s has been written into the record yet." % noun),
+                             self.untold_line())
+        contents, body, sourced = [], [], []
+        for group in groups:
+            sections = [s for s in group.get("sections", []) if isinstance(s, dict)]
+            if len(groups) > 1:
+                body.append(E("h3", {"class": "deliv"}, text_of(group.get("title"))))
+            for section in sections:
+                parts = [p for p in section.get("parts", []) if isinstance(p, dict)]
+                n = integer(section.get("n"))
+                contents.append(E("li", None, self.section_link(n, section.get("label")),
+                                  E("ul", None, *[E("li", None, self.part_link(p)) for p in parts])))
+                body.append(E("section", {"class": "sec", "id": "sec-%d" % n}, E("h3", None, text_of(section.get("label"))),
+                              self.blocks(section.get("before")), *[self.part(p) for p in parts]))
+                sourced += [integer(p.get("thread")) for p in parts]
+        by_thread = []
+        for entry in other:
+            n = integer(entry.get("thread"))
+            if not by_thread or by_thread[-1][0] != n:
+                by_thread.append((n, []))
+            by_thread[-1][1].append(entry)
+        for n, entries in by_thread:
+            heading = E("h3", None, text_of((self.threads.get(n) or {}).get("name"))) if not groups else \
+                E("h3", None, "Other text of ", self.thread_link(n))
+            if not groups:
+                contents.append(E("li", None, E("a", {"href": anchor("other-%d" % n)}, self.thread_name(n))))
+            body.append(E("section", {"class": "sec", "id": "other-%d" % n}, heading, *[self.part(p) for p in entries]))
+            sourced.append(n)
+        numbers = []
+        for n in dict.fromkeys(sourced):
+            sources = (self.threads.get(n) or {}).get("sources")
+            if sources:
+                numbers.append(self.show(J("Where the numbers of ", self.thread_name(n), " come from"), E("ul", {
+                    "class": "srcs"}, *[E("li", None, E("b", None, self.runs(row.get("statement"))), ": ",
+                                          self.runs(row.get("source"))) for row in sources])))
+        return self.view("text", title, TEXT_LEDE,
+                         E("ul", {"class": "contents", "aria-label": "The parts of the text, in order"}, *contents),
+                         *body, E("h3", None, "Where the numbers come from") if numbers else "", *numbers,
+                         self.untold_line())
+
+    # ------------------------------------------------------------ the story
+
+    def story_line(self, thread):
+        began = thread.get("began")
+        return "It began on %s; the latest memory is from %s." % (text_of(began), text_of(thread.get("ended"))) \
+            if began else "It holds no memories yet."
+
+    def station(self, memory, mark_id=None):
+        return E("li", {"class": "station %s %s%s" % (kind_class(memory), state_class(memory),
+                                                        " deadend" if memory.get("side") is True else ""),
+                        "id": mark_id}, self.meta(memory, date=True), self.said(memory))
+
+    def divider(self, memory, step, mark_id=None):
+        pause = step.get("pause") if isinstance(step.get("pause"), dict) else {}
+        after = self.m.get(integer(pause.get("next")))
+        return E("li", {"class": "pause", "id": mark_id},
+                 E("p", {"class": "pausehead"}, "We paused here on %s." % text_of(pause.get("day"))),
+                 E("p", {"class": "pausefocus"}, text_of(pause.get("focus"))),
+                 E("p", {"class": "quiet"}, J("The work in this thread picked up again on ",
+                                              self.said(after, "inl", text_of(after.get("day"))), ".")
+                   if after else "Nothing has been recorded in this thread since this pause.", "  ",
+                   self.explain_button("kind-checkpoint", "What is a pause?", "ask")))
+
+    def group_node(self, thread, index, nodes):
+        groups = thread.get("groups", [])
+        group = groups[index] if 0 <= index < len(groups) and isinstance(groups[index], dict) else {}
+        task, opened = integer(group.get("task")), group.get("open") is True
+        first, last = text_of(group.get("first")), text_of(group.get("last"))
+        span = first if first == last else "%s to %s" % (first, last)
+        state = "still open" if opened else ("closed on %s" % text_of(group.get("closed")) if group.get("closed")
+                                             else "closed")
+        return E("li", {"class": "group fold" + ("" if opened else " closed"),
+                        "id": "task-%d" % task if group.get("anchor") is True and task else None},
+                 E("button", {"type": "button", "class": "foldbtn", "data-fold": "g%d-%d" % (integer(thread.get("n")), index),
+                              "aria-expanded": "true"},
+                   E("span", {"class": "gt"}, "While working on: ", text_of(group.get("title")) or "a task"),
+                   E("span", {"class": "gm"}, "%s · %s · %s" % (plural(integer(group.get("count")), "1 memory",
+                                                                        "%d memories"), span, state))),
+                 E("ol", {"class": "chain foldbody"}, *nodes))
 
     def chain(self, thread):
         n = integer(thread.get("n"))
-        items = []
-        for step in thread.get("steps", []):
-            memory = self.m.get(integer(step.get("id")))
-            if memory is None:
-                continue
+        steps = [s for s in thread.get("steps", []) if isinstance(s, dict) and integer(s.get("id")) in self.m]
+        items, nodes, current = [], [], None
+
+        def flush():
+            if nodes and current is not None:
+                items.append(self.group_node(thread, current, list(nodes)))
+            del nodes[:]
+
+        for at, step in enumerate(steps):
+            memory = self.m[integer(step.get("id"))]
+            mark_id = "latest-%d" % n if at == len(steps) - 1 else None
+            made = []
             conn = step.get("conn")
             if conn:
                 label, to = [text_of(conn.get("phrase"))], conn.get("to") or {}
@@ -585,66 +1002,154 @@ class Page:
                     label.append(E("a", {"href": anchor("m-%d" % to["id"]), "data-m": to["id"]}, text_of(to.get("day"))))
                 elif "thread" in to and integer(to["thread"]) in self.threads:  # the loose thread is number 0
                     label.append(self.thread_link(to["thread"]))
-                items.append(E("li", {"class": "conn time" if conn.get("time") else "conn"}, *label))
+                made.append(E("li", {"class": "conn time" if conn.get("time") else "conn"}, *label))
             if step.get("note"):
-                items.append(E("li", {"class": "note"}, CHAIN_NOTE))
-            items.append(E("li", {"class": "station %s %s%s" % (kind_class(memory), state_class(memory),
-                                                                 " deadend" if memory.get("side") is True else "")},
-                           self.meta(memory, date=True), self.said(memory)))
+                made.append(E("li", {"class": "note"}, CHAIN_NOTE))
+            made.append(self.divider(memory, step, mark_id) if memory.get("kind") == "checkpoint"
+                        else self.station(memory, mark_id))
+            group = step.get("group")
+            group = group if isinstance(group, int) and not isinstance(group, bool) else None
+            if group != current:
+                flush()
+                current = group
+            if group is None:
+                items += made
+            else:
+                nodes += made
+        flush()
+        return E("ol", {"class": "chain"}, *items)
+
+    def feeds_line(self, thread):
+        links = []
+        for feed in thread.get("feeds", []):
+            if not isinstance(feed, dict):
+                continue
+            ordinal = feed.get("ordinal")
+            links.append(E("a", {"href": anchor("text-%d-%d" % (integer(thread.get("n")), ordinal))}
+                           if isinstance(ordinal, int) and not isinstance(ordinal, bool) else
+                           {"href": anchor("sec-%d" % integer(feed.get("n")))}, text_of(feed.get("label"))))
+        return links
+
+    @staticmethod
+    def join(nodes, last=" and "):
+        out = []
+        for i, node in enumerate(nodes):
+            out += [", " if 0 < i < len(nodes) - 1 else last if i else "", node]
+        return out
+
+    def thread_article(self, thread):
+        n = integer(thread.get("n"))
+        feeds = self.feeds_line(thread)
         opening = thread.get("opening")
-        began = thread.get("began")
-        story = ("It began on %s and holds %s; the latest is from %s." % (
-            text_of(began), plural(len(thread.get("memories", [])), "1 memory", "%d memories"),
-            text_of(thread.get("ended")))) if began else "It holds no memories yet."
-        about = E("div", {"class": "about"}, E("span", {"class": "lab"}, "What this thread is about"),
-                  E("p", {"class": "aboutsay"}, "This thread is about ", self.runs(self.first_runs(opening["about"])), ".")
-                  if opening else E("p", {"class": "aboutsay"}, "Nobody has written what this thread is about yet."),
-                  self.blocks(opening.get("why")) if opening else "", E("p", None, story))
+        stands = thread.get("stands") if isinstance(thread.get("stands"), dict) else {}
+        cards = [E("li", None, E("span", {"class": "lab"}, label), self.card(self.m[integer(stands.get(key))], thread=False))
+                 for key, label in (("decision", "The latest decision"), ("result", "The latest result"))
+                 if integer(stands.get(key)) in self.m]
+        points = [E("li", None, self.said_id(mid)) for mid in stands.get("open", []) if integer(mid) in self.m]
+        tasks = [self.task_note(task, with_story=True) for task in stands.get("tasks", []) if isinstance(task, dict)]
+        noun = text_of(self.outline.get("noun")) or "the deliverable"
+        where = [E("a", {"href": anchor("text-%d-%d" % (n, f["ordinal"])) if isinstance(f.get("ordinal"), int)
+                         and not isinstance(f.get("ordinal"), bool) else anchor("sec-%d" % integer(f.get("n")))},
+                   text_of(f.get("label"))) for f in thread.get("feeds", []) if isinstance(f, dict)]
         return E("article", {"class": "thread", "id": "thread-%d" % n},
                  E("h3", None, text_of(thread.get("name")), " ",
-                   E("span", {"class": "chip " + STATE_CLASS.get(thread.get("status_css"), "s-plain")},
-                     text_of(thread.get("status")))),
-                 about, E("div", {"class": "nowsay"}, E("span", {"class": "lab"}, "What we say now"), self.outcome(thread)),
-                 *[self.task_note(task) for task in thread.get("tasks", [])],
-                 E("ol", {"class": "chain"}, *items))
+                   self.explain_button(text_of(thread.get("status_explain")), text_of(thread.get("status")),
+                                       "chip " + STATE_CLASS.get(thread.get("status_css"), "s-plain"))),
+                 E("p", {"class": "feeds quiet"}, "Feeds ", *self.join(feeds)) if feeds else "",
+                 E("div", {"class": "about"}, E("h4", {"class": "sh"}, "What this thread is about"),
+                   E("p", {"class": "aboutsay"}, "This thread is about ", self.runs(self.first_runs(opening["about"])), ".")
+                   if opening else E("p", {"class": "aboutsay"}, "Nobody has written what this thread is about yet."),
+                   self.blocks(opening.get("why")) if opening else "", E("p", None, self.story_line(thread))),
+                 E("div", {"class": "standing"}, E("h4", {"class": "sh"}, "Where it stands"),
+                   E("ul", {"class": "latest"}, *cards) if cards else "",
+                   E("p", {"class": "lab"}, "Still open here") if points else "",
+                   E("ul", {"class": "plainlist"}, *points) if points else "", *tasks,
+                   E("p", {"class": "quiet"}, "Its text is in %s under " % noun, *self.join(where), ".") if where else ""),
+                 E("h4", {"class": "sh"}, "The story, oldest first"),
+                 E("p", None, E("a", {"class": "jump", "href": anchor("latest-%d" % n)}, "Jump to the latest"))
+                 if thread.get("steps") else "", self.chain(thread))
 
-    def outcome(self, thread):
-        if thread.get("loose") is True:
-            return E("p", None, "These memories belong to no thread of what we deliver.")
-        if thread.get("set_aside") is True:
-            return E("p", None, "This thread is not part of what we deliver. The story below says why.")
-        if thread.get("shown") is not True:
-            address = github_url("issue", self.repo, thread.get("topic"))
-            return J(E("p", None, NOT_SHOWN), E("a", {"href": address},
-                                                "Open the thread on GitHub") if address else "")
-        sections = thread.get("sections", [])
-        if not sections:
-            return E("p", None, "The text of this thread has no sections yet.")
-        first = sections[0]
-        return J(E("p", {"class": "quiet"}, text_of(first.get("heading"))), self.blocks(first.get("doc")),
-                 E("p", {"class": "quiet"}, "The rest is under “What is settled?”.") if len(sections) > 1 else "")
+    def task_note(self, task, with_story=False):
+        if task.get("goal"):
+            words = J("We are working on this: ", self.runs(task["goal"]))
+        elif task.get("shown") is True:
+            words = "An open task has no goal written yet."
+        else:
+            words = "An open task whose text is not shown here."
+        address = github_url("issue", self.repo, task.get("issue"))
+        story = with_story and bool(task.get("memories")) and integer(task.get("thread")) in self.threads
+        return E("div", {"class": "onote task k-checkpoint"},
+                 E("p", {"class": "said"}, words),
+                 E("a", {"class": "quiet", "href": anchor("task-%d" % integer(task.get("issue")))}, "See it in the story")
+                 if story else "", " " if story else "",
+                 E("a", {"class": "quiet", "href": address}, "Open the task on GitHub") if address else "")
+
+    def outline_entry(self, thread):
+        n = integer(thread.get("n"))
+        also = [E("a", {"href": anchor("sec-%d" % integer(f.get("n")))}, text_of(f.get("label")))
+                for f in thread.get("feeds", [])[1:] if isinstance(f, dict)]
+        tasks = []
+        for task in thread.get("tasks", []):
+            if not isinstance(task, dict):
+                continue
+            title = text_of(task.get("title")) or "a task"
+            state = "still open" if task.get("open") is True else "closed"
+            tasks.append(E("li", None, E("a", {"href": anchor("task-%d" % integer(task.get("issue")))}, title)
+                           if task.get("memories") else title, " ", E("span", {"class": "quiet"}, state)))
+        return E("li", None, self.thread_link(n), " ",
+                 self.explain_button(text_of(thread.get("status_explain")), text_of(thread.get("status")),
+                                     "chip " + STATE_CLASS.get(thread.get("status_css"), "s-plain")),
+                 E("span", {"class": "quiet"}, " also feeds ", *self.join(also)) if also else "",
+                 E("ul", {"class": "outline"}, *tasks) if tasks else "")
 
     def threads_view(self):
         threads = self.model.get("threads", [])
-        tabs = E("div", {"class": "tabs", "role": "tablist"},
-                 *[E("a", {"href": anchor("thread-%d" % integer(t.get("n"))), "class": "tab"}, text_of(t.get("name")))
-                   for t in threads])
+        groups = [g for g in self.outline.get("deliverables", []) if isinstance(g, dict)] \
+            if isinstance(self.outline.get("deliverables"), list) else []
+        out = []
+        for group in groups:
+            if len(groups) > 1:
+                out.append(E("h3", {"class": "deliv"}, text_of(group.get("title"))))
+            for section in group.get("sections", []):
+                firsts = [self.threads[integer(p.get("thread"))] for p in section.get("parts", [])
+                          if isinstance(p, dict) and p.get("first") is True and integer(p.get("thread")) in self.threads]
+                if firsts:
+                    out.append(E("section", {"class": "outl"}, E("p", {"class": "lab"}, self.section_link(
+                        section.get("n"), section.get("label"))), E("ul", {"class": "outline"}, *[
+                            self.outline_entry(t) for t in firsts])))
+        unplaced = [self.threads[n] for n in self.outline.get("unplaced", []) if integer(n) in self.threads]
+        if unplaced:
+            out.append(E("section", {"class": "outl"}, E("p", {"class": "lab"}, "Topics"),
+                         E("ul", {"class": "outline"}, *[self.outline_entry(t) for t in unplaced])))
+        aside = [t for t in threads if t.get("set_aside") is True]
+        if aside:
+            out.append(E("section", {"class": "outl"}, E("p", {"class": "lab"}, "Set aside"),
+                         E("ul", {"class": "outline"}, *[self.outline_entry(t) for t in aside])))
+        loose = [t for t in threads if t.get("loose") is True]
+        if loose:
+            out.append(E("section", {"class": "outl"}, E("ul", {"class": "outline"}, *[self.outline_entry(t)
+                                                                                      for t in loose])))
         return self.view("threads", "How we got here", "Each thread is one line of thought, told from its first memory "
-                         "to its latest. Choose a sentence to open that memory.", tabs,
-                         *[self.chain(t) for t in threads])
+                         "to its latest. Choose a sentence to open that memory.",
+                         E("div", {"class": "outlines", "aria-label": "The threads, by section"}, *out),
+                         *[self.thread_article(t) for t in threads], self.untold_line())
+
+    # ------------------------------------------------------------ lessons, what is settled, what is open
 
     def lessons_view(self):
         rows = []
         failures = [m for m in self.model.get("memories", []) if m.get("kind") == "failure"]
         for memory in reversed(failures):
             after = [self.m[integer(pair.get("id"))] for pair in memory.get("in", []) if integer(pair.get("id")) in self.m]
+            told = {integer(other.get("id")) for other in after}
             if after:
                 right = [self.card(other, thread=False) for other in after]
                 for other in after:
                     for css, key, lead in (("replaced", "replaces", "That changed again later: "),
                                            ("aside", "instead", "That was set aside. Instead: ")):
                         newer = [pair for pair in other.get("in", []) if pair.get("kind") == key]
-                        if other.get("css") == css and newer and integer(newer[0].get("id")) in self.m:
+                        if other.get("css") == css and newer and integer(newer[0].get("id")) in self.m \
+                                and integer(newer[0].get("id")) not in told:  # a decision is told once, not twice
                             right.append(E("p", {"class": "quiet"}, lead, self.said_id(newer[0]["id"])))
             elif memory.get("old") is True:
                 thread = self.threads.get(integer(memory.get("thread"))) or {}
@@ -657,7 +1162,7 @@ class Page:
             cause = next((entry for entry in memory.get("fields", []) if entry.get("label") == "Cause"), None)
             rows.append(E("li", {"class": "lesson"},
                           E("div", {"class": "wrong"}, E("span", {"class": "lab"}, "What went wrong, in ",
-                                                         self.thread_name(memory.get("thread"))),
+                                                         self.thread_link(memory.get("thread"))),
                             self.said(memory),
                             E("div", {"class": "why"}, E("span", {"class": "lab"}, "Why it happened"),
                               self.blocks(cause.get("doc"))) if cause else ""),
@@ -665,58 +1170,74 @@ class Page:
                           E("div", {"class": "did"}, E("span", {"class": "lab"}, "What we did about it"), *right)))
         return self.view("lessons", "What we learned the hard way", "Every failure in this mind, newest first, with "
                          "what it led to.", E("ol", {"class": "lessons"}, *rows) if rows else
-                         E("p", {"class": "quiet"}, "Nothing has gone wrong in this record yet."))
+                         E("p", {"class": "quiet"}, "Nothing has gone wrong in this record yet."), self.untold_line())
+
+    REPLACED_WORD = {"decision": "decision", "result": "finding", "correction": "correction"}
+
+    def standing(self, thread, heading=True):
+        """What stands in one thread, with its links to the story and to the text. No text of the topic is here."""
+        n = integer(thread.get("n"))
+        rests = []
+        for rest in thread.get("rests", []):
+            memory = self.m.get(integer(rest.get("id")))
+            if memory is None:
+                continue
+            older = [mid for mid in rest.get("replaced", []) if integer(mid) in self.m]
+            word = self.REPLACED_WORD.get(memory.get("kind"), "memory")
+            extra = E("details", {"class": "older"},
+                      E("summary", None, ("It replaced an earlier %s. See it" % word) if len(older) == 1 else
+                        "It replaced %d earlier %ss. See them" % (len(older), word)),
+                      *[E("p", {"class": "struck"}, self.said_id(mid)) for mid in older]) if older else ""
+            rests.append(E("li", {"class": "rest " + kind_class(memory)}, self.mark(memory),
+                           E("div", None, self.said(memory), extra)))
+        stands = thread.get("stands") if isinstance(thread.get("stands"), dict) else {}
+        opened = len([mid for mid in stands.get("open", []) if integer(mid) in self.m])
+        nothing = E("p", {"class": "quiet"}, "Nothing here stands yet.", " ",
+                    E("a", {"href": anchor("thread-%d" % n)}, plural(opened, "1 point is open", "%d points are open"))
+                    if opened else "")
+        feeds = self.feeds_line(thread)
+        return E("article", {"class": "settled", "id": "settled-%d" % n},
+                 E("h4", {"class": "sh"}, self.thread_link(n)) if heading else "",
+                 E("p", {"class": "quiet"}, "Also feeds ", *self.join(feeds[1:])) if len(feeds) > 1 else "",
+                 E("ul", {"class": "restson"}, *rests) if rests else nothing,
+                 E("p", {"class": "partlinks"}, E("a", {"href": anchor("thread-%d" % n)}, "How we got here"),
+                   "  " if feeds else "", E("a", {"href": feeds_first(thread, feeds)}, "The text") if feeds else ""))
 
     def settled_view(self):
-        blocks, left = [], []
+        out = []
+        groups = [g for g in self.outline.get("deliverables", []) if isinstance(g, dict)] \
+            if isinstance(self.outline.get("deliverables"), list) else []
+        for group in groups:
+            if len(groups) > 1:
+                out.append(E("h3", {"class": "deliv"}, text_of(group.get("title"))))
+            for section in group.get("sections", []):
+                firsts = [self.threads[integer(p.get("thread"))] for p in section.get("parts", [])
+                          if isinstance(p, dict) and p.get("first") is True and integer(p.get("thread")) in self.threads]
+                if firsts:
+                    out.append(E("section", {"class": "setsec"}, E("h3", None, self.section_link(section.get("n"),
+                                                                                                   section.get("label"))),
+                                 *[self.standing(t) for t in firsts]))
+        unplaced = [self.threads[n] for n in self.outline.get("unplaced", []) if integer(n) in self.threads]
+        if unplaced:
+            out.append(E("section", {"class": "setsec"}, E("h3", None, "Other topics"),
+                         *[self.standing(t) for t in unplaced]))
+        loose = [t for t in self.model.get("threads", []) if t.get("loose") is True and t.get("rests")]
+        if loose:
+            out.append(E("section", {"class": "setsec"}, E("h3", None, "About the project as a whole"),
+                         *[self.standing(t, heading=False) for t in loose]))
+        left = []
         for thread in self.model.get("threads", []):
-            if thread.get("loose") is True:
-                continue
             if thread.get("set_aside") is True:
-                left.append(E("li", None, E("b", None, text_of(thread.get("name"))), ". ",
+                left.append(E("li", None, self.thread_link(thread.get("n")), ". ",
                               self.said_id(thread["aside_by"]) if integer(thread.get("aside_by")) in self.m
                               else "Left out."))
-                continue
-            says = []
-            if thread.get("shown") is True:
-                by_key = {(b.get("kind"), b.get("id")): b for b in thread.get("blocks", [])}
-                for section in thread.get("sections", []):
-                    refs = []
-                    for key in section.get("blocks", []):
-                        block = by_key.get(tuple(key)) if isinstance(key, list) else None
-                        if block:
-                            refs.append(self.table_ref(block) if block.get("kind") == "table" else
-                                        self.figure_ref(block))
-                    says.append(E("div", {"class": "sec"}, E("span", {"class": "lab"}, text_of(section.get("heading"))),
-                                  self.blocks(section.get("doc")), *refs))
-                sources = thread.get("sources", [])
-                if sources:
-                    says.append(self.show("Show where these numbers come from", E("ul", {"class": "srcs"}, *[
-                        E("li", None, E("b", None, self.runs(row.get("statement"))), ": ", self.runs(row.get("source")))
-                        for row in sources])))
-            else:
-                says.append(self.outcome(thread))
-            rests = []
-            for rest in thread.get("rests", []):
-                memory = self.m.get(integer(rest.get("id")))
-                if memory is None:
-                    continue
-                older = [mid for mid in rest.get("replaced", []) if integer(mid) in self.m]
-                extra = E("details", {"class": "older"},
-                          E("summary", None, "This is answer %d. See what it replaced" % (len(older) + 1)),
-                          *[E("p", {"class": "struck"}, self.said_id(mid)) for mid in older]) if older else ""
-                rests.append(E("li", {"class": "rest " + kind_class(memory)}, self.mark(memory),
-                               E("div", None, self.said(memory), extra)))
-            blocks.append(E("article", {"class": "settled"}, E("h3", None, text_of(thread.get("name"))),
-                            E("div", {"class": "says"}, *says),
-                            E("div", {"class": "restson"}, E("span", {"class": "lab"}, "This rests on"),
-                              E("ul", None, *rests) if rests else
-                              E("p", {"class": "quiet"}, "No standing decision or result yet."))))
-        return self.view("settled", "What is settled", "What the project says today, thread by thread, and the "
-                         "memories it rests on. Anything replaced is folded under what replaced it.", *blocks,
-                         E("h3", None, "Left out on purpose"),
+        text_link = E("a", {"href": anchor("text")}, text_of(self.outline.get("title")) or "the text")
+        return self.view("settled", "What is settled", J(
+            "What we hold today: the decisions, findings and corrections that nothing recorded later replaces or sets "
+            "aside. The text they hold up is under ", text_link, "."), *out,
+                         E("h3", None, "Set aside"),
                          E("ul", {"class": "leftout"}, *left) if left else
-                         E("p", {"class": "quiet"}, "No thread has been set aside."))
+                         E("p", {"class": "quiet"}, "No thread has been set aside."), self.untold_line())
 
     @staticmethod
     def age(days):
@@ -724,25 +1245,13 @@ class Page:
             return ""
         return "open since today" if days == 0 else "open for 1 day" if days == 1 else "open for %d days" % days
 
-    def task_note(self, task):
-        if task.get("goal"):
-            words = J("We are working on this: ", self.runs(task["goal"]))
-        elif task.get("shown") is True:
-            words = "An open task has no goal written yet."
-        else:
-            words = "An open task whose text is not shown here."
-        address = github_url("issue", self.repo, task.get("issue"))
-        return E("div", {"class": "onote task k-checkpoint"},
-                 E("p", {"class": "said"}, words),
-                 E("a", {"class": "quiet", "href": address}, "Open the task on GitHub")
-                 if address else "")
-
     def open_view(self):
         opened = self.model.get("open") or {}
 
-        def group(title, hint, rows):
-            return E("section", {"class": "ogroup"}, E("h3", None, title), E("p", {"class": "quiet"}, hint),
-                     E("ul", {"class": "notes"}, *rows) if rows else E("p", {"class": "nothing"}, "Nothing here."))
+        def group(key, title, hint, rows, empty):
+            return E("section", {"class": "ogroup", "id": "open-%s" % key}, E("h3", None, title),
+                     E("p", {"class": "quiet"}, hint),
+                     E("ul", {"class": "notes"}, *rows) if rows else E("p", {"class": "nothing"}, empty))
 
         def note(entry):
             memory = self.m.get(integer(entry.get("id")))
@@ -750,7 +1259,7 @@ class Page:
                 return ""
             return E("li", {"class": "onote " + kind_class(memory)},
                      E("div", {"class": "meta"}, self.mark(memory), E("span", {"class": "in"},
-                                                                      self.thread_name(memory.get("thread"))),
+                                                                      self.thread_link(memory.get("thread"))),
                        E("span", {"class": "age"}, self.age(entry.get("age")))), self.said(memory))
 
         unknown = []
@@ -758,34 +1267,127 @@ class Page:
             memory = self.m.get(integer(entry.get("id")))
             if memory is None:
                 continue
+            after = self.m.get(integer(entry.get("followed")))
             unknown.append(E("li", {"class": "onote k-result"},
                              E("div", {"class": "meta"}, self.mark("result"),
-                               E("span", {"class": "in"}, self.thread_name(memory.get("thread")))),
+                               E("span", {"class": "in"}, self.thread_link(memory.get("thread")))),
                              E("div", {"class": "said"}, E("span", {"class": "lab"}, "We have not established"),
                                self.blocks(entry.get("doc"))),
                              E("p", {"class": "quiet"}, "From ", self.said(memory, "inl", "what we found on %s"
-                                                                           % text_of(memory.get("day"))), ".")))
+                                                                           % text_of(memory.get("day"))), ". ",
+                               J("A later memory follows from this result: ", self.said(after, "inl", text_of(
+                                   after.get("day"))), ".") if after else "")))
         holds = opened.get("holds")
         return self.view(
             "open", "What is still open", "Thoughts nobody has closed. Each one stays here until a later memory answers "
             "it, tries it or sets it aside.",
-            group("Questions without an answer", "Asked, and nothing recorded since answers them.",
-                  [note(entry) for entry in opened.get("questions", [])]),
-            group("Ideas we have not tried", "Written down, never put to a test.",
-                  [note(entry) for entry in opened.get("ideas", [])]),
-            group("Went wrong, and nothing followed", "Failures that no decision or fix points back to.",
-                  [note(entry) for entry in opened.get("failures", [])]),
-            group("What our results do not show", "Said by the results that still stand, in their own words.", unknown),
-            group("Waiting for a yes", "From the last pause.",
+            group("questions", "Questions without an answer", "Asked, and nothing recorded since answers them. Oldest "
+                  "first.", [note(entry) for entry in opened.get("questions", [])], "No question is waiting for an answer."),
+            group("ideas", "Ideas we have not tested", "Written down; nothing took them up and no result tested them. "
+                  "Oldest first.", [note(entry) for entry in opened.get("ideas", [])],
+                  "Every idea has been tested, taken up or set aside."),
+            group("failures", "Went wrong, and nothing followed", "Failures that no decision or fix points back to. "
+                  "Oldest first.", [note(entry) for entry in opened.get("failures", [])],
+                  "Everything that went wrong has been followed up."),
+            group("unknown", "What our results do not show", "Said by the results that still stand, in their own words. "
+                  "What nothing followed comes first.", unknown, "No result that still stands leaves a gap open."),
+            group("holds", "Waiting for a yes", "From the last pause.",
                   [E("li", {"class": "onote k-checkpoint"}, E("div", {"class": "said"}, self.blocks(holds)))]
-                  if holds else []),
-            group("Work in progress", "Open tasks, from their goal.",
-                  [E("li", None, self.task_note(task)) for task in opened.get("tasks", [])]))
+                  if holds else [], "Nothing waits for a yes."),
+            group("tasks", "Work in progress", "Open tasks, from their goal.",
+                  [E("li", None, self.task_note(task, with_story=True)) for task in opened.get("tasks", [])],
+                  "No task is open."), self.untold_line())
+
+
+    # ------------------------------------------------------------ the stores behind the box
+
+    def word_store(self):
+        entries = []
+        for word in self.model.get("words", []):
+            n = integer(word.get("n"))
+            if not n:
+                continue
+            uses = [self.m[mid] for mid in word.get("uses", []) if integer(mid) in self.m]
+            first = word.get("first") or {}
+            story = [E("li", None, E("span", {"class": "when"}, self.mark(memory), " ", text_of(memory.get("day"))), " ",
+                       self.said(memory, cls="inl")) for memory in uses]
+            earlier = [E("li", None, E("span", {"class": "when"}, "Until a later memory, from ",
+                                       text_of(entry.get("day"))), " we used it to mean ",
+                         text_of(entry.get("meaning")), ".") for entry in word.get("earlier", [])]
+            in_text = [E("li", None, self.part_link(use)) for use in word.get("in_text", [])
+                       if isinstance(use, dict) and isinstance(use.get("ordinal"), int)
+                       and integer(use.get("thread")) in self.threads]
+            used = {integer(m.get("id")) for m in uses}
+            in_fields = [E("li", None, self.said(self.m[mid], cls="inl")) for mid in word.get("in_fields", [])
+                         if integer(mid) in self.m and integer(mid) not in used]
+            also = [text_of(name) for name in word.get("also", []) if text_of(name)]
+            entries.append(E("div", {"class": "entry", "id": "w%d" % n},
+                             E("p", {"class": "wt"}, text_of(word.get("word"))),
+                             E("p", {"class": "def"}, "We use “", E("b", None, text_of(word.get("word"))),
+                               "” to mean ", text_of(word.get("meaning")), "."),
+                             E("div", {"class": "why"}, self.blocks(word.get("why"))) if word.get("why") else "",
+                             E("p", {"class": "quiet"}, "Also called: ", ", ".join(also), ".") if also else "",
+                             E("div", {"class": "more"}, E("p", {"class": "lab"}, "The longer story"),
+                               self.blocks(word.get("story"))) if word.get("story") else "",
+                             E("div", {"class": "uses"}, E("p", {"class": "lab"}, "What it meant before"),
+                               E("ol", None, *earlier)) if earlier else "",
+                             E("div", {"class": "uses"},
+                               E("p", {"class": "lab"}, "Where it came up (%d), oldest first" % len(story)),
+                               E("ol", None, *story)) if story else "",
+                             E("div", {"class": "uses"}, E("p", {"class": "lab"}, "In the text:"),
+                               E("ol", None, *in_text)) if in_text else "",
+                             E("div", {"class": "uses"}, E("p", {"class": "lab"}, "In what other memories say:"),
+                               E("ol", None, *in_fields)) if in_fields else "",
+                             E("p", {"class": "quiet"}, "First explained on %s" % text_of(first.get("day")),
+                               J(", in the thread ", self.thread_link(first["thread"]))
+                               if "thread" in first and integer(first["thread"]) in self.threads else "", ".")))
+        return E("div", {"id": "words", "hidden": "hidden"}, *entries)
+
+    def explain_store(self):
+        """The fixed explanations behind every kind, state and mark, and the box "How to read this page". No record
+        text is in it."""
+        entries = [E("div", {"class": "entry", "id": "x-%s" % key}, E("p", {"class": "wt"}, title),
+                     E("p", {"class": "def"}, text)) for key, title, text in EXPLAIN]
+        how = [E("p", {"class": "wt"}, "How to read this page"),
+               E("p", {"class": "def"}, "Every sentence here comes from what the project recorded. Words that explain "
+                                        "themselves are buttons: choose one to read what it means."),
+               *[E("p", None, E("b", None, name), ": ", text) for name, text in HOW_TO_READ],
+               E("p", {"class": "lab"}, "What each kind of memory records"),
+               E("ul", {"class": "plainlist"}, *[E("li", None, E("b", None, word), ": ", text)
+                                                   for _, word, text in KIND_TABLE]),
+               E("p", {"class": "lab"}, "What each state means"),
+               E("ul", {"class": "plainlist"}, *[E("li", None, E("b", None, title), ": ", text)
+                                                   for _, _, title, text in STATE_TABLE]),
+               E("p", {"class": "lab"}, "What a thread's mark means"),
+               E("ul", {"class": "plainlist"}, *[E("li", None, E("b", None, title), ": ", text)
+                                                   for _, title, text in THREAD_TABLE])]
+        return E("div", {"id": "explain", "hidden": "hidden"}, *entries, E("div", {"class": "entry", "id": "x-how"}, *how))
+
+
+    def issue_store(self):
+        entries = []
+        for issue in self.model.get("cited", []):
+            n = integer(issue.get("n"))
+            if not n:
+                continue
+            who = text_of(issue.get("author")) or mind_model.PHRASES["account"]
+            state = "still open" if issue.get("open") is True else (
+                "closed on %s" % text_of(issue.get("closed")) if issue.get("closed") else "closed")
+            address = github_url("pull" if issue.get("pull") is True else "issue", self.repo, n)
+            entries.append(E("div", {"class": "entry", "id": "issue-%d" % n},
+                             E("p", {"class": "wt"}, text_of(issue.get("title"))),
+                             E("p", {"class": "quiet"}, "Opened by ", E("span", {"class": "people"}, who),
+                               " on %s; %s." % (text_of(issue.get("opened")), state)),
+                             E("div", {"class": "why"}, self.blocks(issue.get("first"))) if issue.get("first") else "",
+                             E("p", None, E("a", {"href": address},
+                                            "Open the whole issue on GitHub")) if address else ""))
+        return E("div", {"id": "issues", "hidden": "hidden"}, *entries)
 
     def map_view(self):
         layout = self.model.get("map")
         if not layout:
-            return self.view("map", "The whole mind", None, E("p", {"class": "quiet"}, "There is nothing to draw yet."))
+            return self.view("map", "The whole mind", None, E("p", {"class": "quiet"}, "There is nothing to draw yet."),
+                             self.untold_line())
         width, height, top = integer(layout.get("width"), 1080), integer(layout.get("height"), 300), \
             integer(layout.get("top"), 64)
         parts = []
@@ -866,7 +1468,7 @@ class Page:
                            E("svg", {"viewBox": "0 0 %d %d" % (width, height), "role": "img", "class": "mindmap",
                                      "aria-label": "Map of the threads of this mind over time"}, *parts)),
                          E("p", {"class": "reading", "id": "reading", "aria-live": "polite"},
-                           "Point at a mark on the map to read that memory here."), legend)
+                           "Point at a mark on the map to read that memory here."), legend, self.untold_line())
 
     def ask_view(self):
         chips = (("decided", "What have we decided?"), ("wrong", "What went wrong?"), ("open", "What is still open?"),
@@ -878,107 +1480,7 @@ class Page:
                                        "aria-label": "Words to look for", "autocomplete": "off"})),
                          E("div", {"class": "qchips"}, *[E("button", {"type": "button", "data-ask": key}, label)
                                                           for key, label in chips]),
-                         E("div", {"id": "answers", "aria-live": "polite"}))
-
-    # ------------------------------------------------------------ the stores behind the box
-
-    def word_store(self):
-        entries = []
-        for word in self.model.get("words", []):
-            n = integer(word.get("n"))
-            if not n:
-                continue
-            uses = [self.m[mid] for mid in word.get("uses", []) if integer(mid) in self.m]
-            first = word.get("first") or {}
-            story = [E("li", None, E("span", {"class": "when"}, self.mark(memory), " ", text_of(memory.get("day"))), " ",
-                       self.said(memory, cls="inl")) for memory in uses]
-            earlier = [E("li", None, E("span", {"class": "when"}, "Until a later memory, from ",
-                                       text_of(entry.get("day"))), " we used it to mean ",
-                         text_of(entry.get("meaning")), ".") for entry in word.get("earlier", [])]
-            also = [text_of(name) for name in word.get("also", []) if text_of(name)]
-            entries.append(E("div", {"class": "entry", "id": "w%d" % n},
-                             E("p", {"class": "wt"}, text_of(word.get("word"))),
-                             E("p", {"class": "def"}, "We use “", E("b", None, text_of(word.get("word"))),
-                               "” to mean ", text_of(word.get("meaning")), "."),
-                             E("div", {"class": "why"}, self.blocks(word.get("why"))) if word.get("why") else "",
-                             E("p", {"class": "quiet"}, "Also called: ", ", ".join(also), ".") if also else "",
-                             E("div", {"class": "more"}, E("p", {"class": "lab"}, "The longer story"),
-                               self.blocks(word.get("story"))) if word.get("story") else "",
-                             E("div", {"class": "uses"}, E("p", {"class": "lab"}, "What it meant before"),
-                               E("ol", None, *earlier)) if earlier else "",
-                             E("div", {"class": "uses"},
-                               E("p", {"class": "lab"}, "Where it came up (%d), oldest first" % len(story)),
-                               E("ol", None, *story)) if story else "",
-                             E("p", {"class": "quiet"}, "First explained on %s" % text_of(first.get("day")),
-                               J(", in the thread ", self.thread_link(first["thread"]))
-                               if "thread" in first and integer(first["thread"]) in self.threads else "", ".")))
-        return E("div", {"id": "words", "hidden": "hidden"}, *entries)
-
-    def issue_store(self):
-        entries = []
-        for issue in self.model.get("cited", []):
-            n = integer(issue.get("n"))
-            if not n:
-                continue
-            who = text_of(issue.get("author")) or mind_model.PHRASES["account"]
-            state = "still open" if issue.get("open") is True else (
-                "closed on %s" % text_of(issue.get("closed")) if issue.get("closed") else "closed")
-            address = github_url("pull" if issue.get("pull") is True else "issue", self.repo, n)
-            entries.append(E("div", {"class": "entry", "id": "issue-%d" % n},
-                             E("p", {"class": "wt"}, text_of(issue.get("title"))),
-                             E("p", {"class": "quiet"}, "Opened by ", E("span", {"class": "people"}, who),
-                               " on %s; %s." % (text_of(issue.get("opened")), state)),
-                             E("div", {"class": "why"}, self.blocks(issue.get("first"))) if issue.get("first") else "",
-                             E("p", None, E("a", {"href": address},
-                                            "Open the whole issue on GitHub")) if address else ""))
-        return E("div", {"id": "issues", "hidden": "hidden"}, *entries)
-
-    @staticmethod
-    def word_box():
-        return J(E("div", {"id": "wordtip", "class": "wordtip", "role": "tooltip", "hidden": "hidden"}),
-                 E("dialog", {"id": "wordbox", "class": "wordbox", "aria-labelledby": "wordhead"},
-                   E("div", {"class": "wordtop"}, E("span", {"id": "wordkind", "class": "lab"},
-                                                    "A word from this project"),
-                     E("h2", {"id": "wordhead", "class": "wordhead"})),
-                   E("div", {"id": "wordbody", "class": "wordbody", "tabindex": "0"}),
-                   E("div", {"class": "wordbar"}, E("button", {"type": "button", "id": "wordclose", "class": "primary"},
-                                                    "Close"))))
-
-    def tour(self):
-        threads = [t for t in self.model.get("threads", []) if t.get("memories")]
-        longest = max(threads, key=lambda t: len(t.get("memories", []))) if threads else None
-        counts = self.model.get("counts") or {}
-        first, latest = text_of(self.model.get("first")), text_of(self.model.get("latest"))
-        steps = [
-            ("now", J("This is the memory of ", text_of(self.model.get("name")), ": ",
-                      plural(integer(counts.get("memories")), "1 memory", "%d memories"), " in ",
-                      plural(integer(counts.get("threads")), "1 thread", "%d threads"),
-                      ", from %s to %s. " % (first, latest) if first else ". ",
-                      "Nothing here is a list of tickets. It is what was thought, tried, decided and learned, in "
-                      "sentences.")),
-            ("now", "Start with where things stand. This page is the last pause: what was in focus, what was meant to "
-                    "happen next, and what has happened since."),
-            ("thread-%d" % integer(longest.get("n")) if longest else "threads",
-             "A thread is one line of thought. Read it top to bottom. The words between two memories say how one led "
-             "to the next: so, we tried it, later that changed. Indented memories are dead ends."),
-            ("lessons", "Every failure sits next to what it led to. A failure with nothing beside it is one nobody has "
-                        "acted on."),
-            ("settled", "This is what the project says today, and the memories that hold it up. When an answer "
-                        "replaced an earlier one, the earlier one is folded underneath."),
-            ("open", "These thoughts are still open: questions without an answer, ideas nobody tried, and what the "
-                     "results do not show."),
-            ("map", "The map shows every thread at once. To find something by a word, ask the mind. Choose any "
-                    "sentence, anywhere, to open that memory. A word with a dotted line is one of the project's own "
-                    "words: point at it to see what it means, or choose it for the whole story. Inside a memory, "
-                    "“Remind me” tells what was going on then, and the “Show” lines say what the "
-                    "table, code or figure behind it is and where to open it."),
-        ]
-        return E("div", {"id": "tour", "class": "tour", "role": "dialog", "aria-label": "First visit", "hidden": "hidden"},
-                 *[E("p", {"class": "step", "data-go": "#" + go, "hidden": "hidden"}, words) for go, words in steps],
-                 E("div", {"class": "tourbar"}, E("span", {"id": "tourn", "class": "quiet"}),
-                   E("button", {"type": "button", "id": "tourback"}, "Back"),
-                   E("button", {"type": "button", "id": "tournext", "class": "primary"}, "Next"),
-                   E("button", {"type": "button", "id": "tourend"}, "Leave the tour")))
+                         E("div", {"id": "answers", "aria-live": "polite"}), self.untold_line())
 
     def untold(self):
         """The page's last lines: what is not told, and why."""
@@ -1018,9 +1520,61 @@ class Page:
                            "has not been read yet. ",
                            E("a", {"href": address}, "Open it on GitHub") if address
                            else ""))
+        if integer(missing.get("kinds")):
+            lines.append(E("p", None, plural(integer(missing["kinds"]), "1 comment is of a kind this version of the "
+                                                                          "plugin does not know, so it is not told here.",
+                                             "%d comments are of a kind this version of the plugin does not know, so they "
+                                             "are not told here.")))
         if not lines:
             lines.append(E("p", None, "Every memory of the record by your allowed accounts is told here."))
         return E("section", {"class": "untold", "id": "untold"}, E("h3", None, "What this page leaves out"), *lines)
+
+    @staticmethod
+    def word_box():
+        return J(E("div", {"id": "wordtip", "class": "wordtip", "role": "tooltip", "hidden": "hidden"}),
+                 E("dialog", {"id": "wordbox", "class": "wordbox", "aria-labelledby": "wordhead"},
+                   E("div", {"class": "wordtop"}, E("span", {"id": "wordkind", "class": "lab"},
+                                                    "A word from this project"),
+                     E("h2", {"id": "wordhead", "class": "wordhead"})),
+                   E("div", {"id": "wordbody", "class": "wordbody", "tabindex": "0"}),
+                   E("div", {"class": "wordbar"}, E("button", {"type": "button", "id": "wordclose", "class": "primary"},
+                                                    "Close"))))
+
+    def tour(self):
+        threads = [t for t in self.model.get("threads", []) if t.get("memories")]
+        first_thread = threads[0] if threads else None
+        counts = self.model.get("counts") or {}
+        first, latest = text_of(self.model.get("first")), text_of(self.model.get("latest"))
+        steps = [
+            ("now", J("This is the memory of ", text_of(self.model.get("name")), ": ",
+                      plural(integer(counts.get("memories")), "1 memory", "%d memories"), " in ",
+                      plural(integer(counts.get("threads")), "1 thread", "%d threads"),
+                      ", from %s to %s. " % (first, latest) if first else ". ",
+                      "Nothing here is a list of tickets. It is what was thought, tried, decided and learned, in "
+                      "sentences.")),
+            ("text", "This is the text itself, part by part, in the order of what the project delivers. Under each part "
+                     "are the day it last changed and what is still open on it. Choose “Why it says this” to see what "
+                     "holds it up."),
+            ("thread-%d" % integer(first_thread.get("n")) if first_thread else "threads",
+             "A thread is one line of thought. It opens with where it stands now. Below that is its story, oldest first. "
+             "The words between two memories say how one led to the next: so, we tried it, later that changed."),
+            ("settled", "This is what the project holds today, and the memories that hold it up. When an answer "
+                        "replaced an earlier one, the earlier one is folded underneath."),
+            ("lessons", "Every failure sits next to what it led to. A failure with nothing beside it is one nobody has "
+                        "acted on."),
+            ("open", "These thoughts are still open: questions without an answer, ideas nobody tested, and what the "
+                     "results do not show."),
+            ("map", "The map shows what we know, as a tree, and every thread over time. To find something by a word, ask "
+                    "the mind. Choose any sentence, anywhere, to open that memory. A word with a dotted line is one of "
+                    "the project's own words: point at it to see what it means, or choose it for the whole story. Every "
+                    "word that explains itself is a button. “How to read this page” lists them all."),
+        ]
+        return E("div", {"id": "tour", "class": "tour", "role": "dialog", "aria-label": "First visit", "hidden": "hidden"},
+                 *[E("p", {"class": "step", "data-go": "#" + go, "hidden": "hidden"}, words) for go, words in steps],
+                 E("div", {"class": "tourbar"}, E("span", {"id": "tourn", "class": "quiet"}),
+                   E("button", {"type": "button", "id": "tourback"}, "Back"),
+                   E("button", {"type": "button", "id": "tournext", "class": "primary"}, "Next"),
+                   E("button", {"type": "button", "id": "tourend"}, "Leave the tour")))
 
     def page(self, style, script, icon):
         digest = lambda text: "'sha256-%s'" % base64.b64encode(hashlib.sha256(text.encode("utf-8")).digest()).decode()
@@ -1033,24 +1587,29 @@ class Page:
                  E("title", None, "The mind of ", text_of(self.model.get("name"))), Safe("<style>%s</style>" % style))
         logo = E("svg", {"viewBox": "144 144 968 968", "class": "logo", "aria-hidden": "true"},
                  E("path", {"class": "lg-a", "d": icon[0]}), E("path", {"class": "lg-b", "d": icon[1]}))
-        side = E("nav", {"class": "side", "aria-label": "Ways into the mind"}, logo,
+        labels = dict(NAV)
+        labels["text"] = text_of(self.outline.get("nav")) or "What do we deliver?"
+        side = E("nav", {"class": "side fold", "aria-label": "Ways into the mind"}, logo,
                  E("p", {"class": "mindname"}, text_of(self.model.get("name"))),
                  E("p", {"class": "mindsub"}, "the memory of one project"),
-                 E("ul", None, *[E("li", None, E("a", {"href": anchor(key), "data-nav": key}, label))
-                                 for key, label in NAV]),
+                 E("button", {"type": "button", "class": "foldbtn waysbtn", "data-fold": "ways",
+                              "aria-expanded": "true"}, "Ways in"),
+                 E("ul", {"class": "foldbody"}, *[E("li", None, E("a", {"href": anchor(key), "data-nav": key}, labels[key]))
+                                                  for key, _ in NAV]),
                  E("div", {"class": "sidefoot"},
+                   self.explain_button("how", "How to read this page", "howbtn"),
                    E("button", {"type": "button", "id": "tourstart"}, "First visit? Take the tour"),
                    E("button", {"type": "button", "id": "theme"}, "Switch light and dark"),
                    E("p", {"class": "quiet"}, "Read from the record on %s. This page never changes the record."
                      % text_of(built.get("words")))))
-        main = E("main", {"id": "main"}, self.now_view(), self.threads_view(), self.lessons_view(), self.settled_view(),
-                 self.open_view(), self.map_view(), self.ask_view(), self.untold())
+        main = E("main", {"id": "main"}, self.now_view(), self.text_view(), self.threads_view(), self.settled_view(),
+                 self.lessons_view(), self.open_view(), self.map_view(), self.ask_view())
         panel = E("aside", {"id": "panel", "class": "panel", "aria-label": "One memory"},
                   E("button", {"type": "button", "id": "close", "class": "close"}, "Close"),
                   E("h2", {"class": "noscript-h"}, "Every memory"),
                   *[self.detail(memory) for memory in self.model.get("memories", []) if integer(memory.get("id"))])
-        body = E("body", None, side, main, panel, self.tour(), self.word_store(), self.issue_store(), self.word_box(),
-                 Safe("<script>%s</script>" % script))
+        body = E("body", None, side, main, panel, self.tour(), self.word_store(), self.explain_store(), self.issue_store(),
+                 self.word_box(), Safe("<script>%s</script>" % script))
         return "<!doctype html>\n%s\n<html lang=\"en\">%s%s</html>\n" % (NOTICE, head, body)
 
 
@@ -1111,7 +1670,8 @@ def main(argv=None):
         if not index.mind_ready(db):
             print(index.NOT_READY)
             return 1
-        model = mind_model.build(db, repo, allowed, datetime.date.today())
+        model = mind_model.build(db, repo, allowed, datetime.date.today(),
+                                 recortex.shipped_profiles(config.get("profiles")))
     finally:
         db.close()
     text = render(model)

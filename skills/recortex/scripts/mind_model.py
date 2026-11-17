@@ -25,6 +25,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import index  # noqa: E402
+import mind_text  # noqa: E402
 import recortex  # noqa: E402
 import record_format  # noqa: E402
 
@@ -33,11 +34,15 @@ CAP_MAP_THREADS = 24      # rows of the map; the quietest threads fold into one 
 CAP_WORDS = 400
 CAP_FIELD = 1200          # characters of a field
 CAP_STORY = 3000          # characters of a word's longer story
-CAP_SECTION = 6000        # characters of a section of a topic body
+CAP_SECTION = 6000        # characters of a section of a topic body in a field or a first line
+CAP_TEXT = 40000          # characters of a section of a topic body in the view of the text
 CAP_TABLE_ROWS = 40
 CAP_TABLE_COLUMNS = 12
 CAP_FIRST_LINES = 600     # characters of a cited issue's first lines
 CAP_LINE = 300            # characters of a name, a title, a plain line or a pause line
+
+KINDS = ("result", "decision", "failure", "idea", "question", "correction", "checkpoint")  # the kinds the page knows
+THREAD_KINDS = ("decision", "result", "correction", "failure")   # what can make a part's text out of date
 
 PHRASES = {
     # a sentence: the lead is fixed, the words are the record's, the full stop is the page's
@@ -79,19 +84,20 @@ PHRASES = {
     "chip.answered": "Answered on %s",
     "chip.tried": "Tried on %s",
     "chip.question": "Still open",
-    "chip.idea": "Not tried yet",
+    "chip.idea": "Not tested yet",
+    "chip.taken": "Taken up on %s",
     "chip.nothing": "Nothing followed yet",
     "chip.led": "Led to a change",
     "chip.stands": "Still stands",
-    "latest.decision": "The latest decision here",
-    "latest.result": "The latest result here",
+    "latest.decision": "The latest decision",
+    "latest.result": "The latest result",
     "latest.replaced": "; it replaced an earlier one",
     # threads
     "status.aside": "Set aside",
-    "status.open": "1 open thought",
-    "status.opens": "%d open thoughts",
-    "status.settled": "Settled for now",
-    "thread.loose": "Loose thoughts",
+    "status.open": "1 open point",
+    "status.opens": "%d open points",
+    "status.settled": "Nothing open",
+    "thread.loose": "Other notes",
     "thread.unnamed": "a thread",
     # what stands in for text that is not told
     "not told": "an earlier memory that is not told here",
@@ -247,10 +253,14 @@ class Words:
         self.owner, parts = {}, []
         for number, (name, n) in enumerate(ordered):
             group = "g%d" % number
-            body = re.escape(name)
+            # the words of a name are joined by a space or a hyphen, and a final "s" or "es" still matches
+            body = "(?:[ ]+|-)".join(re.escape(word) for word in re.split(r"[ -]+", name) if word)
+            if name[-1].isalpha():
+                body += "(?:e?s)?"
             parts.append("(?P<%s>%s)" % (group, body if len(name) < 4 else "(?i:%s)" % body))
             self.owner[group] = n
-        self.pattern = re.compile(r"(?<![A-Za-z0-9])(?:%s)(?![A-Za-z0-9])" % "|".join(parts)) if parts else None
+        # a letter, a digit or a hyphen right before or after a name makes it part of another word
+        self.pattern = re.compile(r"(?<![A-Za-z0-9-])(?:%s)(?![A-Za-z0-9-])" % "|".join(parts)) if parts else None
 
     def find(self, text, seen):
         """[(start, end, n)] of the words in `text`, the first appearance of each word not already in `seen`."""
@@ -268,25 +278,26 @@ class Words:
 
 # ---------------------------------------------------------------- the build
 
-def build(db, repo, allowed, today):
+def build(db, repo, allowed, today, profiles=()):
     """The model of the mind of `repo` (a dict that json.dumps can print), read from the open index `db` in one
     transaction that is rolled back. `allowed` is recortex.allowed_users(repo) and must not be empty; `today` is the
-    day of the build (a datetime.date), from which ages are counted."""
+    day of the build (a datetime.date), from which ages are counted; `profiles` is recortex.shipped_profiles of the
+    project file's profiles, which give the deliverable's sections."""
     if not allowed:
         raise ValueError("the mind is built only for a repository in the user's trusted list")
     began = not db.in_transaction
     if began:
         db.execute("BEGIN")
     try:
-        return Build(db, repo, {name.lower() for name in allowed}, today).model()
+        return Build(db, repo, {name.lower() for name in allowed}, today, list(profiles)).model()
     finally:
         if began and db.in_transaction:
             db.execute("ROLLBACK")
 
 
 class Build:
-    def __init__(self, db, repo, allowed, today):
-        self.db, self.repo, self.allowed, self.today = db, repo, allowed, today
+    def __init__(self, db, repo, allowed, today, profiles=()):
+        self.db, self.repo, self.allowed, self.today, self.profiles = db, repo, allowed, today, list(profiles)
         self.cited, self.first_lines = {}, []
 
     def ok(self, author):
@@ -300,10 +311,11 @@ class Build:
     def read_issues(self):
         self.issues = {}
         for row in self.db.execute("SELECT number, title, state, is_pr, author, body, created_at, closed_at, "
-                                   "timeline_read, edits_read FROM issues"):
+                                   "last_edited_at, timeline_read, edits_read FROM issues"):
             self.issues[row["number"]] = {"number": row["number"], "title": row["title"] or "", "state": row["state"],
                                           "pull": bool(row["is_pr"]), "author": row["author"], "body": row["body"] or "",
                                           "created": row["created_at"], "closed": row["closed_at"],
+                                          "edited": row["last_edited_at"],
                                           "timeline_read": bool(row["timeline_read"]),
                                           "edits_read": bool(row["edits_read"]), "renamers": [], "editors": []}
         for row in self.db.execute("SELECT issue, event, actor FROM timeline WHERE event IN ('renamed', 'edited')"):
@@ -313,6 +325,10 @@ class Build:
         self.labels = {}
         for row in self.db.execute("SELECT issue, label FROM labels ORDER BY issue, label"):
             self.labels.setdefault(row["issue"], []).append(row["label"] or "")
+        self.parent = {row["issue"]: row["parent"] for row in self.db.execute("SELECT issue, parent FROM parents")
+                       if row["parent"] is not None}
+        hub = self.meta("hub")
+        self.hub = int(hub) if hub.isdigit() else None
 
     def body_shown(self, number):
         """The topic-body rule: an allowed account opened the issue, its edit history is read, and every edit of
@@ -334,7 +350,8 @@ class Build:
 
     def read_memories(self):
         found = index.memories(self.db, self.allowed)
-        every = sorted(found["items"].values(), key=lambda m: (m["time"], m["id"]))
+        every = sorted((m for m in found["items"].values() if m["kind"] in KINDS), key=lambda m: (m["time"], m["id"]))
+        self.unknown_kinds = len(found["items"]) - len(every)  # a kind this version does not know: left out, counted
         self.older = max(0, len(every) - CAP_MEMORIES)
         kept = every[self.older:]
         self.found = found
@@ -413,14 +430,18 @@ class Build:
         return self.text_of(memory["sentence"])
 
     def state_of(self, memory):
-        """(css, chip) of a memory: css is one of stands, replaced, aside, answered, tried, open, led, plain."""
+        """(css, chip) of a memory: css is one of stands, replaced, aside, answered, tried, taken, open, led, pause,
+        plain. A checkpoint is a pause, not a claim: it has no chip."""
         incoming = self.incoming.get(memory["id"], [])
 
-        def first(key):
-            sources = sorted((self.m[s] for k, s in incoming if k == key), key=lambda m: (m["time"], m["id"]))
+        def first(key, kinds=None):
+            sources = sorted((self.m[s] for k, s in incoming if k == key and (kinds is None or self.m[s]["kind"] in kinds)),
+                             key=lambda m: (m["time"], m["id"]))
             return sources[0]["day"] if sources else PHRASES["day.unknown"]
 
         state, kind = memory["state"], memory["kind"]
+        if kind == "checkpoint":
+            return "pause", ""
         if state == "replaced":
             return "replaced", PHRASES["chip.replaced"] % first("replaces")
         if state == "set aside":
@@ -429,6 +450,8 @@ class Build:
             return "answered", PHRASES["chip.answered"] % first("checks")
         if state == "tried":
             return "tried", PHRASES["chip.tried"] % first("checks")
+        if state == "taken up":
+            return "taken", PHRASES["chip.taken"] % first("because", ("decision", "result"))
         if state == "open":
             return "open", PHRASES["chip.question"]
         if state == "untried":
@@ -441,16 +464,43 @@ class Build:
             return "open", PHRASES["chip.nothing"]
         return "stands", PHRASES["chip.stands"]
 
+    @staticmethod
+    def explain_of(memory):
+        """The key of the fixed explanation behind a memory's chip (mind.py holds the entries), or None."""
+        css, kind = memory["css"], memory["kind"]
+        if css == "open":
+            return {"idea": "state-untested", "failure": "state-nothing"}.get(kind, "state-open")
+        return {"stands": "state-stands", "replaced": "state-replaced", "aside": "state-aside",
+                "answered": "state-answered", "tried": "state-tried", "taken": "state-taken", "led": "state-led",
+                "pause": "kind-checkpoint"}.get(css)
+
     # ------------------------------------------------------------ text with words and citations
 
     def runs(self, text, seen):
-        """The inline runs of one line or paragraph of record text."""
-        spans = [(m.start(), m.end(), {"code": m.group(1)}) for m in CODE.finditer(text)]
-        for item in record_format.citations(text, self.repo):
-            spans.append((item["start"], item["end"], self.citation(item, text[item["start"]:item["end"]])))
-        spans.sort(key=lambda span: span[0])
+        """The inline runs of one line or paragraph of record text: the reader's runs (bold, code, formulas, links)
+        with project words and citations marked in the text between them."""
+        return self.marked(mind_text.inline(clean(text)), seen)
+
+    def marked(self, runs, seen):
+        """`runs` of mind_text with the project words and citations marked inside each text run."""
+        out = []
+        for run in runs:
+            if "t" in run:
+                flags = {key: True for key in ("b", "i", "sup", "sub") if run.get(key)}
+                for piece in self.text_runs(run["t"], seen):
+                    piece.update(flags)
+                    out.append(piece)
+            elif "link" in run:
+                out.append(dict(run, link=self.marked(run["link"], seen)))
+            else:
+                out.append(run)
+        return out
+
+    def text_runs(self, text, seen):
+        spans = [(item["start"], item["end"], self.citation(item, text[item["start"]:item["end"]]))
+                 for item in record_format.citations(text, self.repo)]
         out, at = [], 0
-        for start, end, run in spans:
+        for start, end, run in sorted(spans, key=lambda span: span[0]):
             if start < at:
                 continue
             self.plain_runs(text[at:start], seen, out)
@@ -512,8 +562,7 @@ class Build:
             self.cited[number]["first"] = self.doc(text, set(), cap=CAP_FIRST_LINES)
 
     def doc(self, text, seen, cap=CAP_FIELD):
-        """Record text as blocks: paragraphs at blank lines, a list for lines that start with "- ", a quotation for
-        lines that start with ">", a table for a Markdown table; a line that is only an image is left out. Cut at
+        """Record text as blocks (mind_text.blocks) with project words and citations marked in their runs. Cut at
         its last line break before `cap` characters, so that a table loses whole rows; when that break lies in the
         first half, at the last space instead, and else at `cap`; then "cut" is true."""
         text = clean(text).strip("\n")
@@ -524,82 +573,79 @@ class Build:
             if stop < cap // 2:
                 stop = text.rfind(" ")  # a short first line before a long paragraph keeps the paragraph's start
             text = text[:stop] if stop >= cap // 2 else text
-        lines, blocks, paragraph, i = text.split("\n"), [], [], 0
-        inline = self.runs
+        return {"blocks": [self.block(block, seen) for block in mind_text.blocks(text)], "cut": cut}
 
-        def flush():
-            if paragraph:
-                blocks.append({"p": inline(" ".join(paragraph), seen)})
-                del paragraph[:]
-
-        while i < len(lines):
-            stripped = lines[i].strip()
-            if not stripped or IMAGE_LINE.fullmatch(stripped):
-                flush()
-                i += 1
-                continue
-            if is_table_line(stripped):
-                end = i
-                while end < len(lines) and is_table_line(lines[end]):
-                    end += 1
-                table = table_of(lines[i:end])
-                if table:
-                    flush()
-                    head, rows, table_cut = table
-                    blocks.append({"table": {"head": [inline(cell, seen) for cell in head],
-                                             "rows": [[inline(cell, seen) for cell in row] for row in rows],
-                                             "cut": table_cut}})
-                    i = end
-                    continue
-            if stripped.startswith("- "):
-                flush()
-                items = []
-                while i < len(lines) and lines[i].strip().startswith("- "):
-                    items.append(inline(lines[i].strip()[2:], seen))
-                    i += 1
-                blocks.append({"ul": items})
-                continue
-            if stripped.startswith(">"):
-                flush()
-                quoted = []
-                while i < len(lines) and lines[i].strip().startswith(">"):
-                    quoted.append(lines[i].strip()[1:].strip())
-                    i += 1
-                blocks.append({"quote": inline(" ".join(part for part in quoted if part), seen)})
-                continue
-            paragraph.append(stripped)
-            i += 1
-        flush()
-        return {"blocks": blocks, "cut": cut}
+    def block(self, block, seen):
+        """One block of mind_text with its runs marked."""
+        if "p" in block or "quote" in block:
+            key = "p" if "p" in block else "quote"
+            return {key: self.marked(block[key], seen)}
+        if "h" in block:
+            return {"h": {"level": block["h"]["level"], "r": self.marked(block["h"]["r"], seen)}}
+        for key in ("ul", "ol"):
+            if key in block:
+                items = [{"r": self.marked(item["r"], seen), "sub": self.block(item["sub"], seen) if item["sub"] else None}
+                         for item in block[key]]
+                return dict({key: items}, **({"start": block["start"]} if "start" in block else {}))
+        if "table" in block:
+            table = block["table"]
+            cells = lambda rows: [[dict(cell, r=self.marked(cell["r"], seen)) for cell in row] for row in rows]
+            return {"table": {"head": cells(table["head"]), "rows": cells(table["rows"]), "cut": table["cut"],
+                              "caption": self.marked(table["caption"], seen) if table.get("caption") else None}}
+        return block
 
     # ------------------------------------------------------------ threads
 
+    def topic_labels(self, number):
+        return sorted(label for label in self.labels.get(number, []) if label.lower().startswith("topic:"))
+
+    def is_topic(self, number):
+        """An issue that holds deliverable text: a final-record issue that is no pull request and not the hub."""
+        issue = self.issues.get(number)
+        return bool(issue) and not issue["pull"] and number != self.hub and self.has_label(number, "final-record")
+
     def read_threads(self):
-        topics = sorted({label for labels in self.labels.values() for label in labels
-                         if label.lower().startswith("topic:")})
-        first = {}
-        for number, labels in self.labels.items():
-            mine = sorted(label for label in labels if label.lower().startswith("topic:"))
-            if mine:
-                first[number] = mine[0]
+        """Threads, one per topic: label. An issue belongs to the thread of the nearest topic above it in `parents`
+        (up to four steps, a loop stops the climb); else to the thread of its own first topic: label. With several
+        labels and no such parent, it goes to the first by name, and that thread carries the others as `also`."""
+        belongs, also = {}, {}
+        for number in sorted(self.issues):
+            label, current, seen = None, number, {number}
+            for _ in range(4):
+                current = self.parent.get(current)
+                if current is None or current in seen:
+                    break
+                seen.add(current)
+                if self.is_topic(current) and self.topic_labels(current):
+                    label = self.topic_labels(current)[0]
+                    break
+            mine = self.topic_labels(number)
+            if label is None and mine:
+                label = mine[0]
+                if len(mine) > 1:
+                    also.setdefault(label, set()).update(mine[1:])
+            if label is not None:
+                belongs[number] = label
+        self.belongs = belongs
+        labels = sorted(set(belongs.values()))
         threads, taken = [], set()
-        for label in topics:
-            issues = sorted(n for n, labels in self.labels.items() if label in labels)
-            finals = [n for n in issues if n in self.issues and self.issues[n]["state"] == "open"
-                      and not self.issues[n]["pull"] and self.has_label(n, "final-record")]
+        for label in labels:
+            issues = sorted(n for n, mine in belongs.items() if mine == label)
+            finals = [n for n in issues if self.is_topic(n) and self.issues[n]["state"] == "open"]
+            closed = [n for n in issues if self.issues[n]["state"] != "open" and not self.issues[n]["pull"]
+                      and n != self.hub and not self.has_label(n, "active")]  # a closed topic names a set-aside thread
             threads.append({"label": label, "issues": issues, "topic": finals[0] if finals else None,
-                            "own": [n for n in issues if first.get(n) == label]})
-        self.first_topic = first
+                            "closed_topic": closed[0] if closed else None, "own": issues,
+                            "also_labels": sorted(also.get(label, ()))})
         for memory in self.order:
-            label = first.get(memory["issue"])
-            memory["thread_label"] = label
+            memory["thread_label"] = belongs.get(memory["issue"])
         loose = [m for m in self.order if m["thread_label"] is None]
         for thread in threads:
             thread["memories"] = [m for m in self.order if m["thread_label"] == thread["label"]]
         threads = [t for t in threads if t["memories"] or t["topic"] is not None]
         if loose:
-            threads.append({"label": None, "issues": sorted({m["issue"] for m in loose}), "topic": None, "own": [],
-                            "memories": loose})
+            threads.append({"label": None, "issues": sorted({m["issue"] for m in loose}), "topic": None,
+                            "closed_topic": None, "own": [], "memories": loose, "also_labels": []})
         position = {m["id"]: i for i, m in enumerate(self.order)}
         threads.sort(key=lambda t: (t["label"] is None, position[t["memories"][0]["id"]] if t["memories"]
                                     else len(self.order), t["label"] or ""))
@@ -621,6 +667,10 @@ class Build:
                               if line.startswith("# ")), "")
                 if title.strip():
                     name, source = short(title), "body"
+            closed = thread["closed_topic"]
+            if name is None and label is not None and thread["topic"] is None and closed is not None \
+                    and self.title_shown(closed) and self.issues[closed]["title"].strip():
+                name, source = short(self.issues[closed]["title"]), "title"
             if name is None and label is None:
                 name, source = PHRASES["thread.loose"], "fixed"
             elif name is None:
@@ -637,6 +687,8 @@ class Build:
                 memory["thread"] = thread["n"]
         self.thread_of = {t["n"]: t for t in threads}
         self.thread_by_label = {t["label"]: t["n"] for t in threads if t["label"] is not None}
+        for thread in threads:
+            thread["also"] = [self.thread_by_label[l] for l in thread["also_labels"] if l in self.thread_by_label]
 
     # ------------------------------------------------------------ words and openings
 
@@ -655,7 +707,7 @@ class Build:
         self.words = Words(entries)
         self.openings = {}
         for row in index.explained(self.db, self.allowed, "thread"):  # oldest first: the newest stands
-            n = self.thread_by_label.get(self.first_topic.get(row["issue"]))
+            n = self.thread_by_label.get(self.belongs.get(row["issue"]))
             if n is not None:
                 self.openings[n] = row
 
@@ -694,7 +746,8 @@ class Build:
             "id": cid, "issue": memory["issue"], "thread": memory["thread"], "kind": memory["kind"],
             "at": memory["at"], "day": memory["day"], "plain": memory["plain"], "title": memory["title"],
             "old": memory["old"], "changed": memory["changed"], "state": memory["state"], "css": memory["css"], "chip": memory["chip"],
-            "latest": memory.get("latest", ""), "group": memory["group"], "sentence": sentence,
+            "latest": memory.get("latest", ""), "latest_note": memory.get("latest_note", ""),
+            "explain": memory["explain"], "group": memory["group"], "sentence": sentence,
             "passage": memory["passage"], "out": out, "in": incoming, "fields": fields, "where": where,
             "evidence": [self.evidence_model(row, thread) for row in self.evidence.get(cid, [])],
             "author": memory["author"],
@@ -725,11 +778,8 @@ class Build:
                      "section": clean(row["section"] or ""), "caption": short(row["caption"], CAP_FIELD),
                      "data": short(row["data"] or ""), "command": short(row["command"] or "")}
             if row["kind"] == "table":
-                table = first_table(texts.get(key, ""))
-                seen = set()
-                entry["table"] = {"head": [self.runs(cell, seen) for cell in table[0]],
-                                  "rows": [[self.runs(cell, seen) for cell in row_] for row_ in table[1]],
-                                  "cut": table[2]} if table else None
+                found = [block for block in mind_text.blocks(texts.get(key, "")) if "table" in block]
+                entry["table"] = self.block(found[0], set())["table"] if found else None
             else:
                 entry.update(repo=clean(repos.get(key) or ""), ref=clean(row["ref"] or ""),
                              path=clean(row["path"] or ""))
@@ -745,7 +795,9 @@ class Build:
             block = self.blocks_of(topic).get((kind, row["ident"]))
             if block is None:
                 return {"kind": kind, "found": False, "shown": True}
-            return dict(block, found=True, shown=True)
+            headings = self.heading_list(topic)
+            ordinal = headings.index(block["section"].lower()) if block["section"].lower() in headings else None
+            return dict(block, found=True, shown=True, place={"thread": thread["n"], "ordinal": ordinal})
         if kind == "code":
             return {"kind": "code", "repo": clean(row["repo"] or "") or self.repo, "ref": clean(row["ref"] or ""),
                     "path": clean(row["path"] or ""), "from": row["line_from"], "to": row["line_to"]}
@@ -755,6 +807,16 @@ class Build:
         if not other and number in self.issues and self.issues[number]["pull"] and self.title_shown(number):
             title = short(self.issues[number]["title"]) or title
         return {"kind": "pull", "repo": other or self.repo, "number": number, "title": title}
+
+    def heading_list(self, number):
+        """The lower-case headings of a topic body's sections except Sources, in order: the ordinals of its parts."""
+        if not hasattr(self, "heading_cache"):
+            self.heading_cache = {}
+        if number not in self.heading_cache:
+            self.heading_cache[number] = [clean(row["heading"]).lower() for row in self.db.execute(
+                "SELECT heading FROM sections WHERE issue = ? ORDER BY ordinal", (number,))
+                if clean(row["heading"]).lower() != recortex.SOURCES_HEADING.lower()]
+        return self.heading_cache[number]
 
     def blocks_of(self, number):
         if not hasattr(self, "block_cache"):
@@ -849,7 +911,9 @@ class Build:
         for memory in self.order:
             memory["passage"] = self.passage(memory)
             memory["css"], memory["chip"] = self.state_of(memory)
-            memory["group"] = {"replaced": "changed", "aside": "changed", "open": "open", "led": "wrong"}.get(
+            memory["explain"] = self.explain_of(memory)
+            memory["group"] = {"replaced": "changed", "aside": "changed", "open": "open", "led": "wrong",
+                               "answered": "done", "tried": "done", "taken": "done", "pause": "pause"}.get(
                 memory["css"], "wrong" if memory["kind"] == "failure" else "stands")
         for memory in self.order:
             memory["side"] = memory["css"] == "aside" or any(
@@ -861,11 +925,16 @@ class Build:
                 kind = memory["kind"]
                 if memory["state"] == "stands" and kind in ("decision", "result") and kind not in seen:
                     seen.add(kind)
-                    memory["latest"] = PHRASES["latest." + kind] + (PHRASES["latest.replaced"] if any(
-                        key == "replaces" for key, _ in memory["links"]) else "")
+                    memory["latest"] = PHRASES["latest." + kind]
+                    memory["latest_note"] = PHRASES["latest.replaced"] if any(
+                        key == "replaces" for key, _ in memory["links"]) else ""
         self.read_pauses()
+        self.read_outline(self.profiles)
         memories = [self.memory_model(memory) for memory in self.order]
         threads = [self.thread_model(thread) for thread in self.threads]
+        outline = self.outline_model(threads)
+        tree = self.tree_model(outline)
+        self.read_word_uses(threads)
         words = [self.word_model(n, rows) for n, rows in self.word_rows]
         opened = self.open_model()
         not_told = self.not_told_model()
@@ -877,7 +946,7 @@ class Build:
             "years": self.years,
             "first": self.order[0]["day"] if self.order else None,
             "latest": self.order[-1]["day"] if self.order else None,
-            "memories": memories, "threads": threads, "words": words,
+            "memories": memories, "threads": threads, "outline": outline, "tree": tree, "words": words,
             "pauses": [{key: p[key] for key in ("kind", "id", "day", "focus", "wall")} for p in self.pauses],
             "last": self.last,
             "since": [m["id"] for m in self.order if self.last and self.last["wall"] and m["wall"] > self.last["wall"]],
@@ -889,6 +958,43 @@ class Build:
             "not_told": not_told,
         }
 
+    def tree_model(self, outline):
+        """The map of what we know: the project's question in the middle, the sections around it (the first half to the
+        right, the rest to the left, each in the order of the deliverable), under each its topics, and on each topic
+        what was found, what was decided and what is still open, newest first, six at most with the full count. No
+        coordinates: the page lays it out with its style."""
+        def entry(n):
+            memories = self.thread_of[n]["memories"]
+
+            def pick(test):
+                ids = [m["id"] for m in reversed(memories) if test(m)]
+                return {"ids": ids[:6], "count": len(ids)}
+
+            return {"thread": n, "found": pick(lambda m: m["kind"] == "result" and m["css"] == "stands"),
+                    "decided": pick(lambda m: m["kind"] == "decision" and m["css"] == "stands"),
+                    "open": pick(lambda m: m["css"] == "open")}
+
+        sections = []
+        for group in outline["deliverables"]:
+            for section in group["sections"]:
+                topics = [entry(p["thread"]) for p in section["parts"] if p["first"]]
+                if topics:
+                    sections.append({"n": section["n"], "key": section["key"], "label": section["label"],
+                                     "topics": topics})
+        if outline["unplaced"]:
+            sections.append({"n": None, "key": "topics", "label": "Topics",
+                             "topics": [entry(n) for n in outline["unplaced"]]})
+        half = (len(sections) + 1) // 2
+        question = None
+        if self.hub in self.issues and self.body_shown(self.hub):
+            text = record_format.section_text(self.issues[self.hub]["body"], "Project")
+            paragraph = " ".join(clean(text or "").strip().split("\n\n")[0].split())
+            first = re.split(r"(?<=[.!?])\s", paragraph, maxsplit=1)[0] if paragraph else ""
+            question = self.doc(first, set(), cap=300) if first else None
+        return {"question": question, "right": sections[:half], "left": sections[half:],
+                "aside": [t["n"] for t in self.threads if t["set_aside"]],
+                "other": entry(0) if 0 in self.thread_of else None}
+
     def latest_of(self):
         out = {}
         for kind in ("decision", "result", "failure", "question"):
@@ -896,15 +1002,175 @@ class Build:
             out[kind] = found[-1] if found else None
         return out
 
+    NOUNS = {"manuscript": ("does", "the manuscript"), "thesis": ("does", "the thesis"),
+             "research": ("does", "the report"), "prototyping": ("does", "the report"),
+             "proposal": ("does", "the proposal"), "software": ("do", "the release notes"),
+             "docs": ("does", "the documentation"), "dataset": ("does", "the documentation")}
+
+    def read_outline(self, profiles):
+        """Where each topic's text goes: the deliverable's sections in the order of the hub's table, which is read only
+        when the hub's text may be shown, and else in the order of the profiles. Sets `place` and `feeds` of the
+        threads and sorts them: by the first section they feed, then the sections' own order, then the topics that
+        feed none, then the set-aside threads, then the other notes."""
+        shown = self.hub is not None and self.body_shown(self.hub)
+        self.unreadable = False
+        try:
+            plan = index.deliverable_order(self.db, self.hub if shown else None, profiles)
+        except ValueError:
+            plan, self.unreadable = [], True
+        table = shown and record_format.section_text(self.issues[self.hub]["body"], "Deliverable sections") is not None
+        self.order_from = "hub" if table else "profile"
+        profile_of = {}
+        for entry in profiles:
+            try:
+                labels = [label for label, _ in recortex.section_labels([entry])]
+            except ValueError:
+                self.unreadable = True
+                continue
+            name = entry if isinstance(entry, str) else entry.get("name")
+            for label in labels:
+                profile_of.setdefault(label, name)
+        self.plan_rows = []
+        for label, heading, numbers in plan:
+            threads = [self.topic_thread[n]["n"] for n in numbers if n in self.topic_thread]
+            if threads:
+                self.plan_rows.append({"key": label, "heading": clean(heading), "profile": profile_of.get(label),
+                                       "threads": threads})
+        for thread in self.threads:
+            thread["place"], thread["feeds_keys"] = None, []
+        for k, row in enumerate(self.plan_rows):
+            for p, n in enumerate(row["threads"]):
+                thread = self.thread_of[n]
+                if thread["place"] is None:
+                    thread["place"] = (k, p)
+                thread["feeds_keys"].append(row["key"])
+        position = {m["id"]: i for i, m in enumerate(self.order)}
+
+        def rank(thread):
+            began = position[thread["memories"][0]["id"]] if thread["memories"] else len(self.order)
+            if thread["loose"]:
+                return (3, 0, 0)
+            if thread["set_aside"]:
+                return (2, began, 0)
+            if thread["place"] is not None:
+                return (0,) + thread["place"]
+            return (1, began, 0)
+
+        self.threads.sort(key=rank)
+
+    def part_status(self, model):
+        """The status line of a part of the text: a list of sentences, each {"key", "segs"}, so that a later round can
+        append one. A seg is {"t": words}, {"thread": n}, {"m": memory id, "t": words} or {"open": a group of
+        "What is still open?", "t": words}."""
+        text = model["text"]
+        sentences = [{"key": "from", "segs": [{"t": "From "}, {"thread": model["n"]}, {"t": "."}]},
+                     {"key": "changed", "segs": [{"t": "Current text, last changed on %s." % text["changed"]}]}]
+        after = text["after"]
+        if not after:
+            sentences.append({"key": "after", "segs": [{"t": "Nothing recorded since then bears on it."}]})
+        else:
+            segs = [{"t": plural(len(after), "1 decision or finding was", "%d decisions or findings were") +
+                     " recorded in this thread after that change: "}]
+            shown = after[:4]
+            for i, link in enumerate(shown):
+                if i:
+                    segs.append({"t": " and " if i == len(shown) - 1 and len(after) == len(shown) else ", "})
+                segs.append({"m": link["id"], "t": link["text"]})
+            if len(after) > len(shown):
+                segs.append({"t": " and %d more" % (len(after) - len(shown))})
+            segs.append({"t": ". Check that the text says what they changed."})
+            sentences.append({"key": "after", "segs": segs})
+        counts = [("questions", len(text["questions"]), "1 open question", "%d open questions"),
+                  ("failures", len(text["failures"]), "1 failure nothing followed", "%d failures nothing followed"),
+                  ("tasks", text["tasks"], "1 task", "%d tasks")]
+        counts = [(key, plural(n, one, many)) for key, n, one, many in counts if n]
+        if counts:
+            segs = []
+            for i, (key, words) in enumerate(counts):
+                segs.append({"t": ", " if 0 < i < len(counts) - 1 else " and " if i else ""} if i else {"t": ""})
+                segs.append({"open": key, "t": words})
+            total = len(text["questions"]) + len(text["failures"]) + text["tasks"]
+            segs.append({"t": " bears on it." if total == 1 else " bear on it."})
+            sentences.append({"key": "open", "segs": [s for s in segs if s["t"] != "" or "open" in s]})
+        return sentences
+
+    def thread_text(self, thread):
+        """What a reader needs to judge a thread's text: when its body last changed, the decisions and findings
+        recorded after that (the rule of query consistency for a stale body), and what is still open on it."""
+        issue = self.issues.get(thread["topic"]) if thread["topic"] is not None else None
+        if issue is None:
+            return None
+        stamp = issue["edited"] or issue["created"]
+        body_time = record_format.sort_key(stamp or "")
+        after = [{"id": m["id"], "text": "the %s of %s" % ({"result": "finding"}.get(m["kind"], m["kind"]), m["day"])}
+                 for m in thread["memories"] if m["kind"] in THREAD_KINDS and m["time"] > body_time]
+        return {"changed": full_day(stamp), "after": after,
+                "questions": [m["id"] for m in thread["memories"] if m["kind"] == "question" and m["css"] == "open"],
+                "failures": [m["id"] for m in thread["memories"] if m["kind"] == "failure" and m["css"] == "open"],
+                "tasks": sum(1 for task in self.tasks() if task["thread"] == thread["n"] and task["open"])}
+
+    def outline_model(self, models):
+        """The outline of the deliverable for the page, built from the thread models (their sections give the
+        ordinal of each part): deliverables, each with its sections and their parts; the parts of a text that no
+        section takes; the topics placed nowhere."""
+        by_n = {m["n"]: m for m in models}
+        used, first, deliverables, count = {}, {}, [], 0
+        for row in self.plan_rows:
+            parts = []
+            for n in row["threads"]:
+                model = by_n[n]
+                ordinal = next((i for i, s in enumerate(model["sections"]) if s["heading"].lower() == row["heading"].lower()),
+                               None)
+                if model["shown"] and ordinal is None:
+                    continue  # the body carries the label and has no such section
+                parts.append({"thread": n, "ordinal": ordinal, "first": n not in first, "status": self.part_status(model)})
+                if ordinal is not None:
+                    used.setdefault(n, set()).add(ordinal)
+            if not parts:
+                continue
+            count += 1
+            for part in parts:
+                first.setdefault(part["thread"], count)
+                by_n[part["thread"]]["feeds"].append({"n": count, "label": row["heading"], "ordinal": part["ordinal"]})
+            name = row["profile"] or "deliverable"
+            group = next((g for g in deliverables if g["profile"] == name), None)
+            if group is None:
+                aux, noun = self.NOUNS.get(name, (None, None))
+                group = {"profile": name, "noun": noun, "title": (noun or name).capitalize() if noun or name else "",
+                         "sections": []}
+                deliverables.append(group)
+            group["sections"].append({"key": row["key"], "label": row["heading"], "n": count, "before": None,
+                                      "parts": parts})
+        names = [p if isinstance(p, str) else p.get("name") for p in self.profiles]
+        if len(names) == 1 and names[0] in self.NOUNS:
+            aux, noun = self.NOUNS[names[0]]
+            nav, title = "What %s %s say?" % (aux, noun), noun.capitalize()
+        else:
+            noun, nav, title = None, "What do we deliver?", "What we deliver"
+        other, unplaced = [], []
+        for model in models:
+            if model["topic"] is None or model["set_aside"] or model["loose"]:
+                continue
+            if model["n"] not in first:
+                unplaced.append(model["n"])
+            if model["shown"]:
+                other += [{"thread": model["n"], "ordinal": i} for i in range(len(model["sections"]))
+                          if i not in used.get(model["n"], ())]
+            elif model["n"] not in first:
+                other.append({"thread": model["n"], "ordinal": None})
+        return {"order_from": self.order_from, "nav": nav, "title": title, "noun": noun, "deliverables": deliverables,
+                "other": other, "unplaced": unplaced, "unreadable": self.unreadable, "sections": count}
+
     def thread_model(self, thread):
         memories = thread["memories"]
         opened = sum(1 for m in memories if m["css"] == "open")
         if thread["set_aside"]:
-            status, css = PHRASES["status.aside"], "aside"
+            status, css, explain = PHRASES["status.aside"], "aside", "thread-aside"
         elif opened:
-            status, css = PHRASES["status.open"] if opened == 1 else PHRASES["status.opens"] % opened, "open"
+            status, css, explain = PHRASES["status.open"] if opened == 1 else PHRASES["status.opens"] % opened, \
+                "open", "thread-open"
         else:
-            status, css = PHRASES["status.settled"], "stands"
+            status, css, explain = PHRASES["status.settled"], "stands", "thread-clear"
         opening = self.openings.get(thread["n"])
         seen = set()
         sections, sources, blocks = [], [], []
@@ -916,26 +1182,18 @@ class Build:
                 heading = clean(row["heading"])
                 if heading.lower() == recortex.SOURCES_HEADING.lower():
                     continue
-                prose, skipping = [], False
-                for line in clean(row["text"]).split("\n"):
-                    if BLOCK_HEADING.match(line):
-                        skipping = True
-                        continue
-                    if skipping and HEADING.match(line):
-                        skipping = False
-                    if not skipping:
-                        prose.append(line)
-                sections.append({"heading": short(heading), "doc": self.doc("\n".join(prose), seen, cap=CAP_SECTION),
-                                 "blocks": [list(key) for key, block in parts.items() if block["section"] == heading]})
+                sections.append({"heading": short(heading), "doc": self.doc(row["text"], seen, cap=CAP_TEXT)})
             blocks = [dict(block) for block in parts.values()]
             for row in self.db.execute("SELECT statement, source FROM sources WHERE issue = ? ORDER BY ordinal",
                                        (topic,)):
                 sources.append({"statement": self.runs(short(row["statement"], CAP_FIELD), seen),
                                 "source": self.runs(short(row["source"], CAP_FIELD), seen)})
-        steps, previous, noted = [], None, False
+        tasks = {task["issue"]: task for task in self.tasks() if task["thread"] == thread["n"]}
+        steps, groups, anchored, previous = [], [], set(), None
+        noted = False
         for memory in memories:
-            step = {"id": memory["id"], "conn": None, "note": False}
-            if previous is not None:
+            step = {"id": memory["id"], "conn": None, "note": False, "task": None, "group": None}
+            if previous is not None and previous["kind"] != "checkpoint" and memory["kind"] != "checkpoint":
                 direct = [(k, t) for k, t in memory["links"] if t == previous["id"]]
                 back = [(k, t) for k, t in memory["links"] if t in self.m and self.m[t]["thread"] == memory["thread"]]
                 away = [(k, t) for k, t in memory["links"] if t in self.m]
@@ -954,24 +1212,48 @@ class Build:
                     step["conn"] = {"phrase": PHRASES["link.then"], "to": None, "time": True}
             if memory["old"] and not noted:
                 step["note"] = noted = True
+            if memory["kind"] == "checkpoint":
+                after = next((m for m in memories if m["kind"] != "checkpoint"
+                              and (m["time"], m["id"]) > (memory["time"], memory["id"])), None)
+                focus = memory["plain"] or self.field(memory["id"], "State") or memory["title"]
+                step["pause"] = {"day": memory["day"], "focus": short(focus, CAP_FIELD),
+                                 "next": after["id"] if after else None, "next_day": after["day"] if after else None}
+            task = memory["issue"] if memory["issue"] in tasks else None
+            if task is not None:
+                step["task"] = task
+                if groups and groups[-1]["task"] == task and previous is not None and previous["issue"] == task:
+                    groups[-1]["count"] += 1
+                    groups[-1]["last"] = memory["day"]
+                else:
+                    info = tasks[task]
+                    groups.append({"task": task, "title": info["title"], "count": 1, "first": memory["day"],
+                                   "last": memory["day"], "open": info["open"], "closed": info["closed"],
+                                   "anchor": task not in anchored})
+                    anchored.add(task)
+                step["group"] = len(groups) - 1
             steps.append(step)
             previous = memory
         aside_by = [m for m in memories if m["kind"] == "decision"]
-        tasks = [task for task in self.tasks() if task["thread"] == thread["n"]]
+        latest = {kind: next((m["id"] for m in reversed(memories) if m.get("latest") and m["kind"] == kind), None)
+                  for kind in ("decision", "result")}
+        open_tasks = [task for task in tasks.values() if task["open"]]
         return {
             "n": thread["n"], "label": clean(thread["label"]) if thread["label"] else None, "name": thread["name"],
             "name_from": thread["name_from"], "topic": thread["topic"], "issues": thread["issues"],
             "set_aside": thread["set_aside"], "loose": thread["loose"], "shown": thread["shown"],
-            "status": status, "status_css": css, "open": opened,
+            "status": status, "status_css": css, "status_explain": explain, "open": opened, "also": thread["also"],
             "opening": {"comment": opening["comment"], "day": day_words(opening["at"], self.years),
                         "about": self.doc(opening["meaning"], seen), "why": self.doc(opening["why"], seen)}
             if opening else None,
-            "sections": sections, "blocks": blocks, "sources": sources,
-            "memories": [m["id"] for m in memories], "steps": steps,
+            "sections": sections, "blocks": blocks, "sources": sources, "feeds": [],
+            "text": self.thread_text(thread),
+            "stands": {"decision": latest["decision"], "result": latest["result"],
+                       "open": [m["id"] for m in memories if m["css"] == "open"], "tasks": open_tasks},
+            "memories": [m["id"] for m in memories], "steps": steps, "groups": groups,
             "began": memories[0]["day"] if memories else None, "ended": memories[-1]["day"] if memories else None,
             "aside_by": aside_by[-1]["id"] if thread["set_aside"] and aside_by else None,
             "rests": self.rests_on(memories) if not thread["set_aside"] else [],
-            "tasks": tasks,
+            "tasks": list(tasks.values()),
         }
 
     def rests_on(self, memories):
@@ -991,23 +1273,56 @@ class Build:
         return out
 
     def tasks(self):
+        """Every task (an `active` issue that is no pull request), open and closed, with its place in a thread, its
+        title under the title rule, its goal when its text may be shown, and the ids of the memories written on it."""
         if not hasattr(self, "task_cache"):
             out = []
             for number, issue in sorted(self.issues.items()):
-                if issue["state"] != "open" or issue["pull"] or not self.has_label(number, "active"):
+                if issue["pull"] or not self.has_label(number, "active"):
                     continue
-                goal = None
-                if self.body_shown(number):
+                shown, goal = self.body_shown(number), None
+                if shown:
                     row = self.db.execute("SELECT text FROM sections WHERE issue = ? AND lower(heading) = ? "
                                           "ORDER BY ordinal LIMIT 1", (number, GOAL)).fetchone()
                     line = next((l.strip() for l in clean(row["text"] if row else "").split("\n") if l.strip()), "")
                     if line:
                         goal = self.runs(short(line), set())
-                out.append({"issue": number, "thread": self.thread_by_label.get(self.first_topic.get(number)),
-                            "goal": goal,
-                            "shown": self.body_shown(number)})
+                label = self.belongs.get(number)
+                opened = issue["state"] == "open"
+                out.append({"issue": number, "thread": self.thread_by_label.get(label) if label else 0,
+                            "title": short(issue["title"]) if self.title_shown(number) and issue["title"].strip()
+                            else None, "open": opened,
+                            "closed": full_day(issue["closed"]) if not opened and issue["closed"] else None,
+                            "goal": goal, "shown": shown,
+                            "memories": [m["id"] for m in self.order if m["issue"] == number]})
             self.task_cache = out
         return self.task_cache
+
+    def read_word_uses(self, threads):
+        """Where each project word is used besides the sentences: in the parts of the text (thread and ordinal) and
+        in the fields of memories. Found in the record's text itself, so a word is listed for every part that holds it."""
+        self.word_in_text, self.word_in_fields = {}, {}
+        if self.words.pattern is None:
+            return
+        for thread in threads:
+            if not thread["shown"]:
+                continue
+            ordinal = 0
+            for row in self.db.execute("SELECT heading, text FROM sections WHERE issue = ? ORDER BY ordinal",
+                                       (thread["topic"],)):
+                if clean(row["heading"]).lower() == recortex.SOURCES_HEADING.lower():
+                    continue
+                for _, _, n in self.words.find(clean(row["text"]), set()):
+                    self.word_in_text.setdefault(n, []).append({"thread": thread["n"], "ordinal": ordinal})
+                ordinal += 1
+        for cid in sorted(self.fields):
+            if cid not in self.m:
+                continue
+            for label, text in self.fields[cid]:
+                for _, _, n in self.words.find(text, set()):
+                    ids = self.word_in_fields.setdefault(n, [])
+                    if cid not in ids and len(ids) < 200:
+                        ids.append(cid)
 
     def word_model(self, n, rows):
         newest = rows[-1]
@@ -1026,6 +1341,7 @@ class Build:
             "earlier": [{"comment": row["comment"], "meaning": short(row["meaning"]),
                          "day": day_words(row["at"], self.years)} for row in rows[:-1]],
             "uses": uses,
+            "in_text": self.word_in_text.get(n, []), "in_fields": self.word_in_fields.get(n, []),
         }
 
     def open_model(self):
@@ -1034,7 +1350,9 @@ class Build:
         for memory in self.order:
             text = self.field(memory["id"], "Not established")
             if text and memory["kind"] == "result" and memory["state"] == "stands" and memory["thread"] not in set_aside:
-                unknown.append({"id": memory["id"], "doc": self.doc(text, set())})
+                after = [source for _, source in self.incoming.get(memory["id"], [])]
+                unknown.append({"id": memory["id"], "doc": self.doc(text, set()), "followed": after[0] if after else None})
+        unknown.sort(key=lambda entry: entry["followed"] is not None)  # what nothing followed first; the sort is stable
 
         def age(memory):
             parts = wall(memory["at"])
@@ -1049,7 +1367,7 @@ class Build:
             "failures": pick(lambda m: m["kind"] == "failure" and m["css"] == "open"),
             "unknown": unknown,
             "holds": self.last["holds"] if self.last else None,
-            "tasks": self.tasks(),
+            "tasks": [task for task in self.tasks() if task["open"]],
         }
 
     def not_told_model(self):
@@ -1060,12 +1378,30 @@ class Build:
                 edited.append({"id": cid, "issue": row["issue"]})
         bodies = [{"thread": t["n"], "topic": t["topic"]} for t in self.threads if t["topic"] and not t["shown"]]
         return {"others": self.found["hidden"], "edited": self.found["edited"], "edited_ids": edited,
-                "older": self.older, "words": self.words_cut, "bodies": bodies, "pause": self.pause_untold}
+                "older": self.older, "words": self.words_cut, "bodies": bodies, "pause": self.pause_untold,
+                "kinds": self.unknown_kinds + self.unknown_marked(),
+                "count": self.found["hidden"] + self.found["edited"] + self.older + self.words_cut + len(bodies)
+                + (1 if self.pause_untold else 0) + (1 if self.meta("sync_complete") == "0" else 0)
+                + self.unknown_kinds + self.unknown_marked()}
+
+    def unknown_marked(self):
+        """How many comments of allowed accounts carry a marker of a kind this version does not know (a plan, for
+        example): they are not memories here, so they are left out and counted."""
+        known = set(record_format.EVENT_TYPES) | {"resume"}
+        count = 0
+        for row in self.db.execute("SELECT substr(c.body, 1, 400) AS head, e.author AS author FROM events e JOIN "
+                                   "comments c ON c.id = e.comment WHERE e.type = 'other'"):
+            marker = record_format.parse_marker((row["head"] or "").split("\n", 1)[0])
+            if marker and marker.get("type") and marker["type"] not in known and self.ok(row["author"]):
+                count += 1
+        return count
 
     # ------------------------------------------------------------ the map
 
+    NAME_CHARS = 34   # a thread's name on the map is cut to this many characters; the whole name is in the row's title
+
     def map_model(self):
-        width, left, right, top, gap = 1080, 226, 30, 64, 104
+        width, right, top, gap = 1080, 30, 64, 104
         timed = [m for m in self.order if wall(m["at"])]
         if not timed:
             return None
@@ -1073,7 +1409,6 @@ class Build:
         start = min(moment(m["at"]) for m in timed).replace(hour=0, minute=0)
         end = max(moment(m["at"]) for m in timed)
         span = (end - start).total_seconds() + 86400
-        scale = lambda value: left + (width - left - right) * (value - start).total_seconds() / span
         rows = [t for t in self.threads if t["memories"]]
         folded = []
         if len(rows) > CAP_MAP_THREADS:
@@ -1081,6 +1416,9 @@ class Build:
             folded = [t for t in rows if t not in keep]
             rows = [t for t in rows if t in keep]
         lines = [(t["n"], t["name"], t["memories"]) for t in rows]
+        longest = max([min(self.NAME_CHARS, len(name or "")) for _, name, _ in lines] + [12])
+        left = max(150, int(longest * 8.6) + 40)   # the name column is as wide as the longest name, cut at 34 characters
+        scale = lambda value: left + (width - left - right) * (value - start).total_seconds() / span
         if folded:
             lines.append((None, None, sorted((m for t in folded for m in t["memories"]),
                                              key=lambda m: (m["time"], m["id"]))))
@@ -1107,7 +1445,8 @@ class Build:
                 thread = self.thread_of[n]
                 opened = sum(1 for m in thread["memories"] if m["css"] == "open")
                 status = "aside" if thread["set_aside"] else "open" if opened else "stands"
-            rows_out.append({"n": n, "name": name, "y": y, "x1": round(min(xs) - 14, 1) if xs else left,
+            short_name = name if name is None or len(name) <= self.NAME_CHARS else name[:self.NAME_CHARS - 1].rstrip() + "…"
+            rows_out.append({"n": n, "name": name, "name_short": short_name, "y": y, "x1": round(min(xs) - 14, 1) if xs else left,
                              "x2": round(max(xs) + 14, 1) if xs else left, "status_css": status,
                              "folded": len(folded) if n is None else 0})
         width = max(width, int(max([p[0] for p in position.values()] or [0]) + right + 10))
@@ -1121,7 +1460,13 @@ class Build:
                     links.append({"a": target, "b": memory["id"], "kind": key,
                                   "x1": position[target][0], "y1": position[target][1],
                                   "x2": position[memory["id"]][0], "y2": position[memory["id"]][1]})
-        pauses = [{"x": round(scale(datetime.datetime(*wall(p["at"]))), 1)} for p in self.pauses
-                  if wall(p["at"]) and start <= datetime.datetime(*wall(p["at"])) <= end + datetime.timedelta(days=1)]
-        return {"width": width, "height": height, "top": top, "rows": rows_out, "dots": dots, "links": links,
+        pauses, last_label = [], None
+        for p in sorted((p for p in self.pauses if wall(p["at"]) and start <= datetime.datetime(*wall(p["at"]))
+                         <= end + datetime.timedelta(days=1)), key=lambda p: (p["wall"], p["id"])):
+            x = round(scale(datetime.datetime(*wall(p["at"]))), 1)
+            label = last_label is None or x - last_label >= 60  # a label is drawn only 60 units after the one before
+            if label:
+                last_label = x
+            pauses.append({"x": x, "label": label})
+        return {"width": width, "height": height, "top": top, "left": left, "rows": rows_out, "dots": dots, "links": links,
                 "ticks": ticks, "pauses": pauses, "folded": len(folded)}
