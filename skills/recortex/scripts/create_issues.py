@@ -388,8 +388,8 @@ def main(argv=None):
             entry["verified"] = digest(body)
             save_state(state_path, state)
             marker = record_format.parse_marker(record_format.first_lines(body)[0]) or {}
-            kind = item["kind"] if item["kind"] in record_format.MEMORY_TYPES else marker.get("type")
-            if registrar and kind in record_format.MEMORY_TYPES:
+            kind = item["kind"] if item["kind"] in record_format.OBSERVED_TYPES else marker.get("type")
+            if registrar and kind in record_format.OBSERVED_TYPES:
                 registrar(target_repo, number, kind, int(comment_id_from_url(entry["url"])))
         else:
             failures += 1

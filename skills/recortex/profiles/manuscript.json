@@ -9,6 +9,35 @@
     "frozen data or code version",
     "submission, revision or resubmission"
   ],
+  "plan": {
+    "noun": "paper",
+    "parts": [
+      "message",
+      "claim",
+      "figure",
+      "table",
+      "interpretation",
+      "limitation",
+      "comparison",
+      "implication"
+    ],
+    "evidence": [
+      "claim"
+    ],
+    "display": [
+      "figure",
+      "table"
+    ],
+    "write": [
+      "Methods",
+      "Results",
+      "Discussion",
+      "Limitations"
+    ],
+    "write_from_record": [
+      "Methods"
+    ]
+  },
   "labels": [
     {
       "name": "ms:introduction",

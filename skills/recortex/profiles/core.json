@@ -19,6 +19,11 @@
       "description": "Work in development; names its destination topic; carries no section labels"
     },
     {
+      "name": "plan",
+      "color": "5319e7",
+      "description": "The plan of the deliverable; its comments are the planned parts"
+    },
+    {
       "name": "triage",
       "color": "fbca04",
       "description": "Opened by hand; not yet placed in the record (see the triage workflow)"

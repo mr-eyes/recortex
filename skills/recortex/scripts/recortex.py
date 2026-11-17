@@ -567,6 +567,54 @@ def section_labels(profiles, shipped_only=False):
     return out
 
 
+PLAN_PART = re.compile(r"[a-z][a-z-]{0,29}")
+
+
+def plan_profile(profiles):
+    """The plan of the project's deliverable, from the first shipped profile of `profiles` that has a "plan" key, or
+    None. A dict: profile, noun, parts, evidence, display, write, write_from_record and sections (the headings of
+    that profile in this project). `write` is cut to the headings the project has, `write_from_record` to those among
+    them. Only shipped profiles are read: a project file cannot name a part. An entry with sections chosen at setup
+    keeps its profile's parts."""
+    for entry in profiles if isinstance(profiles, list) else []:
+        name = entry if isinstance(entry, str) else entry.get("name") if isinstance(entry, dict) else None
+        if not is_shipped(name) or isinstance(entry, dict) and custom_sections(entry) is None:
+            continue
+        try:
+            plan = load_profile(name, shipped_only=True).get("plan")
+            headings = [heading for _, heading in section_labels([entry], shipped_only=True)]
+        except (ValueError, OSError):
+            continue
+        if not isinstance(plan, dict):
+            continue
+        parts = [p for p in plan.get("parts", []) if isinstance(p, str) and PLAN_PART.fullmatch(p)]
+        noun = plan.get("noun") if isinstance(plan.get("noun"), str) and HEADING_TEXT.fullmatch(plan["noun"]) else "paper"
+        lowered = {h.lower(): h for h in headings}
+        write = [lowered[h.lower()] for h in plan.get("write", []) if isinstance(h, str) and h.lower() in lowered]
+        from_record = [h for h in write if h.lower() in {x.lower() for x in plan.get("write_from_record", [])
+                                                         if isinstance(x, str)}]
+        return {"profile": name, "noun": noun, "parts": parts,
+                "evidence": [p for p in plan.get("evidence", []) if p in parts],
+                "display": [p for p in plan.get("display", []) if p in parts],
+                "write": write, "write_from_record": from_record, "sections": headings}
+    return None
+
+
+def plan_issue(config, profile):
+    """The number of the plan issue of `profile` in the project file ("plans": {"manuscript": 12}), or None. Only an
+    integer from 1 to 2147483647 counts, never a bool; whether that issue carries the label `plan` and was opened by
+    an allowed account is the reader's to check."""
+    plans = (config or {}).get("plans")
+    value = plans.get(profile) if isinstance(plans, dict) else None
+    return value if type(value) is int and 1 <= value <= 2147483647 else None
+
+
+def planning_on(config):
+    """False when the project file holds "planning": false. The user's own settings.json has the same switch, read by
+    the hooks (hooks.planning_off), since the project file can switch planning off but never on."""
+    return (config or {}).get("planning") is not False
+
+
 def body_sections(text):
     """The level-2 headings of a body outside fenced blocks, as a list of (line number, heading text)."""
     found, fence = [], None

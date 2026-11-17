@@ -18,13 +18,17 @@ import re
 
 import recortex
 
-EVENT_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question", "record", "triage")
-HEADED_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question")
-MEMORY_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question")
+EVENT_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question", "record", "triage",
+               "plan", "text", "proposal")
+HEADED_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question", "plan", "text")
+MEMORY_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question", "plan", "text")
+# The seven kinds of memory that the observer may queue and post; a plan and a text change are the main session's.
+OBSERVED_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question")
 ISO = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:Z|[+-][0-9]{2}:[0-9]{2})"
 STAMP = r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} (?:[A-Z]{2,5}|UTC[+-][0-9]{1,2}(?::[0-9]{2})?)\b"
 MARKER = re.compile(r"^<!-- ghim:event ((?:[a-z]+=\S+ )*[a-z]+=\S+) -->\s*$")
-EVENT_HEADING = re.compile(r"^### (Result|Decision|Failure|Checkpoint|Correction|Idea|Question|Triage)( \(reconstructed\))?: "
+EVENT_HEADING = re.compile(r"^### (Result|Decision|Failure|Checkpoint|Correction|Idea|Question|Triage|Plan|Text|Proposal)"
+                           r"( \(reconstructed\))?: "
                            r"(%s) - (.+?)\s*$"
                            % STAMP)
 BLOCK_HEADING = re.compile(r"^### (Figure|Table): ([A-Za-z0-9][\w.-]*) - (.+?)\s*$")
@@ -265,18 +269,22 @@ def event_at(event, created_at):
 
 # ---------------------------------------------------------------- memories: links
 
-LINK_KINDS = ("because", "replaces", "instead", "checks")
+LINK_KINDS = ("because", "replaces", "instead", "checks", "against")
 LINK_VALUE = re.compile(r"[1-9][0-9]{0,18}(?:,[1-9][0-9]{0,18}){0,3}")  # one to four comment ids; use fullmatch
 MARKER_KEYS = ("type", "at", "recorded", "source", "eventkey") + LINK_KINDS
-LINKABLE = ("result", "decision", "failure", "correction", "idea", "question")  # a checkpoint never links
-# key -> the kind of the memory that carries it -> the kinds it may point at
+SIX = ("result", "decision", "failure", "correction", "idea", "question")  # the memories of 0.6.0 that may link
+LINKABLE = SIX + ("plan", "text")  # a checkpoint never links; a text change links only as the carrier of because
+# key -> the kind of the memory that carries it -> the kinds it may point at. Nothing points at a text change.
 LINK_RULES = {
-    "because": {kind: frozenset(LINKABLE) for kind in LINKABLE},
-    "replaces": dict({kind: frozenset([kind]) for kind in LINKABLE}, correction=frozenset(LINKABLE)),
-    "instead": {kind: frozenset(["idea", "decision"]) for kind in ("decision", "idea", "result")},
-    "checks": {"result": frozenset(["question", "idea", "decision"]),
-               "failure": frozenset(["question", "idea", "decision"]),
+    "because": dict({kind: frozenset(SIX + ("plan",)) for kind in SIX + ("plan",)},
+                    text=frozenset(("result", "decision", "correction", "plan"))),
+    "replaces": dict({kind: frozenset([kind]) for kind in SIX + ("plan",)}, correction=frozenset(SIX)),
+    "instead": dict({kind: frozenset(["idea", "decision"]) for kind in ("decision", "idea", "result")},
+                    decision=frozenset(["idea", "decision", "plan"]), plan=frozenset(["plan"])),
+    "checks": {"result": frozenset(["question", "idea", "decision", "plan"]),
+               "failure": frozenset(["question", "idea", "decision", "plan"]),
                "decision": frozenset(["question"])},
+    "against": {"result": frozenset(["plan"])},
 }
 
 
@@ -300,6 +308,8 @@ def links(marker):
 # ---------------------------------------------------------------- memories: the lines of a comment
 
 PLAIN_LABELS = {
+    "plan": "In plain words, we plan to",
+    "text": "In plain words, we changed the text to say that",
     "result": "In plain words, we found that",
     "decision": "In plain words, we decided to",
     "failure": "In plain words, what went wrong",
@@ -618,6 +628,123 @@ def evidence(body):
         if row:
             rows.append(row)
     return rows
+
+
+# ---------------------------------------------------------------- memories: plans and changes of the text
+
+PLAN_CHANGES = ("narrows", "rewords", "widens", "reverses")   # what a revised plan memory does to the one it replaces
+SHA256 = r"[0-9a-f]{64}"
+BODY_HASHES = re.compile(r"before sha256 `(%s|none)`; after sha256 `(%s)`" % (SHA256, SHA256))
+COMMIT_ID = re.compile(r"[0-9a-f]{40}")
+LOGIN_TEXT = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?"
+WHO = r"[A-Za-z][A-Za-z0-9 .'-]{0,59}"
+# The five forms that the Approved field of a text change starts with, as (key, pattern, a quote follows). The key is
+# what the index and the page read; the words are fixed, so that nothing of the record's own text is told.
+APPROVED_FORMS = (
+    ("autonomous", re.compile(r"Written without asking, under the autonomous mode\."), False),
+    ("chat", re.compile(r"By %s in the chat, %s:" % (WHO, STAMP)), True),
+    ("merged", re.compile(r"By %s on GitHub, by merging pull request [1-9][0-9]{0,8}\." % LOGIN_TEXT), False),
+    ("edited", re.compile(r"Edited by %s on GitHub, %s\." % (LOGIN_TEXT, STAMP)), False),
+    ("restored", re.compile(r"Restored by %s in the chat, %s:" % (WHO, STAMP)), True),
+)
+# The reasons a version was not kept as a file (references/versions.md): the Version field says "Not kept: <reason>".
+NOT_KEPT = ("this account may not write files to the repository", "a branch rule refused the write",
+            "the branch changed while writing")
+KEPT_FROM_AUTHOR = re.compile(r"(?:[1-9][0-9]{0,3} paragraphs? (?:was|were) changed by hand and (?:was|were) left as "
+                              r"(?:it is|they are)\.|Nothing was changed by hand\.)")
+VERSION_NAME = re.compile(r"Version name: ([a-z0-9][a-z0-9.-]{0,39}); commit (%s); manifest sha256 (%s)" % ("[0-9a-f]{40}", SHA256))
+
+
+def field_text(body, label):
+    """The text of the first field called `label` in an event comment, or None."""
+    for found, text in fields(body):
+        if found == label:
+            return text
+    return None
+
+
+def approved_form(text):
+    """The key of the form that the text of an Approved field starts with ("autonomous", "chat", "merged", "edited" or
+    "restored"), or None. Only the first line is read; a form that wants a quote needs one after it."""
+    lines = (text or "").split("\n")
+    for key, pattern, quoted in APPROVED_FORMS:
+        if pattern.fullmatch(lines[0].strip()):
+            if quoted and not any(line.lstrip().startswith(">") and line.lstrip(" >").strip() for line in lines[1:]):
+                return None
+            return key
+    return None
+
+
+def sha_pair(text):
+    """(before, after) of a Body field, each a 64-character hash, before None when it says none; or None when the text
+    is not in the form 'before sha256 `<hash or none>`; after sha256 `<hash>`'."""
+    match = BODY_HASHES.fullmatch((text or "").strip())
+    if not match:
+        return None
+    return (None if match.group(1) == "none" else match.group(1)), match.group(2)
+
+
+def version_name(text):
+    """(name, commit, manifest hash) from the first line of the Effect field of the decision that names a version
+    ('Version name: <name>; commit <40 hex>; manifest sha256 <64 hex>'), or None."""
+    first = (text or "").split("\n")[0].strip()
+    match = VERSION_NAME.fullmatch(first)
+    return match.groups() if match else None
+
+
+COPY_MADE = re.compile(r"^Copy made: (%s)[ \t]*$" % STAMP, re.M)
+
+
+def copy_made(body):
+    """The ISO time of the 'Copy made: <date time zone>' line of a plan issue's body, or None."""
+    match = COPY_MADE.search((body or "").replace("\r\n", "\n"))
+    return to_iso(match.group(1)) if match else None
+
+
+# ---------------------------------------------------------------- citations in Manubot's forms
+
+# The identifiers a prefix takes, as far as the plugin checks them: the form only, never the literature. The prefixes
+# are USAGE.md's (doi, pmc, pubmed, arxiv, isbn, wikidata) and the spellings Manubot's own code accepts for the same
+# sources (pmid, pmcid; url, http and https for a web address; manubot/cite/pubmed.py and url.py at the commit its
+# build environment pins).
+MANUBOT_IDENTIFIERS = {
+    "doi": re.compile(r"10\.[0-9]{4,9}/[^\s;\[\]]+"),
+    "pmc": re.compile(r"PMC[0-9]+"),
+    "pmcid": re.compile(r"PMC[0-9]+"),
+    "pubmed": re.compile(r"[0-9]+"),
+    "pmid": re.compile(r"[0-9]+"),
+    "url": re.compile(r"https?://[^\s;\[\]]+"),
+    "arxiv": re.compile(r"(?:[0-9]{4}\.[0-9]{4,5}|[a-z-]+(?:\.[A-Z]{2})?/[0-9]{7})(?:v[0-9]+)?"),
+    "isbn": re.compile(r"[0-9][0-9X-]{8,16}"),
+    "wikidata": re.compile(r"Q[0-9]+"),
+}
+CITE_GROUP = re.compile(r"\[((?:-?@[^\s;\[\]]+)(?:[ \t]*;[ \t]*-?@[^\s;\[\]]+)*)\](?!:)")
+CITE_DEFINITION = re.compile(r"^\[@([A-Za-z0-9_-]+)\]:[ \t]*(\S.*)$", re.M)
+
+
+def manubot_identifier(prefix, rest):
+    """True when `rest` has the form of an identifier of the documented `prefix`."""
+    pattern = MANUBOT_IDENTIFIERS.get(prefix)
+    return bool(pattern and pattern.fullmatch(rest))
+
+
+def manubot_definitions(text):
+    """{name: what the line defines} of the named references a body defines on lines of its own, '[@name]: doi:...',
+    outside code."""
+    return {match.group(1): match.group(2).strip() for match in CITE_DEFINITION.finditer(masked(text))}
+
+
+def citations_manubot(text):
+    """The citations of a text in Pandoc's and Manubot's form, '[@key]' and '[@key; @key]', outside code, as dicts:
+    key (without '@'), line (1-based), start and end. A line '[@name]: ...' defines a name; it cites nothing."""
+    out = []
+    plain_text = masked(text)
+    for match in CITE_GROUP.finditer(plain_text):
+        line = plain_text.count("\n", 0, match.start()) + 1
+        for part in match.group(1).split(";"):
+            key = part.strip().lstrip("-")[1:]
+            out.append({"key": key, "line": line, "start": match.start(), "end": match.end()})
+    return out
 
 
 # ---------------------------------------------------------------- memories: folds

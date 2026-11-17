@@ -91,7 +91,7 @@ def observer_comment(args, draft, repo, config):
     import storage
 
     marker = record_format.parse_marker(record_format.first_lines(draft)[0]) or {}
-    memory = args.kind in record_format.MEMORY_TYPES or marker.get("type") in record_format.MEMORY_TYPES
+    memory = args.kind in record_format.OBSERVED_TYPES or marker.get("type") in record_format.OBSERVED_TYPES
     if not args.eventkey and not memory:
         return None
     try:
@@ -283,7 +283,7 @@ def main(argv=None):
         if ok and args.kind in record_format.MEMORY_TYPES:
             print("memory id: %s" % match.group(1))
         if ok and register:
-            register_with_observer(repo, config, args.issue, args.kind if args.kind in record_format.MEMORY_TYPES
+            register_with_observer(repo, config, args.issue, args.kind if args.kind in record_format.OBSERVED_TYPES
                                    else marker.get("type"), int(match.group(1)))
         return 0 if ok else 1
 

@@ -587,7 +587,7 @@ class Store:
         candidates of the same kind for the same issue that rest on what came before this post (main_post_after), and
         its ready events of that kind for that issue wait for the main session. The keys of those events are returned.
         The record is refreshed before the next selection."""
-        if (type(issue) is not int or issue < 1 or kind not in record_format.MEMORY_TYPES
+        if (type(issue) is not int or issue < 1 or kind not in record_format.OBSERVED_TYPES
                 or type(comment_id) is not int or comment_id < 1):
             raise StoreError("invalid_candidate")
         now = time.time() if now is None else now
@@ -620,7 +620,7 @@ class Store:
         sources = sorted({_id(source) for source in sources})
         if source_id not in sources or any(self.observation(source) is None for source in sources):
             raise StoreError("missing_source")
-        if candidate.get("kind") not in record_format.MEMORY_TYPES:
+        if candidate.get("kind") not in record_format.OBSERVED_TYPES:
             raise StoreError("invalid_candidate")
         issue = candidate.get("issue")
         if isinstance(issue, bool) or not isinstance(issue, int) or issue < 1:
