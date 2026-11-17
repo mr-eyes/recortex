@@ -320,21 +320,34 @@ def hub_title(db, hub, allowed):
     return row["title"] if row and index.body_told(db, hub, allowed) and row["title"] else None
 
 
-def newest_texts(db, config, allowed, plan):
-    """{issue: id of its newest told text change} from the index."""
+def told_texts(db, config, allowed, plan):
+    """The told text changes, oldest first (write_rules.text_memories), from the index; [] without a plan."""
     state = index.planned(db, config, allowed, plan) if plan else None
-    texts = write_rules.text_memories(db, state["found"]["items"]) if state else []
-    return {issue: write_rules.newest_text(texts, issue)["id"] for issue in {row["issue"] for row in texts}}
+    return write_rules.text_memories(db, state["found"]["items"]) if state else []
 
 
-def paper_bodies(db, config, repo, hub, allowed, plan, replace, head_versions=None, head=None):
-    """({issue: body}, {issue: entry}): the bodies of the paper's topics, the told ones, `replace` ({issue: text}) winning; and
-    the topics the snapshot leaves as the branch has them, with the entry VERSION.json holds for each.
+def vouched_text(repo, number, known, texts):
+    """The last text of a topic that the record vouches for, when its file on the branch was changed by hand: the file of the
+    newest told text change whose "after" is the hash VERSION.json holds, read at the commit that change names, and kept only
+    when it has that hash; None when there is none. Nothing from the changed file is ever used."""
+    for row in reversed(texts or []):
+        if row["issue"] == number and row["after"] == known.get("sha256") and SHA40.fullmatch(row["version"] or ""):
+            found = file_at(repo, row["version"], "topics/%d.md" % number)
+            return found if found is not None and record_format.body_sha(found) == known.get("sha256") else None
+    return None
+
+
+def paper_bodies(db, config, repo, hub, allowed, plan, replace, head_versions=None, head=None, texts=None):
+    """({issue: body}, {issue: entry}): the bodies the layout is made from, the paper's told topics, `replace` ({issue: text})
+    winning; and the topics the snapshot leaves as the branch has them, with the entry VERSION.json holds for each.
 
     A topic whose file at `head` is not what VERSION.json says of it (somebody changed the file on the branch alone) is held:
     its file and its entry are left as they are, so that no commit puts the file back before the author decided (references/
-    versions.md, "A file edited directly"). A topic whose live body is not the text the branch holds for it (a hand edit that
-    `sync` has not recorded) keeps the branch's text, so that one commit never records a change that has no memory yet."""
+    versions.md, "A file edited directly"), and nothing from the file reaches the layout, the manifest, the page or the
+    compiled paper: its text in the layout is the last one the record vouches for (the live body when that has the hash
+    VERSION.json holds, else the file of the text change that does, `vouched_text`), and it has none when there is none. A
+    topic whose live body is not the text the branch holds for it (a hand edit that `sync` has not recorded) keeps the branch's
+    text, so that one commit never records a change that has no memory yet."""
     profiles = recortex.shipped_profiles(config.get("profiles"))
     told = index.told_bodies(db, allowed)
     bodies, held = {}, {}
@@ -352,7 +365,11 @@ def paper_bodies(db, config, repo, hub, allowed, plan, replace, head_versions=No
             if head and known and isinstance(known, dict):
                 kept = file_at(repo, head, "topics/%d.md" % number)
                 if kept is not None and record_format.body_sha(kept) != known.get("sha256"):
-                    bodies[number], held[number] = kept, known
+                    held[number] = known
+                    vouched = live if record_format.body_sha(live) == known.get("sha256") else vouched_text(
+                        repo, number, known, texts)
+                    if vouched is not None:
+                        bodies[number] = vouched
                     continue
                 if kept is not None and known.get("sha256") != record_format.body_sha(live):
                     bodies[number] = kept
@@ -388,8 +405,8 @@ def version_json(repo, hub, bodies, texts, held=None, outline=None):
     and the outline the sections were laid out in, so that a named version is compiled in the sections it had."""
     held = held or {}
     found = {"repository": repo, "hub": hub, "topics": {
-        str(n): held[n] if n in held else {"sha256": record_format.body_sha(b), "text": texts.get(n)}
-        for n, b in sorted(bodies.items())}}
+        str(n): held[n] if n in held else {"sha256": record_format.body_sha(bodies[n]), "text": texts.get(n)}
+        for n in sorted(set(bodies) | set(held))}}
     if outline is not None:
         found["layout"] = outline
     return json.dumps(found, indent=1, sort_keys=True) + "\n"
@@ -441,10 +458,12 @@ def ensure(config, repo):
             return "refused"
         if head is not None:
             return add_workflow(config, repo, head)
-        texts = newest_texts(db, config, allowed, plan)
+        rows = told_texts(db, config, allowed, plan)
+        texts = {row["issue"]: write_rules.newest_text(rows, row["issue"])["id"] for row in rows}
 
         def files(now):   # made again for the head a retry accepts: the branch may have been made meanwhile
-            bodies, held = paper_bodies(db, config, repo, hub, allowed, plan, {}, version_at(repo, now) if now else None, now)
+            bodies, held = paper_bodies(db, config, repo, hub, allowed, plan, {}, version_at(repo, now) if now else None, now,
+                                        rows)
             return layout_files(db, config, repo, hub, allowed, plan, bodies, metadata_at(repo, now) if now else None, texts,
                                 held)
         message = "Start the versions of the manuscript"
@@ -515,10 +534,11 @@ def commit(config, repo, issue, text):
             if made != "made":
                 return REASON.get(LAST_REFUSAL[0], REASON["push"]) if made == "refused" else REASON["off"]
             head = head_of(repo)
-        texts = newest_texts(db, config, allowed, plan)
+        rows = told_texts(db, config, allowed, plan)
+        texts = {row["issue"]: write_rules.newest_text(rows, row["issue"])["id"] for row in rows}
 
         def files(now):   # made again for the head a retry accepts: another session may have kept a version meanwhile
-            bodies, held = paper_bodies(db, config, repo, hub, allowed, plan, {issue: text}, version_at(repo, now), now)
+            bodies, held = paper_bodies(db, config, repo, hub, allowed, plan, {issue: text}, version_at(repo, now), now, rows)
             return layout_files(db, config, repo, hub, allowed, plan, bodies, metadata_at(repo, now), texts, held)
         headings = changed_headings(repo, head, issue, text, config)
         message = "Text: %s of topic %d" % (", ".join(headings)[:60] or "text", issue)

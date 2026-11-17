@@ -462,7 +462,9 @@ class VersionTests(VersionBox):
         git = self.git()
         head = self.head()
         files = dict(self.files_at())
-        by_hand = files["topics/5.md"] + "\nA line typed straight into the file on the branch.   \n\n\n"   # not as the plugin writes
+        files_before = dict(files)
+        by_hand = files["topics/5.md"].replace("\n### Figure: dryspell", "\nA line typed straight into the file on the branch.   \n\n\n"
+                                              "### Figure: dryspell", 1)   # in Results, and not as the plugin writes
         files["topics/5.md"] = by_hand
         data = self.repo()
         data["git"]["trees"]["d" * 40] = files
@@ -478,6 +480,33 @@ class VersionTests(VersionBox):
         self.assertIn("left out of the moisture analysis", final["topics/3.md"])
         status = self.cmd("versions.py", "status").stdout
         self.assertIn("the file of this part was changed on the branch and the text was not", status)
+        # what is typed into a file on the branch is not record text: it reaches no section file and no manifest line
+        results = [name for name in final if name.startswith("content/") and name.endswith(".results.md")][0]
+        self.assertNotIn("typed straight into the file", "\n".join(text for name, text in final.items() if name != "topics/5.md"))
+        self.assertEqual(files_before[results], final[results])
+        self.assertIn("pooled fit", final[results])   # topic 5 is still in its section, at the text the record vouches for
+
+    def test_a_topic_whose_text_and_file_both_changed_keeps_its_last_vouched_text_in_the_sections(self):
+        self.written()
+        written_head = self.head()
+        files = dict(self.files_at())
+        before_results = [name for name in files if name.startswith("content/") and name.endswith(".results.md")][0]
+        by_hand = files["topics/5.md"].replace("\n### Figure: dryspell", "\nTyped into the file on the branch.\n\n### Figure: dryspell", 1)
+        files["topics/5.md"] = by_hand
+        data = self.repo()
+        data["git"]["trees"]["d" * 40] = files
+        data["git"]["commits"]["e" * 40] = {"tree": "d" * 40, "parents": [written_head], "message": "by hand"}
+        data["git"]["refs"]["heads/" + BRANCH] = "e" * 40
+        self.save(data)
+        self.edited_by_hand(5, "## Limitations", "Typed into the issue by hand.\n\n## Limitations")   # the text changed too
+        done = self.write_methods()
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        final = self.files_at()
+        self.assertEqual(by_hand, final["topics/5.md"])
+        everything = "\n".join(text for name, text in final.items() if name != "topics/5.md")
+        self.assertNotIn("Typed into the file on the branch", everything)
+        self.assertNotIn("Typed into the issue by hand", everything)   # no memory records it yet either
+        self.assertEqual(files[before_results], final[before_results])
 
     def test_a_branch_that_keeps_moving_gives_the_fixed_line_and_not_kept(self):
         self.ready()
