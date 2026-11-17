@@ -17,7 +17,9 @@ The marketplace lists the plugin under its new name and maps the old one to it (
 
 A copy of the plugin installed another way (a folder under `~/.claude/skills/` with hooks from `templates/settings-hook-snippet.json`, or a second plugin entry) stays as it is. Copy the new `skills/recortex` folder in, remove the old folder, and change the four hook commands to `$HOME/.claude/skills/recortex/scripts/`. Two copies enabled at once print two briefs, so disable or uninstall the other one.
 
-## Version 1.3.1: setup questions after an update
+## Version 1.4.0: the manuscript page, and setup questions after an update
+
+A project with a plan of its paper gets a new view of the mind page, "Read the manuscript": the paper as a paper, with the changes since an earlier version, who wrote each paragraph and what the plan says that the text does not yet. Nothing changed in the record, the index or the project file, and an older version of the plugin ignores the view. Every other project gets the page it had.
 
 The first session after an update asks only the setup questions the user has not answered yet, in one batch, at a pause: the brief carries one line with a count, and the session runs `setup.py questions` at the first pause, not before the user's first task. A question is asked only when it applies to the project (the writing mode and the author's own paper for a project with a plan; the manuscript profile for a project with paper files and no such profile; the labels for a project with the manuscript profile) or to the machine (the status line, the observer). Which are open is read from the current state, so a project set up with any earlier version needs no migration, and a project with nothing open sees no change. The writing-mode question of 1.3.0 joins the batch: the brief no longer asks it on its own, unless the questions are switched off.
 

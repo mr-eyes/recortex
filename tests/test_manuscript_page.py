@@ -1181,5 +1181,16 @@ class WholeBuildTests(Steps):
         self.assertNotIn("Planned for the", words)
 
 
+class VersionRaiseTests(unittest.TestCase):
+    def test_the_version_is_1_4_0_and_the_upgrade_notes_name_it_above_1_3_0(self):
+        with open(os.path.join(ROOT, ".claude-plugin", "plugin.json"), encoding="utf-8") as handle:
+            self.assertEqual("1.4.0", json.load(handle)["version"])
+        with open(os.path.join(ROOT, "skills", "recortex", "references", "upgrading.md"), encoding="utf-8") as handle:
+            notes = handle.read()
+        self.assertIn("## Version 1.4.0: the manuscript page, and setup questions after an update", notes)
+        self.assertLess(notes.index("## Version 1.4.0"), notes.index("## Version 1.3.0"))
+        self.assertNotIn("Version 1.3.1", notes)
+
+
 if __name__ == "__main__":
     unittest.main()

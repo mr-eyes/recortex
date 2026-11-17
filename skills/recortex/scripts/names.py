@@ -27,7 +27,7 @@ OLD_WORKFLOW = "ghim-triage.yml"
 # versions of the plugin's own manuscript in the record's repository.
 WRITING_MODES = "writing-modes.json"
 OWN_PAPER = "own-paper.json"
-# 1.3.1: the answers of this machine to the setup questions an update adds (private folder of the configuration top).
+# 1.4.0: the answers of this machine to the setup questions an update adds (private folder of the configuration top).
 SETUP_ANSWERS = "setup-answers.json"
 MANUSCRIPT_BRANCH = "recortex-manuscript"
 # The plugin's environment variables, without the prefix. The three before the last are read only by the tests.

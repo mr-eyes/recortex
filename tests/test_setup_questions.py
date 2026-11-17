@@ -1,4 +1,4 @@
-"""Tests of the setup questions an update adds (1.3.1): which questions a project has not answered, the answers kept on a
+"""Tests of the setup questions an update adds (1.4.0): which questions a project has not answered, the answers kept on a
 machine, the one fixed line of the session start, `setup.py questions`, `answer` and the wizard's two steps as commands.
 Nothing here reaches GitHub; the scripts run against tests/fake_gh.py.
 
@@ -1264,8 +1264,8 @@ class SetupQuestionDocsTests(unittest.TestCase):
 
     def test_the_upgrading_page_has_a_section_above_130(self):
         text = self.read("skills", "recortex", "references", "upgrading.md")
-        self.assertLess(text.index("## Version 1.3.1"), text.index("## Version 1.3.0"))
-        self.assertIn("private/setup-answers.json", text.split("## Version 1.3.1", 1)[1].split("## Version 1.3.0", 1)[0])
+        self.assertLess(text.index("## Version 1.4.0"), text.index("## Version 1.3.0"))
+        self.assertIn("private/setup-answers.json", text.split("## Version 1.4.0", 1)[1].split("## Version 1.3.0", 1)[0])
 
 
 if __name__ == "__main__":
