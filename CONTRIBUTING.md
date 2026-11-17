@@ -104,6 +104,10 @@ The dry run prints the commands issue by issue and makes no network call. In the
 - A new setup question is a row of `QUESTIONS` in `setup_questions.py`, its row in the table of `references/setup.md` ("Questions added after setup"), and a test of each of its states (open, answered, not asked) in `tests/test_setup_questions.py`. The hook counts it from local files and makes no GitHub call; the answers of a machine are read through `storage.py` and never replaced when they cannot be read; and the `since` of a row decides nothing.
 - Examples use invented projects only.
 
+## Licensing
+
+The plugin is under FSL-1.1-MIT from 1.4.0 (versions up to 1.3.0 stay MIT). A pull request from outside the project is accepted only with a signed contributor agreement, so that the project can relicense its code.
+
 ## Releases
 
 `version` in `.claude-plugin/plugin.json` pins installed copies to that version. Raise it with every change that users should receive.

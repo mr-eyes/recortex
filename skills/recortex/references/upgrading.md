@@ -27,7 +27,7 @@ The first session after an update asks only the setup questions the user has not
 
 An older version ignores the new file, the new line and the new commands, and nothing in the record changes: no comment, body, label or hub row is written by the questions themselves, only by the commands the user agrees to. A user who chose "off" for the observer in an earlier wizard is asked once more, because earlier versions did not keep a "no".
 
-The license changes with this version. Version 1.4.0 and later are under the Functional Source License, FSL-1.1-MIT: using, changing and sharing the plugin are allowed for any purpose except a competing use, which means offering it to others in a commercial product or service that substitutes for it. Each release becomes MIT two years after it is published. Versions up to 1.3.0 stay under MIT. The full terms are in `LICENSE` at the root of the plugin.
+The license changes with this version. Version 1.4.0 and later are under the Functional Source License, FSL-1.1-MIT: using, changing and sharing the plugin are allowed for any purpose except a competing use, which means making it available to others in a commercial product or service that substitutes for it, that substitutes for another product or service the licensor offers with it, or that offers the same or substantially similar functionality. Each release becomes MIT two years after it is published. Versions up to 1.3.0 stay under MIT. The full terms are in `LICENSE` at the root of the plugin.
 
 ## Version 1.3.0: the plan of the paper, its text and its versions
 
