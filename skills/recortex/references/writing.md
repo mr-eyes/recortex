@@ -36,7 +36,7 @@ A stop after the body leaves a body with no comment; the next `write.py apply` s
 
 ### The approval forms
 
-The `**Approved:**` field of a `text` comment starts with one of five fixed forms, so that nothing in it can be mistaken for a record of the user's word:
+The `**Approved:**` field of a `text` comment starts with one of six fixed forms, so that nothing in it can be mistaken for a record of the user's word:
 
 | Form | When |
 |---|---|
@@ -45,6 +45,7 @@ The `**Approved:**` field of a `text` comment starts with one of five fixed form
 | `By (login) on GitHub, by merging pull request (number).` | review mode, the pull request path ([versions.md](versions.md)) |
 | `Edited by (login) on GitHub, (stamp).` | the text was edited on github.com, recorded by `versions.py sync` |
 | `Restored by (name or role) in the chat, (stamp):` and a quote | a restored version ([versions.md](versions.md)) |
+| `Kept as a file later, for the text change of comment (id).` | `versions.py sync` made the commit that an earlier text change could not (it said "Not kept"): the same text, the commit in its Version field ([versions.md](versions.md)) |
 
 ### When the author edited the text
 

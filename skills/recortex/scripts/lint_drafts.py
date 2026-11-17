@@ -815,10 +815,11 @@ def check_text(text, template, profiles, add):
     if approved is not None:
         form = record_format.approved_form(approved["text"])
         if form is None:
-            add("error", "text-approved", approved["line"] + 1, "'**Approved:**' starts with one of five forms: 'Written "
+            add("error", "text-approved", approved["line"] + 1, "'**Approved:**' starts with one of six forms: 'Written "
                 "without asking, under the autonomous mode.'; 'By <name or role> in the chat, <date time zone>:' and a "
                 "quote; 'By <login> on GitHub, by merging pull request <n>.'; 'Edited by <login> on GitHub, <date time "
-                "zone>.'; or 'Restored by <name or role> in the chat, <date time zone>:' and a quote")
+                "zone>.'; 'Restored by <name or role> in the chat, <date time zone>:' and a quote; or 'Kept as a file later, for the "
+                "text change of comment <id>.'")
     kept = need_text(found, "Kept from the author", add, 200, True)
     if kept is not None and not record_format.KEPT_FROM_AUTHOR.fullmatch(kept):
         add("error", "text-kept", found["Kept from the author"]["line"] + 1, "'**Kept from the author:**' is '<n> "

@@ -83,6 +83,23 @@ class VersionBox(tw.WritingBox):
     def tags(self):
         return {ref: sha for ref, sha in self.git()["refs"].items() if ref.startswith("tags/")}
 
+    def edited_by_hand(self, issue, old, new):
+        data = self.repo()
+        item = data["issues"][str(issue)]
+        item["body"] = item["body"].replace("\r\n", "\n").replace(old, new, 1)
+        item["edits"] = [{"at": "2026-12-02T10:00:00Z", "by": "octocat"}, {"at": item["created_at"], "by": "octocat"}]
+        item["last_edited_at"] = item["updated_at"] = "2026-12-02T10:00:00Z"
+        self.save(data)
+        self.ready()
+        return item["body"]
+
+    def write_methods(self, name="methods", env=None):
+        folder = self.start(3, name)
+        base = self.base(folder)
+        self.draft(folder, base.replace("### Table: plots", "The four plots of the wet corner were left out of the moisture "
+                                        "analysis.\n\n### Table: plots", 1), parts=(), results=(), decisions=(9106,))
+        return self.cmd("write.py", "apply", "--dir", folder, env=env)
+
     def untrust(self):
         """The user's trusted list no longer names the repository (or never did)."""
         with open(self.trusted, "w") as handle:
@@ -423,23 +440,6 @@ class VersionTests(VersionBox):
         self.assertEqual("another commit", self.git()["commits"][history[1]]["message"])
         self.assertEqual("Text: Results of topic 5", self.git()["commits"][history[0]]["message"])
 
-    def edited_by_hand(self, issue, old, new):
-        data = self.repo()
-        item = data["issues"][str(issue)]
-        item["body"] = item["body"].replace("\r\n", "\n").replace(old, new, 1)
-        item["edits"] = [{"at": "2026-12-02T10:00:00Z", "by": "octocat"}, {"at": item["created_at"], "by": "octocat"}]
-        item["last_edited_at"] = item["updated_at"] = "2026-12-02T10:00:00Z"
-        self.save(data)
-        self.ready()
-        return item["body"]
-
-    def write_methods(self, name="methods", env=None):
-        folder = self.start(3, name)
-        base = self.base(folder)
-        self.draft(folder, base.replace("### Table: plots", "The four plots of the wet corner were left out of the moisture "
-                                        "analysis.\n\n### Table: plots", 1), parts=(), results=(), decisions=(9106,))
-        return self.cmd("write.py", "apply", "--dir", folder, env=env)
-
     def test_a_retry_after_a_moved_head_lays_down_a_snapshot_made_from_the_head_it_accepted(self):
         """Another session kept a version of topic 6 just before this one moved the branch: the retry must not put topic 6
         back to what this session saw before."""
@@ -717,6 +717,58 @@ class NameAndRefusalTests(VersionBox):
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
         self.assertIsNotNone(self.head())
         self.assertIn("The pooled fit", self.files_at()["topics/5.md"])
+        self.assert_kept_later()
+
+    def assert_kept_later(self):
+        """Codex review of 1.3.0: the commit made later is tied to the text change that said "Not kept" by a text change of its
+        own, in the form "kept", so that the version can be fetched, shown and restored; the first comment is not edited."""
+        self.ready()
+        memories = self.text_memories()
+        self.assertEqual(2, len(memories), [c for c, _ in memories])
+        first, second = memories[0][1], memories[1][1]
+        self.assertIn("Not kept", dict(record_format.fields(first))["Version"])
+        fields = dict(record_format.fields(second))
+        self.assertEqual("`%s`" % self.head(), fields["Version"])
+        self.assertEqual("Kept as a file later, for the text change of comment %d." % int(memories[0][0]), fields["Approved"])
+        match = re.fullmatch(r"before sha256 `([0-9a-f]{64})`; after sha256 `([0-9a-f]{64})`", fields["Body"])
+        self.assertTrue(match and match.group(1) == match.group(2), fields["Body"])   # the same text
+        self.assertIn(match.group(2), dict(record_format.fields(first))["Body"])      # the text the first change told
+        done = self.cmd("versions.py", "fetch")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn("fetched 1", done.stdout)
+        log = json.loads(self.cmd("versions.py", "log", "--issue", "5", "--json").stdout)
+        self.assertEqual({self.head()}, {row["commit"] for row in log if row["commit"]})
+        self.assertEqual(0, self.cmd("versions.py", "sync").returncode)
+        self.ready()
+        self.assertEqual(2, len(self.text_memories()), "a second sync tells nothing more")
+
+    def test_a_write_refused_by_a_branch_rule_is_tied_to_its_commit_when_a_later_sync_can_write(self):
+        self.refused_line({"FAKE_GH_BRANCH_RULE": "1"}, "rule")
+        self.ready()
+        done = self.cmd("versions.py", "sync")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assert_kept_later()
+
+    def test_a_write_that_found_the_branch_moving_is_tied_to_its_commit_by_a_later_sync(self):
+        self.written()                      # the branch exists
+        done = self.write_methods(env={"FAKE_GH_MOVE_HEAD": "always"})
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn("the branch changed while writing", done.stdout)
+        self.ready()
+        synced = self.cmd("versions.py", "sync")
+        self.assertEqual(0, synced.returncode, synced.stdout + synced.stderr)
+        self.assertIn("#3 is now in step; its file was kept afterwards", synced.stdout)
+        self.ready()
+        memories = [(cid, body) for cid, body in self.text_memories(3)]
+        self.assertEqual(2, len(memories))
+        self.assertEqual("`%s`" % self.head(), dict(record_format.fields(memories[1][1]))["Version"])
+        self.assertIn("Not kept", dict(record_format.fields(memories[0][1]))["Version"])   # the first comment is as it was posted
+        fetched = self.cmd("versions.py", "fetch")
+        self.assertIn("fetched 2", fetched.stdout)   # topic 5's version and this one
+        built = self.tool("mind.py")
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        page = open(os.path.join(self.data, "private", self.slug(), "mind.html"), encoding="utf-8").read()
+        self.assertIn("this file was kept after the first try was refused", page)
 
     def test_a_write_refused_with_404_is_treated_like_403(self):
         self.refused_line({"FAKE_GH_GIT_NO_PUSH": "404"}, "push")

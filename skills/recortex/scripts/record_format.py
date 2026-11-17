@@ -638,7 +638,7 @@ BODY_HASHES = re.compile(r"before sha256 `(%s|none)`; after sha256 `(%s)`" % (SH
 COMMIT_ID = re.compile(r"[0-9a-f]{40}")
 LOGIN_TEXT = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?"
 WHO = r"[A-Za-z][A-Za-z0-9 .'-]{0,59}"
-# The five forms that the Approved field of a text change starts with, as (key, pattern, a quote follows). The key is
+# The six forms that the Approved field of a text change starts with, as (key, pattern, a quote follows). The key is
 # what the index and the page read; the words are fixed, so that nothing of the record's own text is told.
 APPROVED_FORMS = (
     ("autonomous", re.compile(r"Written without asking, under the autonomous mode\."), False),
@@ -646,6 +646,7 @@ APPROVED_FORMS = (
     ("merged", re.compile(r"By %s on GitHub, by merging pull request [1-9][0-9]{0,8}\." % LOGIN_TEXT), False),
     ("edited", re.compile(r"Edited by %s on GitHub, %s\." % (LOGIN_TEXT, STAMP)), False),
     ("restored", re.compile(r"Restored by %s in the chat, %s:" % (WHO, STAMP)), True),
+    ("kept", re.compile(r"Kept as a file later, for the text change of comment [1-9][0-9]{0,9}\."), False),
 )
 # The reasons a version was not kept as a file (references/versions.md): the Version field says "Not kept: <reason>".
 NOT_KEPT = ("this account may not write files to the repository", "a branch rule refused the write",
@@ -686,8 +687,8 @@ def field_text(body, label):
 
 
 def approved_form(text):
-    """The key of the form that the text of an Approved field starts with ("autonomous", "chat", "merged", "edited" or
-    "restored"), or None. Only the first line is read; a form that wants a quote needs one after it."""
+    """The key of the form that the text of an Approved field starts with ("autonomous", "chat", "merged", "edited",
+    "restored" or "kept"), or None. Only the first line is read; a form that wants a quote needs one after it."""
     lines = (text or "").split("\n")
     for key, pattern, quoted in APPROVED_FORMS:
         if pattern.fullmatch(lines[0].strip()):

@@ -748,6 +748,15 @@ def sync_command(args):
             db = None
             result = ensure(config, repo)
             say("versions: sync %s." % ("made the branch" if result == "made" else "could not make the branch"))
+            if result == "made":
+                db = open_index(repo)
+                made_head = head_of(repo)
+                for number in paper_topics(db, config, hub, allowed) if db is not None and made_head else []:
+                    newest = write_rules.newest_text(texts, number)
+                    here = file_at(repo, made_head, "topics/%d.md" % number)
+                    if newest is not None and not SHA40.fullmatch(newest["version"] or "") and here is not None \
+                            and record_format.body_sha(here) == newest["after"]:
+                        tell_kept_later(repo, number, newest, made_head)
             return 0 if result == "made" else 1
         head, versions, found = compare(repo, db, config, hub, allowed)
         for number, how in sorted(found.items()):
@@ -767,7 +776,13 @@ def sync_command(args):
                 return 1
             made += 1
             if newest is not None and newest["after"] == sha:
-                say("versions: #%d is now in step; its version was missing and its text change already says why." % number)
+                # The text change already says why and by whom. Its Version field says "Not kept" and a comment is never
+                # edited, so a new text change, in the form "kept", tells which commit holds the file now: without it the
+                # version could never be fetched, shown or restored.
+                if SHA40.fullmatch(newest["version"] or ""):
+                    say("versions: #%d is now in step; its version was missing and its text change already says why." % number)
+                else:
+                    tell_kept_later(repo, number, newest, result)
                 continue
             if actor is None or actor.lower() not in allowed:
                 say("versions: #%d changed, and the account that edited it is not known here; the version was kept without a "
@@ -795,6 +810,28 @@ def sync_command(args):
             db.close()
 
 
+def tell_kept_later(repo, number, newest, commit):
+    """Post the text change that ties `commit` to the earlier text change `newest` (whose Version field says "Not kept")."""
+    cid = post_comment(repo, number, "text", kept_later_text(newest, newest["after"], commit, utc_now()), scratch_folder(repo))
+    say("versions: #%d is now in step; its file was kept afterwards%s." % (
+        number, " (comment %d)" % cid if cid else ", but the comment that says so was not posted"))
+
+
+def kept_later_text(newest, sha, commit, moment):
+    """The text change that ties the commit made later to the text change whose Version field says "Not kept": the same
+    text (the same body hash before and after), the commit in its Version field, and the fixed form "Kept as a file later"."""
+    return "\n".join([
+        "<!-- ghim:event type=text at=%s -->" % moment.strftime("%Y-%m-%dT%H:%MZ"),
+        "### Text: %s - %s" % (stamp(moment), "%s of #%d" % (", ".join(newest["sections"])[:60], newest["issue"])), "",
+        "**In plain words, we changed the text to say that:** the text of this part is as the earlier change said; its file on the "
+        "branch was kept afterwards", "",
+        "**Section:** %s" % ", ".join(newest["sections"]), "", "**What changed:** Nothing; the file of the earlier text change was "
+        "kept afterwards.", "", "**Why:** Not recorded: the file could not be kept when the text was written.", "",
+        "**Approved:** Kept as a file later, for the text change of comment %d." % newest["id"], "",
+        "**Kept from the author:** Nothing was changed by hand.", "",
+        "**Body:** before sha256 `%s`; after sha256 `%s`" % (sha, sha), "", "**Version:** `%s`" % commit, ""])
+
+
 def changed_headings(repo, head, number, body, config=None):
     """The headings of the sections whose text differs between the branch's file and the body, among the headings of the
     project's profiles (the Section field of a text change names only those); when none differs among them, the profile
@@ -813,7 +850,8 @@ def changed_headings(repo, head, number, body, config=None):
 # ---------------------------------------------------------------- log and diff
 
 HOW = {"autonomous": "written by the plugin without asking", "chat": "written by the plugin with your approval",
-       "merged": "approved by you on GitHub", "edited": "edited by you by hand", "restored": "restored by you", None: "recorded"}
+       "merged": "approved by you on GitHub", "edited": "edited by you by hand", "restored": "restored by you",
+       "kept": "kept as a file afterwards", None: "recorded"}
 
 
 def log_rows(db, items, texts, issue=None):

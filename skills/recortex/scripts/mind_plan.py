@@ -42,7 +42,8 @@ PHRASES = {
     # how a change of the text came about, from the fixed form of its Approved field
     "how.autonomous": "by the plugin without asking", "how.chat": "by the plugin with your approval",
     "how.merged": "by the plugin, approved by you on GitHub", "how.edited": "by you by hand",
-    "how.restored": "by the plugin, restoring an earlier version at your request", "how.unknown": "in a way this page cannot tell",
+    "how.restored": "by the plugin, restoring an earlier version at your request",
+    "how.kept": "by the plugin; this file was kept after the first try was refused", "how.unknown": "in a way this page cannot tell",
     "hist.days": "Versions with their differences are kept once you choose review or autonomous writing.",
     "hist.first": "This is the first version kept.",
     "hist.restore": "To go back to a version, ask in the chat, for example: restore the Results of %s.",
@@ -67,7 +68,7 @@ STATE_CSS = {"dropped": "aside", "revised": "replaced", "doubt": "open", "moved"
              "stands": "plain"}
 EXPLAIN_KEY = {state: "state-plan-" + state.replace(" ", "-") for state in plan_rules.STATES}
 EVIDENCE_PARTS = ("claim",)
-HOW = ("autonomous", "chat", "merged", "edited", "restored")
+HOW = ("autonomous", "chat", "merged", "edited", "restored", "kept")
 CAP_ROWS = 60
 
 

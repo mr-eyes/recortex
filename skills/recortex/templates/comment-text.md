@@ -9,7 +9,7 @@
 
 **Why:** {{what made the change: the finding, the agreed claim, the correction}}
 
-**Approved:** {{one of the five forms in references/writing.md, with the quote when the form has one}}
+**Approved:** {{one of the six forms in references/writing.md, with the quote when the form has one}}
 
 **Kept from the author:** {{N paragraphs were changed by hand and were left as they are. / Nothing was changed by hand.}}
 
