@@ -8615,6 +8615,26 @@ class MindModelTests(MindSandbox):
         self.assertEqual(("sensors", "label"), (aside["name"], aside["name_from"]))
         self.assertNotIn("MARK-RENAMED", json.dumps(model))
 
+    def test_a_task_title_is_told_only_under_the_title_rule(self):
+        model = self.ms_model()
+        titles = {g["task"]: g["title"] for t in model["threads"] for g in t["groups"]}
+        self.assertEqual("Task: refit the model with the second season", titles[8])
+        data = self.repo()
+        data["issues"]["8"]["timeline"] = [{"event": "renamed", "created_at": "2026-11-20T10:00:00Z",
+                                            "actor": {"login": "ghost"}, "rename": {"from": "a", "to": "MARK-TASK"}}]
+        data["issues"]["8"]["title"] = "MARK-TASK"
+        data["issues"]["8"]["updated_at"] = "2026-11-20T10:00:00Z"
+        self.save(data)
+        self.ready()
+        model = self.model()
+        self.assertNotIn("MARK-TASK", json.dumps(model))
+        self.assertIsNone({g["task"]: g["title"] for t in model["threads"] for g in t["groups"]}[8])
+        built = self.tool("mind.py", gh="false")
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        text = recortex.read_text(os.path.join(self.data, "private", self.slug(), "mind.html"))
+        self.assertNotIn("MARK-TASK", text)
+        self.assertIn("While working on: a task", " ".join("".join(PageReader(text).texts).split()))
+
     def test_where_a_thread_stands_names_its_latest_decision_and_result_its_open_points_and_tasks(self):
         model = self.ms_model()
         threads = {t["n"]: t for t in model["threads"]}
