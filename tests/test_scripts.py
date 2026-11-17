@@ -4570,6 +4570,18 @@ class SetupTests(Sandbox):
         refused = self.setup_script("apply", "--answers", self.answers("single"), "--root", self.project())
         self.assertIn("pass --dry-run to see the changes, or --yes", refused.stderr)
 
+    def test_the_trust_a_setup_reports_counts_the_variable_that_trusts_a_repository(self):
+        """Live check of 1.3.0: a wizard said that a repository was not trusted while RECORTEX_TRUSTED_REPOS trusted it. The
+        scripts read the variable as a trusted list does; what they print says so."""
+        root = self.project()
+        listed = self.setup_script("apply", "--answers", self.answers("single"), "--root", root, "--dry-run",
+                                   env={"RECORTEX_TRUSTED_REPOS": REPO, "RECORTEX_TRUSTED_FILE": os.path.join(self.dir, "absent")})
+        self.assertEqual(0, listed.returncode, listed.stdout + listed.stderr)
+        self.assertIn("trusted: %s is already in RECORTEX_TRUSTED_REPOS" % REPO, listed.stdout)
+        self.assertNotIn("would add: %s" % REPO, listed.stdout)
+        absent = self.setup_script("apply", "--answers", self.answers("single"), "--root", root, "--dry-run",
+                                   env={"RECORTEX_TRUSTED_FILE": os.path.join(self.dir, "absent")})
+        self.assertIn("would add: %s" % REPO, absent.stdout)   # without it the same setup would add the entry
 
     NOT_FOUND = ("not ready: the GitHub CLI gh was not found. Install it from https://cli.github.com, then run "
                  "`gh auth login` in a terminal, and start setup again.\n")
