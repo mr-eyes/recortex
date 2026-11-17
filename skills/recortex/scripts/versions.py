@@ -55,7 +55,9 @@ WORKFLOW_PATH = ".github/workflows/" + names.MANUSCRIPT_WORKFLOW
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(os.path.dirname(HERE), "templates")
 STATE_FILE = "state.json"
-NAME = re.compile(r"[a-z0-9][a-z0-9.-]{0,39}")
+# A name of a version is also the tag paper-<name>, so it must be a name git accepts as a ref: no "..", no end in "." and
+# none in ".lock" (the letters, digits, "." and "-" it is made of are otherwise allowed in a ref name).
+NAME = re.compile(r"(?!.*\.\.)(?!.*\.$)(?!.*\.lock$)[a-z0-9][a-z0-9.-]{0,39}")
 SHA40 = re.compile(r"[0-9a-f]{40}")
 FILE_CAP = 2 * 1024 * 1024
 

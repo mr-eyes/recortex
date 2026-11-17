@@ -562,6 +562,19 @@ class NameAndRefusalTests(VersionBox):
         self.assertNotEqual(0, done.returncode)
         self.assertEqual(self.history()[1], self.tags()["tags/paper-draft"])
 
+    def test_a_name_that_is_no_name_for_a_git_tag_is_refused_before_a_decision_is_posted(self):
+        self.written()
+        comments = len(self.repo()["comments"])
+        for name in ("draft..2", "draft.", "draft.lock", "a..", "x.lock"):
+            done = self.cmd("versions.py", "name", name, "--words-file", self.words("name it"))
+            self.assertNotEqual(0, done.returncode, name)
+            self.assertIn("a name is 1 to 40 characters", done.stderr, name)
+        self.assertEqual(comments, len(self.repo()["comments"]))
+        self.assertEqual({}, self.tags())
+        for name in ("draft.2", "v1.0", "a-b", "lock", "draft.locked"):
+            self.assertEqual(0, self.cmd("versions.py", "name", name, "--words-file", self.words("name it")).returncode, name)
+            self.ready()
+
     def test_a_name_is_refused_while_a_body_and_its_file_differ(self):
         self.written()
         data = self.repo()
