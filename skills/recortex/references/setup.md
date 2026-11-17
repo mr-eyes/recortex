@@ -15,7 +15,7 @@ A project's goal usually does not exist as files yet (a manuscript is written du
 2. `python3 scripts/setup.py detect` (read-only, local). It looks only at file and folder names at the top of the project and one level down, and prints suggestions with their evidence, for example "suggested: software (profile software), because pyproject.toml, tests/". An empty project gets no suggestion. In a large folder it stops after the first few hundred names.
 3. Ask the questions below with the session's multiple-choice question tool, a few at a time, each with an "other" answer. Pre-select what detection suggested and show its evidence next to it.
 4. Show a summary of all answers and ask for one final confirmation. Nothing is written before it. For a project that will produce a paper, the summary says: "The paper will be planned in the first session after setup: the session drafts a plan from the record, shows it to you once and asks for a yes before it posts anything." `apply` creates the label `plan` with the others; the plan issue is made by the first plan run (`plan.py setup`, [planning.md](planning.md)). The field sheet has its own approval, in the last of the field questions below.
-5. Write the answers to a file, then run `python3 scripts/setup.py apply --answers <file> --dry-run`, show its output, and run it again with `--yes`.
+5. Write every answer to a file, including each "no" (`"status_line": false`, an observer of mode `off`), then run `python3 scripts/setup.py apply --answers <file> --dry-run`, show its output, and run it again with `--yes`. The "no" answers are what `apply` records on this machine, so that the setup questions below do not ask them again.
 
 ## Questions
 
@@ -85,6 +85,42 @@ The field questions:
 - With an `observer` answer other than off, and the repository in the trusted list: runs `observer.py enable --mode shadow --model M --yes` for this folder and `observer.py runtime-check` (one model call; without it the observer reviews nothing), and for automatic mode then `observer.py enable --mode automatic --model M --yes`. When an API key or another provider is set, it repeats `enable`'s line saying the calls are billed to it. The user's answer is the approval, recorded as the field sheet's is; nothing asks on a terminal. When a step does not pass, what is on stays on, and one line says what to run.
 - Records the kinds of deliverable that the project's files already suggest, so the hooks mention only what appears later.
 - With a `fields` entry in the answers: checks first that the approvals file can be read, and stops before any write if not; prints the notices of a sensitive mark (show them to the user, and when the first one says the repository is public, ask whether to go on, use a new private repository, or stop); writes the entry into the configuration with the rest, appends the checked identifier patterns to `restricted_patterns`, and right after the configuration file is written records the user's approval of the sheet on this machine. A project that already has another sheet is refused: change a sheet with `fields set --replace`. A sheet that `apply` does not write is printed as one line, `"fields": "(field guidance: <state>; see setup.py fields show)"`.
+
+## Questions added after setup
+
+A project set up with an earlier version has not been asked what a later version added. The first session after an update asks, at a pause and in one batch, only the questions the user has not answered yet; a project with nothing open sees no change at all. Whether a question is open is read from the current state, never from a stored setup version, so a project set up with any earlier version gets the right list with no migration. The `since` column says which version added it and decides nothing.
+
+The brief carries one fixed line with a count ("recortex: 2 setup questions to check, added since this project was set up ..."), once per session, at session start only. The session then runs `python3 scripts/setup.py questions`: it prints each open question with its exact commands (the dry run first) and ends with the count, reads GitHub once at most (the labels) and writes nothing else. The hook reads local files only and makes no GitHub call, so it counts the labels as one question to check; `questions` settles it.
+
+| Question | Since | The answer is kept for | Asked only when | Settled when | Commands for "yes" |
+|---|---|---|---|---|---|
+| `writing-mode` | 1.3.0 | this machine and this repository | the plan issue is usable and the writing setting can be read | a mode is chosen on this machine | `setup.py writing set --mode M --yes` (review, autonomous or off) |
+| `own-paper` | 1.3.0 | the project file | the same | the project file records a place, or "no" | `own_paper.py where --set PATH --dry-run`, then `--yes`; "no" is `--set no --yes` |
+| `manuscript-profile` | 1.3.0 | the project file | the project has paper or manuscript files and no `manuscript` profile | the profile is in the project file | `setup.py apply --answers F --dry-run`, then `--yes`, with the answers file that `questions` prints |
+| `labels` | 1.2.0 | GitHub, noted on this machine | the project has the `manuscript` profile | every wanted label is on GitHub | `setup_labels.py --dry-run`, then `setup_labels.py` (no `--update`) |
+| `status-line` | 1.2.0 | this machine | the user's Claude Code `settings.json` is absent, or is a plain file that holds a JSON object | that object has a `statusLine` | `setup.py status-line --dry-run`, then `--yes` |
+| `observer` | 1.1.0 | this machine and this folder | the project file does not switch the observer off | this folder has an approval | `setup.py observer --mode automatic or shadow --model sonnet --dry-run`, then `--yes` |
+
+A question the plugin could not apply (for example a `settings.json` that is a symlink) is not asked; `hooks.py --doctor` says why, in fixed words. The field sheet and the board are not in the list: the field sheet has its own once-only offer, and the board needs a token scope the user adds in a terminal.
+
+The questions and their options, in this order, each with the recommended option first:
+
+- `writing-mode`: Review, Autonomous, Off, Later. The wording and the consent lines are those of [writing.md](writing.md); "Off" is `writing set --mode off`.
+- `own-paper`: Yes (the user names the file), No, Later. No option is recommended.
+- `manuscript-profile`, `labels` and `status-line`: Yes, No, Later.
+- `observer`: Automatic with sonnet, Shadow with sonnet, No, Later, and "Other" for another model. The question says what the wizard says: the notes it takes, that its calls count against the user's Claude usage (at most 60 a day for the project) and that it needs the repository in the trusted list.
+
+The three answers are remembered on this machine, in `private/setup-answers.json` of the configuration folder, never in the project file, and nothing in the project file is read as an answer:
+
+- Yes and no close the question for good. A project-wide yes settles it for everyone through the project file or GitHub; a project-wide no (the manuscript profile, the labels) is remembered on this machine only, so each collaborator is asked it once.
+- Later asks again at the first session start that comes seven days or more later, in local dates.
+- `setup.py answer --id ID --answer yes|no|later` records an answer, and `setup.py answer --id ID --answer reset` removes it, so that the question is asked again while it is open. The session records a question the user dismisses as `later`.
+
+A question that the wizard has just asked is recorded by `apply` (the labels as yes, and each "no" the answers say), so that a fresh setup leaves nothing open. After `apply` for the manuscript profile the session does not add the rows for the new section that `apply` prints: the hub is not edited, and the page places each topic by its labels. A file of answers that cannot be read (a symlink, loose permissions, not JSON, not of its form, larger than 20,000 bytes) is never replaced: no question is asked, the brief says so in one line, and `hooks.py --doctor` has the detail.
+
+Switch the line off with `RECORTEX_SETUP_QUESTIONS=0`, or `"setup_questions": false` in the plugin's `settings.json` (`~/.config/recortex/settings.json`). `setup.py questions` still answers when it is asked. With the questions switched off, the brief asks the writing-mode question itself, as in 1.3.0.
+
+A new setup question is a row of `QUESTIONS` in `setup_questions.py`, a row of this table and a test of each of its states.
 
 ## Later changes
 
