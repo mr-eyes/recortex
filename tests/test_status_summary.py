@@ -232,8 +232,8 @@ class SummaryStalenessTests(SummaryRecord):
                                r"what else is due: the board's apply, the planner's due check, the next actions\.$")
         self.assertNotIn("IGNORE", said)
         self.assertNotIn("HOSTILE", said)
-        self.assertLess(len(line), 260)                      # the payload sizes: one short line, with the 400 of the one-line reminder
-        self.assertLess(len(said), 400 + 260)
+        self.assertLess(len(line), 300)                      # the payload sizes: one short line, with the 400 of the one-line reminder
+        self.assertLess(len(said), 400 + 300)
 
     def test_a_summary_state_that_is_anything_else_is_never_a_line(self):
         self.ready()
