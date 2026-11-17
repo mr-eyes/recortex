@@ -279,6 +279,7 @@ def approvals_command(args):
     results = []
     try:
         state = index.planned(db, config, allowed, plan)
+        closed = write_rules.closed_pulls(db, allowed)   # rejections the record already holds
         for cid, issue, author in newest_proposals(db, allowed):
             if args.issue and issue != args.issue:
                 continue
@@ -309,7 +310,7 @@ def approvals_command(args):
                 close_proposal(repo, detail)
         else:
             SAY(LINES[status] % detail)
-            if status == "closed" and args.apply:
+            if status == "closed" and args.apply and detail not in closed:
                 drop_proposal(config, repo, issue, detail)
             if status in ("stranger", "other"):
                 refused += 1

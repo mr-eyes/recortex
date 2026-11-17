@@ -1238,6 +1238,37 @@ class WriteTrustTests(VersionBox):
         self.assertIn("a proposed change of the text was closed on GitHub without being merged", checkpoints[0]["body"])
         self.nothing_written()
 
+    def test_a_rejection_is_recorded_once_and_the_proposal_stops_waiting(self):
+        """Codex review of 1.3.0: every later run posted another checkpoint, and the brief went on counting the proposal."""
+        self.proposed()
+        self.ready()
+        self.assertEqual(1, self.plan_json()["counts"]["proposals"])
+        closed = self.fake("api", "-X", "PATCH", "repos/octo-org/sample-project/pulls/%d" % self.pull, stdin=json.dumps({"state": "closed"}))
+        self.assertEqual(0, closed.returncode, closed.stdout + closed.stderr)
+        self.approvals("--apply")
+        for _ in range(2):
+            self.approvals("--apply")
+        checkpoints = [c for c in self.repo()["comments"].values() if c["issue"] == 5 and "type=checkpoint" in c["body"].split("\n")[0]]
+        self.assertEqual(1, len(checkpoints))
+        self.ready()
+        self.assertEqual(0, self.plan_json()["counts"]["proposals"])
+        self.assertNotIn("proposal", self.tool("index.py", "query", "brief").stdout.split("===== BEGIN")[0].lower().replace(
+            "plan of the paper", ""))
+
+    def test_a_checkpoint_of_an_account_that_is_not_allowed_or_that_was_edited_does_not_close_a_proposal(self):
+        self.proposed()
+        closed = self.fake("api", "-X", "PATCH", "repos/octo-org/sample-project/pulls/%d" % self.pull, stdin=json.dumps({"state": "closed"}))
+        self.approvals("--apply")
+        self.ready()
+        self.assertEqual(0, self.plan_json()["counts"]["proposals"])
+        data = self.repo()
+        for comment in data["comments"].values():
+            if comment["issue"] == 5 and "type=checkpoint" in comment["body"].split("\n")[0]:
+                comment["user"] = "hubot"
+        self.save(data)
+        self.assertEqual(0, self.tool("index.py", "sync", "--rebuild").returncode)
+        self.assertEqual(1, self.plan_json()["counts"]["proposals"])   # a stranger's checkpoint settles nothing
+
     def test_a_proposal_made_on_another_machine_is_not_applied_here(self):
         self.proposed()
         self.merge()

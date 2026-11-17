@@ -155,10 +155,32 @@ def due_parts(db, config, allowed, state):
     return sorted(out.values(), key=lambda row: (row["topic"], row["heading"]))
 
 
+CLOSED_STATE = re.compile(r"The author closed pull request ([1-9][0-9]{0,8}) without merging it, so the proposed change is "
+                          r"dropped and the text is as it was\.")
+
+
+def closed_pulls(db, allowed):
+    """{pull request number} of the proposals that a told checkpoint says were closed without being merged: a checkpoint of an
+    allowed account, never edited, whose State field is the fixed sentence that proposals.drop_proposal writes. Only the
+    number is read from it, and only in that form; this is what makes a rejection final, so that it is recorded once and
+    the proposal no longer counts as waiting."""
+    edited = index.edited_comments(db)
+    found = set()
+    for row in db.execute("SELECT comment, author FROM events WHERE type = 'checkpoint'"):
+        if (row["author"] or "").lower() not in allowed or row["comment"] in edited:
+            continue
+        match = CLOSED_STATE.fullmatch(index.event_field(db, row["comment"], "State").strip())
+        if match:
+            found.add(int(match.group(1)))
+    return found
+
+
 def open_proposals(db, items, allowed):
     """The topics with a proposal that waits on GitHub: the newest proposal comment of the topic by an allowed account
-    that was never edited, with no told text change after it. {issue: comment id}."""
+    that was never edited, with no told text change after it and whose pull request no told checkpoint says was closed
+    without merging. {issue: comment id}."""
     edited = index.edited_comments(db)
+    closed = closed_pulls(db, allowed)
     newest = {}
     for row in db.execute("SELECT comment, issue, at, author FROM events WHERE type = 'proposal'"):
         if (row["author"] or "").lower() not in allowed:
@@ -170,6 +192,11 @@ def open_proposals(db, items, allowed):
     waiting = {}
     for issue, (key, cid) in newest.items():
         if cid in edited:
+            continue
+        row = db.execute("SELECT body FROM comments WHERE id = ?", (cid,)).fetchone()   # a proposal is no memory: no fields kept
+        pull = re.fullmatch(r"#([1-9][0-9]{0,8})", (dict(record_format.fields(row["body"] or "")).get("Pull request") or "").strip()) \
+            if row else None
+        if pull and int(pull.group(1)) in closed:
             continue
         later = [row for row in texts if row["issue"] == issue and row["time"] > key[0]]
         if not later:
