@@ -1234,7 +1234,7 @@ def status_line_step(answers, dry):
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 handle.write(text)
-            os.chmod(temporary, 0o644)
+            os.chmod(temporary, 0o600)  # private, like the plugin's other files, so that the hooks may refresh it
             os.replace(temporary, target)
         except BaseException:
             if os.path.exists(temporary):

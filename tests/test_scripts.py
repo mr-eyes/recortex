@@ -2011,6 +2011,7 @@ class HookTests(RecordSandbox):
         os.makedirs(folder, mode=0o700)
         with open(copy, "w") as handle:
             handle.write("# an older version\n")
+        os.chmod(copy, 0o600)
         self.assertEqual(0, self.hook("session-start", source="startup").returncode)
         self.assertEqual(recortex.read_text(os.path.join(SCRIPTS, "statusline.py")), recortex.read_text(copy))
         self.assertFalse(os.path.exists(os.path.join(self.dir, "xdg-config", "claude")))  # and never settings.json
@@ -4599,7 +4600,7 @@ class SetupTests(Sandbox):
         self.assertEqual(dict(before, statusLine={"type": "command", "command": "python3 %s" % copy}),
                          json.load(open(settings)))
         self.assertEqual(recortex.read_text(os.path.join(SCRIPTS, "statusline.py")), recortex.read_text(copy))
-        self.assertEqual(0o700, os.stat(os.path.dirname(copy)).st_mode & 0o777)
+        self.assertEqual((0o700, 0o600), (os.stat(os.path.dirname(copy)).st_mode & 0o777, os.stat(copy).st_mode & 0o777))
         # no settings file at all: one is made, with this entry only
         os.unlink(settings)
         again = self.setup_script("apply", "--answers", answers, "--root", root, "--yes", gh=FAKE, env=env)
