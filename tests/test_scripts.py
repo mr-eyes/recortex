@@ -60,9 +60,16 @@ def overlay(base, *parts):
     return {k: v for k, v in out.items() if v is not None}
 
 
+# The first layer of every environment the harness builds: the hook's line about the setup questions is off (a test of the
+# questions, tests/test_setup_questions.py, takes it away with None), so that every payload test holds the 1.3.0 payloads;
+# and Claude Code's configuration folder is an empty sandbox, so that no test reads the real settings.json.
+HARNESS = {"RECORTEX_SETUP_QUESTIONS": "0", "CLAUDE_CONFIG_DIR": os.path.join(ROOT, ".tmp", "claude-config-sandbox")}
+
+
 def environment_for(base, *parts):
-    """`base` without any of the plugin's variables, under either name, then the parts laid over it (see overlay)."""
-    return overlay({k: v for k, v in base.items() if k not in PLUGIN_VARIABLES}, *parts)
+    """`base` without any of the plugin's variables, under either name, then HARNESS, then the parts laid over it (see
+    overlay)."""
+    return overlay({k: v for k, v in base.items() if k not in PLUGIN_VARIABLES}, HARNESS, *parts)
 
 
 def keep_folders():
@@ -1892,8 +1899,11 @@ class RecordSandbox(Sandbox):
                        "XDG_STATE_HOME": os.path.join(self.dir, "xdg-state"),
                        "XDG_CACHE_HOME": os.path.join(self.dir, "xdg-cache"),
                        "XDG_CONFIG_HOME": os.path.join(self.dir, "xdg-config")}
+        environment.update(HARNESS)
         environment.update(extra or {})
-        removed = sorted(PLUGIN_VARIABLES - set(environment)) + ["CLAUDE_PLUGIN_DATA"]
+        dropped = sorted(k for k, v in environment.items() if v is None)   # None takes a variable away
+        environment = {k: v for k, v in environment.items() if v is not None}
+        removed = sorted((PLUGIN_VARIABLES | set(dropped)) - set(environment)) + ["CLAUDE_PLUGIN_DATA"]
         saved = {k: os.environ.get(k) for k in list(environment) + list(removed)}
 
         def restore():
@@ -5270,7 +5280,10 @@ class SetupTests(Sandbox):
             self.ANSWERS["combined"], fields=nothing))), "--root", fresh, "--yes", gh=FAKE,
             env={"CLAUDE_PROJECT_DIR": fresh})
         self.assertEqual(0, applied.returncode, applied.stdout + applied.stderr)
-        self.assertFalse(os.path.lexists(os.path.join(self.dir, "xdg-config", names.NAME)))  # nothing made or tightened
+        # no approval and no lock of the field sheet is made; the only files a setup now keeps there are the record of what
+        # the wizard asked and its lock (setup-answers.json, spec 1.3.1)
+        private = os.path.join(self.dir, "xdg-config", names.NAME, "private")
+        self.assertEqual(["setup-answers.json", "setup-answers.lock"], sorted(os.listdir(private)) if os.path.isdir(private) else [])
         self.assertTrue(os.path.isfile(self.offer()))  # the question was asked
 
     def test_fields_set_and_apply_write_nothing_through_a_symlink(self):
