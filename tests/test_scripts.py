@@ -9115,10 +9115,10 @@ class MindTextTests(unittest.TestCase):
 
     def test_display_math_on_one_line_on_several_and_in_a_math_fence(self):
         one = self.t.blocks("$$ x^2 $$")[0]["math"]
-        self.assertEqual((True, "msup"), (one["d"], one["m"]["c"][0]["m"]))
+        self.assertEqual((True, "msup", "x^2"), (one["d"], one["m"]["c"][0]["m"], one["s"]))  # the source stays
         several = self.t.blocks("Text.\n$$\n\\theta = a\n  + b\n$$\nMore.")
         self.assertEqual(["p", "math", "p"], [next(iter(b)) for b in several])
-        self.assertEqual("mrow", several[1]["math"]["m"]["m"])
+        self.assertEqual(("mrow", "\\theta = a\n  + b"), (several[1]["math"]["m"]["m"], several[1]["math"]["s"]))
         fenced = self.t.blocks("```math\n\\frac{1}{2}\n```")[0]["math"]
         self.assertEqual("mfrac", fenced["m"]["c"][0]["m"])
         outside = self.t.blocks("$$\n\\begin{aligned} a &= b \\end{aligned}\n$$")[0]["math"]
@@ -9186,7 +9186,7 @@ class MindTextTests(unittest.TestCase):
         self.assertEqual([{"t": "a $b and c"}], self.t.inline("a $b and c"))
         runs = self.t.inline("Let $\\theta$ be, and $u_p$ too; also $`a^2`$ and \\$5 and 4$.")
         self.assertEqual("Let |$m$| be, and |$m$| too; also |$m$| and $5 and 4$.", self.words(runs))
-        self.assertEqual({"math": {"d": False, "m": {"m": "mrow", "c": [{"m": "mi", "t": "\u03b8"}]}}}, runs[1])
+        self.assertEqual({"math": {"d": False, "m": {"m": "mrow", "c": [{"m": "mi", "t": "\u03b8"}]}, "s": "\\theta"}}, runs[1])
         outside = self.t.inline("Then $\\unknown x$ here.")
         self.assertEqual({"math": {"d": False, "s": "\\unknown x"}}, outside[1])
         self.assertEqual("$m$", self.words(self.t.inline("$$x$$")))  # written inline
@@ -9304,10 +9304,10 @@ class MindTextTests(unittest.TestCase):
     def test_an_html_table_of_more_than_twenty_thousand_characters_is_a_note(self):
         cell = "<td>%s</td>" % ("x" * 100)
         small = "<table><tr>" + cell * 190 + "</tr></table>"  # under the cap in characters, over 12 columns: use rows
-        rows = "<table>" + ("<tr><td>%s</td></tr>" % ("x" * 800)) * 24 + "</table>"
+        rows = "<table>\n" + ("<tr><td>%s</td></tr>\n" % ("x" * 800)) * 24 + "</table>"
         self.assertLess(len(rows), 20000)
         self.assertEqual("table", next(iter(self.t.blocks(rows)[0])))
-        big = "<table>" + ("<tr><td>%s</td></tr>" % ("x" * 800)) * 25 + "</table>"
+        big = "<table>\n" + ("<tr><td>%s</td></tr>\n" % ("x" * 800)) * 25 + "</table>"
         self.assertGreater(len(big), 20000)
         self.assertEqual([{"note": {"key": "html-table"}}], self.t.blocks(big))
         self.assertTrue(small)
@@ -9533,6 +9533,112 @@ class MindTextTests(unittest.TestCase):
             if direct is not None:
                 json.dumps(direct)
         self.assertGreater(converted, 5)  # the strings are not all outside the subset
+
+    # ------------------------------------------------------------ what is read at all, and how fast
+
+    def timed(self, source, limit=1.0):
+        """Run `source` (Python that sets `result`) in a child process and return the result as JSON read back. The
+        time is taken inside the child, around the source only, and must be under `limit` seconds; a child that is
+        still running after 30 seconds is stopped and the test fails, so that a removed guard fails the test and
+        does not hang it."""
+        code = ("import json, sys, time\nsys.path.insert(0, %r)\nimport mind_text as t\n"
+                "def lines(text, width=1000):\n    return '\\n'.join(text[n:n + width] for n in range(0, len(text), width))\n"
+                "began = time.time()\n%s\nprint(json.dumps([time.time() - began, result]))" % (SCRIPTS, source))
+        try:
+            done = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            self.fail("still running after 30 seconds: %s" % source.split("\n")[0])
+        self.assertEqual(0, done.returncode, done.stderr)
+        seconds, result = json.loads(done.stdout)
+        self.assertLess(seconds, limit, source.split("\n")[0])
+        return result
+
+    def test_a_line_of_number_signs_and_spaces_of_200000_characters_is_read_in_under_a_second(self):
+        line = "# #" + " " * 199994 + "# #"
+        self.assertEqual(200000, len(line))
+        result = self.timed("result = t.blocks('# #' + ' ' * 199994 + '# #')")
+        self.assertEqual([{"p": [{"t": line[:4000]}]}], result)  # a line over 4,000 characters is plain text
+        self.assertTrue(self.timed("result = bool(t.HEADING.match('# #' + ' ' * 20000 + '# #'))"))  # the pattern alone
+
+    def test_a_paragraph_of_50000_alternating_stars_and_underscores_is_plain_text_past_its_cap(self):
+        result = self.timed("result = t.blocks('\\n'.join(['*_*_*_*_*_'] * 5000))")  # 54,999 characters, 5,000 lines
+        self.assertEqual(["p"], [next(iter(block)) for block in result])
+        runs = result[0]["p"]
+        self.assertEqual([20000], [len(run["t"]) for run in runs])
+        self.assertEqual({"*", "_", " "}, set(runs[0]["t"]))
+        self.assertEqual(self.t.blocks("*_" * 25000), [{"p": [{"t": "*_" * 2000}]}])  # 50,000 on one line: cut at 4,000
+
+    def test_marks_with_no_partner_and_marks_by_the_thousand_are_read_in_under_a_second(self):
+        text = "a* " * 6300
+        self.assertEqual([{"t": text}], self.timed("result = t.inline('a* ' * 6300)"))  # closers, no opener
+        self.assertEqual([{"t": "a_ " * 6300}], self.timed("result = t.inline('a_ ' * 6300)"))
+        runs = self.timed("result = t.inline('*_' * 10000)")  # 20,000 marks in a paragraph just under its cap
+        self.assertGreaterEqual(sum(len(run["t"]) for run in runs), 20000 - self.t.MAX_MARKS)  # the rest is text
+
+    def test_a_closer_with_no_opener_tells_the_next_closer_of_its_kind_not_to_look_again(self):
+        # with the cap of marks lifted, the search below a failed closer is what keeps the work linear
+        for text in ("a* " * 6666, "a_ " * 6666, "x</b> " * 3333):
+            result = self.timed("t.MAX_MARKS = 10 ** 9\nresult = t.inline(%r)" % text, limit=0.5)
+            self.assertEqual("".join(run["t"] for run in result), text)
+
+    def test_the_html_table_reader_and_the_formula_converter_read_hostile_text_in_under_a_second(self):
+        for source in ("'<table><tr><td>' + '<a ' * 6000", "'<table><tr><td>' + '<' * 19000 + '</td></tr></table>'",
+                       "'<table><tr>' + '<td>x' * 3000 + '</tr></table>'",
+                       "'<table><tr><td><b>' * 1900 + '</table>'", "'<table><tr><td>' + '<!--' * 4000 + '</table>'",
+                       "'<table><tr><td>' + '&#' * 9000 + '</td></tr></table>'",
+                       "'<table><tr><td><script>' + '<' * 19000 + '</script></td></tr></table>'",
+                       "'<table>' + '<tr><td>a</td><td>b* </td></tr>' * 500 + '</table>'"):
+            shown = self.timed("result = [next(iter(b)) for b in t.blocks(lines(%s))]" % source)
+            self.assertIn(shown[0], ("table", "note"), source)  # read as an HTML table, not as plain lines
+        cell = self.timed("result = t.blocks('<table><tr><td>\\n' + lines('a* ' * 6300, 999) + '</td></tr></table>')")
+        self.assertEqual(["table"], [next(iter(block)) for block in cell])  # one cell of marks with no opener
+        words = "".join(run["t"] for run in cell[0]["table"]["rows"][0][0]["r"])
+        self.assertEqual("a* " * 6299 + "a*", words)
+        for source in ("'\\\\frac{' * 40000", "'{' * 200000", "'\\\\left(' * 300", "'x' + ' ' * 199998 + 'x'",
+                       "'\\\\text{' * 300", "'\\\\mathbf{' * 8 + 'a' * 150 + '}' * 8", "'x_' * 1000 + '{' * 900", "'$' * 5000"):
+            self.timed("result = [t.tex(%s, True), t.tex(%s, False)]" % (source, source))
+
+    def test_an_over_long_text_line_or_paragraph_is_plain_text_cut_at_its_cap(self):
+        self.assertEqual("h", next(iter(self.t.blocks("###" + " " + "x" * 3990)[0])))  # under the line cap: read
+        self.assertEqual([{"p": [{"t": "### " + "x" * 3996}]}], self.t.blocks("### " + "x" * 4000))  # over: plain
+        blocks = self.t.blocks("Before.\n\n- " + "x" * 4000 + "\n\nAfter.")
+        self.assertEqual(["p", "p", "p"], [next(iter(b)) for b in blocks])  # not a list, as it was cut
+        self.assertEqual(4000, len(blocks[1]["p"][0]["t"]))
+        self.assertEqual("Before.", blocks[0]["p"][0]["t"])
+        self.assertEqual([{"p": [{"t": "a" * 4000}]}], self.t.blocks("a" * 200000))  # one line, 200,000 characters
+        whole = "line\n" * 40000 + "x"  # 200,001 characters
+        self.assertEqual([{"p": [{"t": whole[:200000]}]}], self.t.blocks(whole))
+        self.assertEqual("p", next(iter(self.t.blocks("line\n" * 39999 + "x")[0])))  # 199,996 characters: read
+        self.assertEqual([{"t": "y" * 20000}], self.t.inline("y" * 20001))
+        self.assertEqual([{"t": "**" * 10000}], self.t.inline("**" * 10000))  # 20,000: read, and no partner
+        cell = "<table><tr><td>\n" + ("z" * 3000 + "\n") * 7 + "</td></tr></table>"
+        self.assertEqual("note", next(iter(self.t.blocks(cell)[0])))  # the table is over its own cap, in lines
+
+    def test_no_more_than_200_marks_of_emphasis_are_read_in_a_paragraph(self):
+        runs = self.t.inline("*a* " * 150)  # 300 marks
+        self.assertEqual(100, sum(1 for run in runs if run.get("i")))
+        self.assertIn("*a* *a*", "".join(run["t"] for run in runs if not run.get("i")))
+        tags = self.t.inline("<b>x</b> " * 150)
+        self.assertEqual(100, sum(1 for run in tags if run.get("b")))
+        self.assertIn("<b>x</b>", "".join(run["t"] for run in tags if not run.get("b")))
+        self.assertEqual(200, self.t.MAX_MARKS)
+
+    def test_a_closing_run_of_number_signs_counts_only_after_a_space(self):
+        for line, words in (("### Title ###", "Title"), ("### Title #", "Title"), ("### C#", "C#"), ("### a ## b", "a ## b"),
+                            ("### Title\t##", "Title"), ("#### x#y ####  ", "x#y"), ("###  spaced   ", "spaced")):
+            self.assertEqual(words, self.words(self.t.blocks(line)[0]["h"]["r"]), line)
+        self.assertEqual([], self.t.blocks("### ###"))  # an empty heading is no block
+        self.assertEqual("C#", self.t.heading_text("C#"))
+        self.assertEqual("", self.t.heading_text("###"))
+        self.assertEqual("a #b", self.t.heading_text("a #b"))
+
+    def test_a_fence_needs_three_marks_up_to_three_spaces_of_indent_and_no_backtick_in_a_backtick_info(self):
+        self.assertEqual("code", next(iter(self.t.blocks("   ```\nx\n   ```")[0])))
+        for line in ("    ```\nx", "``\nx", "~~\nx", "``` code ```\nx"):
+            self.assertEqual("p", next(iter(self.t.blocks(line)[0])), line)
+        self.assertEqual([{"code": "x"}], self.t.blocks("~~~ a`b\nx\n~~~"))  # a tilde fence may name a backtick
+        self.assertEqual(("`", 3, ["math"]), self.t.fence_of("```math"))
+        self.assertIsNone(self.t.fence_of(""))
 
 
 

@@ -15,7 +15,8 @@ Blocks, each a dict with one main key:
     {"p": runs}                           {"h": {"level": 1 to 3, "r": runs}}
     {"ul": [item]}                        {"ol": [item], "start": 1 to 9999}, item = {"r": runs, "sub": block or None}
     {"quote": runs}                       {"code": "text"}
-    {"math": {"d": True, "m": tree}}      or {"math": {"d": True, "s": source}} when the formula is outside the subset
+    {"math": {"d": True, "m": tree, "s": source}}   or {"math": {"d": True, "s": source}} when the formula is
+                                          outside the subset; the source is as written, cut at the formula's limit
     {"table": {"head": [row], "rows": [row], "cut": bool, "caption": runs or None}}
         row = [cell], cell = {"r": runs, "rs": 1 to 40, "cs": 1 to 12, "h": bool, "a": "l", "c", "r" or None}
     {"block": {"kind": "figure" or "table", "id": id}}     a figure or table block that the page draws in place
@@ -23,7 +24,7 @@ Blocks, each a dict with one main key:
 Runs, each a dict with one main key:
     {"t": text} with "b", "i", "sup", "sub" set to True when they apply
     {"code": text}
-    {"math": {"d": False, "m": tree}}     or {"math": {"d": False, "s": source}}
+    {"math": {"d": False, "m": tree, "s": source}}   or {"math": {"d": False, "s": source}}
     {"link": runs, "to": parts or None, "said": address}
 
 HTML is never passed through. A comment is dropped. Of an HTML table only the tags and attributes listed below are
@@ -37,8 +38,15 @@ import re
 CAP_TABLE_ROWS = 40
 CAP_TABLE_COLUMNS = 12
 HTML_TABLE_CHARACTERS = 20000
+HTML_TABLE_TAGS = 5000     # opening angle brackets in one HTML table
 MAX_LIST_DEPTH = 3
 SCAN_LIMIT = 500           # characters a dollar sign looks ahead for its partner
+
+# What is read at all. Past a cap the part is plain text, cut at the cap, and no pattern runs on it.
+MAX_TEXT = 200000          # characters of a text given to blocks()
+MAX_LINE = 4000            # characters of one line of a text
+MAX_PARAGRAPH = 20000      # characters of a paragraph, a cell or a line given to inline()
+MAX_MARKS = 200            # emphasis marks (stars, underscores, tags) read in one paragraph
 
 # the limits of a formula
 MAX_INLINE = 400           # characters of source
@@ -48,8 +56,7 @@ MAX_NODES = 300
 
 ASCII_SPACE = " \t\n\r\f\v\u00a0"
 
-FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*([^`\n]*)$")
-HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$")
+HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.*)$")
 BLOCK_HEADING = re.compile(r"^### (Figure|Table): ([A-Za-z0-9][A-Za-z0-9_.-]*) - ")
 BLOCK_END = re.compile(r"^#{1,3} ")
 THEMATIC = re.compile(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$")
@@ -74,6 +81,29 @@ def digit(char):
 
 def letter(char):
     return char != "" and char in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+def fence_of(line):
+    """(character, length, words of the info string) of a line that opens a fenced block, else None. Written without
+    a pattern, so that a line of backticks and spaces costs one pass."""
+    stripped = line.lstrip(" ")
+    if len(line) - len(stripped) > 3 or stripped[:1] not in ("`", "~"):
+        return None
+    char = stripped[0]
+    length = len(stripped) - len(stripped.lstrip(char))
+    info = stripped[length:].strip()
+    if length < 3 or (char == "`" and "`" in info):
+        return None
+    return char, length, info.split()
+
+
+def heading_text(text):
+    """The text of a heading line without its closing run of number signs, which counts only after a space or tab."""
+    text = text.rstrip(" \t")
+    bare = text.rstrip("#")
+    if bare != text and (bare == "" or bare[-1] in " \t"):
+        return bare.rstrip(" \t")
+    return text
 
 
 def escaped(text, at):
@@ -209,8 +239,11 @@ def split_math(text):
 
 
 def math_run(source, display):
+    """A math run: "d" for display, "m" the tree when the formula converts, and "s" the source as written (cut at the
+    length limit of a formula), so that the page can show the source when it refuses the tree."""
     tree = tex(source, display)
-    return {"math": {"d": display, "m": tree}} if tree is not None else {"math": {"d": display, "s": source}}
+    kept = source[:MAX_DISPLAY if display else MAX_INLINE]
+    return {"math": {"d": display, "m": tree, "s": kept} if tree is not None else {"d": display, "s": kept}}
 
 
 def split_links(text):
@@ -257,10 +290,12 @@ class Delimiter(object):
     def __init__(self, char, count, can_open, can_close, raw, style=None):
         self.char, self.count, self.can_open, self.can_close, self.raw, self.style = (
             char, count, can_open, can_close, raw, style)
+        self.sequence = 0
 
 
-def tokens(piece, before, after):
-    """`piece` as plain strings and delimiters. `before` and `after` are the characters next to it ("." for a run)."""
+def tokens(piece, before, after, budget):
+    """`piece` as plain strings and delimiters. `before` and `after` are the characters next to it ("." for a run).
+    `budget` is a one-item list, the marks that may still be read in this paragraph; a mark past it is plain text."""
     out, buf, i, size = [], [], 0, len(piece)
     while i < size:
         char = piece[i]
@@ -268,8 +303,9 @@ def tokens(piece, before, after):
             buf.append(piece[i + 1])
             i += 2
             continue
-        found = HTML_TAG.match(piece, i) if char == "<" else None
+        found = HTML_TAG.match(piece, i) if char == "<" and budget[0] > 0 else None
         if found:
+            budget[0] -= 1
             if buf:
                 out.append("".join(buf))
                 buf = []
@@ -285,7 +321,7 @@ def tokens(piece, before, after):
             length = end - i
             prev = piece[i - 1] if i > 0 else before
             nxt = piece[end] if end < size else after
-            if length > 3:
+            if length > 3 or budget[0] <= 0:
                 buf.append(piece[i:end])
             else:
                 can_open, can_close = not space(nxt), not space(prev)
@@ -293,6 +329,7 @@ def tokens(piece, before, after):
                     can_open = can_open and not (prev != "" and prev.isalnum())
                     can_close = can_close and not (nxt != "" and nxt.isalnum())
                 if can_open or can_close:
+                    budget[0] -= 1
                     if buf:
                         out.append("".join(buf))
                         buf = []
@@ -317,42 +354,59 @@ def edge(item, end):
 
 def emphasis(parts):
     """Runs from atoms: bold, italic, superscript and subscript read out of the strings, in the way of CommonMark but
-    simpler. A mark with no partner stays text exactly as written."""
+    simpler. A mark with no partner stays text exactly as written. At most MAX_MARKS marks are read, and a closer
+    that finds no opener tells the next closer of its kind where not to look again (CommonMark's openers-bottom
+    rule), so that the work grows with the marks and not with their square."""
+    budget = [MAX_MARKS]
     items = []
     for index, part in enumerate(parts):
         if isinstance(part, str):
             before = edge(parts[index - 1], "last") if index > 0 else ""
             after = edge(parts[index + 1], "first") if index + 1 < len(parts) else ""
-            items.extend(tokens(part, before, after))
+            items.extend(tokens(part, before, after, budget))
         else:
             items.append(part)
-    i = 0
-    while i < len(items):
-        closer = items[i]
-        if isinstance(closer, Delimiter) and closer.can_close and closer.count > 0:
-            j = i - 1
-            while j >= 0:
-                opener = items[j]
-                if isinstance(opener, Delimiter) and opener.char == closer.char and opener.can_open and opener.count > 0:
-                    break
-                j -= 1
-            if j >= 0:
-                if closer.style is not None:
-                    use, style = 1, closer.style
-                else:
-                    use = 2 if opener.count >= 2 and closer.count >= 2 else 1
-                    style = "b" if use == 2 else "i"
-                items[j + 1:i] = [("node", style, items[j + 1:i])]
-                opener.count -= use
-                closer.count -= use
-                i = j + 2
-                if closer.count == 0:
-                    del items[i]
-                if opener.count == 0:
-                    del items[j]
-                    i -= 1
-                continue
-        i += 1
+    stack = [item for item in items if isinstance(item, Delimiter)]
+    for sequence, delimiter in enumerate(stack):
+        delimiter.sequence = sequence
+    floor = {}
+    k = 0
+    while k < len(stack):
+        closer = stack[k]
+        if not (closer.can_close and closer.count > 0):
+            k += 1
+            continue
+        low = floor.get(closer.char, -1)
+        j = k - 1
+        while j >= 0 and stack[j].sequence > low:
+            opener = stack[j]
+            if opener.char == closer.char and opener.can_open and opener.count > 0:
+                break
+            j -= 1
+        if j < 0 or stack[j].sequence <= low:
+            floor[closer.char] = stack[k - 1].sequence if k > 0 else -1
+            k += 1
+            continue
+        if closer.style is not None:
+            use, style = 1, closer.style
+        else:
+            use = 2 if opener.count >= 2 and closer.count >= 2 else 1
+            style = "b" if use == 2 else "i"
+        a, z = items.index(opener), items.index(closer)
+        items[a + 1:z] = [("node", style, items[a + 1:z])]
+        opener.count -= use
+        closer.count -= use
+        if closer.count == 0:
+            del items[a + 2]
+        if opener.count == 0:
+            del items[a]
+        del stack[j + 1:k]  # the marks between them can no longer match anything
+        k = j + 1
+        if closer.count == 0:
+            del stack[k]
+        if opener.count == 0:
+            del stack[j]
+            k -= 1
     return merge(flatten(items, ()))
 
 
@@ -401,6 +455,8 @@ def inline(text):
     """The runs of one line or paragraph."""
     if not isinstance(text, str) or text == "":
         return []
+    if len(text) > MAX_PARAGRAPH:
+        return [{"t": text[:MAX_PARAGRAPH]}]
     return emphasis(atoms(text))
 
 
@@ -429,13 +485,13 @@ def without_comments(lines):
             line, comment = line[end + 3:], False
         elif fence is not None:
             out.append(line)
-            if fence_close(line, fence[0], len(fence)):
+            if fence_close(line, fence[0], fence[1]):
                 fence = None
             continue
         else:
-            found = FENCE.match(line)
+            found = fence_of(line)
             if found:
-                fence = found.group(1)
+                fence = (found[0], found[1])
                 out.append(line)
                 continue
         while True:
@@ -695,11 +751,10 @@ def display_math(lines, i):
     else:
         parts, end = [first], i + 1
         while end < len(lines) and end - i <= 60:
-            line = lines[end].strip()
-            if line.endswith("$$"):
-                parts.append(line[:-2])
+            if lines[end].rstrip().endswith("$$"):
+                parts.append(lines[end].rstrip()[:-2])
                 break
-            parts.append(line)
+            parts.append(lines[end])
             end += 1
         else:
             return None
@@ -715,7 +770,7 @@ def block_start(lines, i):
     stripped = line.strip()
     if not stripped:
         return True
-    if FENCE.match(line) or stripped.startswith("$$") or BLOCK_HEADING.match(line) or HEADING.match(line) \
+    if fence_of(line) or stripped.startswith("$$") or BLOCK_HEADING.match(line) or HEADING.match(line) \
             or THEMATIC.match(line) or IMAGE_LINE.fullmatch(stripped) or stripped.startswith(">") \
             or stripped.lower().startswith("<table"):
         return True
@@ -747,11 +802,10 @@ def read_list(lines, i):
                 base, top_ordered = indent, ordered
             if indent <= base + 1 and ordered != top_ordered:
                 break
-            flat.append((max(0, indent - base), ordered, int(marker[:-1]) if ordered else 0, found.group(3).strip()))
+            flat.append((max(0, indent - base), ordered, int(marker[:-1]) if ordered else 0, [found.group(3).strip()]))
             i += 1
         elif flat and not block_start(lines, i):
-            kept = flat[-1]
-            flat[-1] = (kept[0], kept[1], kept[2], kept[3] + " " + line.strip())
+            flat[-1][3].append(line.strip())
             i += 1
         else:
             break
@@ -767,12 +821,12 @@ def read_list(lines, i):
         while depth < len(levels) and indent >= levels[depth] + 2:
             depth += 1
         if depth >= MAX_LIST_DEPTH:
-            last[MAX_LIST_DEPTH - 1]["text"] += " " + text
+            last[MAX_LIST_DEPTH - 1]["text"] += " " + " ".join(text)
             del levels[MAX_LIST_DEPTH:]
             continue
         del levels[depth:]
         levels.append(indent)
-        item = {"text": text, "sub": None}
+        item = {"text": " ".join(text), "sub": None}
         if depth == 0:
             if top is None:
                 top = new_list(ordered, number)
@@ -798,7 +852,13 @@ def blocks(text):
     """The blocks of a text, see the module's notes."""
     if not isinstance(text, str) or not text.strip():
         return []
-    lines = without_comments(text.split("\n"))
+    if len(text) > MAX_TEXT:
+        return [{"p": [{"t": text[:MAX_TEXT]}]}]
+    lines, long_lines = text.split("\n"), {}
+    for number, line in enumerate(lines):
+        if len(line) > MAX_LINE:  # before any pattern looks at it: the part past the cap is not read
+            lines[number] = long_lines[number] = line[:MAX_LINE]
+    lines = without_comments(lines)
     out, paragraph, i, size = [], [], 0, len(lines)
 
     def flush():
@@ -809,16 +869,21 @@ def blocks(text):
             del paragraph[:]
 
     while i < size:
+        if i in long_lines:
+            flush()
+            out.append({"p": [{"t": long_lines[i]}]})  # an over-long line is plain text
+            i += 1
+            continue
         line = lines[i]
         stripped = line.strip()
         if not stripped:
             flush()
             i += 1
             continue
-        found = FENCE.match(line)
+        found = fence_of(line)
         if found:
             flush()
-            char, length, info = found.group(1)[0], len(found.group(1)), found.group(2).split()
+            char, length, info = found
             body, i = [], i + 1
             while i < size and not fence_close(lines[i], char, length):
                 body.append(lines[i])
@@ -849,7 +914,9 @@ def blocks(text):
         found = HEADING.match(line)
         if found:
             flush()
-            out.append({"h": {"level": min(3, max(1, len(found.group(1)) - 2)), "r": inline(found.group(2))}})
+            runs = inline(heading_text(found.group(2)))
+            if runs:
+                out.append({"h": {"level": min(3, max(1, len(found.group(1)) - 2)), "r": runs}})
             i += 1
             continue
         if THEMATIC.match(line):
