@@ -1285,6 +1285,8 @@ class Page:
         line = text_of(data.get("line"))
         if line in ("off", "none", "first") and mode == "plain":
             said.append(mind_model.PHRASES["line." + line])
+        if mode == "changes" and integer(data.get("omitted")) > 0:
+            said.append(plural(integer(data["omitted"]), *mind_model.PHRASES["line.omitted"]))
         if mode == "changes" and data.get("dropped") is True:
             said.append(mind_model.PHRASES["line.dropped"])
         if integer(sheet.get("unfetched")):
@@ -1360,7 +1362,8 @@ class Page:
     def sheet_mark(kind, words, explain=None):
         """A state in a margin: its sign, then its words. The words explain themselves (a button) when the state has an
         explanation of the page."""
-        text = Page.explain_button(explain, words, "stw") if explain in EXPLAIN_TEXT else E("span", {"class": "stw"}, words)
+        text = Page.explain_button(explain, words, "stw") if isinstance(explain, str) and explain in EXPLAIN_TEXT \
+            else E("span", {"class": "stw"}, words)
         return E("span", {"class": "st st-" + kind}, text)
 
     def sheet_legend(self, plan, changes):
@@ -1406,6 +1409,7 @@ class Page:
         parts = [p for p in section.get("parts", []) if isinstance(p, dict)] if isinstance(section.get("parts"), list) else []
         plan = section.get("plan") if isinstance(section.get("plan"), dict) else None
         has_text = section.get("text") is True
+        untold = section.get("untold") is True   # its text is there and may not be told: never "No text yet", never a request
         note = []
         if plan is not None:
             planned, backed = integer(plan.get("planned")), integer(plan.get("backed"))
@@ -1416,17 +1420,17 @@ class Page:
                               E("rect", {"class": "mfg", "width": round(100 * min(backed, planned) / planned), "height": 4})))
             else:
                 note.append(E("span", None, mind_model.PHRASES["sec.none"]))
-            if not has_text and planned:
+            if not has_text and not untold and planned:
                 done = mind_model.PHRASES["empty.backed"]
                 note.append(E("span", None, mind_model.PHRASES["empty.plan"] % (
                     plural(planned, *mind_model.PHRASES["empty.are"]), done[0] if not backed else done[1] if backed == 1 else
                     done[2] % backed)))
-            note.append(E("a", {"class": "lk", "href": anchor("sec-%d" % n if n else "plan-against-text")},
+            note.append(E("a", {"class": "lk", "href": anchor("sec-%d" % n if n > 0 else "plan-against-text")},
                           mind_model.PHRASES["sec.link"] % label))
         head = E("div", {"class": "row sechead"}, E("h3", {"class": "sech", "id": "p-sec-%d" % k}, label),
                  E("div", {"class": "mn", "role": "note"}, *note) if note else "")
         empty = ""
-        if not has_text:
+        if not has_text and not untold:
             shown = self.copy_heading(label)
             ask = J(E("span", None, mind_model.PHRASES["empty.draft"]), self.sheet_copy(
                 mind_model.PHRASES["empty.request"] % shown, mind_model.PHRASES["copy.draft"] % shown)) \
@@ -1533,7 +1537,8 @@ class Page:
             how = text_of(last.get("how"))
             out.append(E("span", None, mind_model.PHRASES["part.changed"] % self.day_of(last.get("day")),
                          ", " + mind_model.PHRASES["how." + how] if how in mind_plan.HOW else ""))
-        out += [line for line in (self.sheet_since_note(g) for g in part.get("since", []) if isinstance(g, dict)) if line != ""]
+        since = part.get("since") if isinstance(part.get("since"), list) else []
+        out += [line for line in (self.sheet_since_note(g) for g in since if isinstance(g, dict)) if line != ""]
         links = []
         history = outline.get("history") if isinstance(outline.get("history"), dict) else {}
         entries = [e for e in history.get("entries", []) if isinstance(e, dict)] if isinstance(history.get("entries"), list) else []

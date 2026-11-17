@@ -33,7 +33,8 @@ import recortex  # noqa: E402
 import versions  # noqa: E402
 import write_rules  # noqa: E402
 
-LISTED = 10          # the most recent earlier versions the picker offers; named older ones are offered too
+LISTED = 10          # the most recent earlier versions the picker offers; named older ones are offered too, up to NAMED
+NAMED = 20           # the most named older versions the picker offers, the newest first; the rest are counted, not offered
 SLOTS = 12           # slots shown in a section
 PLAIN = ("autonomous", "chat", "merged")   # forms of a text change the plugin made
 
@@ -60,6 +61,8 @@ PHRASES = {
     "line.none": "No version of the text has been kept yet. Changes show here once it has changed.",
     "line.off": "Versions of the text are kept only when recortex writes the paper (writing mode review or autonomous).",
     "line.dropped": "The oldest versions are not offered: this page marks changes against the newest ones only.",
+    "line.omitted": ("1 older named version is not offered: the picker holds the 10 latest versions and the 20 newest named ones.",
+                     "%d older named versions are not offered: the picker holds the 10 latest versions and the 20 newest named ones."),
     "line.unfetched": "The text of earlier versions is not kept here for %s, so they show no marks; build the page again with "
                       "mind.py --versions.",
     # the marks of a part and a section
@@ -146,10 +149,11 @@ class SheetMixin:
     # ------------------------------------------------------------ the versions of the paper, numbered
 
     def sheet_versions(self):
-        """{"kept", "list", "count", "line", "dropped"}: the numbered versions (one per told text change with a kept commit,
-        in the order of the record) and, for the picker, the earlier ones: the LISTED most recent and every named one older.
-        `line` is the fixed line that stands where the picker is not."""
-        found = {"kept": False, "rows": [], "list": [], "count": 0, "line": "off", "dropped": False}
+        """{"kept", "list", "count", "line", "dropped", "omitted"}: the numbered versions (one per told text change with a kept
+        commit, in the order of the record) and, for the picker, the earlier ones: the LISTED most recent and the NAMED newest
+        named ones older (`omitted` counts the named ones left out). `line` is the fixed line that stands where the picker is
+        not."""
+        found = {"kept": False, "rows": [], "list": [], "count": 0, "line": "off", "dropped": False, "omitted": 0}
         if self.plan_state is None or self.writing == "off":
             return found
         from mind_model import short  # noqa: E402
@@ -161,12 +165,14 @@ class SheetMixin:
         named = {}
         for row in names:
             if versions.NAME.fullmatch(row["name"]):
-                for version in rows:
-                    if version["version"] == row["commit"]:
-                        named[version["n"]] = row   # a commit two changes share is named once, on the newer
+                same = [version for version in rows if version["version"] == row["commit"]]
+                if same:
+                    named[same[-1]["n"]] = row   # a commit two changes share is named once, on the newer
         found.update(kept=True, rows=rows, count=len(rows), line="none" if not rows else "first" if len(rows) == 1 else None)
         earlier = list(reversed(rows[:-1]))
-        keep = earlier[:LISTED] + [version for version in earlier[LISTED:] if version["n"] in named]
+        older = [version for version in earlier[LISTED:] if version["n"] in named]
+        keep = earlier[:LISTED] + older[:NAMED]
+        found["omitted"] = len(older) - NAMED if len(older) > NAMED else 0
         for version in keep:
             row = named.get(version["n"])
             found["list"].append({"n": version["n"], "id": version["id"], "time": version["time"], "day": self.day_of(version["at"]),
@@ -246,7 +252,8 @@ class SheetMixin:
             "plan": planned, "message": message["plain"] if message else None, "mode": mode,
             "versions": {"kept": info["kept"], "count": info["count"], "list": info["list"] if mode == "changes" else [],
                          "default": info["list"][0]["n"] if mode == "changes" else None, "line": line,
-                         "dropped": info["dropped"] and mode == "changes"},
+                         "dropped": info["dropped"] and mode == "changes",
+                         "omitted": info["omitted"] if mode == "changes" else 0},
             "unfetched": len(ctx["unfetched"]), "sections": sections, "sources": sources,
             "then_figures": ctx["then_figures"],
         }
@@ -260,7 +267,7 @@ class SheetMixin:
         for section in (group or {}).get("sections", []):
             out.append({"n": section["n"], "label": section["label"], "key": section["key"], "parts": [
                 {"thread": p["thread"], "ordinal": p["ordinal"], "outline": p} for p in section["parts"]],
-                        "text": False, "slots": None, "more": 0, "plan": None})
+                        "text": False, "untold": False, "slots": None, "more": 0, "plan": None})
         if planned:
             order = [h for h in self.plan_state["plan"]["sections"]]
             have = {s["label"].lower() for s in out}
@@ -274,8 +281,8 @@ class SheetMixin:
                 at = 0
                 if before:
                     at = next(i for i, s in enumerate(out) if s["label"].lower() == before[-1].lower()) + 1
-                out.insert(at, {"n": None, "label": heading, "key": None, "parts": [], "text": False, "slots": None, "more": 0,
-                                "plan": None})
+                out.insert(at, {"n": None, "label": heading, "key": None, "parts": [], "text": False, "untold": False,
+                                "slots": None, "more": 0, "plan": None})
                 have.add(heading.lower())
         return out
 
@@ -298,6 +305,7 @@ class SheetMixin:
                     rows=None, removed=[], since=[], marks=[], slots=None, planned=[], by_hand=bool(outline.get("by_hand")),
                     _results={}, _blocks=[])
         if not shown:
+            section["untold"] = section["untold"] or thread is not None   # its text is there, and may not be told
             return
         section["text"] = section["text"] or not part["empty"]
         if part["long"]:
@@ -382,7 +390,7 @@ class SheetMixin:
             if key == "new":
                 rows = [dict(r, k="added") for r in rows if r["k"] != "removed"]
             same = all(r["k"] == "same" for r in rows)
-            variant = {"rows": rows, "same": same, "size": 0 if same else mind_versions.since_size(rows),
+            variant = {"rows": rows, "same": same, "size": 0 if same else mind_versions.since_size(rows, then_entries),
                        "entries": then_entries, "new": key == "new"}
             fresh.setdefault(id(part), {})[key] = variant
         return {"state": "same" if variant["same"] else "new" if variant["new"] else "marked", "variant": key}
@@ -426,15 +434,19 @@ class SheetMixin:
         removed = {}
         for key, fors in serves.items():
             variant = cache[key]
-            before = 0
+            before, run = 0, 0
             for item in variant["rows"]:
                 kind = item["k"]
                 if kind == "removed":
-                    place = removed.setdefault((before, mind_versions.block_key(item["then"])), {
-                        "at": before, "for": [], "block": item["then"],
+                    # each version keeps its own ordered run of removed blocks: a block is shared with another version only
+                    # when its place, its turn in the run and the whole block (a figure or table with its entry) are the same
+                    place = removed.setdefault((before, run, mind_versions.block_key(item["then"], variant["entries"])), {
+                        "at": before, "turn": run, "for": [], "block": item["then"],
                         "entry": self.sheet_then(item["then"], variant["entries"], ctx)})
                     place["for"] += fors
+                    run += 1
                     continue
+                run = 0
                 row = part["rows"][item["i"]]
                 before = item["i"] + 1
                 if kind in ("added", "reworded", "changed"):
@@ -453,7 +465,7 @@ class SheetMixin:
                                 "entry": self.sheet_then(item["then"], variant["entries"], ctx)}
                         row["then"].append(mark)
                     mark["for"] += fors
-        part["removed"] = sorted(removed.values(), key=lambda r: (r["at"], -max(r["for"])))
+        part["removed"] = sorted(removed.values(), key=lambda r: (r["at"], r["turn"], -max(r["for"])))
         for row in part["rows"]:
             for kind in ("added", "reworded", "changed"):
                 row[kind] = sorted(set(row[kind]), reverse=True)

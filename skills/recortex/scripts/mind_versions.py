@@ -28,7 +28,10 @@ CUT_CHARS = 20000
 MAX_PARTS = 30           # differences drawn per part
 MAX_BYTES = 3 * 1024 * 1024   # of differences per page
 MAX_SINCE_BYTES = 2 * 1024 * 1024   # of the marked variants of the manuscript view
-MAX_PAIRS = 6000         # paragraph pairs compared by words in one since()
+MAX_PAIRS = 6000         # pairs of blocks looked at in one since(); when they are spent the rest are plain additions and removals
+MAX_CELLS = 4000000      # words of one block times words of the other, summed over the pairs that since() matches by words
+MAX_WORDS = 1500         # a paragraph of more words than this is paired with another by its words' overlap, never matched by words
+MAX_TOKENS = 3000        # a pair of paragraphs with more word and space tokens than this in either is one deletion and one addition
 SAME_WORDS, SAME_CHARS = 2, 16   # a run of unchanged words this short between two changes joins them
 WHOLE_SHARE = 0.6        # more of the longer side changed than this: the paragraph is one deletion and one addition
 REWORD_RATIO = 0.5       # paragraphs whose words match at least this much are one paragraph reworded
@@ -67,8 +70,10 @@ def merge_runs(runs):
 def word_runs(old, new):
     """The runs of a changed paragraph, matched by words (whitespace kept with the words around it)."""
     a, b = TOKEN.findall(old), TOKEN.findall(new)
+    if len(a) > MAX_TOKENS or len(b) > MAX_TOKENS:   # too long to match by words: the whole paragraph is replaced
+        return merge_runs([("del", old), ("add", new)])
     runs = []
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b).get_opcodes():
         if tag == "equal":
             runs.append(("same", "".join(a[i1:i2])))
         else:
@@ -85,7 +90,7 @@ def diff_text(before, after, collapse=True):
     sides. A difference past CUT_CHARS of changed text ends with {"op": "cut"}."""
     a, b = paragraphs(before), paragraphs(after)
     ops, spent, same = [], 0, 0
-    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    matcher = difflib.SequenceMatcher(None, a, b)
 
     def flush():
         nonlocal same
@@ -213,15 +218,24 @@ def words(block):
     return block_text(block).split()
 
 
+def structure(value):
+    """A value as a string that is equal for two equal values, whatever their keys' order."""
+    try:
+        return json.dumps(value, sort_keys=True)
+    except (TypeError, ValueError):
+        return repr(value)
+
+
 def entry_key(entry):
     """What makes a figure or table entry the same entry: its title, caption, data and command, its place for a figure, and
-    for a table the words of its cells."""
+    for a table its whole structure (rows, cells, spans, alignment and the formatting inside a cell), so that a cell boundary
+    that moved is a change although the words are the same."""
     if not isinstance(entry, dict):
         return None
     table = entry.get("table")
     return json.dumps([entry.get("kind"), entry.get("title"), entry.get("caption"), entry.get("data"), entry.get("command"),
                        entry.get("repo"), entry.get("ref"), entry.get("path"),
-                       block_text({"table": table}) if isinstance(table, dict) else None])
+                       structure(table) if isinstance(table, dict) else None])
 
 
 def block_key(block, entries=None):
@@ -230,10 +244,7 @@ def block_key(block, entries=None):
     if block_kind(block) == "block" and isinstance(block["block"], dict):
         entry = (entries or {}).get((block["block"].get("kind"), block["block"].get("id")))
         return json.dumps(["block", block["block"].get("kind"), block["block"].get("id"), entry_key(entry)])
-    try:
-        return json.dumps(block, sort_keys=True)
-    except (TypeError, ValueError):
-        return repr(block)
+    return structure(block)
 
 
 def phrases(runs):
@@ -274,22 +285,65 @@ def phrases(runs):
     return merge_runs(out)
 
 
-def pairs(old, new, budget):
+def inline_shape(runs):
+    """(signature, math) of the inline runs of a paragraph: the signature lists, in order, every run that is more than plain
+    words (code with its text, a link with its target, a citation with its target, the emphasis, superscript or subscript a
+    text run carries, a formula with its source), and `math` says that the paragraph holds a formula anywhere."""
+    signature, math = [], False
+    for run in runs if isinstance(runs, list) else []:
+        if not isinstance(run, dict):
+            continue
+        if "math" in run:
+            math = True
+            signature.append(("math", structure(run["math"])))
+        elif "code" in run:
+            signature.append(("code", run["code"]))
+        elif "link" in run:
+            inner, inside = inline_shape(run["link"])
+            math = math or inside
+            signature.append(("link", structure(run.get("to")), inner))
+        elif "cite" in run:
+            signature.append(("cite", run.get("cite"), run.get("n")))
+        elif "t" in run or "w" in run:
+            flags = tuple(flag for flag in ("sup", "sub", "i", "b") if run.get(flag) is True)
+            if flags:
+                signature.append(("styled", flags))
+    return signature, math
+
+
+def reword_or_change(old, new):
+    """"reworded" for two paragraphs that differ in plain words only, else "changed": a formula on either side (the marks of a
+    reworded paragraph are drawn as words, which would show the formula's source), or a run that is more than plain words
+    (code, a link's target, a citation, emphasis, a superscript or a subscript) that the two sides do not share."""
+    first, math_first = inline_shape(old.get("p"))
+    second, math_second = inline_shape(new.get("p"))
+    if math_first or math_second or first != second:
+        return "changed"
+    return "reworded"
+
+
+def pairs(old, new, budget, first=None, second=None):
     """"reworded" or "changed" when an old block and a new block are one block that changed, else None. Two paragraphs are
-    one when the ratio of their words is REWORD_RATIO or more; two blocks of one other kind are, and for a figure or table
-    pointer only when they name the same figure or table. `budget` is a one-item list that counts the paragraph pairs left."""
+    one when the ratio of their words is REWORD_RATIO or more (reworded, unless a formula or another run that is more than
+    plain words differs: changed); two blocks of one other kind are, and for a figure or table pointer only when they name the
+    same figure or table. `budget` is a list [pairs left, cells left] that every call spends; `first` and `second` are the
+    words of the two blocks when the caller has them."""
+    budget[0] -= 1
     kind = block_kind(old)
     if kind != block_kind(new) or kind is None:
         return None
     if kind == "p":
-        first, second = words(old), words(new)
-        if not first or not second or budget[0] <= 0:
+        first = words(old) if first is None else first
+        second = words(new) if second is None else second
+        if not first or not second:
             return None
-        budget[0] -= 1
-        matcher = difflib.SequenceMatcher(None, first, second, autojunk=False)
+        matcher = difflib.SequenceMatcher(None, first, second)
         if matcher.real_quick_ratio() < REWORD_RATIO or matcher.quick_ratio() < REWORD_RATIO:
             return None
-        return "reworded" if matcher.ratio() >= REWORD_RATIO else None
+        if len(first) > MAX_WORDS or len(second) > MAX_WORDS:   # too long to match by words: the overlap of the words decides
+            return "changed"
+        budget[1] -= len(first) * len(second)
+        return reword_or_change(old, new) if matcher.ratio() >= REWORD_RATIO else None
     if kind == "block":
         left, right = old["block"], new["block"]
         same = isinstance(left, dict) and isinstance(right, dict) and left.get("kind") == right.get("kind") \
@@ -308,13 +362,22 @@ def since(old_blocks, new_blocks, old_entries=None, new_entries=None):
     blocks, j its place among the old) and one for each block only the old text had (k "removed", now and i None), between
     the new blocks it stood between. Blocks are matched as wholes; inside a stretch that differs, the two sides are walked in
     order: paragraphs that are mostly the same words are one paragraph reworded (its runs are phrases(word_runs)), other
-    blocks of one kind are one block changed, and the rest are removed or added."""
+    blocks of one kind are one block changed, and the rest are removed or added. The search for a partner is bounded: every
+    pair looked at spends MAX_PAIRS and every matching by words spends MAX_CELLS, and once either is spent the blocks still
+    unpaired are removed and added, in one pass."""
     old_blocks = [b for b in old_blocks if block_kind(b)]
     new_blocks = [b for b in new_blocks if block_kind(b)]
     first = [block_key(b, old_entries) for b in old_blocks]
     second = [block_key(b, new_entries) for b in new_blocks]
-    out, budget = [], [MAX_PAIRS]
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, first, second, autojunk=False).get_opcodes():
+    old_words, new_words = {}, {}
+    out, budget = [], [MAX_PAIRS, MAX_CELLS]
+
+    def words_of(blocks, cache, n):
+        if n not in cache:
+            cache[n] = words(blocks[n]) if block_kind(blocks[n]) == "p" else None
+        return cache[n]
+
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, first, second).get_opcodes():
         if tag == "equal":
             out += [row("same", new_blocks[j], None, None, j, i1 + j - j1) for j in range(j1, j2)]
             continue
@@ -322,7 +385,10 @@ def since(old_blocks, new_blocks, old_entries=None, new_entries=None):
         for i in range(i1, i2):
             found = None
             for later in range(j, j2):
-                how = pairs(old_blocks[i], new_blocks[later], budget)
+                if budget[0] <= 0 or budget[1] <= 0:
+                    break
+                how = pairs(old_blocks[i], new_blocks[later], budget, words_of(old_blocks, old_words, i),
+                            words_of(new_blocks, new_words, later))
                 if how:
                     found = (later, how)
                     break
@@ -340,14 +406,35 @@ def since(old_blocks, new_blocks, old_entries=None, new_entries=None):
     return out
 
 
-def since_size(rows):
+def entry_weight(entry):
+    """What an earlier figure or table entry costs on the page: its words, and for a table every cell's words and a little
+    markup for each cell."""
+    if not isinstance(entry, dict):
+        return 0
+    total = 160 + sum(len(entry[key]) for key in ("title", "caption", "data", "command", "repo", "ref", "path")
+                      if isinstance(entry.get(key), str))
+    table = entry.get("table")
+    if isinstance(table, dict):
+        total += len(run_text(table.get("caption")))
+        for key in ("head", "rows"):
+            for line in table.get(key) or []:
+                for cell in line if isinstance(line, list) else []:
+                    total += 56 + (len(run_text(cell.get("r"))) if isinstance(cell, dict) else 0)
+    return total
+
+
+def since_size(rows, entries=None):
     """The characters a list of rows costs on the page: the runs of reworded paragraphs and the blocks of removed and changed
-    rows, and a little for each row."""
+    rows (what the page draws of them, as the model encodes them, and for a figure or table pointer the entry it names, from
+    `entries`: {(kind, id): entry} of the earlier text), and a little for each row."""
     total = 0
     for item in rows:
         total += 24 + sum(len(run["text"]) for run in item.get("runs") or [])
-        if item.get("then") is not None:
-            total += 40 + len(block_text(item["then"]))
+        then = item.get("then")
+        if then is not None:
+            total += 40 + len(block_text(then)) + len(structure(then))
+            if block_kind(then) == "block" and isinstance(then["block"], dict):
+                total += entry_weight((entries or {}).get((then["block"].get("kind"), then["block"].get("id"))))
     return total
 
 

@@ -160,6 +160,88 @@ class DifferTests(unittest.TestCase):
         self.assertEqual([], mind_versions.since([], []))
         self.assertEqual(["added"], self.kinds("", "x"))
 
+    def test_two_thousand_paragraphs_against_two_thousand_others_are_paired_within_the_budget_and_the_rest_is_linear(self):
+        import time
+        calls = []
+        real = mind_versions.pairs
+
+        def counted(*args, **kw):
+            calls.append(1)
+            return real(*args, **kw)
+
+        mind_versions.pairs = counted
+        try:
+            old, new = blocks("a\n\n" * 2000), blocks("b\n\n" * 2000)
+            started = time.time()
+            rows = mind_versions.since(old, new)
+            took = time.time() - started
+        finally:
+            mind_versions.pairs = real
+        self.assertLessEqual(len(calls), mind_versions.MAX_PAIRS)   # the nested search stopped when the budget was spent
+        self.assertLess(took, 5)
+        self.assertEqual(sorted(["removed"] * 2000 + ["added"] * 2000), sorted(r["k"] for r in rows))
+        self.assertEqual(2000, len({r["i"] for r in rows if r["k"] == "added"}))   # every new block once
+        self.assertEqual(2000, len({r["j"] for r in rows if r["k"] == "removed"}))   # every old block once
+        rows = mind_versions.since(blocks("a\n\n" * 2000), blocks("a\n\n" * 2000 + "z"))   # equal blocks over and over
+        self.assertEqual(["same"] * 2000 + ["added"], [r["k"] for r in rows])
+
+    def test_a_pair_of_long_or_repeating_paragraphs_never_runs_long(self):
+        import time
+        started = time.time()
+        rows = mind_versions.since(blocks(" ".join(["a"] * 3000)), blocks(" ".join(["a", "b"] * 1500)))
+        self.assertEqual(["changed"], [r["k"] for r in rows])   # past MAX_WORDS the overlap of the words decides, whole block
+        rows = mind_versions.since(blocks(" ".join(["a"] * 800)), blocks(" ".join(["a", "b"] * 400)))
+        self.assertEqual(["added", "removed"], sorted(r["k"] for r in rows))
+        runs = mind_versions.word_runs(" ".join(["a"] * 2500), " ".join(["a", "b"] * 1250))   # more tokens than MAX_TOKENS
+        self.assertEqual([("del", " ".join(["a"] * 2500)), ("add", " ".join(["a", "b"] * 1250))], [(r["t"], r["text"]) for r in runs])
+        self.assertLess(time.time() - started, 5)
+
+    def test_a_table_whose_cell_boundaries_moved_is_a_change_though_its_words_are_the_same(self):
+        def entry(first, second):
+            cell = lambda text: {"r": [{"t": text}], "rs": 1, "cs": 1, "h": False, "a": None}
+            return {("table", "t"): {"kind": "table", "id": "t", "title": "Spells", "caption": "By length.", "data": "", "command": "",
+                                     "repo": "", "ref": "", "path": "", "table": {"head": [], "rows": [[cell(first), cell(second)]],
+                                                                                  "cut": False, "caption": None}}}
+        pointer = [{"block": {"kind": "table", "id": "t"}}]
+        self.assertEqual(mind_versions.words(blocks("| a | b |\n|---|---|\n| 1 2 | 3 |")[0]), ["a", "b", "1", "2", "3"])
+        same = mind_versions.since(pointer, pointer, entry("1 2", "3"), entry("1 2", "3"))
+        self.assertEqual(["same"], [r["k"] for r in same])
+        moved = mind_versions.since(pointer, pointer, entry("1 2", "3"), entry("1", "2 3"))
+        self.assertEqual(["changed"], [r["k"] for r in moved])
+        spans = entry("1", "2 3")
+        spans[("table", "t")]["table"]["rows"][0][0]["cs"] = 2   # a span is structure too
+        self.assertEqual(["changed"], [r["k"] for r in mind_versions.since(pointer, pointer, entry("1", "2 3"), spans)])
+
+    def test_a_pair_that_differs_in_more_than_plain_words_is_a_change_and_one_that_differs_in_words_only_is_reworded(self):
+        kinds = lambda old, new: [r["k"] for r in mind_versions.since(blocks(old + "\n\nTail."), blocks(new + "\n\nTail."))][:1]
+        self.assertEqual(["changed"], kinds("H<sub>2</sub>O remains stable.", "H<sup>2</sup>O remains stable."))
+        self.assertEqual(["changed"], kinds("H<sub>2</sub>O remains stable here.", "H2O remains stable here."))
+        self.assertEqual(["changed"], kinds("See [the table](https://github.com/octo-org/octo-repo/issues/5) for the spell counts.",
+                                            "See [the table](https://github.com/octo-org/octo-repo/issues/6) for the spell counts."))
+        self.assertEqual(["changed"], kinds("The call `read(a)` returns the first byte here.", "The call `read(b)` returns the first byte here."))
+        self.assertEqual(["changed"], kinds("The result was small and **sure** across the fields.", "The result was small and sure across the fields."))
+        self.assertEqual(["changed"], kinds("The slope was $0.004$ per day in the cover plots.", "The slope was $0.004$ per day in the bare plots."))
+        self.assertEqual(["changed"], kinds("The slope was in the cover plots per day.", "The slope was $0.004$ in the cover plots per day."))
+        self.assertEqual(["reworded"], kinds("The result was small and **sure** across the fields.",
+                                             "The result was tiny and **sure** across the fields."))
+        self.assertEqual(["reworded"], kinds("See [the table](https://github.com/octo-org/octo-repo/issues/5) for the small counts.",
+                                             "See [the table](https://github.com/octo-org/octo-repo/issues/5) for the tiny counts."))
+        self.assertEqual(["reworded"], kinds("The reader is a state machine that reads one character.",
+                                             "The reader is a state machine that reads one character at a time."))
+        row = mind_versions.since(blocks("H<sub>2</sub>O remains stable."), blocks("H<sup>2</sup>O remains stable."))[0]
+        self.assertIsNone(row["runs"])   # a changed block carries no marked phrases: the page shows it as it was
+
+    def test_the_cost_of_an_earlier_table_or_figure_is_the_cost_of_what_the_page_draws_of_it(self):
+        cell = lambda text: {"r": [{"t": text}], "rs": 1, "cs": 1, "h": False, "a": None}
+        entry = {"kind": "table", "id": "t", "title": "Spells", "caption": "By length.", "data": "", "command": "", "repo": "", "ref": "",
+                 "path": "", "table": {"head": [], "rows": [[cell("x" * 900)] for _ in range(30)], "cut": False, "caption": None}}
+        pointer = [{"block": {"kind": "table", "id": "t"}}]
+        other = dict(entry, table=dict(entry["table"], rows=[[cell("y" * 900)] for _ in range(30)]))
+        rows = mind_versions.since(pointer, pointer, {("table", "t"): entry}, {("table", "t"): other})
+        self.assertEqual(["changed"], [r["k"] for r in rows])
+        self.assertGreater(mind_versions.since_size(rows, {("table", "t"): entry}), 27000)   # 30 cells of 900 characters and their markup
+        self.assertLess(mind_versions.since_size(rows), 1000)   # without the entry it is what it was: a pointer, charged as nothing
+
     def test_the_size_of_rows_counts_what_the_page_will_carry(self):
         rows = mind_versions.since(blocks("one two three four five\n\ngone"), blocks("one two THREE four five"))
         self.assertGreater(mind_versions.since_size(rows), 24 * len(rows))
@@ -242,6 +324,19 @@ class PageBox(tv.VersionBox):
         self.ready()
         return commits
 
+    def name_all(self, pairs):
+        """Name many versions with one save and one sync: `pairs` is a list of (commit, name)."""
+        data = self.repo()
+        for k, (commit, name) in enumerate(pairs):
+            text = manuscript_record.decision("2026-11-25T10:%02d-05:00" % k, "name the version", "name this version of the paper",
+                                              "A version of the paper is named.", "the first author", "Call this one that",
+                                              "Chat, 2026-11-25.", "Version name: %s; commit %s; manifest sha256 %s" % (name, commit, "d" * 64),
+                                              "Keep writing, owner Claude session")
+            data["comments"][str(9700 + k)] = {"issue": 13, "body": text, "created_at": "2026-12-07T00:%02d:00Z" % k}
+        data["issues"]["13"]["updated_at"] = "2026-12-07T01:00:00Z"
+        self.save(data)
+        self.ready()
+
     def name(self, commit, name, words="Call this one that", cid=9390, at="2026-11-25T10:00-05:00"):
         data = self.repo()
         text = manuscript_record.decision(at, "name the version", "name this version of the paper", "A version of the paper is named.",
@@ -260,6 +355,8 @@ def add_after(body, heading_line, paragraph):
 
 
 FIGURE_LINE = "### Figure: dryspell"
+PLAIN_OLD = "The seasonal means were small across the plots in both fields."   # a paragraph of plain words, which can be reworded
+PLAIN_NEW = "The seasonal means were tiny across the plots in both fields."
 
 
 class Steps(PageBox):
@@ -591,6 +688,27 @@ class MarksAndSlotsTests(PageBox):
         self.assertFalse(intro["write"])
         self.assertEqual("Introduction", self.model()["sheet"]["sections"][0]["label"])     # in the order of the plan
 
+    def test_a_section_whose_text_may_not_be_told_is_never_called_empty_or_offered_a_draft(self):
+        data = self.repo()
+        data["issues"]["6"]["user"] = "hubot"   # the Discussion's only topic, opened by an account that is not allowed
+        self.save(data)
+        self.ready()
+        model = self.model()
+        discussion = [s for s in model["sheet"]["sections"] if s["label"] == "Discussion"][0]
+        self.assertEqual((False, True), (discussion["text"], discussion["untold"]))
+        self.assertTrue(discussion["write"])   # the plugin may write it: it still must not be offered here
+        view = self.sheet_of(self.page())
+        words = self.words(view)
+        self.assertIn("The text of this thread is not shown here", words)
+        self.assertNotIn("No text yet", words[words.index("Discussion"):])
+        self.assertNotIn("Draft the Discussion", words)
+        self.assertNotIn("To have it drafted", words)
+        self.assertIn("sec-empty", view)   # and print still leaves the section out
+        results = [s for s in model["sheet"]["sections"] if s["label"] == "Results"][0]
+        self.assertFalse(results["untold"])
+        intro = [s for s in model["sheet"]["sections"] if s["label"] == "Introduction"][0]
+        self.assertFalse(intro["untold"])
+
 
 class VersionTests(Steps):
     def test_versions_are_numbered_in_time_order_and_the_picker_lists_the_earlier_ones_newest_first_with_the_previous_as_the_default(self):
@@ -700,6 +818,48 @@ class VersionTests(Steps):
         self.assertEqual(list(range(13, 3, -1)) + [2], listed)    # 13 down to 4 (ten), and version 2, which is named
         self.assertNotIn(3, listed)
 
+    def test_the_picker_offers_the_ten_latest_and_twenty_named_and_says_how_many_it_left_out(self):
+        base = self.topic_body()
+        bodies = [base]
+        for n in range(65):
+            bodies.append(add_after(bodies[-1], FIGURE_LINE, "Paragraph number %d was added." % n))
+        commits = self.craft([{"body": body} for body in bodies], hour=0)    # 66 versions
+        self.mode("autonomous")
+        self.name_all([(commit, "draft-%d" % (k + 1)) for k, commit in enumerate(commits[:55])])   # versions 1 to 55 are named
+        model = self.model()
+        listed = [v["n"] for v in model["sheet"]["versions"]["list"]]
+        self.assertEqual(list(range(65, 55, -1)) + list(range(55, 35, -1)), listed)   # ten latest, then the newest twenty named
+        self.assertEqual(35, model["sheet"]["versions"]["omitted"])
+        text = self.page()
+        view = self.sheet_of(text)
+        self.assertEqual([], ts.page_problems(text))
+        self.assertIn("35 older named versions are not offered: the picker holds the 10 latest versions and the 20 newest named ones.",
+                      self.words(view))
+        self.assertEqual([str(n) for n in listed], re.findall(r'<option value="([0-9]+)"', view))
+        # the newest paragraph was added since every offered version: its membership names each of the thirty
+        last = view[view.rindex('<div class="row rw r-added'):]
+        added = re.search(r'data-added="([0-9 ]+)"', last).group(1).split()
+        self.assertEqual(sorted(str(n) for n in listed), sorted(added))
+        self.assertEqual(30, len(added))
+
+    def test_a_commit_two_changes_share_is_named_on_the_newer_one_only(self):
+        import mind_sheet
+
+        class Build(mind_sheet.SheetMixin):
+            repo, writing, plan_state = "octo-org/sample-project", "autonomous", object()
+            texts = [{"change": 1, "version": "a" * 40, "issue": 5, "id": 1, "time": "t1", "at": "x"},
+                     {"change": 2, "version": "a" * 40, "issue": 5, "id": 2, "time": "t2", "at": "x"},
+                     {"change": 3, "version": "b" * 40, "issue": 5, "id": 3, "time": "t3", "at": "x"}]
+
+            def version_names(self):
+                return [{"name": "draft-one", "commit": "a" * 40, "words": ""}]
+
+            def day_of(self, value):
+                return "November 20"
+        found = Build().sheet_versions()
+        self.assertEqual({2: "draft-one"}, {v["n"]: v["name"] for v in found["list"] if v["name"]})   # version 1 shares the commit
+        self.assertEqual([2, 1], [v["n"] for v in found["list"]])
+
     def test_the_budget_drops_the_oldest_versions_and_says_so(self):
         self.history()
         script = os.path.join(self.dir, "budget.py")
@@ -716,6 +876,28 @@ class VersionTests(Steps):
         self.assertEqual("6", options[0])     # the newest is always offered
         self.assertIn("The oldest versions are not offered: this page marks changes against the newest ones only.", self.words(view))
         self.assertEqual([], ts.page_problems(text))
+
+    def test_a_changed_table_costs_the_budget_what_the_page_draws_of_its_earlier_cells(self):
+        base = self.topic_body()
+        table = "### Table: big - A big table\n\nThirty rows of long cells.\n\n| Cell |\n|---|\n%s\n\n"
+        rows = lambda letter: "\n".join("| %s |" % (letter * 900) for _ in range(30))
+        cut = base.index("## Limitations")
+        first, second = (base[:cut] + table % rows(letter) + base[cut:] for letter in ("x", "y"))
+        self.craft([{"body": first, "before": "c" * 64}, {"body": second}])
+        self.mode("autonomous")
+        script = os.path.join(self.dir, "budget.py")
+        with open(script, "w") as handle:
+            handle.write("import sys; sys.path.insert(0, %r)\nimport mind_versions, mind\nmind_versions.MAX_SINCE_BYTES = 10000\n"
+                         "sys.exit(mind.main([]))\n" % ts.SCRIPTS)
+        self.ready()
+        ran = self.tool(script, gh="false")
+        self.assertEqual(0, ran.returncode, ran.stdout + ran.stderr)
+        with open(os.path.join(self.data, "private", self.slug(), "mind.html"), encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("This page marks changes in the newest versions only, so this part is shown without marks.",
+                      self.words(self.sheet_of(text)))   # the earlier table alone is more than the 10,000 characters of the budget
+        self.assertEqual([], ts.page_problems(text))
+
         # with every version over the budget, the parts that do not fit are shown without marks
         with open(script, "w") as handle:
             handle.write("import sys; sys.path.insert(0, %r)\nimport mind_versions, mind\nmind_versions.MAX_SINCE_BYTES = 1\nsys.exit(mind.main([]))\n"
@@ -820,29 +1002,97 @@ class StateTests(Steps):
 
     def test_marked_reworded_added_removed_and_changed_rows_come_with_phrases(self):
         self.mode("autonomous")
-        base = self.topic_body()
+        base = add_after(self.topic_body(), FIGURE_LINE, PLAIN_NEW)
         older = base.replace("the difference between cover and bare plots was small", "the difference between cover and bare plots was tiny").replace(
-            "| 8 to 12 days | 4 | 3 of 4 | 1 of 4 |", "| 8 to 12 days | 4 | 2 of 4 | 1 of 4 |")
+            "| 8 to 12 days | 4 | 3 of 4 | 1 of 4 |", "| 8 to 12 days | 4 | 2 of 4 | 1 of 4 |").replace(PLAIN_NEW, PLAIN_OLD)
         older = add_after(older, FIGURE_LINE, "A paragraph that the text no longer has.")
         self.craft([{"body": older, "before": "c" * 64}, {"body": base}])
         model = self.model()
         part = self.part_of(model, 5, 0)
         self.assertEqual({1: "marked"}, self.states(model))
         kinds = [k for row in part["rows"] for k in ("reworded", "changed") if row[k]]
-        self.assertEqual(["reworded", "changed"], kinds)
+        self.assertEqual(["changed", "changed", "reworded"], kinds)   # the paragraph with a formula, the table, the plain paragraph
         self.assertEqual(1, len(part["removed"]))
         self.assertEqual([1], part["removed"][0]["for"])
         counts = part["since"][0]["counts"]
-        self.assertEqual({"reworded": 1, "added": 0, "removed": 1, "changed": 1}, counts)
+        self.assertEqual({"reworded": 1, "added": 0, "removed": 1, "changed": 2}, counts)
         text = self.page()
         view = self.sheet_of(text)
         self.assertEqual([], ts.page_problems(text))
-        self.assertIn("<del>tiny</del>", view)
-        self.assertIn("<ins>small</ins>", view)
-        self.assertIn("1 paragraph reworded, 1 removed, 1 changed since version", self.words(view))
+        self.assertIn("<del>small</del>", view)
+        self.assertIn("<ins>tiny</ins>", view)
+        self.assertIn("1 paragraph reworded, 1 removed, 2 changed since version", self.words(view))
         self.assertIn("A paragraph was removed here since version", self.words(view))
         self.assertIn("A paragraph that the text no longer has.", view)
         self.assertIn('class="ev v-then', view)
+
+
+class SameNeedsTheLiveBodyTests(unittest.TestCase):
+    """"Same as version K" is proved by the hash of the live body, so a hand edit after the topic's newest change is never "same"."""
+
+    def build(self, by_hand):
+        import mind_sheet
+
+        class Build(mind_sheet.SheetMixin):
+            texts = [{"issue": 5, "time": "2026-11-20T15:00:00Z", "id": 1, "after": "a" * 64, "version": "1" * 40},
+                     {"issue": 4, "time": "2026-11-21T15:00:00Z", "id": 2, "after": "b" * 64, "version": "2" * 40}]
+
+            def body_shown(self, topic):
+                return True
+
+            def version_text(self, commit, topic, after):
+                return "## Results\n\nThe text as version 1 left it.\n", "ok"
+
+            def by_hand(self, topic, newest):
+                return by_hand
+        return Build()
+
+    def test_a_hand_edit_after_the_topics_newest_change_is_never_called_same(self):
+        version_1 = {"time": "2026-11-20T15:00:00Z", "id": 1}
+        self.assertEqual((None, "same"), self.build(False).text_at_version(5, "Results", version_1))
+        found = self.build(True).text_at_version(5, "Results", version_1)   # the live body was edited by hand after its newest change
+        self.assertEqual("ok", found[1])
+        self.assertIn("The text as version 1 left it.", found[0])
+        # a topic with no change at or before the version had no text then
+        self.assertEqual((None, "before"), self.build(False).text_at_version(4, "Results", version_1))
+
+
+class RemovedBlocksTests(Steps):
+    def results_removed(self, model):
+        return self.results(model)["removed"]
+
+    def test_each_version_keeps_its_own_run_of_removed_blocks_and_identical_ones_count_each_time(self):
+        self.mode("autonomous")
+        base = self.topic_body()
+        twice = add_after(add_after(base, FIGURE_LINE, "A repeated line of the draft."), FIGURE_LINE, "A repeated line of the draft.")
+        once = add_after(base, FIGURE_LINE, "A repeated line of the draft.")
+        self.craft([{"body": twice, "before": "c" * 64}, {"body": once}, {"body": base}])   # versions 1, 2 and the current one (3)
+        model = self.model()
+        removed = self.results_removed(model)
+        self.assertEqual([[2, 1], [1]], [place["for"] for place in removed])   # version 1 lost two paragraphs, version 2 one
+        self.assertEqual([0, 1], [place["turn"] for place in removed])
+        view = self.sheet_of(self.page())
+        part = view[view.index('id="p-5-0"'):view.index('id="p-4-2"')]
+        self.assertEqual(['data-for="2 1"', 'data-for="1"'], re.findall(r'<div class="row r-removed[^"]*" (data-for="[0-9 ]+")', part))
+        self.assertIn("2 removed", self.words(view))   # the line under the bar counts both paragraphs of version 1
+        self.assertEqual({"reworded": 0, "added": 0, "removed": 2, "changed": 0}, next(g for g in self.results(model)["since"] if 1 in g["for"])["counts"])
+
+    def test_a_removed_figure_shows_the_entry_it_had_at_each_version(self):
+        self.mode("autonomous")
+        base = self.topic_body()
+        start = base.index(FIGURE_LINE)
+        end = base.index("## Limitations")
+        figure = base[start:end]
+        caption = figure.split("\n\n")[1]
+        first = base.replace(caption, "Caption of the first version, mean of ten plots.")
+        second = base.replace(caption, "Caption of the second version, mean of eight plots.")
+        gone = base[:start] + base[end:]
+        self.craft([{"body": first, "before": "c" * 64}, {"body": second}, {"body": gone}])
+        removed = self.results_removed(self.model())
+        self.assertEqual(2, len(removed), removed)
+        said = {tuple(place["for"]): (place["entry"] or {}).get("caption") for place in removed}
+        self.assertEqual({(1,): "Caption of the first version, mean of ten plots.",
+                          (2,): "Caption of the second version, mean of eight plots."}, said)
 
 
 class AuthorshipTests(Steps):
@@ -913,8 +1163,8 @@ class ModeTests(Steps):
         base = self.topic_body()
         older = base.replace("the difference between cover and bare plots was small", "the difference between cover and bare plots was tiny").replace(
             "| 8 to 12 days | 4 | 3 of 4 | 1 of 4 |", "| 8 to 12 days | 4 | 2 of 4 | 1 of 4 |")
-        older = add_after(older, FIGURE_LINE, "Bright zebras quietly vanish.")
-        newer = add_after(base, FIGURE_LINE, "Soil probes logged readings hourly.")
+        older = add_after(add_after(older, FIGURE_LINE, PLAIN_OLD), FIGURE_LINE, "Bright zebras quietly vanish.")
+        newer = add_after(add_after(base, FIGURE_LINE, PLAIN_NEW), FIGURE_LINE, "Soil probes logged readings hourly.")
         self.craft([{"body": older, "before": "c" * 64}, {"body": newer}])
         text = self.page()
         view = self.sheet_of(text)
@@ -1153,6 +1403,50 @@ class HostileTests(Steps):
         self.assertNotIn('id="paper"', mind.render(model, {}))
         model["sheet"] = {}
         self.assertEqual([], ts.page_problems(mind.render(model, {})))
+
+    def test_an_unhashable_explain_a_number_for_since_and_a_negative_section_number_never_raise_or_break_the_contract(self):
+        self.history()
+        import mind
+        model = self.model()
+        part = next(p for s in model["sheet"]["sections"] for p in s["parts"] if p.get("marks"))
+        part["marks"][0]["explain"] = {"x": 1}
+        part["since"] = 3
+        model["sheet"]["sections"][0]["n"] = -1   # a link to a section that no page has is not made
+        self.assertEqual([], ts.page_problems(mind.render(model, {})))
+
+    def test_a_hundred_and_fifty_seeded_damages_of_the_sheet_never_raise_and_never_break_the_contract(self):
+        import copy
+        import mind
+        import random
+        self.history()
+        model = self.model()
+        rng = random.Random(1404)
+        junk = [None, 3, -1, 2.5, True, "x", "<b>x</b>", [], {}, [1, "a", None], {"x": 1}, [{"x": [1]}], float("nan")]
+
+        def places(value, path=()):
+            yield path
+            if isinstance(value, dict):
+                for key in value:
+                    yield from places(value[key], path + (key,))
+            elif isinstance(value, list):
+                for index, item in enumerate(value):
+                    yield from places(item, path + (index,))
+
+        sheet = model["sheet"]
+        spots = [p for p in places(sheet) if p]
+        for round_ in range(150):
+            damaged = copy.deepcopy(sheet)
+            for _ in range(rng.randint(1, 3)):
+                path = rng.choice(spots)
+                holder = damaged
+                try:
+                    for step in path[:-1]:
+                        holder = holder[step]
+                    holder[path[-1]] = copy.deepcopy(rng.choice(junk))
+                except (KeyError, IndexError, TypeError):
+                    continue
+            text = mind.render(dict(model, sheet=damaged), {})
+            self.assertEqual([], ts.page_problems(text), round_)
 
 
 class FailureModeTests(PageBox):
