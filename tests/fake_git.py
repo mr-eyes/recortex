@@ -19,6 +19,8 @@ Fault switches (environment):
                                  move); a tag is created
   FAKE_GH_MOVE_HEAD=once|always  another commit lands on the branch just before an update of it, so that the update is not a
                                  fast forward: 422 "Update is not a fast forward" (observed, not documented), once or every time
+  FAKE_GH_MOVE_HEAD_FILES=json   the files ({path: text}) that the other commit of FAKE_GH_MOVE_HEAD also writes, as another
+                                 session that kept a version of another topic would have
   FAKE_GH_NO_WORKFLOW=1          the account lacks the permission to add a workflow: a ref that would carry a workflow file
                                  it did not have is refused (403; the documentation names no status)
   FAKE_GH_LOGIN=name             the login that merges a pull request and opens one (default octocat)
@@ -151,9 +153,9 @@ def handle(args, path, state, repo, login):
         move = os.environ.get("FAKE_GH_MOVE_HEAD")
         if move and key.startswith("heads/") and (move == "always" or not store.get("moved_once")):
             store["moved_once"] = True  # someone else's commit lands on the branch first
-            other = {"tree": tree_sha(flat_of(store, store["refs"][key])), "parents": [store["refs"][key]],
-                     "message": "another commit"}
-            store["trees"].setdefault(other["tree"], flat_of(store, store["refs"][key]))
+            flat = dict(flat_of(store, store["refs"][key]), **json.loads(os.environ.get("FAKE_GH_MOVE_HEAD_FILES") or "{}"))
+            other = {"tree": tree_sha(flat), "parents": [store["refs"][key]], "message": "another commit"}
+            store["trees"].setdefault(other["tree"], flat)
             other_sha = sha_of("commit", other["tree"], *other["parents"], other["message"])
             store["commits"][other_sha] = other
             store["refs"][key] = other_sha

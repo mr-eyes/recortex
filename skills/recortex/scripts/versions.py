@@ -212,15 +212,19 @@ def write_refusal(error):
 
 
 def commit_files(repo, files, message, delete_stale=True):
-    """Commit `files` to the branch and return the new commit. A head that moved is read again once. Raises Refused."""
+    """Commit `files` to the branch and return the new commit. `files` is {path: text}, or a function of the head that makes
+    it: a head that moved is read again once, and the function is called again with the head that was accepted, so that the
+    retry never lays down a snapshot made from a head that is gone (it would overwrite what another session just kept).
+    Raises Refused."""
     for attempt in range(2):
         try:
             head = head_of(repo)
+            made = files(head) if callable(files) else files
             stale = ()
             if head and delete_stale:
                 present = listing(repo, tree_of(repo, head))
-                stale = [p for p in present if re.fullmatch(r"content/[0-9][0-9]\.[a-z0-9-]+\.md", p) and p not in files]
-            return post_commit(repo, files, message, head, stale)
+                stale = [p for p in present if re.fullmatch(r"content/[0-9][0-9]\.[a-z0-9-]+\.md", p) and p not in made]
+            return post_commit(repo, made, message, head, stale)
         except GitError as error:
             kind = write_refusal(error)
             if kind == "moved" and attempt == 0:
@@ -324,12 +328,16 @@ def newest_texts(db, config, allowed, plan):
 
 
 def paper_bodies(db, config, repo, hub, allowed, plan, replace, head_versions=None, head=None):
-    """{issue: body} of the paper's topics, the told ones; `replace` ({issue: text}) wins. A topic whose live body is not the
-    text the branch holds for it (its hash differs from VERSION.json's at `head`, a hand edit that `sync` has not recorded)
-    keeps the branch's text, read from the head, so that one commit never records a change that has no memory yet."""
+    """({issue: body}, {issue: entry}): the bodies of the paper's topics, the told ones, `replace` ({issue: text}) winning; and
+    the topics the snapshot leaves as the branch has them, with the entry VERSION.json holds for each.
+
+    A topic whose file at `head` is not what VERSION.json says of it (somebody changed the file on the branch alone) is held:
+    its file and its entry are left as they are, so that no commit puts the file back before the author decided (references/
+    versions.md, "A file edited directly"). A topic whose live body is not the text the branch holds for it (a hand edit that
+    `sync` has not recorded) keeps the branch's text, so that one commit never records a change that has no memory yet."""
     profiles = recortex.shipped_profiles(config.get("profiles"))
     told = index.told_bodies(db, allowed)
-    bodies = {}
+    bodies, held = {}, {}
     for _, _, numbers in index.deliverable_order(db, hub, profiles):
         for number in numbers:
             if number in bodies:
@@ -341,37 +349,50 @@ def paper_bodies(db, config, repo, hub, allowed, plan, replace, head_versions=No
                 continue
             live = db.execute("SELECT body FROM issues WHERE number = ?", (number,)).fetchone()["body"] or ""
             known = ((head_versions or {}).get("topics") or {}).get(str(number))
-            if head and known and isinstance(known, dict) and known.get("sha256") != record_format.body_sha(live):
+            if head and known and isinstance(known, dict):
                 kept = file_at(repo, head, "topics/%d.md" % number)
-                if kept is not None and record_format.body_sha(kept) == known.get("sha256"):
+                if kept is not None and record_format.body_sha(kept) != known.get("sha256"):
+                    bodies[number], held[number] = kept, known
+                    continue
+                if kept is not None and known.get("sha256") != record_format.body_sha(live):
                     bodies[number] = kept
-                continue
+                    continue
             bodies[number] = live
-    return bodies
+    return bodies, held
 
 
-def layout_files(db, config, repo, hub, allowed, plan, bodies, metadata=None, texts=None):
-    """{path: text} of the whole branch except the workflow: topics/, content/ and VERSION.json."""
+def layout_files(db, config, repo, hub, allowed, plan, bodies, metadata=None, texts=None, held=None, order=None):
+    """{path: text} of the whole branch except the workflow: topics/, content/ and VERSION.json. `held` ({issue: entry}) are
+    the topics whose file and entry stay as the branch has them; `order` ([(label, heading, [issues])]) is the outline to
+    lay out (a named version's own, from its VERSION.json), else the outline as the index has it now."""
     profiles = recortex.shipped_profiles(config.get("profiles"))
     titles = {row["number"]: row["title"] for row in db.execute("SELECT number, title FROM issues")}
-    sections = []
-    for _, heading, numbers in index.deliverable_order(db, hub, profiles):
+    sections, outline = [], []
+    for label, heading, numbers in order if order is not None else index.deliverable_order(db, hub, profiles):
         topics = [(n, titles.get(n, ""), record_format.section_text(bodies[n], heading) or "") for n in numbers if n in bodies]
         sections.append((heading, topics))
+        outline.append({"label": label, "heading": heading, "topics": [n for n, _, _ in topics]})
     authors, keywords = metadata or ([], [])
     files, _ = paper_layout.layout(repo, hub, hub_title(db, hub, allowed) or repo.split("/")[-1], sections, authors, keywords,
                                    front_matter=shipped_front_matter())
     texts = texts if texts is not None else {}
     for number, body in sorted(bodies.items()):
-        files["topics/%d.md" % number] = record_format.body_bytes(body).decode("utf-8")
-    files["VERSION.json"] = version_json(repo, hub, bodies, texts)
+        if number not in (held or {}):
+            files["topics/%d.md" % number] = record_format.body_bytes(body).decode("utf-8")
+    files["VERSION.json"] = version_json(repo, hub, bodies, texts, held, outline)
     return files
 
 
-def version_json(repo, hub, bodies, texts):
-    return json.dumps({"repository": repo, "hub": hub, "topics": {
-        str(n): {"sha256": record_format.body_sha(b), "text": texts.get(n)} for n, b in sorted(bodies.items())}},
-        indent=1, sort_keys=True) + "\n"
+def version_json(repo, hub, bodies, texts, held=None, outline=None):
+    """VERSION.json: per topic the body's SHA-256 and its newest text change (a held topic keeps the entry the branch has),
+    and the outline the sections were laid out in, so that a named version is compiled in the sections it had."""
+    held = held or {}
+    found = {"repository": repo, "hub": hub, "topics": {
+        str(n): held[n] if n in held else {"sha256": record_format.body_sha(b), "text": texts.get(n)}
+        for n, b in sorted(bodies.items())}}
+    if outline is not None:
+        found["layout"] = outline
+    return json.dumps(found, indent=1, sort_keys=True) + "\n"
 
 
 def metadata_at(repo, ref):
@@ -420,11 +441,15 @@ def ensure(config, repo):
             return "refused"
         if head is not None:
             return add_workflow(config, repo, head)
-        bodies = paper_bodies(db, config, repo, hub, allowed, plan, {})
-        files = layout_files(db, config, repo, hub, allowed, plan, bodies, texts=newest_texts(db, config, allowed, plan))
+        texts = newest_texts(db, config, allowed, plan)
+
+        def files(now):   # made again for the head a retry accepts: the branch may have been made meanwhile
+            bodies, held = paper_bodies(db, config, repo, hub, allowed, plan, {}, version_at(repo, now) if now else None, now)
+            return layout_files(db, config, repo, hub, allowed, plan, bodies, metadata_at(repo, now) if now else None, texts,
+                                held)
         message = "Start the versions of the manuscript"
         try:
-            commit_files(repo, dict(files, **{WORKFLOW_PATH: shipped_workflow()}), message)
+            commit_files(repo, lambda now: dict(files(now), **{WORKFLOW_PATH: shipped_workflow()}), message)
             say("versions: recortex keeps every version of the manuscript in %s from now on." % repo)
             keep_state(repo, refusal=None, workflow_refused=False)
             return "made"
@@ -490,10 +515,11 @@ def commit(config, repo, issue, text):
             if made != "made":
                 return REASON.get(LAST_REFUSAL[0], REASON["push"]) if made == "refused" else REASON["off"]
             head = head_of(repo)
-        versions = version_at(repo, head)
-        bodies = paper_bodies(db, config, repo, hub, allowed, plan, {issue: text}, versions, head)
-        files = layout_files(db, config, repo, hub, allowed, plan, bodies, metadata_at(repo, head),
-                             newest_texts(db, config, allowed, plan))
+        texts = newest_texts(db, config, allowed, plan)
+
+        def files(now):   # made again for the head a retry accepts: another session may have kept a version meanwhile
+            bodies, held = paper_bodies(db, config, repo, hub, allowed, plan, {issue: text}, version_at(repo, now), now)
+            return layout_files(db, config, repo, hub, allowed, plan, bodies, metadata_at(repo, now), texts, held)
         headings = changed_headings(repo, head, issue, text, config)
         message = "Text: %s of topic %d" % (", ".join(headings)[:60] or "text", issue)
         try:
@@ -924,7 +950,7 @@ class NotVouched(Exception):
 
 
 def vouched_version(config, repo, db, allowed, plan, name):
-    """What compile.py --version needs, after every check: (bodies {issue: text}, decision, authors, keywords). The name must
+    """What compile.py --version needs, after every check: (bodies {issue: text}, decision, authors, keywords, layout). The name must
     be one that a told decision of an allowed account carries in the fixed line of its Effect; the tag paper-<name> must
     point at the commit that decision names; VERSION.json at that commit must have the sha256 the decision names; and each
     topics/<issue>.md at that commit must have the hash VERSION.json holds. No body is read from the index."""
@@ -961,7 +987,26 @@ def vouched_version(config, repo, db, allowed, plan, name):
         authors, keywords = metadata_at(repo, decision["commit"])
     except GitError:
         raise NotVouched("compile: GitHub could not be read just now; nothing was written.")
-    return bodies, decision, authors, keywords
+    return bodies, decision, authors, keywords, recorded_layout(recorded.get("layout"), set(bodies))
+
+
+def recorded_layout(value, topics):
+    """The outline a version was laid out in, [(label, heading, [issues])], from the "layout" of its VERSION.json; None when
+    it has none (a version kept before the layout was recorded) or when it is not in the form this plugin writes: each section
+    names topics of the version only, each at most once (a topic may stand in several sections)."""
+    if not isinstance(value, list) or len(value) > 60:
+        return None
+    out, seen = [], []
+    for row in value:
+        if not isinstance(row, dict) or set(row) != {"label", "heading", "topics"} or not isinstance(row["label"], str) \
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9:_. -]{0,59}", row["label"]) or not isinstance(row["heading"], str) \
+                or not re.fullmatch(r"[^\x00-\x1f\x7f]{1,80}", row["heading"]) or not isinstance(row["topics"], list) \
+                or not all(type(n) is int and n in topics for n in row["topics"]):
+            return None
+        if len(set(row["topics"])) != len(row["topics"]):
+            return None
+        out.append((row["label"], row["heading"], list(row["topics"])))
+    return out
 
 
 # ---------------------------------------------------------------- doctor, metadata, commit

@@ -183,9 +183,11 @@ def kept_versions(db, config, repo):
         return None
 
 
-def build(db, config, repo, hub, out, ref=None, dry_run=False, bodies=None, cut=None, version=None):
+def build(db, config, repo, hub, out, ref=None, dry_run=False, bodies=None, cut=None, version=None, layout=None):
+    """`layout` ([(label, heading, [issues])]) is the outline a named version was laid out in, from its own VERSION.json:
+    without it the outline is the index's, as it is now."""
     profiles = recortex.shipped_profiles(config.get("profiles"))
-    plan = index.deliverable_order(db, hub, profiles)
+    plan = layout if layout is not None else index.deliverable_order(db, hub, profiles)
     kept = bodies is not None   # a named version: the bodies are the version's, never the index's
     files = []
     issues = {r["number"]: r for r in db.execute("SELECT * FROM issues")}
@@ -203,11 +205,12 @@ def build(db, config, repo, hub, out, ref=None, dry_run=False, bodies=None, cut=
         for number in numbers:
             if kept and number not in bodies:
                 continue
-            issue = issues[number]
+            issue = issues.get(number) if kept else issues[number]
             text = record_format.section_text(bodies[number] if kept else issue["body"] or "", heading)
             if text is None:
                 text = "(The body of #%d has no '## %s' section, although the issue carries %s.)" % (number, heading, label)
-            parts += ["## %s (#%d)" % (issue["title"], number), "", issue["url"] or "", "", text.strip(), ""]
+            parts += ["## %s (#%d)" % (issue["title"] if issue else "Topic %d" % number, number), "",
+                      (issue["url"] if issue else "") or "", "", text.strip(), ""]
             counts["section_texts"] += 1
         if not dry_run:
             with open(name, "w", encoding="utf-8") as handle:
@@ -326,7 +329,7 @@ def main(argv=None):
     db = index.connect(repo, create=False)
     if db is None:
         sys.exit("error: no index for %s; run without --no-sync" % repo)
-    bodies = cut = version = layout_bodies = layout_meta = None
+    bodies = cut = version = layout_bodies = layout_meta = layout = None
     if args.version:
         import versions  # noqa: E402
         allowed = recortex.allowed_users(repo)
@@ -334,21 +337,23 @@ def main(argv=None):
         if not allowed or plan is None:
             sys.exit("compile: this project has no plan or is not in your trusted repositories, so no version can be vouched for")
         try:
-            bodies, decision, authors, keywords = versions.vouched_version(config, repo, db, allowed, plan, args.version)
+            bodies, decision, authors, keywords, layout = versions.vouched_version(config, repo, db, allowed, plan, args.version)
         except versions.NotVouched as error:
             sys.exit(str(error))
+        if layout is None:
+            print("compile: this version was kept before its sections were recorded, so they follow the outline as it is now.")
         cut = decision["time"]
         version = {"name": args.version, "commit": decision["commit"], "manifest_sha256": decision["manifest"],
                    "decision": decision["id"]}
         layout_bodies, layout_meta = bodies, (authors, keywords)
-    files, counts = build(db, config, repo, hub, args.out, args.ref, bodies=bodies, cut=cut, version=version)
+    files, counts = build(db, config, repo, hub, args.out, args.ref, bodies=bodies, cut=cut, version=version, layout=layout)
     if args.layout:
         import versions  # noqa: E402
         allowed = recortex.allowed_users(repo)
         plan = recortex.plan_profile(recortex.shipped_profiles(config.get("profiles")))
         if layout_bodies is None:
-            layout_bodies = versions.paper_bodies(db, config, repo, hub, allowed, plan, {})
-        laid = versions.layout_files(db, config, repo, hub, allowed, plan, layout_bodies, layout_meta)
+            layout_bodies = versions.paper_bodies(db, config, repo, hub, allowed, plan, {})[0]
+        laid = versions.layout_files(db, config, repo, hub, allowed, plan, layout_bodies, layout_meta, order=layout)
         for path, text in sorted(laid.items()):
             if path.startswith("content/"):
                 target = os.path.join(args.out, path)

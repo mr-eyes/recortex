@@ -423,6 +423,62 @@ class VersionTests(VersionBox):
         self.assertEqual("another commit", self.git()["commits"][history[1]]["message"])
         self.assertEqual("Text: Results of topic 5", self.git()["commits"][history[0]]["message"])
 
+    def edited_by_hand(self, issue, old, new):
+        data = self.repo()
+        item = data["issues"][str(issue)]
+        item["body"] = item["body"].replace("\r\n", "\n").replace(old, new, 1)
+        item["edits"] = [{"at": "2026-12-02T10:00:00Z", "by": "octocat"}, {"at": item["created_at"], "by": "octocat"}]
+        item["last_edited_at"] = item["updated_at"] = "2026-12-02T10:00:00Z"
+        self.save(data)
+        self.ready()
+        return item["body"]
+
+    def write_methods(self, name="methods", env=None):
+        folder = self.start(3, name)
+        base = self.base(folder)
+        self.draft(folder, base.replace("### Table: plots", "The four plots of the wet corner were left out of the moisture "
+                                        "analysis.\n\n### Table: plots", 1), parts=(), results=(), decisions=(9106,))
+        return self.cmd("write.py", "apply", "--dir", folder, env=env)
+
+    def test_a_retry_after_a_moved_head_lays_down_a_snapshot_made_from_the_head_it_accepted(self):
+        """Another session kept a version of topic 6 just before this one moved the branch: the retry must not put topic 6
+        back to what this session saw before."""
+        self.written()
+        new6 = self.edited_by_hand(6, "## Limitations", "A line the other session kept.\n\n## Limitations")
+        files = dict(self.files_at())
+        form = json.loads(files["VERSION.json"])
+        form["topics"]["6"]["sha256"] = record_format.body_sha(new6)
+        other = {"topics/6.md": record_format.body_bytes(new6).decode("utf-8"), "VERSION.json": json.dumps(form, indent=1) + "\n"}
+        done = self.write_methods(env={"FAKE_GH_MOVE_HEAD": "once", "FAKE_GH_MOVE_HEAD_FILES": json.dumps(other)})
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        final = self.files_at()
+        self.assertEqual(other["topics/6.md"], final["topics/6.md"])
+        self.assertEqual(record_format.body_sha(new6), json.loads(final["VERSION.json"])["topics"]["6"]["sha256"])
+        self.assertIn("left out of the moisture analysis", final["topics/3.md"])
+        self.assertTrue(all(force is False for _, _, force in self.git()["updates"]))
+
+    def test_an_edit_made_on_the_branch_alone_is_never_put_back_by_the_commit_of_another_topic(self):
+        self.written()
+        git = self.git()
+        head = self.head()
+        files = dict(self.files_at())
+        by_hand = files["topics/5.md"] + "\nA line typed straight into the file on the branch.   \n\n\n"   # not as the plugin writes
+        files["topics/5.md"] = by_hand
+        data = self.repo()
+        data["git"]["trees"]["d" * 40] = files
+        data["git"]["commits"]["e" * 40] = {"tree": "d" * 40, "parents": [head], "message": "by hand"}
+        data["git"]["refs"]["heads/" + BRANCH] = "e" * 40
+        self.save(data)
+        recorded = json.loads(files["VERSION.json"])["topics"]["5"]
+        done = self.write_methods()
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        final = self.files_at()
+        self.assertEqual(by_hand, final["topics/5.md"])
+        self.assertEqual(recorded, json.loads(final["VERSION.json"])["topics"]["5"])   # the entry still says what was kept
+        self.assertIn("left out of the moisture analysis", final["topics/3.md"])
+        status = self.cmd("versions.py", "status").stdout
+        self.assertIn("the file of this part was changed on the branch and the text was not", status)
+
     def test_a_branch_that_keeps_moving_gives_the_fixed_line_and_not_kept(self):
         self.ready()
         self.mode("autonomous")
@@ -846,6 +902,45 @@ class CompileVersionTests(VersionBox):
         self.assertFalse(os.path.exists(os.path.join(out, "deliverable", "plan.md")))
         later, done = self.compiled("later")
         self.assertIn(b"pooled FIT", b"".join(self.sections_of(later).values()))
+
+    def test_a_named_version_keeps_the_sections_it_had_when_the_outline_changes_later(self):
+        """Codex review of 1.3.0: a label or a topic removed after the name must not remove or move the version's text."""
+        self.named()
+        ordinary, done = self.compiled("now", "--layout", "manubot")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        data = self.repo()
+        data["issues"]["5"]["labels"] = [l for l in data["issues"]["5"]["labels"] if not l.startswith("ms:")]   # no section now
+        data["issues"]["6"]["labels"] = [l for l in data["issues"]["6"]["labels"] if l != "ms:discussion"]
+        for number in ("5", "6"):
+            data["issues"][number]["updated_at"] = "2026-12-09T10:00:00Z"
+        self.save(data)
+        self.ready()
+        later, done = self.compiled("later")
+        self.assertNotIn(b"pooled fit", b"".join(self.sections_of(later).values()))   # the outline of today has no such text
+        out, done = self.compiled("v", "--version", "submitted", "--layout", "manubot")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(self.sections_of(ordinary), self.sections_of(out))
+        self.assertIn(b"pooled fit", b"".join(self.sections_of(out).values()))
+        self.assertNotIn("kept before its sections were recorded", done.stdout)
+        for name in sorted(os.listdir(os.path.join(ordinary, "content"))):
+            if name[:2].isdigit():
+                self.assertEqual(open(os.path.join(ordinary, "content", name), "rb").read(),
+                                 open(os.path.join(out, "content", name), "rb").read(), name)
+
+    def test_version_json_records_the_outline_the_sections_were_laid_out_in(self):
+        self.named()
+        form = json.loads(self.files_at()["VERSION.json"])
+        self.assertTrue({"Methods", "Results", "Limitations", "Discussion"} <= {row["heading"] for row in form["layout"]})
+        self.assertEqual([4, 5], [row["topics"] for row in form["layout"] if row["heading"] == "Results"][0])
+
+    def test_a_recorded_layout_is_used_only_in_the_form_the_plugin_writes(self):
+        import versions
+        good = [{"label": "ms:results", "heading": "Results", "topics": [4, 5]}]
+        self.assertEqual([("ms:results", "Results", [4, 5])], versions.recorded_layout(good, {4, 5, 6}))
+        for bad in (None, {}, [1], [{"label": "x"}], [dict(good[0], topics=[4, 9])], [dict(good[0], topics=[4, 4])],
+                    [dict(good[0], heading="a\nb")], [dict(good[0], extra=1)], [dict(good[0], topics=["4"])],
+                    [dict(good[0], label="")], good * 61):
+            self.assertIsNone(versions.recorded_layout(bad, {4, 5, 6}), bad)
 
     def test_a_tag_no_told_decision_names_writes_nothing(self):
         self.named()

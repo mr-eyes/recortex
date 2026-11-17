@@ -143,7 +143,7 @@ def layout(repo, hub, title, sections, authors=(), keywords=(), lang="en-US", fr
     held = [(heading, topics) for heading, topics in sections if any(text.strip() for _, _, text in topics)]
     step = 10 if len(held) <= 8 else 1
     for position, (heading, topics) in enumerate(held):
-        parts = ["## %s" % heading, ""]
+        parts = ["## %s" % jinja_safe(heading), ""]
         for number, name, text in topics:
             if text.strip():
                 parts += ["### %s" % jinja_safe(name or "Topic %d" % number), "", jinja_safe(lay_text(text, images, number)), ""]
