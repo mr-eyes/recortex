@@ -22,6 +22,14 @@ import record_format  # noqa: E402
 import recortex  # noqa: E402
 
 BRANCH = "recortex-manuscript"
+
+
+def recortex_reason(key):
+    """What versions.commit returns when it keeps nothing, for a reason (record_format.NOT_KEPT)."""
+    import versions
+    return versions.REASON[key]
+
+
 WORKFLOW = ".github/workflows/recortex-manuscript.yaml"
 
 
@@ -882,6 +890,18 @@ class WriteTrustTests(VersionBox):
     def nothing_written(self, before_memories=0):
         self.assertEqual(before_memories, len(self.text_memories()))
         self.assertNotIn("The pooled fit", self.body(5))
+
+    def test_the_author_of_a_proposal_is_read_live_and_not_from_the_index(self):
+        import proposals
+        from unittest import mock
+        self.proposed()
+        data = self.repo()
+        data["comments"][str(self.proposal)]["user"] = "hubot"   # GitHub says hubot; the index still says octocat
+        self.save(data)
+        with mock.patch.dict(os.environ, {"RECORTEX_GH": ts.FAKE, "FAKE_GH_STATE": self.state}):
+            found = proposals.evaluate(self.config, "octo-org/sample-project", 1, None, {"octocat"}, None, None,
+                                       self.proposal, 5, "octocat")
+        self.assertEqual(("not-ours", self.proposal), found)
 
     def test_a_proposal_is_a_pull_request_and_a_comment_that_name_the_same_hashes(self):
         self.proposed()
