@@ -1799,10 +1799,12 @@ class TextPageTests(WritingBox):
         said = self.said(text)
         self.assertRegex(said, r"Last changed on [A-Z][a-z]+ [0-9]{1,2}(?:, 20[0-9]{2})?, by the plugin with your approval\. "
                                r"See what changed\.")
-        self.assertIn("History (1 version)", said)
-        history = said.split("History (1 version)")[1]
-        self.assertIn("To go back to a version, ask in the chat, for example: restore the Results of ", history)
+        self.assertIn("History (1)", said)   # the History is drawn once, in the manuscript view; the text view points to it
+        self.assertIn("The history of this part, with each version, is in Read the manuscript.", said)
+        history = said.split("History of ")[1]
+        self.assertIn("Restore the Results of ", history)   # each version carries its own request to go back to it
         self.assertIn("This is the first version kept.", history)
+        self.assertIn("Version 1 · ", history)
         self.assertIn(", by the plugin with your approval", history)
         self.assertIn("in dry spells the cover plots stayed moist more often than the bare plots", history)
         self.assertNotIn("You changed it by hand after that.", said)
@@ -1847,7 +1849,7 @@ class TextPageTests(WritingBox):
         self.write_results("autonomous")
         said = self.said(self.page())
         self.assertIn("by the plugin without asking", said)
-        self.assertIn("History (1 version)", said)
+        self.assertIn("History (1)", said)
 
 
     def test_a_text_change_of_another_account_is_not_told_and_a_body_someone_else_changed_is_not_judged_by_hand(self):
