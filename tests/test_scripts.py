@@ -10598,6 +10598,294 @@ class MindFigureTests(RecordSandbox):
         return os.path.join(self.data, "private", "octo-org__octo-repo", "figures", commit,
                             hashlib.sha256(path.encode("utf-8")).hexdigest())
 
+    # ------------------------------------------------------------ the check of the bytes
+
+    def test_the_type_and_size_come_from_the_first_bytes_of_a_picture(self):
+        found = {name: self.mf.inspect(self.fixture(name)) for name in
+                 ("figure.png", "figure.jpg", "figure.gif", "figure.webp", "figure-lossy.webp", "figure-alpha.webp")}
+        self.assertEqual({"figure.png": ("png", 8, 6), "figure.jpg": ("jpeg", 16, 12), "figure.gif": ("gif", 7, 5),
+                          "figure.webp": ("webp", 9, 4), "figure-lossy.webp": ("webp", 11, 7),
+                          "figure-alpha.webp": ("webp", 6, 10)}, found)
+        # the name says nothing: a PNG called .svg is a PNG, a drawing called .png is refused as a drawing
+        self.stash(self.COMMIT, "plots/looks-like.svg", self.fixture("figure.png"))
+        self.stash(self.COMMIT, "plots/drawing.png", self.fixture("drawing.svg"))
+        self.stash(self.COMMIT, "plots/page.png", self.fixture("page-named.png"))
+        images, reasons = self.load([(REPO, self.COMMIT, "plots/looks-like.svg"), (REPO, self.COMMIT, "plots/drawing.png"),
+                                     (REPO, self.COMMIT, "plots/page.png")])
+        self.assertEqual({(REPO, self.COMMIT, "plots/looks-like.svg"): self.fixture("figure.png")}, images)
+        self.assertEqual({(REPO, self.COMMIT, "plots/drawing.png"): "svg",
+                          (REPO, self.COMMIT, "plots/page.png"): "not-an-image"}, reasons)
+        self.assertEqual("a drawing in SVG is not embedded", self.mf.REASONS["svg"])
+
+    def test_a_drawing_a_page_a_cut_header_and_a_size_out_of_range_are_refused(self):
+        import struct
+        mf = self.mf
+        self.assertEqual((None, "svg"), mf.inspect(self.fixture("drawing.svg")))
+        self.assertEqual((None, "svg"), mf.inspect(b"\xef\xbb\xbf<?xml version='1.0'?>\n<SVG xmlns='x'></SVG>"))
+        for raw in (self.fixture("page-named.png"), b"", b"\x00" * 64, b"GIF", b"RIFF\0\0\0\0WEBPVP9 ", None, "text",
+                    b"\xff\xd8\xff\xe0" + b"\xff" * 40):
+            self.assertEqual((None, "not-an-image"), mf.inspect(raw), raw)
+        for name in ("figure.png", "figure.jpg", "figure.gif", "figure.webp", "figure-lossy.webp", "figure-alpha.webp"):
+            raw = self.fixture(name)
+            for cut in range(0, 6):
+                self.assertIsNone(mf.inspect(raw[:cut])[0], (name, cut))  # too short to be any picture
+            for cut in range(6, len(raw)):
+                mf.inspect(raw[:cut])  # whatever it says, a cut file does not make it fail
+        png, gif, jpeg = self.fixture("figure.png"), self.fixture("figure.gif"), self.fixture("figure.jpg")
+        sof = jpeg.find(b"\xff\xc0")
+        webp = self.fixture("figure-alpha.webp")
+        for width, kind, bad in ((0, "png", (None, "bad-size")), (20001, "png", (None, "bad-size")),
+                                 (20000, "png", ("png", 20000, 6)), (1, "png", ("png", 1, 6))):
+            raw = png[:16] + struct.pack(">I", width) + png[20:]
+            self.assertEqual(bad, mf.inspect(raw), (kind, width))
+        self.assertEqual((None, "bad-size"), mf.inspect(png[:20] + struct.pack(">I", 0) + png[24:]))  # height 0
+        self.assertEqual((None, "bad-size"), mf.inspect(gif[:6] + struct.pack("<H", 0) + gif[8:]))
+        self.assertEqual((None, "bad-size"), mf.inspect(gif[:6] + struct.pack("<H", 20001) + gif[8:]))
+        self.assertEqual((None, "bad-size"), mf.inspect(jpeg[:sof + 7] + struct.pack(">H", 20001) + jpeg[sof + 9:]))
+        self.assertEqual(("jpeg", 20000, 12), mf.inspect(jpeg[:sof + 7] + struct.pack(">H", 20000) + jpeg[sof + 9:]))
+        self.assertEqual((None, "bad-size"), mf.inspect(webp[:24] + (20000).to_bytes(3, "little") + webp[27:]))  # 20001
+        self.assertEqual(("webp", 20000, 10), mf.inspect(webp[:24] + (19999).to_bytes(3, "little") + webp[27:]))
+
+    # ------------------------------------------------------------ the source
+
+    def test_a_source_that_is_not_allowed_makes_no_call(self):
+        c, bad = self.COMMIT, []
+        for repo, ref, path, why in [
+                (REPO, c, "a/../b.png", "bad-path"), (REPO, c, "../b.png", "bad-path"), (REPO, c, "a//b.png", "bad-path"),
+                (REPO, c, "/a/b.png", "bad-path"), (REPO, c, "a/b.png/", "bad-path"), (REPO, c, "", "bad-path"),
+                (REPO, c, "./a.png", "bad-path"), (REPO, c, ("p" * 395) + "/a.png", "bad-path"),
+                (REPO, c, "a/b c.png", "bad-path"), (REPO, c, "a/b?x=1.png", "bad-path"), (REPO, c, "a/b#c.png", "bad-path"),
+                (REPO, c, "a/é.png", "bad-path"), (REPO, c, "a/b\n.png", "bad-path"), (REPO, c, 5, "bad-path"),
+                ("octo-org/other", c, "a.png", "not-allowed-source"), ("other/octo-repo", c, "a.png", "not-allowed-source"),
+                ("octo-org", c, "a.png", "not-allowed-source"), ("octo-org/octo-repo/x", c, "a.png", "not-allowed-source"),
+                ("javascript:x/y", c, "a.png", "not-allowed-source"), (REPO, "main", "a.png", "not-allowed-source"),
+                (REPO, "HEAD", "a.png", "not-allowed-source"), (REPO, "v1..2", "a.png", "not-allowed-source"),
+                (REPO, "..", "a.png", "not-allowed-source"), (REPO, "-v1", "a.png", "not-allowed-source"),
+                (REPO, "v1/x", "a.png", "not-allowed-source"), (REPO, "v1?x", "a.png", "not-allowed-source"),
+                (REPO, "", "a.png", "not-allowed-source"),
+                (REPO, "A" * 101, "a.png", "not-allowed-source"), (REPO, None, "a.png", "not-allowed-source")]:
+            bad.append(((repo, ref, path), why))
+        images, reasons = self.load([item for item, _ in bad])
+        self.assertEqual({}, images)
+        self.assertEqual({item: why for item, why in bad}, reasons)
+        self.assertEqual([], self.asked())
+        # at 400 characters a path passes the check and then fails at the fetch, not before
+        self.assertIsNone(self.mf.path_problem("p" * 394 + "/a.png"))  # 400 characters
+        self.assertEqual("bad-path", self.mf.path_problem("p" * 395 + "/a.png"))  # 401
+        # the code repository named by the caller is allowed too, any other still is not
+        self.stash(self.COMMIT, "a.png", self.fixture("figure.png"))
+        self.assertEqual(({}, {("octo-org/code", self.COMMIT, "a.png"): "not-allowed-source"}),
+                         self.load([("octo-org/code", self.COMMIT, "a.png")]))
+        self.assertEqual({}, self.load([("octo-org/code", self.COMMIT, "a.png")], code_repo="octo-org/other")[0])
+        images, _ = self.load([("OCTO-ORG/Code", self.COMMIT, "a.png")], code_repo="octo-org/code")
+        self.assertEqual([("OCTO-ORG/Code", self.COMMIT, "a.png")], list(images))
+        self.assertEqual(1, len(self.asked("/contents/")))
+
+    # ------------------------------------------------------------ the fetch and the cache
+
+    def test_a_tag_is_resolved_to_its_commit_and_the_picture_is_fetched_and_cached(self):
+        import hashlib
+        png = self.fixture("figure.png")
+        self.commits(**{"v0.4": self.COMMIT})
+        self.stash(self.COMMIT, "figures/dry-spell.png", png)
+        key = (REPO, "v0.4", "figures/dry-spell.png")
+        images, reasons = self.load([key])
+        self.assertEqual(({key: png}, {}), (images, reasons))
+        self.assertEqual(["api repos/%s/commits/v0.4" % REPO,
+                          "api repos/%s/contents/figures/dry-spell.png?ref=%s" % (REPO, self.COMMIT)], self.asked())
+        call = [c for c in self.repo()["log"] if "/contents/" in c[1]][0]
+        self.assertEqual(["-H", "Accept: application/vnd.github.raw"], call[2:])
+        target = self.cache_file(self.COMMIT, "figures/dry-spell.png")
+        self.assertEqual(hashlib.sha256(b"figures/dry-spell.png").hexdigest(), os.path.basename(target))
+        with open(target, "rb") as handle:
+            self.assertEqual(png, handle.read())
+        self.assertEqual(0o600, os.stat(target).st_mode & 0o777)
+        folders = [os.path.join(self.data, "private", "octo-org__octo-repo", part) for part in
+                   ("figures", os.path.join("figures", self.COMMIT), os.path.join("figures", "refs"))]
+        self.assertEqual([0o700] * 3, [os.stat(folder).st_mode & 0o777 for folder in folders])
+        self.assertEqual([], [n for n in os.listdir(os.path.dirname(target)) if n.startswith(".part-")])
+        # a short commit is resolved the same way, a full commit is not asked about
+        self.commits(**{"0123abc": self.COMMIT})
+        short = (REPO, "0123abc", "figures/dry-spell.png")
+        full = (REPO, self.COMMIT, "figures/dry-spell.png")
+        self.assertEqual(({short: png, full: png}, {}), self.load([short, full]))
+        self.assertEqual(["api repos/%s/commits/0123abc" % REPO], self.asked("/commits/")[1:])
+
+    def test_a_cached_picture_is_never_fetched_again(self):
+        self.commits(**{"v0.4": self.COMMIT})
+        self.stash(self.COMMIT, "a.png", self.fixture("figure.png"))
+        self.stash(self.COMMIT, "b.jpg", self.fixture("figure.jpg"))
+        items = [(REPO, self.COMMIT, "a.png"), (REPO, "v0.4", "b.jpg")]
+        first = self.load(items)
+        self.assertEqual(2, len(first[0]))
+        self.assertEqual(2, len(self.asked("/contents/")))
+        again = self.load(items)
+        self.assertEqual(first, again)
+        self.assertEqual(2, len(self.asked("/contents/")))  # no second fetch of either
+        self.assertEqual(2, len(self.asked("/commits/")))  # the tag is asked about again, for what it names now
+
+    def test_a_build_that_does_not_fetch_uses_the_cache_and_names_what_is_missing(self):
+        self.commits(**{"v0.4": self.COMMIT})
+        self.stash(self.COMMIT, "a.png", self.fixture("figure.png"))
+        self.stash(self.COMMIT, "b.gif", self.fixture("figure.gif"))
+        self.load([(REPO, "v0.4", "a.png"), (REPO, self.COMMIT, "b.gif")])
+        before = len(self.repo()["log"])
+        items = [(REPO, "v0.4", "a.png"), (REPO, self.COMMIT, "b.gif"), (REPO, self.COMMIT, "never.png"),
+                 (REPO, "v9.9", "a.png"), (REPO, "0123abc", "a.png")]
+        images, reasons = self.load(items, fetch=False)
+        self.assertEqual({items[0], items[1]}, set(images))
+        self.assertEqual({items[2]: "offline", items[3]: "offline", items[4]: "offline"}, reasons)
+        self.assertEqual(before, len(self.repo()["log"]))  # no call at all
+        # without fetching, nothing is written either
+        self.load([(REPO, self.COMMIT, "never.png")], fetch=False)
+        self.assertFalse(os.path.exists(self.cache_file(self.COMMIT, "never.png")))
+
+    def test_a_picture_over_5_mb_and_a_set_over_40_mb_fall_back(self):
+        png, limit = self.fixture("figure.png"), 5 * 1024 * 1024
+        self.stash(self.COMMIT, "exact.png", png, limit)
+        self.stash(self.COMMIT, "over.png", png, limit + 1)
+        images, reasons = self.load([(REPO, self.COMMIT, "exact.png"), (REPO, self.COMMIT, "over.png")])
+        self.assertEqual(([(REPO, self.COMMIT, "exact.png")], {(REPO, self.COMMIT, "over.png"): "too-big"}),
+                         (list(images), reasons))
+        self.assertEqual(limit, len(images[(REPO, self.COMMIT, "exact.png")]))
+        self.assertFalse(os.path.exists(self.cache_file(self.COMMIT, "over.png")))  # what is refused is not kept
+        size, items = 4 * 1024 * 1024 + 512 * 1024, []
+        for n in range(10):  # 4.5 MB each: eight fit in 40 MB, the ninth does not
+            self.stash(self.OTHER, "set/%d.png" % n, png, size)
+            items.append((REPO, self.OTHER, "set/%d.png" % n))
+        images, reasons = self.load(items)
+        self.assertEqual(items[:8], list(images))
+        self.assertEqual({item: "budget" for item in items[8:]}, reasons)
+        self.assertLessEqual(sum(len(raw) for raw in images.values()), 40 * 1024 * 1024)
+        self.assertFalse(os.path.exists(self.cache_file(self.OTHER, "set/8.png")))
+        # the cache counts toward the 40 MB like a fetch does
+        self.mf.write_cached(REPO, self.OTHER, "set/8.png", png + b"\0" * (size - len(png)))
+        images, reasons = self.load(items[:9], fetch=False)
+        self.assertEqual((items[:8], {items[8]: "budget"}), (list(images), reasons))
+
+    def test_a_failed_fetch_a_missing_file_and_an_unknown_version_fall_back_with_fixed_words(self):
+        self.commits(**{"v0.4": self.COMMIT, "v-bad": "../../../etc", "v-short": "0123456789abcdef"})
+        self.stash(self.COMMIT, "a.png", self.fixture("figure.png"))
+        items = [(REPO, self.COMMIT, "gone.png"), (REPO, "v-none", "a.png"), (REPO, "v-bad", "a.png"),
+                 (REPO, "v-short", "a.png"), (REPO, "v0.4", "a.png")]
+        images, reasons = self.load(items)
+        self.assertEqual({items[0]: "not-found", items[1]: "unknown-tag", items[2]: "unknown-tag",
+                          items[3]: "unknown-tag"}, reasons)
+        self.assertEqual([items[4]], list(images))
+        self.assertEqual([], [call for call in self.asked("/contents/") if "etc" in call or "v-bad" in call])
+        # a fetch that fails, and a gh that cannot be run, are one fixed reason and none of their words
+        self.setenv(FAKE_GH_FAIL_ON="api repos/%s/contents" % REPO)
+        self.stash(self.OTHER, "b.png", self.fixture("figure.png"))
+        images, reasons = self.load([(REPO, self.OTHER, "b.png")])
+        self.assertEqual(({}, {(REPO, self.OTHER, "b.png"): "fetch-failed"}), (images, reasons))
+        self.setenv(FAKE_GH_FAIL_ON=None, RECORTEX_GH="/nonexistent/gh")
+        self.assertEqual({(REPO, self.OTHER, "b.png"): "fetch-failed"}, self.load([(REPO, self.OTHER, "b.png")])[1])
+        self.setenv(RECORTEX_GH="'unbalanced")
+        self.assertEqual({(REPO, self.OTHER, "b.png"): "fetch-failed"}, self.load([(REPO, self.OTHER, "b.png")])[1])
+        for code in reasons.values():
+            self.assertIn(code, self.mf.REASONS)
+            self.assertNotIn("simulated", self.mf.REASONS[code])
+        self.assertEqual(["1 figure shown without the picture: the picture could not be fetched"],
+                         self.mf.lines(reasons))
+        self.assertEqual(["2 figures shown without the picture: the picture is not in the local copy, and this build did "
+                          "not fetch"], self.mf.lines({1: "offline", 2: "offline"}))
+
+    def test_a_slow_gh_ends_at_the_time_allowed(self):
+        self.stash(self.COMMIT, "a.png", self.fixture("figure.png"))
+        self.setenv(FAKE_GH_SLEEP="6")
+        items = [(REPO, self.COMMIT, name) for name in ("a.png", "b.png", "c.png")]
+        began = time.monotonic()
+        images, reasons = self.load(items, budget_seconds=1)
+        self.assertLess(time.monotonic() - began, 4)
+        self.assertEqual(({}, {item: "timeout" for item in items}), (images, reasons))
+        self.assertEqual(({}, {items[0]: "timeout"}), self.load(items[:1], budget_seconds=0))
+        self.setenv(FAKE_GH_SLEEP=None)
+        self.assertEqual([items[0]], list(self.load(items[:1])[0]))
+        self.setenv(FAKE_GH_SLEEP="6")
+        self.assertEqual([items[0]], list(self.load(items[:1], budget_seconds=1)[0]))  # the cache needs no time
+
+    def test_the_cache_is_private_and_a_planted_or_damaged_file_is_not_trusted(self):
+        png, other = self.fixture("figure.png"), os.path.join(self.dir, "outside.png")
+        with open(other, "wb") as handle:
+            handle.write(self.fixture("figure.gif"))
+        self.stash(self.COMMIT, "a.png", png)
+        item = (REPO, self.COMMIT, "a.png")
+        self.load([item])
+        target = self.cache_file(self.COMMIT, "a.png")
+        # a symlink at the picture's name is not followed: not read, and replaced by a real file, not written through
+        os.unlink(target)
+        os.symlink(other, target)
+        self.assertEqual(({}, {item: "offline"}), self.load([item], fetch=False))
+        self.assertEqual(({item: png}, {}), self.load([item]))
+        self.assertFalse(os.path.islink(target))
+        self.assertEqual((0o600, png), (os.stat(target).st_mode & 0o777, open(target, "rb").read()))
+        with open(other, "rb") as handle:
+            self.assertEqual(self.fixture("figure.gif"), handle.read())
+        # a file that is no picture (a page, a drawing, a cut header) is not used, and is fetched again
+        for damaged in (self.fixture("page-named.png"), self.fixture("drawing.svg"), png[:10], b""):
+            with open(target, "wb") as handle:
+                handle.write(damaged)
+            os.chmod(target, 0o600)
+            self.assertEqual(({}, {item: "offline"}), self.load([item], fetch=False))
+            calls = len(self.asked("/contents/"))
+            self.assertEqual(({item: png}, {}), self.load([item]))
+            self.assertEqual(calls + 1, len(self.asked("/contents/")))
+            with open(target, "rb") as handle:
+                self.assertEqual(png, handle.read())
+        # a file that others can read, and a folder that others can enter, are not trusted
+        os.chmod(target, 0o644)
+        self.assertEqual(({}, {item: "offline"}), self.load([item], fetch=False))
+        os.chmod(target, 0o600)
+        self.assertEqual(({item: png}, {}), self.load([item], fetch=False))
+        folder = os.path.dirname(target)
+        os.chmod(folder, 0o755)
+        self.assertEqual(({}, {item: "offline"}), self.load([item], fetch=False))
+        os.chmod(folder, 0o700)
+        # a cache folder that is a symlink is not followed, and the load still gives the picture (without keeping it)
+        os.rename(folder, folder + "-real")
+        os.symlink(folder + "-real", folder)
+        self.assertEqual(({}, {item: "offline"}), self.load([item], fetch=False))
+        self.assertEqual(({item: png}, {}), self.load([item]))
+        self.assertTrue(os.path.islink(folder))
+
+    # ------------------------------------------------------------ the list and odd input
+
+    def test_wanted_lists_the_figures_of_a_model_once_and_in_order(self):
+        c = self.COMMIT
+        model = {"repo": REPO, "threads": [
+            {"blocks": [{"kind": "figure", "repo": REPO, "ref": c, "path": "a.png"},
+                        {"kind": "table", "repo": REPO, "ref": c, "path": "t.png"},
+                        {"kind": "figure", "repo": "", "ref": "v1", "path": "b.png"},
+                        {"kind": "figure", "repo": REPO, "ref": c, "path": ""},
+                        {"kind": "figure", "repo": REPO, "ref": c, "path": None}, "x", None]},
+            {"blocks": [{"kind": "figure", "repo": REPO, "ref": c, "path": "a.png"}]}, "x", None],
+            "memories": [{"evidence": [
+                {"kind": "figure", "found": True, "shown": True, "repo": REPO, "ref": c, "path": "c.png"},
+                {"kind": "figure", "found": False, "shown": True, "repo": REPO, "ref": c, "path": "d.png"},
+                {"kind": "figure", "found": True, "shown": False, "repo": REPO, "ref": c, "path": "e.png"},
+                {"kind": "code", "found": True, "shown": True, "repo": REPO, "ref": c, "path": "f.py"},
+                {"kind": "figure", "found": True, "shown": True, "repo": 5, "ref": c, "path": "g.png"},
+                {"kind": "figure", "found": True, "shown": True, "repo": REPO, "ref": c, "path": "a.png"}]}, "x"]}
+        self.assertEqual([(REPO, c, "a.png"), (REPO, "v1", "b.png"), (REPO, c, "c.png")], self.mf.wanted(model))
+        for odd in (None, {}, [], "x", {"threads": "x", "memories": 5}, {"threads": [{"blocks": 5}]}):
+            self.assertEqual([], self.mf.wanted(odd))
+
+    def test_odd_input_is_a_fallback_and_never_an_error(self):
+        c = self.COMMIT
+        for fetch in (True, False):
+            for items in (None, "text", 5, [None, 5, ("a",), ["x"], (REPO, c), (REPO, c, ["x"]), (REPO, [], "a.png"),
+                                            (REPO, c, "a.png", "extra"), {"a": 1}],
+                          [(REPO, c, "a" * 100000), ("o" * 100000 + "/r", c, "a.png"), (None, None, None),
+                           (REPO, c, "\x00"), (REPO, "\x00", "a.png")]):
+                images, reasons = self.load(items, fetch=fetch)
+                self.assertEqual({}, images)
+                self.assertTrue(set(reasons.values()) <= set(self.mf.REASONS))
+        for budget in (None, -5, "x", float("nan"), True):
+            self.assertEqual({}, self.load([(REPO, c, "gone.png")], budget_seconds=budget)[0])
+        self.assertEqual(({}, {}), self.mf.load([], None, None, True))
+        self.assertEqual({(REPO, c, "a.png"): "not-allowed-source"}, self.mf.load([(REPO, c, "a.png")], None, None, True)[1])
+        self.assertEqual({}, self.mf.load([(REPO, c, "a.png")], "not a repo", None, True)[0])
+
     def test_gh_gives_a_file_as_bytes_and_text_as_before(self):
         raw = bytes(range(256)) + b"\xff\xfe\r\n\x00end"
         self.stash(self.COMMIT, "bin.dat", raw)
