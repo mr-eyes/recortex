@@ -89,7 +89,8 @@ def ago(stamp, now):
 
 def state_top(environ):
     """The state folder of the plugin for this user: the test folder when RECORTEX_TESTING is 1 (or the name from before
-    the rename), else $XDG_STATE_HOME or ~/.local/state, under the current name; the rule of storage.status_path."""
+    the rename), else $XDG_STATE_HOME or ~/.local/state under the current name, or under the name from before the
+    rename when only that folder is there; the rule of storage.state_top, held equal by a test."""
     def read(name):
         return environ.get("RECORTEX_" + name) or environ.get("GHIM_" + name) or ""
 
@@ -99,7 +100,8 @@ def state_top(environ):
     base = environ.get("XDG_STATE_HOME") or ""
     if not (base and os.path.isabs(base)):
         base = os.path.join(os.path.expanduser("~"), ".local", "state")
-    return os.path.join(base, "recortex")
+    current, earlier = os.path.join(base, "recortex"), os.path.join(base, "gh-issues-manager")
+    return current if os.path.lexists(current) or not os.path.lexists(earlier) else earlier
 
 
 def project_folder(payload, environ):

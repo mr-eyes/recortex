@@ -10926,6 +10926,15 @@ class StatusLineTests(RecordSandbox):
         self.addCleanup(os.environ.pop, "XDG_STATE_HOME", None)
         self.assertEqual(storage_module.status_path(self.root), self.sl.status_file(self.root, dict(os.environ)))
         self.assertTrue(storage_module.status_path(self.root).startswith(os.path.join(self.state_home, "recortex")))
+        # a user who has only the folder of the earlier name keeps it: the status file goes there, nothing new appears
+        earlier = os.path.join(self.dir, "state-earlier")
+        os.makedirs(os.path.join(earlier, "gh-issues-manager"), mode=0o700)
+        os.chmod(earlier, 0o700)
+        os.environ["XDG_STATE_HOME"] = earlier
+        placed = storage_module.status_path(self.root)
+        self.assertEqual(placed, self.sl.status_file(self.root, dict(os.environ)))
+        self.assertTrue(placed.startswith(os.path.join(earlier, "gh-issues-manager", "private", "status")))
+        self.assertEqual(["gh-issues-manager"], os.listdir(earlier))
         sys.path.insert(0, SCRIPTS)
         import hooks as hooks_module
         import names as names_module
@@ -11612,6 +11621,8 @@ FIELD_MARKS = ("This project is marked as handling %s, so before anything that w
                "told what it found.")
 FIELD_OFFER = ("recortex can fit its subagent briefs to this project's field of work. Ask to set the field (three short "
                "questions). This line is shown once per project.")
+SAY_LINE = ('When an answer uses what this record holds (this brief, an issue or a comment of it), start that part with '
+            '"From the record:". Do not write it when the record was not used.')
 ALIAS_LINE = ("recortex was named gh-issues-manager before version 0.5.0; where a project file names the "
               "gh-issues-manager skill, use the recortex skill.")
 
@@ -11683,7 +11694,8 @@ class FieldTests(RecordSandbox):
         frame when `frame`; both END lines are there; the prompt and compaction payloads are those of `reference`."""
         start, agent, prompt, compact = self.payloads(env)
         lines = start.split("\n")
-        after = lines[lines.index(ALIAS_LINE) + 1]
+        self.assertEqual(SAY_LINE, lines[lines.index(ALIAS_LINE) + 1])
+        after = lines[lines.index(ALIAS_LINE) + 2]
         self.assertEqual(line or "", after, label)
         self.assertEqual(bool(frame), "===== BEGIN FIELD GUIDANCE (recortex) =====" in agent, label)
         self.assertEqual(bool(frame), "===== END FIELD GUIDANCE =====" in agent, label)
@@ -11739,7 +11751,7 @@ class FieldTests(RecordSandbox):
         self.approve()  # the same sheet without the mark: the line as it was
         start, agent, _, _ = self.payloads()
         lines = start.split("\n")
-        self.assertEqual(FIELD_ON % self.today, lines[lines.index(ALIAS_LINE) + 1])
+        self.assertEqual(FIELD_ON % self.today, lines[lines.index(ALIAS_LINE) + 2])
         self.assertNotIn("confidentiality question", start)
 
     def test_the_frame_stands_between_the_rules_and_the_alias_line(self):
@@ -11817,7 +11829,7 @@ class FieldTests(RecordSandbox):
                                                         "approved": "2026-11-10", "sensitive": []}}})
             start, agent = self.payloads()[:2]
             lines = start.split("\n")
-            self.assertEqual(FIELD_MALFORMED, lines[lines.index(ALIAS_LINE) + 1], label)
+            self.assertEqual(FIELD_MALFORMED, lines[lines.index(ALIAS_LINE) + 2], label)
             everything = "".join(self.payloads()) + self.tool("hooks.py", "--doctor").stdout + \
                 self.tool("hooks.py", "--print").stdout
             self.assertNotIn(marker, start + agent + everything, label)
@@ -12332,6 +12344,7 @@ class PackagingTests(unittest.TestCase):
         where = lambda test: (lambda lines: {n for n, line in enumerate(lines) if test(line)})
         allowed = {  # path: the lines that may name an earlier name
             "skills/recortex/scripts/names.py": everywhere,
+            "skills/recortex/scripts/statusline.py": everywhere,  # imports nothing, so it repeats the two names it reads
             "tests/fixtures/compat-0.5.0/names.py": everywhere,  # the frozen 0.5.0 copy, never edited
             "skills/recortex/references/upgrading.md": everywhere,
             "tests/test_scripts.py": everywhere,  # the tests of the earlier names
