@@ -2349,7 +2349,6 @@ class GuardTests(RecordSandbox):
     def test_numbers_and_times_take_ascii_digits_only(self):
         import sqlite3
         import brief as brief_module
-        import compile as compile_module
         import index as index_module
         import record_format
         arabic = str.maketrans("0123456789", "".join(chr(0x660 + d) for d in range(10)))  # Arabic-Indic digits
@@ -2372,7 +2371,7 @@ class GuardTests(RecordSandbox):
                        ("## Deliverable sections\n\n| Section | Issue |\n|---|---|\n| Known issues | %s |\n" % cell,))
             db.executemany("INSERT INTO labels VALUES (?, ?)", [(12, "final-record"), (12, "rel:known-issues"),
                                                                (13, "final-record"), (13, "rel:changed")])
-            return compile_module.hub_order(db, 4, ["software"])[0][0]  # the table puts Known issues first
+            return index_module.deliverable_order(db, 4, ["software"])[0][0]  # the table puts Known issues first
 
         def stored_since(stamp):
             index_module.set_meta(db, "issues_newest", stamp)
