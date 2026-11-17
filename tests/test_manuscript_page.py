@@ -372,9 +372,11 @@ class NoPlanTests(PageBox):
         self.assertIn("Cover crops keep the topsoil wetter in dry spells", words)
         self.assertIn("Where the numbers come from", words)
         self.assertIn("<figure", view)
-        for absent in ("planned parts", "Planned for the", "What the paper sets out to say", "Nothing is planned for it",
-                       "Changes since", "Clean copy", "open question"[:0] + "backed", "<fieldset", "holes"):
-            self.assertNotIn(absent, view if absent not in ("planned parts", "backed") else words, absent)
+        for absent in ("planned part", "Planned for the", "What the paper sets out to say", "Nothing is planned for it", "Changes since",
+                       "Clean copy", "backed"):
+            self.assertNotIn(absent, words, absent)
+        for absent in ("<fieldset", "<select", "holes", "class=\"st st-"):
+            self.assertNotIn(absent, view, absent)
         self.assertIn('data-mode="plain"', view)
         self.assertNotIn("Written by the plugin", words)
         self.assertEqual([], [s for s in model["sheet"]["sections"] if s["slots"] or s["plan"]])
@@ -704,7 +706,7 @@ class StateTests(Steps):
         # version 1 is a write of the Results of topic 5, version 2 one of the Methods of topic 3; nothing is in the cache
         self.mode("autonomous")
         base = self.topic_body()
-        self.craft([{"body": base, "before": "c" * 64}])
+        self.craft([{"body": base, "before": "c" * 64}], skip=(0,))     # the file of version 1 is not in the cache
         data = self.repo()
         methods = self.topic_body(3)
         text = manuscript_record.text_memory("2026-11-21T10:00-05:00", "Methods", "the plots", "A paragraph.", "It is true.", FORMS["autonomous"],
@@ -719,13 +721,6 @@ class StateTests(Steps):
         text = self.page(gh="false")     # gh is `false`: nothing can be asked of GitHub
         self.assertIn("Same as version", self.words(self.sheet_of(text)))
         self.assertIn("This part has no kept version at or before version", self.words(self.sheet_of(text)))
-
-    def test_unfetched_says_so_in_the_part_at_the_top_and_in_the_terminal_and_never_marks_the_text(self):
-        self.history()
-        # the cache holds nothing for the early versions
-        cache = os.path.join(self.data, "private", self.slug(), "versions")
-        model = self.model()
-        self.assertEqual("unfetched", self.states(model)[6] if False else self.states(model)[6] if self.states(model)[6] != "marked" else "unfetched")
 
     def test_marked_new_unchecked_and_long(self):
         self.mode("autonomous")
@@ -810,7 +805,6 @@ class StateTests(Steps):
         text = self.page()
         view = self.sheet_of(text)
         self.assertEqual([], ts.page_problems(text))
-        self.assertIn("<del>was a different story</del>", view.replace("<del>It was not.</del>", "").replace("  ", " ")) if False else None
         self.assertIn("<del>tiny</del>", view)
         self.assertIn("<ins>small</ins>", view)
         self.assertIn("1 paragraph reworded, 1 removed, 1 changed since version", self.words(view))
@@ -1170,13 +1164,12 @@ class WholeBuildTests(Steps):
         self.assertEqual(1, text.count("<style>"))
         self.assertEqual(1, text.count("<script>"))
         self.assertIn('the manuscript: file://', self.last_output)
-        self.assertTrue(self.last_output.rstrip().split("\n")[-1].endswith("#paper") or "#paper" in self.last_output)
+        self.assertTrue(self.last_output.rstrip().split("\n")[-1].endswith("#paper"))
         self.assertEqual(0, self.tool("mind.py", "--paper", gh="false").returncode)     # the standalone paper is still there
         paper = open(os.path.join(self.data, "private", self.slug(), "paper.html"), encoding="utf-8").read()
         self.assertEqual([], ts.page_problems(paper))
         words = self.words(paper)
-        self.assertIn("1 Methods", re.sub(r"\s+", " ", " ".join(ts.PageReader(paper).texts)) if False else "1 Methods")
-        self.assertIn('class="parth"', paper)
+        self.assertIn('<h4 class="parth">', paper)     # the part titles and the numbers of the view's print
         self.assertIn("counter-increment:sec", open(os.path.join(PAGE, "mind.css")).read())
         self.assertNotIn("Planned for the", words)
 

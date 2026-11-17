@@ -1308,7 +1308,7 @@ class Page:
                     E("div", None, E("div", {"class": "pmsg noprint"}, E("p", {"class": "lab"}, mind_model.PHRASES["sheet.message"]),
                                      E("p", None, message, "  ", E("a", {"class": "lk", "href": anchor("plan-against-text")},
                                                                     mind_model.PHRASES["sheet.plan"]))) if message else ""),
-                    self.sheet_legend(bool(sheet.get("plan")))))
+                    self.sheet_legend(bool(sheet.get("plan")), mode == "changes")))
         return E("section", {"class": "view", "id": "paper", "aria-labelledby": "paper-h", "data-mode": mode},
                  E("a", {"class": "skip", "href": anchor("paper-text")}, mind_model.PHRASES["sheet.skip"]),
                  self.sheet_bar(mode, listed), E("p", {"class": "sr", "id": "copystatus", "aria-live": "polite"}),
@@ -1363,16 +1363,19 @@ class Page:
         text = Page.explain_button(explain, words, "stw") if explain in EXPLAIN_TEXT else E("span", {"class": "stw"}, words)
         return E("span", {"class": "st st-" + kind}, text)
 
-    def sheet_legend(self, plan):
-        """What the signs in the margin mean, in a fold that the script shuts on a phone. The lines about change marks and the
-        dashed frames show with the changes and the plain view only."""
+    def sheet_legend(self, plan, changes):
+        """What the signs in the margin mean, in a fold that the script shuts on a phone; nothing when no sign is drawn. The line
+        about change marks is there only when the text can be compared, and the one about dashed frames with a plan."""
         signs = [("backed", "A planned part that a finding backs"), ("against", "A finding speaks against it"),
                  ("planned", "Planned; nothing backs it yet"), ("now", "Can be written or made now"), ("open", "Still open")] \
             if plan else []
         rows = [E("p", None, self.sheet_mark(kind, words)) for kind, words in signs]
-        rows.append(E("p", {"class": "lg-chg"}, self.sheet_mark("changed", "A paragraph that changed since the version chosen above")))
+        if changes:
+            rows.append(E("p", {"class": "lg-chg"}, self.sheet_mark("changed", "A paragraph that changed since the version chosen above")))
         if plan:
             rows.append(E("p", {"class": "lg-slot"}, "A dashed frame is a part that the plan names and the text does not say yet."))
+        if not rows:
+            return ""
         return E("details", {"class": "mn legend noprint", "open": "open"}, E("summary", None, mind_model.PHRASES["sheet.legend"]), *rows)
 
     def sheet_contents(self):
