@@ -19,6 +19,8 @@ A copy of the plugin installed another way (a folder under `~/.claude/skills/` w
 
 ## Version 1.3.0: the plan of the paper, its text and its versions
 
+The resume block gains a first field, `**In short:**` (two short plain paragraphs, at most 1,200 characters, no issue numbers), and the linter asks for it in every new block. A block posted before has none and is still read; the mind page says so in one line until the next block. An older version reads a block with the field as a block with one more line, and posts blocks without it. The index keeps two more meta keys (`resume_posted`, `summary_state`); older versions ignore them.
+
 The manuscript profile gains a plan: a `plan` label, a plan issue (a child of the hub) with one dated comment per planned part, and three kinds of comment, `plan`, `text` (a change of a topic's text) and `proposal` (a change put forward as a pull request). The record's format gains one link key, `against`, from a result to a planned part it speaks against. A project without a plan-capable profile is unchanged: its briefs are byte for byte those of 1.2.x.
 
 Update every machine of the team before the first plan is adopted. An older version reads a `plan`, `text` or `proposal` comment as an ordinary comment, so it shows them in no thread and counts them as nothing, and it reads `against=` as no link; nothing breaks and the index stays readable, but the plan and the text changes are invisible to it. The index re-derives its tables on the first sync of 1.3.0 (one pass, no network call for it). Two index meta keys are new (`plan_counts`, and the derive version); older versions ignore them. An older version lists the plan issue as one that needs triage, since it does not know the label `plan`; leave it as it is.

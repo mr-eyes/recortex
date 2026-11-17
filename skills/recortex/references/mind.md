@@ -133,6 +133,10 @@ An edit made in the same second as the post is not seen. It leaves the two times
 
 Every page of an edit history is read, for memories and for the text of a topic, 100 entries at a time. A history of more than 5,000 entries is not read to its end and counts as an edit by someone unknown, so that text is not shown.
 
+## In short
+
+"Where we are" opens with the newest "In short": the first field of the newest resume block that an allowed account posted and nobody edited, as two short paragraphs of text, marked "As of" the day the block says it was written. A block from before 1.3.0 has none, and a record with no usable block says so in one fixed line, "No summary of where the project stands has been written yet. The next resume block carries one."; the rest of the view is as it was. The summary is text and never markup, an attribute or an address.
+
 ## Printing the paper, and the paper as a page of its own
 
 The Manuscript view has a "Print or save as PDF" button that asks the browser to print. The page's own print style leaves the paper alone on the sheet: no side bar, no tour, no folds (History, "Why it says this", the plan against the text, the versions), a page break before each section, and figures, tables and equations kept whole. The browser's print dialog offers "Save as PDF". The style holds no record text, so there is no running header; the browser adds the page number.

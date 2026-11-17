@@ -33,7 +33,7 @@ One issue, pinned, label `hub`. It is the single entry point: a reader who knows
 | Older tracker | One row per item of an older tracker and its new home, or "None" |
 | Recording rules | The rules for recording new work |
 
-The resume block itself is not in the body. It is a comment on the hub, posted anew at the end of every working stretch from `templates/resume-block.md`: last updated, current focus, active issues, last decisions, next actions with owners, holds. Comments have one author each and are never edited here, which is what lets the hook check who wrote the block before showing it (see [session-protocol.md](session-protocol.md)).
+The resume block itself is not in the body. It is a comment on the hub, posted anew at the end of every working stretch from `templates/resume-block.md`: in short (two short plain paragraphs that say where the project stands and what changed lately, at most 1,200 characters, no issue numbers), last updated, current focus, active issues, last decisions, next actions with owners, holds. Comments have one author each and are never edited here, which is what lets the hook check who wrote the block before showing it (see [session-protocol.md](session-protocol.md)).
 
 The hub holds pointers, not content. It repeats no number from a body: a number stated in two places drifts, so each number lives in one body, next to its source. The hub is edited in place when the list of issues per section or the list of active issues changes.
 

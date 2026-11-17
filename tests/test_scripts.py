@@ -2003,6 +2003,16 @@ class IndexTests(RecordSandbox):
                                                                  ("impact", "--commit", "4f2a9c1"))])
 
 
+SUMMARY_LINE = re.compile(r"(?m)^recortex: the project's status summary is out of date \([0-9]+ memories recorded since the "
+                          r"last resume block\)\.[^\n]*\n?")
+
+
+def without_summary_line(text):
+    """A prompt hook's output without the reminder of the status summary, which has its own tests (test_status_summary.py): the
+    example record's resume block is old, so a prompt gets it; the tests that follow are about the one-line reminder."""
+    return SUMMARY_LINE.sub("", text)
+
+
 class HookTests(RecordSandbox):
     START = {"on": "recortex: on. Record octo-org/octo-repo, read just now."}
 
@@ -2232,8 +2242,10 @@ class HookTests(RecordSandbox):
         self.assertEqual(0, printed.returncode, printed.stdout + printed.stderr)
         sizes = dict(re.findall(r"===== ([a-z-]+) \(\w+\): ([0-9]+) characters", printed.stdout))
         import brief as brief_module
-        self.assertEqual({"session-start": str(2773 + len(brief_module.SAY) + 1), "subagent-start": "1099",
-                          "prompt-submit": "151", "pre-compact": "635"}, sizes)  # 0.6.0's, and one sentence at start
+        # 0.6.0's, with the one sentence at start, the In short of the example's resume block (402 characters) in the session
+        # brief and the sentence that tells the summary to be kept (187) in the compaction payload
+        self.assertEqual({"session-start": str(2773 + len(brief_module.SAY) + 1 + 402), "subagent-start": "1099",
+                          "prompt-submit": "151", "pre-compact": str(635 + 187)}, sizes)
         built = self.tool("mind.py", gh="false")
         self.assertEqual(0, built.returncode, built.stdout + built.stderr)
         self.assertEqual(printed.stdout, self.tool("hooks.py", "--print", gh="false").stdout)
@@ -2282,7 +2294,7 @@ class HookTests(RecordSandbox):
     def test_prompt_lines_are_rate_limited(self):
         self.ready()
         self.hook("session-start", session="s1")
-        shown = [bool(self.hook("prompt-submit", session="s1").stdout.strip()) for _ in range(3)]
+        shown = [bool(without_summary_line(self.hook("prompt-submit", session="s1").stdout).strip()) for _ in range(3)]
         self.assertEqual([False, False, False], shown)  # nothing changed since the session brief
         self.assertTrue(self.hook("prompt-submit", session="s2").stdout.strip())  # a session that has seen nothing
         data = self.repo()
@@ -2299,7 +2311,7 @@ class HookTests(RecordSandbox):
         self.write_config(dict(self.config, prompt_hook={"enabled": False}))
         self.assertEqual("", self.hook("prompt-submit", session="s1").stdout)  # the reminder is off
         self.assertIn("===== BEGIN PROJECT STATUS DATA", self.hook("prompt-submit", session="s3").stdout)  # brief once
-        self.assertEqual("", self.hook("prompt-submit", session="s3").stdout)
+        self.assertEqual("", without_summary_line(self.hook("prompt-submit", session="s3").stdout))
 
     def test_titles_are_shown_only_for_allowed_authors_never_renamed_by_others(self):
         self.ready()
@@ -2935,7 +2947,7 @@ class GuardTests(RecordSandbox):
         old["new"] = json.loads(recortex.read_text(state))["new"]
         with open(state, "w") as handle:
             json.dump(old, handle)
-        self.assertEqual("", self.hook("prompt-submit", session="new").stdout)  # unchanged since its brief
+        self.assertEqual("", without_summary_line(self.hook("prompt-submit", session="new").stdout))  # unchanged since its brief
         kept = json.loads(recortex.read_text(state))
         self.assertEqual(50, len(kept))
         self.assertIn("new", kept)
@@ -3074,7 +3086,7 @@ class BackgroundTests(RecordSandbox):
         self.assertIn("===== BEGIN PROJECT STATUS DATA", brief)
         self.assertIn("**Current focus:** Release 0.3.0", brief)
         self.assertLessEqual(len(brief), 6001)
-        self.assertEqual("", self.hook("prompt-submit", session="s1").stdout)  # once, then the usual one line
+        self.assertEqual("", without_summary_line(self.hook("prompt-submit", session="s1").stdout))  # once, then the usual one line
         self.assertIn("#5 Reader", json.loads(self.hook("subagent-start").stdout)["hookSpecificOutput"]["additionalContext"])
 
     def test_a_stale_lock_does_not_block_the_build(self):
@@ -13480,6 +13492,8 @@ def utc_ago(days, hours=0):
 
 
 RESUME_WITH_HOLD = ("### Resume block: 2026-04-10 10:00 UTC\n\n<!-- ghim:resume:start -->\n"
+                    "**In short:** The library reads files of separated values and is close to release 0.3.0.\n\n"
+                    "Lately the reader was changed. Next is waiting for the project lead; nothing else is in doubt.\n\n"
                     "**Last updated:** 2026-04-10 10:00 UTC by the maintainer's Claude session\n"
                     "**Current focus:** Release 0.3.0.\n**Active issues:** #7.\n"
                     "**Last decisions:** none.\n**Next actions:**\n\n| Action | Owner | Where |\n|---|---|---|\n"

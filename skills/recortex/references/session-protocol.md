@@ -29,12 +29,17 @@ If the owner gives an instruction that conflicts with the resume block's holds, 
 
 At the end of a work stretch, before a release and before compiling, run the `record-auditor` agent. It is read-only by instruction and returns a list for the main session to act on: commits, merged pull requests and finished work with no event comment (`catchup.py gap`); bodies older than their newest relevant event; hub lists out of date; section labels that disagree with headings; `active` issues with no activity; issues that need triage; and new deliverable signals the setup does not cover, to be put to the user once as a question.
 
+## Keeping the summary current
+
+The summary is the resume block's In short. It goes stale by activity, never by a session ending: when 5 or more told memories came after the newest resume block, or a day has passed since it and there is at least one new memory, the next prompt carries one fixed line that says so (at most once every 6 hours in a session). At a convenient point, not in the middle of a step: post a new resume block with a fresh In short, and do what else is due at the same time, so that a session that never ends keeps everything current: `board.py apply` when there is a board, the planner's due check when there is a plan, and the next actions. With the observer on and in automatic mode the line is not shown: its worker writes the summary in the background, has it reviewed, and posts it through `resume_block.py update` ([observer.md](observer.md)); the main session still writes the other fields.
+
 ## End of a working stretch
 
 Do this before stopping, before handing over, and when the context is close to full:
 
 1. Post a checkpoint comment on each active issue that changed since its last checkpoint.
 2. Draft a new resume block from `templates/resume-block.md`:
+   - In short: two short plain paragraphs, together at most 1,200 characters and no issue numbers, written from the record (told memories, the plan's states, the text's state) and the conversation. The first says where the project stands, the deliverable's state included; the second says what changed lately, what comes next and what is in doubt. The mind page and the brief open with it.
    - Last updated: now, with zone, and who.
    - Current focus: one or two sentences.
    - Active issues: numbers with a few words each.

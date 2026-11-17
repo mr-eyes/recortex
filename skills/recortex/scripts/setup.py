@@ -1029,7 +1029,8 @@ def resume_comment(answers):
     actions = "| Draft the first topic issues | the owner and the session | this hub |\n"
     if answers["catch_up"]:
         actions += "| Catch up on earlier work: catchup.py inventory | the session | this hub |\n"
-    return ("### Resume block: %s\n\n%s\n**Last updated:** %s by the setup\n**Current focus:** Setting up the record.\n"
+    return ("### Resume block: %s\n\n%s\n**In short:** The record of this project has just been set up and holds no work yet. "
+            "The first topic issues are drafted next.\n\n**Last updated:** %s by the setup\n**Current focus:** Setting up the record.\n"
             "**Active issues:** none\n**Last decisions:** none\n**Next actions:**\n\n| Action | Owner | Where |\n"
             "|---|---|---|\n%s\n**Holds:** none\n%s\n" % (stamp, recortex.RESUME_START, stamp, actions, recortex.RESUME_END))
 
