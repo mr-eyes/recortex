@@ -297,7 +297,7 @@ Every pull request names its topic issue in its description ("Topic: #12"), carr
 | A word that cannot be understood without this project | A fold in the memory that first uses it; afterwards it is used as written there |
 | A claim the paper will make, a figure it needs, what it will concede | A `plan` comment on the plan issue; the state follows from the links ([The plan of the deliverable](#the-plan-of-the-deliverable)) |
 | The text of a topic body changed | A `text` comment on that topic, written by whoever changed the text ([writing.md](writing.md)) |
-| A version worth a name | The author asks in the chat; a decision on the plan issue names it (`versions.md` (stage 6)) |
+| A version worth a name | The author asks in the chat; a decision on the plan issue names it ([versions.md](versions.md)) |
 | A plan for the next hours | A new resume comment on the hub and, if work is in flight, a checkpoint comment |
 | A doubt about an earlier number | An `active` issue until checked; then a correction comment, and the body edited if the number was wrong |
 | A file, table, commit or tag behind a number | "Sources" of the body |

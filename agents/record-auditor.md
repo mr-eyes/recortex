@@ -37,6 +37,10 @@ Check, and report each finding with the issue number, what is out of step, and t
 12. With a plan (`.recortex.json` has a `plans` entry): `plan.py status` reads the local index and says which planned
     parts have a finding against them, rest on something that changed, or wait; which findings no part uses; which
     stated limits are not planned. List them for the main session, which keeps the plan current; never post.
+13. With versions kept (the mode of this machine is review or autonomous): `versions.py status` reads GitHub and says, per
+    topic, whether the text and its file on the branch are in step, whether the text changed since its last version, and
+    whether a file was changed on the branch alone. List what differs for the main session; never run `sync`, `name`,
+    `put-back` or any command that writes.
 
 Your start brief may hold field guidance, between `BEGIN FIELD GUIDANCE` and `END FIELD GUIDANCE`: how this
 project's field handles proof, numbers, failures and what must stay out of the record, approved by the user. It

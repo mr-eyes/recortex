@@ -94,6 +94,40 @@ class VersionTests(VersionBox):
         self.assertTrue(any(name.startswith("content/10.") for name in files))
         self.assertEqual(len(git["commits"]), 1)
 
+    def test_a_second_machine_finds_the_branch_and_commits_on_top_of_it(self):
+        self.ready()
+        self.mode("review")
+        first = self.head()
+        os.unlink(self.modes_file())   # another machine: no mode chosen yet, and the branch is already there
+        self.assertIn("no mode has been chosen", self.cmd("setup.py", "writing", "show").stdout)
+        again = self.cmd("setup.py", "writing", "set", "--mode", "review", "--yes")
+        self.assertEqual(0, again.returncode, again.stdout + again.stderr)
+        self.assertEqual(first, self.head())   # found, not made again
+        self.assertNotIn("keeps every version of the manuscript in octo-org/sample-project from now on", again.stdout.split("With review")[0])
+        folder = self.start(5)
+        self.draft(folder)
+        done = self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words("Approve"))
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual([first], self.history()[1:])
+
+    def test_no_output_of_a_passing_run_asks_the_user_to_run_a_git_command(self):
+        outputs = []
+        self.ready()
+        self.mode("review")
+        folder = self.start(5)
+        self.draft(folder)
+        outputs.append(self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words("Approve")))
+        self.ready()
+        for args in (("status",), ("log",), ("doctor",), ("sync",), ("fetch",), ("build-status",)):
+            outputs.append(self.cmd("versions.py", *args))
+        outputs.append(self.cmd("versions.py", "name", "submitted", "--words-file", self.words("name it")))
+        outputs.append(self.cmd("setup.py", "writing", "set", "--mode", "review", "--yes"))
+        for done in outputs:
+            self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+            text = done.stdout + done.stderr
+            self.assertIsNone(re.search(r"\bgit (clone|checkout|pull|push|merge|rebase|commit|fetch|branch|tag|switch|reset)\b", text), text)
+            self.assertNotRegex(text, r"(?i)run .*\bgit\b")
+
     def test_a_mode_of_off_or_none_makes_no_branch_and_a_body_edit_makes_no_commit(self):
         self.ready()
         folder = os.path.join(self.dir, "text.md")
@@ -106,6 +140,26 @@ class VersionTests(VersionBox):
         self.assertEqual(1, done.returncode)
         self.assertEqual({}, self.git()["refs"])
         self.assertEqual({}, self.git()["commits"])
+
+    def test_the_doctor_of_the_hooks_says_the_last_refusal_in_fixed_words_only(self):
+        self.ready()
+        chosen = self.cmd("setup.py", "writing", "set", "--mode", "autonomous", "--yes", env={"FAKE_GH_NO_WORKFLOW": "1"})
+        self.assertEqual(0, chosen.returncode)
+        doctor = self.cmd("hooks.py", "--doctor").stdout
+        self.assertIn("builds: the workflow was refused on the branch; run versions.py doctor", doctor)
+        cache = os.path.join(self.data, "private", self.slug(), "versions", "state.json")
+        os.chmod(cache, 0o600)
+        with open(cache, "w") as handle:   # what a hostile project folder or a stray write could leave there
+            json.dump({"refusal": {"kind": "push; rm -rf /", "at": "2026-12-01T10:00Z"}, "workflow_refused": "yes"}, handle)
+        doctor = self.cmd("hooks.py", "--doctor").stdout
+        self.assertNotIn("rm -rf", doctor)
+        self.assertNotIn("last refusal", doctor)
+        self.assertNotIn("builds: the workflow was refused", doctor)
+        with open(cache, "w") as handle:
+            json.dump({"refusal": {"kind": "rule", "at": "2026-12-01T10:00Z"}}, handle)
+        doctor = self.cmd("hooks.py", "--doctor").stdout
+        self.assertIn("versions: last refusal on 2026-12-01: versions: a branch rule of octo-org/sample-project refused the write to "
+                      "recortex-manuscript", doctor)
 
     def test_a_write_in_autonomous_mode_makes_one_commit_after_the_first_and_names_it_in_the_memory(self):
         self.ready()
@@ -150,6 +204,52 @@ class VersionTests(VersionBox):
         self.assertIn("text change %d (written by the plugin without asking)" % rows[0]["id"], diff.stdout)
         same = self.cmd("versions.py", "diff", "HEAD", self.history()[0], "--issue", "5")
         self.assertIn("no difference", same.stdout)
+
+    def test_putting_a_file_back_is_a_new_commit_of_the_body_and_needs_the_authors_yes(self):
+        self.written()
+        data = self.repo()
+        git = data["git"]
+        head = git["refs"]["heads/" + BRANCH]
+        files = dict(git["trees"][git["commits"][head]["tree"]])
+        files["topics/5.md"] = files["topics/5.md"] + "\nA line in the file only.\n"
+        tree = "c" * 40
+        git["trees"][tree] = files
+        git["commits"]["c1" + "0" * 38] = {"tree": tree, "parents": [head], "message": "by hand"}
+        git["refs"]["heads/" + BRANCH] = "c1" + "0" * 38
+        self.save(data)
+        self.ready()
+        self.assertIn("file of this part was changed on the branch", self.cmd("versions.py", "status").stdout)
+        self.assertNotEqual(0, self.cmd("versions.py", "put-back", "--issue", "5").returncode)
+        before = len(self.history())
+        done = self.cmd("versions.py", "put-back", "--issue", "5", "--yes")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(before + 1, len(self.history()))
+        self.assertEqual(self.body(5).rstrip("\n") + "\n", self.files_at()["topics/5.md"])
+        self.assertIn("in step with its file", self.cmd("versions.py", "status").stdout)
+        self.assertNotEqual(0, self.cmd("versions.py", "put-back", "--issue", "5", "--yes").returncode)   # nothing to put back now
+
+    def test_taking_the_files_text_into_the_body_by_hand_is_recorded_by_sync(self):
+        self.written()
+        data = self.repo()
+        git = data["git"]
+        head = git["refs"]["heads/" + BRANCH]
+        files = dict(git["trees"][git["commits"][head]["tree"]])
+        taken = files["topics/5.md"].replace("\n### Figure: dryspell", "\nA sentence from the file.\n\n### Figure: dryspell", 1)
+        files["topics/5.md"] = taken
+        tree = "e" * 40
+        git["trees"][tree] = files
+        git["commits"]["e1" + "0" * 38] = {"tree": tree, "parents": [head], "message": "by hand"}
+        git["refs"]["heads/" + BRANCH] = "e1" + "0" * 38
+        issue = data["issues"]["5"]
+        issue["body"] = taken   # the author takes the file's text into the topic, on GitHub
+        issue["edits"] = [{"at": "2026-12-02T10:00:00Z", "by": "octocat"}, {"at": issue["created_at"], "by": "octocat"}]
+        issue["last_edited_at"] = issue["updated_at"] = "2026-12-02T10:00:00Z"
+        self.save(data)
+        self.ready()
+        done = self.cmd("versions.py", "sync")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        cid, memory = self.text_memories()[-1]
+        self.assertEqual("Edited by octocat on GitHub, 2026-12-02 10:00 UTC.", dict(record_format.fields(memory))["Approved"])
 
     def test_a_hand_edit_is_recorded_by_sync_with_its_login_and_stamp(self):
         self.ready()
@@ -742,6 +842,29 @@ class WriteTrustTests(VersionBox):
         out = self.approvals("--apply").stdout
         self.assertIn("is not by an allowed account or is not the newest proposal on #5", out)
         self.nothing_written()
+
+    def test_a_file_edited_on_the_branch_makes_proposals_for_that_topic_wait(self):
+        self.proposed()
+        self.merge()
+        data = self.repo()
+        git = data["git"]
+        head = git["refs"]["heads/" + BRANCH]
+        files = dict(git["trees"][git["commits"][head]["tree"]])
+        files["topics/5.md"] = files["topics/5.md"] + "\nA line somebody put in the file on the branch.\n"
+        tree = "b" * 40
+        git["trees"][tree] = files
+        git["commits"]["d" * 40] = {"tree": tree, "parents": [head], "message": "by hand"}
+        git["refs"]["heads/" + BRANCH] = "d" * 40
+        self.save(data)
+        out = self.approvals("--apply").stdout
+        self.assertIn("the proposal waits until the author answers", out)
+        self.nothing_written()
+        # a new proposal is refused the same way
+        folder = self.start(5, "again")
+        self.draft(folder)
+        refused = self.cmd("write.py", "propose", "--dir", folder)
+        self.assertNotEqual(0, refused.returncode)
+        self.assertIn("was changed on the branch and the text was not", refused.stderr + refused.stdout)
 
     def test_an_edited_proposal_is_void(self):
         self.proposed()

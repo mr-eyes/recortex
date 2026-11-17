@@ -52,6 +52,8 @@ LINES = {
     "unfit": "approvals: the proposed text no longer passes the checks (%s); nothing is written.",
     "elsewhere": "approvals: the proposal of #%d was made on another machine; apply it there.",
     "gone": "approvals: the pull request #%d cannot be read; nothing is written.",
+    "waits": "approvals: the file of the topic of pull request #%d was changed on the branch and the text was not; the proposal "
+             "waits until the author answers (versions.py status).",
 }
 
 
@@ -109,6 +111,20 @@ def pull_of(repo, number):
 
 # ---------------------------------------------------------------- propose
 
+def topic_file_differs(config, repo, hub, allowed, issue):
+    """True when the file of a topic on the branch was changed on its own (or both changed): until the author answers, the
+    proposals for that topic wait (references/versions.md)."""
+    db = write.open_index(repo)
+    try:
+        try:
+            head, _, found = versions.compare(repo, db, config, hub, allowed)
+        except versions.GitError:
+            return False
+    finally:
+        db.close()
+    return found.get(issue) in ("file changed", "both changed")
+
+
 def proposal_text(heading, changed, why, pull, base, text, moment):
     return "\n".join([
         "<!-- ghim:event type=proposal at=%s -->" % moment.strftime("%Y-%m-%dT%H:%MZ"),
@@ -155,6 +171,9 @@ def propose_command(args):
         head = None
     if head is None:
         sys.exit("write: the branch of versions does not exist yet; approval on GitHub is not available here, so ask in the chat.")
+    if topic_file_differs(config, repo, hub, allowed, issue):
+        sys.exit("write: the file of #%d was changed on the branch and the text was not; ask the author whether to take the change "
+                 "or put the file back (versions.py status), then propose again." % issue)
     if record.get("proposal", {}).get("text") == text and record["proposal"].get("pull"):
         SAY("propose: pull request #%d already holds this change" % record["proposal"]["pull"])
         return 0
@@ -237,6 +256,8 @@ def evaluate(config, repo, hub, plan, allowed, db, state, cid, issue, author):
     current = recortex.read_issue_body(repo, issue)
     if record_format.body_sha(current) != base.group(1):
         return "moved", number
+    if topic_file_differs(config, repo, hub, allowed, issue):
+        return "waits", number
     return "ready", {"pull": number, "login": found["merged_by"], "text": merged, "base": current, "base_sha": base.group(1),
                      "comment": cid, "issue": issue}
 

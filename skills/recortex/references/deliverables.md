@@ -11,7 +11,7 @@ The record is organized so that writing the paper, release notes or report is as
 
 ## Assembling
 
-`python3 scripts/compile.py --out <folder>` does the mechanical part: one file per deliverable section in the hub's order, holding each topic's text for that section with its issue link; lists of figures, tables and sources; and the full timeline of the project with a manifest (see [hooks-and-index.md](hooks-and-index.md)). Run `index.py query consistency` first and resolve what it reports. The steps below say what the assembly reads, whether by hand or by the script.
+`python3 scripts/compile.py --out <folder>` does the mechanical part: one file per deliverable section in the hub's order, holding each topic's text for that section with its issue link; lists of figures, tables and sources; and the full timeline of the project with a manifest (see [hooks-and-index.md](hooks-and-index.md)). `--version NAME` compiles a named version of the paper instead of the record as it stands (it reads no body from the index and stops with one fixed line, writing nothing, unless the record vouches for the name: [versions.md](versions.md)), and `--layout manubot` also writes the Manubot `content/` folder of the branch of versions under `--out`. Run `index.py query consistency` first and resolve what it reports. The steps below say what the assembly reads, whether by hand or by the script.
 
 For each section, in the order of the hub's deliverable table, take from every listed issue the text under that section's `## ` heading, and nothing else. The "Sources" sections give the file, table, commit or tag behind each number; use them to build figure and table inputs, the data and code availability statement, and the reference list of resources, not as text.
 

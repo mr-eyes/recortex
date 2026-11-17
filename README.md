@@ -10,8 +10,6 @@
 recortex is a Claude Code plugin. It keeps findings, decisions, failures and deliverable text in GitHub issues.
 New and compacted sessions start from that record.
 
-The optional observer, experimental in 1.1.0, can queue and post reviewed memories; it is off unless you enable it.
-
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works-dark.svg">
   <img src="assets/how-it-works-light.svg" alt="A session writes memories to GitHub issues. The record gives back a brief at every session start, the mind page, the finished text and a board; an optional observer, off unless enabled, can also queue and post reviewed memories.">
@@ -24,6 +22,7 @@ The optional observer, experimental in 1.1.0, can queue and post reviewed memori
 - A start-up line showing recortex is on.
 - The mind page. One private local page that tells the memory in sentences: where things stand, how each thread got there, what went wrong, what is settled, what is open.
 - The finished work, compiled. Topic bodies hold the deliverable's current text, so the paper or the release notes are assembled from the issues.
+- The paper's plan, its text and its versions. The session writes the text in the mode you choose, never changes a paragraph you wrote, and keeps, names and builds every version.
 - Helpers that know your field. A short field sheet tells every subagent what counts as proof in your work and what must never be written down.
 - A board that keeps itself current. Sub-issues and a private GitHub Projects board follow the record; you do not drag a card to keep it honest.
 - Optional observation. Context follows recorded decisions and failures; independent checks select events, and explicit holds stop supported actions. [Controls and limits](skills/recortex/references/observer.md).
@@ -82,7 +81,7 @@ Open active issues: 1
 **Holds:** The project owner says when 1.4.0 is tagged; until then, no tag.
 ```
 
-Before it writes about the undated pages, it reads that thread: the failure and the decision it caused. It does not try the borrowed dates again. The failure is in the record.
+Before it writes about the undated pages, it reads that thread and does not try the borrowed dates again.
 
 ## The board
 

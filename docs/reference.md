@@ -45,7 +45,8 @@ All are in `skills/recortex/scripts/`, use only the Python standard library and 
 | `observer.py`, `observer_hooks.py`, `run_observer_hook.sh` | Experimental, off by default: local capture, independent checks, task context, explicit holds and pending receipts | approved worker event comments only |
 | `setup.py` | `preflight` checks `gh` and Python before the first question; `detect` suggests deliverables and fields from file names; `apply` makes the setup from answers you confirmed; `fields` shows, sets and approves the field sheet | `apply` |
 | `catchup.py` | Lists earlier work and work done since the newest recorded event; drafts reconstructed event comments | no |
-| `compile.py` | Writes the deliverable section by section in the hub's order, the figure, table and source lists, the full dated timeline of the project and a manifest | no |
+| `compile.py` | Writes the deliverable section by section in the hub's order, the figure, table and source lists, the full dated timeline of the project and a manifest; `--version NAME` compiles a named version of the paper | no |
+| `plan.py`, `write.py`, `own_paper.py`, `versions.py` | For a manuscript: the plan of the paper, the writing of its text in the mode you chose, your own paper (never changed without your words), and the versions of the text on a branch of the repository | yes, each under your mode |
 
 Every script that writes has `--dry-run`, which prints the exact `gh` commands and changes nothing.
 

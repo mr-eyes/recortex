@@ -594,7 +594,7 @@ def compare(repo, db, config, hub, allowed):
             continue
         fileside = record_format.body_sha(text)
         was = known.get("sha256")
-        found[number] = ("in step" if live == was and fileside == was else "body changed" if fileside == was
+        found[number] = ("in step" if live == was and fileside == was else "body changed" if fileside == was or fileside == live
                          else "file changed" if live == was else "both changed")
     return head, versions, found
 
@@ -635,6 +635,37 @@ def status_command(args):
         return 0
     finally:
         db.close()
+
+
+def put_back_command(args):
+    """The file of a topic was changed on the branch and the text was not, and the author said to put the file back: a new
+    commit of the body over the file. Needs the author's yes; nothing is read from the file."""
+    config, repo, hub, plan, allowed, mode = load(need_mode=True)
+    print(recortex.describe(config, repo))
+    if not args.yes:
+        sys.exit("error: pass --yes once the author said to put the file back")
+    try:
+        index.sync(repo, hub, timeout=60, deadline=300)
+    except (recortex.GhError, index.SyncBusy) as error:
+        sys.exit("error: the index could not be brought up to date (%s); nothing was written" % error)
+    db = open_index(repo)
+    if db is None:
+        sys.exit("error: no usable local index yet; run index.py sync first")
+    try:
+        try:
+            head, versions, found = compare(repo, db, config, hub, allowed)
+        except GitError:
+            sys.exit("versions: GitHub could not be read just now; nothing was written")
+        if found.get(args.issue) != "file changed":
+            sys.exit("versions: the file of #%d was not changed on its own, so there is nothing to put back" % args.issue)
+        body = live_body(db, args.issue)
+    finally:
+        db.close()
+    result = commit(config, repo, args.issue, body)
+    if not SHA40.fullmatch(result):
+        return 1
+    say("versions: the file of #%d was put back to the text (commit %s)." % (args.issue, result[:12]))
+    return 0
 
 
 def last_editor(db, number):
@@ -1269,6 +1300,10 @@ def main(argv=None):
     p.add_argument("--words-file")
     p.set_defaults(run=name_command)
     sub.add_parser("doctor").set_defaults(run=doctor_command)
+    p = sub.add_parser("put-back", help="after a file was changed on the branch alone: commit the text over it (needs --yes)")
+    p.add_argument("--issue", type=int, required=True)
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(run=put_back_command)
     p = sub.add_parser("restore")
     p.add_argument("--issue", type=int, required=True)
     p.add_argument("--to", required=True, help="a commit or a name of this paper")
