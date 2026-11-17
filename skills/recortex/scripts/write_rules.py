@@ -7,7 +7,7 @@ rules exist once. A part of the text is a topic issue and one of the profile's `
                the topic, and no told text change newer than it links it;
   changed      a memory that a told text change links was replaced, corrected or set aside after that change, and no
                told text change newer than that one, for the same topic and heading, links what replaced it (or what
-               replaced that in turn);
+               replaced that in turn) without a restore of that topic and heading made after it;
   methods      under a `write_from_record` heading: a told standing decision on the topic's thread, or a standing result
                that a backed claim links, is newer than the topic's newest told text change or checkpoint and is linked
                by no told text change.
@@ -120,16 +120,24 @@ def due_parts(db, config, allowed, state):
 
     def covered(row, heading, target):
         """True when a told text change newer than `row` for the same topic and heading links what replaced `target`, or what
-        replaced that in turn: the text already says what the record now holds, so nothing is due for it."""
+        replaced that in turn, and no restore of that topic and heading was made after it: the text already says what the
+        record now holds, so nothing is due for it. A restore puts an older text back, so a change before it no longer
+        counts."""
         later, todo = set(), [target]
         while todo:
             for key, other in pointing.get(todo.pop(), []):
                 if key in ("replaces", "instead") and other["id"] not in later:
                     later.add(other["id"])
                     todo.append(other["id"])
-        return any(newer["issue"] == row["issue"] and (newer["time"], newer["id"]) > (row["time"], row["id"])
-                   and heading.lower() in {name.lower() for name in newer["sections"]} and later & set(newer["links"])
-                   for newer in texts)
+        here = heading.lower()
+        for newer in texts:
+            if newer["issue"] == row["issue"] and (newer["time"], newer["id"]) > (row["time"], row["id"]) \
+                    and here in {name.lower() for name in newer["sections"]} and later & set(newer["links"]) \
+                    and not any(back["form"] == "restored" and back["issue"] == row["issue"]
+                                and here in {name.lower() for name in back["sections"]}
+                                and (back["time"], back["id"]) > (newer["time"], newer["id"]) for back in texts):
+                return True
+        return False
 
     for row in texts:
         for target in row["links"]:

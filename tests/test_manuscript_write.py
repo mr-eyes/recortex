@@ -966,6 +966,101 @@ class WriteTests(WritingBox):
         self.ready()
         self.assertIn("due: #5 Results", self.cmd("write.py", "status").stdout)
 
+    def due_for(self, issue=5):
+        found = json.loads(self.cmd("write.py", "status", "--json").stdout.split("\n", 1)[1])
+        return [(entry["heading"], entry["parts"]) for entry in found["due"] if entry["topic"] == issue]
+
+    def restore_to(self, text_memory_id, body, before, at="2026-12-11T10:00-05:00", section="Results", issue=5):
+        """The record of a restore of `issue` to `body` (a comment of the form "restored", and the body put back)."""
+        restore = manuscript_record.text_memory(
+            at, section, "the text of this part is as it was in the first version",
+            "The text was put back as the first version had it.", "The author asked for it.",
+            "Restored by the author in the chat, %s EST:\n\n> Put back the first version" % at[:16].replace("T", " "),
+            before=record_format.body_sha(before), after=record_format.body_sha(body))
+        self.add_comment(text_memory_id, issue, restore, "2026-12-11T15:00:00Z")
+        data = self.repo()
+        data["issues"][str(issue)]["body"] = body
+        data["issues"][str(issue)]["updated_at"] = "2026-12-11T15:00:00Z"
+        self.save(data)
+        self.ready()
+
+    def test_a_restore_after_the_change_that_covers_a_replacement_makes_the_part_due_again(self):
+        """T1 links C1, C2 replaces C1, T2 links C2, then the author puts T1's text back: the text no longer says C2."""
+        self.ready()
+        self.mode("review")
+        self.write_once()
+        first = self.body(5)
+        self.second_round()
+        self.second_write(parts=(9410,))
+        second = self.body(5)
+        self.assertEqual([], self.due_for())
+        self.restore_to(9470, first, second)
+        self.assertEqual([("Results", [9410])], self.due_for())
+        self.assertIn("due: #5 Results", self.cmd("write.py", "status").stdout)
+
+    def test_a_restore_of_another_heading_or_before_the_covering_change_leaves_the_text_covered(self):
+        self.ready()
+        self.mode("review")
+        self.write_once()
+        first = self.body(5)
+        self.second_round()
+        self.second_write(parts=(9410,))
+        second = self.body(5)
+        self.restore_to(9470, second, second, section="Limitations")    # another heading of the same topic
+        self.assertEqual([], self.due_for())
+        self.restore_to(9471, second, second, at="2026-11-30T10:00-05:00")   # a restore from before the change that covers
+        self.assertEqual([], self.due_for())
+
+    def test_the_text_that_links_the_newest_claim_of_a_chain_covers_the_oldest_claim_it_replaced(self):
+        self.ready()
+        self.mode("review")
+        self.write_once()                  # T1 links 9302
+        self.second_round()                # 9410 replaces 9302
+        third = manuscript_record.plan_memory(
+            "2026-12-05T10:00-05:00", "claim", "wetter topsoil in dry spells, narrowed",
+            "claim that a rye cover keeps the topsoil wetter during dry spells", "Results", "#5",
+            "In dry spells the plots with a rye cover stayed above the wilting point on more spells than the bare plots, "
+            "in the first season.", "The dry-spell comparison in the first season.", "The dry-spell result.",
+            "The paper reports the season effect only.", "None for now, owner Claude session", change="narrows",
+            links="replaces=9410 because=9140")
+        self.add_comment(9420, 13, third, "2026-12-11T10:00:00Z")     # 9420 replaces 9410, which replaced 9302
+        self.ready()
+        self.second_write(parts=(9420,), date="2026-12-12", before="on 9 of 11 spells.", after="on 9 of 11 spells, in all.")
+        self.assertEqual([], self.due_for())   # T2 links only 9420; the chain 9302, 9410, 9420 is followed to it
+
+    def test_a_text_change_for_another_heading_of_the_topic_does_not_cover_the_replacement(self):
+        self.ready()
+        self.mode("review")
+        self.write_once()
+        self.second_round()
+        other = manuscript_record.text_memory(
+            "2026-12-04T10:00-05:00", "Limitations", "the limits name the plot size", "The limits changed.",
+            "The size was missing.", "By the author in the chat, 2026-12-04 10:00 EST:\n\n> Approve", links="because=9410")
+        self.add_comment(9431, 5, other, tp.later(self))
+        self.ready()
+        self.assertEqual([("Results", [9410])], self.due_for())
+
+    def test_a_text_change_from_before_the_row_does_not_cover_what_replaced_a_claim_after_that_row(self):
+        """B links the first replacement (9410), then A links 9302 again, then a second replacement (9442) is made: B is older
+        than A, so it does not say what A's text lacks."""
+        self.ready()
+        self.mode("review")
+        self.second_round()                # 9410 replaces 9302, 3 December
+        text = lambda at, links: manuscript_record.text_memory(
+            at, "Results", "the dry-spell paragraph says the cover plots stayed moist", "A paragraph changed.", "It was due.",
+            "By the author in the chat, %s EST:\n\n> Approve" % at[:16].replace("T", " "), links=links)
+        self.add_comment(9440, 5, text("2026-12-04T10:00-05:00", "because=9410"), "2026-12-11T10:01:00Z")    # B
+        self.add_comment(9441, 5, text("2026-12-05T10:00-05:00", "because=9302"), "2026-12-11T10:02:00Z")    # A
+        second = manuscript_record.plan_memory(
+            "2026-12-06T10:00-05:00", "claim", "wetter topsoil in dry spells, said another way",
+            "claim that a rye cover keeps the topsoil wetter during dry spells", "Results", "#5",
+            "In dry spells the plots with a rye cover stayed wetter than the bare plots.", "The dry-spell comparison.",
+            "The dry-spell result.", "The paper reports the season effect only.", "None for now, owner Claude session",
+            change="rewords", links="replaces=9302")
+        self.add_comment(9442, 13, second, "2026-12-11T10:03:00Z")
+        self.ready()
+        self.assertEqual([("Results", [9442])], self.due_for())
+
     def test_text_changes_since_the_last_pause_are_counted_by_instant_and_not_by_the_clock_a_stamp_was_written_in(self):
         import datetime
         self.ready()
@@ -988,6 +1083,7 @@ class WriteTests(WritingBox):
         self.assertEqual(1, self.plan_json()["counts"]["texts"])
         pause(9462, 1, -10)   # an hour after it, stamped far west: its clock reads earlier than the change's
         self.assertEqual(0, self.plan_json()["counts"]["texts"])
+
 
     def test_a_hand_edit_that_versions_sync_recorded_is_still_the_authors_and_protected(self):
         """versions.py sync tells a hand edit as a text change (form "edited") whose after is the live body; it must not
@@ -1797,6 +1893,7 @@ class ZoneTests(unittest.TestCase):
         for statement in (None, "", 5, "local time", "Mars time, written as 2026-03-04 14:10 MST7", "UTC+99",
                           "written as 2026-03-04 14:10 IST"):
             self.assertIsNone(zones.zone_of(statement), repr(statement))
+
 
     def test_a_stamp_is_written_with_the_abbreviation_and_offset_of_its_moment(self):
         import zones
