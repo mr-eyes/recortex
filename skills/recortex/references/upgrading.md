@@ -27,6 +27,8 @@ The first session after an update asks only the setup questions the user has not
 
 An older version ignores the new file, the new line and the new commands, and nothing in the record changes: no comment, body, label or hub row is written by the questions themselves, only by the commands the user agrees to. A user who chose "off" for the observer in an earlier wizard is asked once more, because earlier versions did not keep a "no".
 
+The license changes with this version. Version 1.4.0 and later are under the Functional Source License, FSL-1.1-MIT: using, changing and sharing the plugin are allowed for any purpose except a competing use, which means offering it to others in a commercial product or service that substitutes for it. Each release becomes MIT two years after it is published. Versions up to 1.3.0 stay under MIT. The full terms are in `LICENSE` at the root of the plugin.
+
 ## Version 1.3.0: the plan of the paper, its text and its versions
 
 The resume block gains a first field, `**In short:**` (two short plain paragraphs, at most 1,200 characters, no issue numbers), and the linter asks for it in every new block. A block posted before has none and is still read; the mind page says so in one line until the next block. An older version reads a block with the field as a block with one more line, and posts blocks without it. The index keeps two more meta keys (`resume_posted`, `summary_state`); older versions ignore them.

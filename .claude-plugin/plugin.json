@@ -6,7 +6,7 @@
     "name": "mr-eyes",
     "url": "https://github.com/mr-eyes"
   },
-  "license": "MIT",
+  "license": "FSL-1.1-MIT",
   "repository": "https://github.com/mr-eyes/recortex",
   "keywords": ["github", "issues", "project-management", "research", "manuscript"]
 }

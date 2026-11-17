@@ -106,4 +106,4 @@ Optional, private, and off unless chosen at setup. The record determines each ca
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+FSL-1.1-MIT. See [LICENSE](LICENSE).
