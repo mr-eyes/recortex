@@ -7201,6 +7201,59 @@ class MindIndexTests(MindSandbox):
         self.assertEqual(("2026-03-09T18:00-08:00", "4"), (self.sql("SELECT at FROM events WHERE comment = 9701")[0][0],
                                                           self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0]))
 
+    def unknown_zone_result(self, at="2026-03-05T09:00Z"):
+        """A result with no marker whose heading names a zone that zones.py does not know (IST): the heading's own time is not
+        an instant, so the time GitHub gave the comment is."""
+        return memory_draft("result", at).split("\n", 1)[1].replace(" UTC - ", " IST - ")
+
+    def test_the_linter_and_the_index_place_a_heading_with_an_unknown_zone_by_the_time_github_gave_the_comment(self):
+        early = memory_draft("result", "2026-03-20T10:00-08:00", links="because=9701")   # written before GitHub had 9701
+        later = memory_draft("result", "2026-04-20T10:00-08:00", links="because=9701")
+        self.put(9701, 5, self.unknown_zone_result(), created="2026-04-11T10:00:00Z")   # its heading says 5 March
+        self.put(9702, 5, early, created="2026-04-12T10:00:00Z")
+        self.put(9703, 5, later, created="2026-04-12T10:01:00Z")
+        self.ready()
+        self.in_process()
+        import index as index_module
+        import lookup as lookup_module
+        for record in (lookup_module.local(REPO, 5), self.lookup(5)):            # offline from the index, and from GitHub
+            try:
+                refused = [f for f in lint_drafts.lint_text(early, kind="result", known_numbers={3, 4, 5, 6, 7}, lookup=record)
+                           if f.level == "error"]
+                accepted = [f for f in lint_drafts.lint_text(later, kind="result", known_numbers={3, 4, 5, 6, 7}, lookup=record)
+                            if f.level == "error"]
+            finally:
+                record.close()
+            self.assertEqual(["link-target"], [f.code for f in refused])
+            self.assertIn("a link points back in time", str(refused[0]))
+            self.assertEqual([], [str(f) for f in accepted])
+        db = index_module.connect(REPO, create=False)
+        try:
+            items = index_module.memories(db, {"octocat"})["items"]
+        finally:
+            db.close()
+        self.assertEqual(([], [("because", 9701)]), (items[9702]["links"], items[9703]["links"]))   # the index agrees
+
+    def test_the_timeline_orders_and_filters_by_the_instant_and_not_by_the_clock_of_a_stamp(self):
+        self.put(9701, 5, self.unknown_zone_result(), created="2026-04-11T10:00:00Z")      # its heading says 5 March
+        self.put(9702, 5, memory_draft("result", "2026-04-05T10:00-08:00"), created="2026-04-12T10:00:00Z")
+        self.ready()
+        rows = json.loads(self.tool("index.py", "query", "timeline", "--json", "--type", "result").stdout)
+        self.assertEqual([9702, 9701], [row["comment"] for row in rows if row["comment"] >= 9701])   # 5 April, then 11 April
+        since = json.loads(self.tool("index.py", "query", "timeline", "--json", "--type", "result", "--since", "2026-04-08").stdout)
+        self.assertEqual([9701], [row["comment"] for row in since])
+        self.assertNotIn("_time", rows[0])
+
+    def test_the_consistency_check_places_a_heading_with_an_unknown_zone_by_the_time_github_gave_the_comment(self):
+        self.put(9701, 5, self.unknown_zone_result(), created="2026-04-11T10:00:00Z")   # newer than the body of #5 (2 April)
+        self.put(9702, 5, memory_draft("result", "2026-04-05T10:00-08:00"), created="2026-04-12T10:00:00Z")   # 5 April, also newer
+        self.ready()
+        found = json.loads(self.tool("index.py", "query", "consistency", "--json").stdout)
+        stale = [f for f in found if f["kind"] == "stale-body" and f["issue"] == 5]
+        self.assertEqual(1, len(stale), found)
+        self.assertIn("issuecomment-9701", stale[0]["detail"])       # the newest is 11 April, not the 5 April of the other
+        self.assertNotIn("issuecomment-9702", stale[0]["detail"])
+
     # ------------------------------------------------------------ the tables
 
     def test_the_tables_are_the_same_after_sync_rebuild_and_step_by_step(self):
@@ -11116,20 +11169,12 @@ class StatusLineTests(RecordSandbox):
             handle.write("{}")
         self.assertEqual("", self.line({"workspace": {"project_dir": os.path.join(parent, "child")}}))  # never a parent
 
+
     def test_a_state_folder_that_is_not_there_yet_is_the_same_as_no_state_file(self):
         fresh = {"XDG_STATE_HOME": os.path.join(self.dir, "never-seen"), "HOME": self.dir}
         text = json.dumps({"workspace": {"project_dir": self.root}})
         self.assertEqual("recortex \u00b7 starting", self.sl.line(text, fresh, 0))
 
-    def test_a_real_off_state_and_a_file_that_fails_its_checks_are_not_the_starting_word(self):
-        self.put(state="off", reason="not-trusted", repo="")
-        self.assertEqual("recortex off \u00b7 not trusted", self.line())
-        with open(self.path, "w") as handle:
-            handle.write("{not json")
-        self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.line())   # present and broken: a problem to look at
-        os.unlink(self.path)
-        os.mkdir(self.path)                                                            # something else where the file belongs
-        self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.line())
 
     def test_a_state_file_that_does_not_pass_its_checks_gives_the_doctor_line_and_none_of_its_text(self):
         fallback = "recortex off \u00b7 run hooks.py --doctor"

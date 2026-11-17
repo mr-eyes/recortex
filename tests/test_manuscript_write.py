@@ -1084,6 +1084,60 @@ class WriteTests(WritingBox):
         pause(9462, 1, -10)   # an hour after it, stamped far west: its clock reads earlier than the change's
         self.assertEqual(0, self.plan_json()["counts"]["texts"])
 
+    def written_at(self):
+        """The instant of the first text change of the record, written in autonomous mode."""
+        import datetime
+        self.ready()
+        self.mode("autonomous")
+        self.write_once()
+        return datetime.datetime.strptime(re.search(r"at=(\S+)", self.text_memories()[0][1]).group(1), "%Y-%m-%dT%H:%MZ")
+
+    def pause_after(self, cid, written, hours, stamp_zone, user=None, edited=False):
+        """A resume block on the hub, made `hours` after `written`, with the zone name `stamp_zone` after its time ("UTC-10" and "UTC+5"
+        are read by their offset; IST is a zone that zones.py does not know, so only the time GitHub gave the comment places it).
+        The wall clock of the stamp is made to disagree with the instant, as a stamp in another zone does. The index is read again
+        from the start, since a sync that goes on from the last one does not read a comment dated before it."""
+        import datetime
+        instant = written + datetime.timedelta(hours=hours)
+        east = {"UTC-10": -10, "UTC+5": 5, "IST": -4}[stamp_zone]
+        stamp = (instant + datetime.timedelta(hours=east)).strftime("%Y-%m-%d %H:%M") + " " + stamp_zone
+        resume = ("### Resume block: %s\n\n<!-- ghim:resume:start -->\n**Last updated:** %s by the session\n**Current focus:** Waiting.\n"
+                  "**Active issues:** none\n**Last decisions:** none\n**Next actions:**\n\n| Action | Owner | Where |\n"
+                  "|---|---|---|\n| Wait | the session | this hub |\n\n**Holds:** none\n<!-- ghim:resume:end -->\n")
+        self.add_comment(cid, 1, resume % (stamp, stamp), instant.strftime("%Y-%m-%dT%H:%M:00Z"), user)
+        if edited:
+            data = self.repo()
+            data["comments"][str(cid)]["updated_at"] = (instant + datetime.timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:00Z")
+            self.save(data)
+        self.assertEqual(0, self.tool("index.py", "sync", "--rebuild").returncode)
+
+    def test_a_pause_in_a_zone_that_is_not_known_is_placed_by_the_time_github_gave_it_when_text_changes_are_counted(self):
+        written = self.written_at()
+        self.assertEqual(1, self.plan_json()["counts"]["texts"])
+        self.pause_after(9461, written, 1, "IST")      # its wall reads four hours before the change; GitHub's time is an hour after
+        self.assertEqual(0, self.plan_json()["counts"]["texts"])
+
+    def test_only_a_resume_block_of_an_allowed_account_that_nobody_edited_ends_the_count_of_text_changes(self):
+        written = self.written_at()
+        self.pause_after(9461, written, 1, "UTC+5", user="hubot")             # an account that is not allowed
+        self.assertEqual(1, self.plan_json()["counts"]["texts"])
+        self.pause_after(9462, written, 2, "UTC+5", edited=True)              # edited after it was posted
+        self.assertEqual(1, self.plan_json()["counts"]["texts"])
+        self.pause_after(9463, written, 3, "UTC+5")                           # the author's own, never edited
+        self.assertEqual(0, self.plan_json()["counts"]["texts"])
+
+    def test_a_proposal_with_a_heading_in_a_zone_that_is_not_known_waits_by_the_time_github_gave_it(self):
+        self.ready()
+        self.mode("review")
+        proposal = manuscript_record.proposal("2026-12-05T10:00-05:00", "Results", "A paragraph is new.", "The claim is backed.", 8,
+                                              "0" * 64, "1" * 64).split("\n", 1)[1].replace(" EST - ", " IST - ")   # no marker
+        self.add_comment(9460, 5, proposal, "2026-12-11T10:00:00Z")           # GitHub gave it 11 December; its heading says 5 December
+        text = manuscript_record.text_memory("2026-12-08T10:00-05:00", "Results", "the paragraph about spells", "A paragraph.",
+                                             "It was due.", "By the author in the chat, 2026-12-08 10:00 EST:\n\n> Approve")
+        self.add_comment(9461, 5, text, "2026-12-11T10:01:00Z")                # a text change written before GitHub had the proposal
+        self.ready()
+        self.assertIn("proposal waiting on GitHub: #5 (comment 9460)", self.cmd("write.py", "status").stdout)
+        self.assertEqual(1, self.plan_json()["counts"]["proposals"])
 
     def test_a_hand_edit_that_versions_sync_recorded_is_still_the_authors_and_protected(self):
         """versions.py sync tells a hand edit as a text change (form "edited") whose after is the live body; it must not

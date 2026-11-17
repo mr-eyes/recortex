@@ -149,7 +149,7 @@ class Lookup:
                                   "LEFT JOIN comments c ON c.id = e.comment WHERE e.comment = ?", (cid,)).fetchone()
             if row is None:
                 return None
-            return {"type": row["type"], "at": row["at"] or "", "time": record_format.sort_key(row["at"]),
+            return {"type": row["type"], "at": row["at"] or "", "time": record_format.instant(row["at"], row["created_at"]),
                     "issue": row["issue"], "author": row["author"] or "",
                     "edited": self._edited(cid, row["created_at"], row["updated_at"])}
         try:
@@ -167,7 +167,7 @@ class Lookup:
             return None  # not a comment of an issue or pull request
         event = record_format.parse_event(data.get("body") or "")
         at = record_format.event_at(event, data.get("created_at"))
-        return {"type": event["type"], "at": at or "", "time": record_format.sort_key(at),
+        return {"type": event["type"], "at": at or "", "time": record_format.instant(at, data.get("created_at")),
                 "issue": int(match.group(1)), "author": (data.get("user") or {}).get("login") or "",
                 "edited": self._edited(cid, data.get("created_at"), data.get("updated_at"))}
 

@@ -1646,19 +1646,22 @@ def timeline(db, issue=None, kind=None, since=None):
     plains, written = (plain_lines(db), links_as_written(db)) if ready else ({}, {})
     for e in db.execute("SELECT e.*, i.title AS issue_title, i.labels AS labels FROM events e "
                         "LEFT JOIN issues i ON i.number = e.issue"):
-        rows.append({"at": e["at"], "type": e["type"], "issue": e["issue"], "issue_title": e["issue_title"] or "",
+        rows.append({"_time": record_format.instant(e["at"], e["created_at"]),
+                     "at": e["at"], "type": e["type"], "issue": e["issue"], "issue_title": e["issue_title"] or "",
                      "labels": ", ".join(json.loads(e["labels"] or "[]")), "title": e["title"], "author": e["author"],
                      "url": e["url"], "recorded": e["recorded"] or "", "reconstructed": bool(e["reconstructed"]),
                      "comment": e["comment"] if ready else "", "plain": plains.get(e["comment"], ""),
                      "links": written.get(e["comment"], "")})
     for t in db.execute("SELECT t.*, i.title AS issue_title, i.labels AS labels, i.url AS url FROM timeline t "
                         "LEFT JOIN issues i ON i.number = t.issue"):
-        rows.append({"at": t["at"], "type": t["event"], "issue": t["issue"], "issue_title": t["issue_title"] or "",
+        rows.append({"_time": sort_key(t["at"]),
+                     "at": t["at"], "type": t["event"], "issue": t["issue"], "issue_title": t["issue_title"] or "",
                      "labels": ", ".join(json.loads(t["labels"] or "[]")), "title": t["detail"] or "",
                      "author": t["actor"], "url": t["url"], "recorded": "", "reconstructed": False,
                      "comment": "", "plain": "", "links": ""})
     for i in db.execute("SELECT * FROM issues"):
-        rows.append({"at": i["created_at"], "type": "opened", "issue": i["number"], "issue_title": i["title"],
+        rows.append({"_time": sort_key(i["created_at"]),
+                     "at": i["created_at"], "type": "opened", "issue": i["number"], "issue_title": i["title"],
                      "labels": ", ".join(json.loads(i["labels"] or "[]")), "title": i["title"], "author": i["author"],
                      "url": i["url"], "recorded": "", "reconstructed": False, "comment": "", "plain": "", "links": ""})
     if issue is not None:
@@ -1666,8 +1669,10 @@ def timeline(db, issue=None, kind=None, since=None):
     if kind:
         rows = [r for r in rows if r["type"] == kind]
     if since:
-        rows = [r for r in rows if sort_key(r["at"]) >= sort_key(since if "T" in since else since + "T00:00:00Z")]
-    rows.sort(key=lambda r: (sort_key(r["at"]), r["issue"], r["type"]))
+        rows = [r for r in rows if r["_time"] >= sort_key(since if "T" in since else since + "T00:00:00Z")]
+    rows.sort(key=lambda r: (r["_time"], r["issue"], r["type"]))   # by the instant, as everything else orders a time
+    for r in rows:
+        del r["_time"]
     return rows
 
 

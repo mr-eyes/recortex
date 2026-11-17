@@ -206,10 +206,10 @@ def open_proposals(db, items, allowed):
     edited = index.edited_comments(db)
     closed = closed_pulls(db, allowed)
     newest = {}
-    for row in db.execute("SELECT comment, issue, at, author FROM events WHERE type = 'proposal'"):
+    for row in db.execute("SELECT comment, issue, at, author, created_at FROM events WHERE type = 'proposal'"):
         if (row["author"] or "").lower() not in allowed:
             continue
-        key = (record_format.sort_key(row["at"]), row["comment"])
+        key = (record_format.instant(row["at"], row["created_at"]), row["comment"])
         if row["issue"] not in newest or key > newest[row["issue"]][0]:
             newest[row["issue"]] = (key, row["comment"])
     texts = text_memories(db, items)
@@ -228,10 +228,14 @@ def open_proposals(db, items, allowed):
     return waiting
 
 
-def texts_since_pause(db, items):
-    """The told text changes written since the newest told resume block (all of them when there is none)."""
+def texts_since_pause(db, items, allowed):
+    """The told text changes written since the newest told resume block (all of them when there is none). A resume block is
+    told when an allowed account posted it and nobody edited it afterwards, as the page's pauses are; the time of a block
+    is its instant (record_format.instant)."""
+    edited = index.edited_comments(db)
     pause = max([record_format.instant(row["at"], row["created_at"]) for row in db.execute(
-        "SELECT at, created_at FROM events WHERE type = 'resume'")], default="")
+        "SELECT comment, at, author, created_at FROM events WHERE type = 'resume'")
+        if (row["author"] or "").lower() in allowed and row["comment"] not in edited], default="")
     return [row for row in text_memories(db, items) if row["time"] > pause]
 
 
@@ -241,4 +245,4 @@ def counts(db, config, allowed, state):
         return {"due": 0, "proposals": 0, "texts": 0}
     items = state["found"]["items"]
     return {"due": len(due_parts(db, config, allowed, state)), "proposals": len(open_proposals(db, items, allowed)),
-            "texts": len(texts_since_pause(db, items))}
+            "texts": len(texts_since_pause(db, items, allowed))}
