@@ -84,7 +84,7 @@ The text of a memory's plain line is one sentence and is not parsed. The text, i
 
 `index.py query mind --json` prints the model the page is made from. Its shape follows the version of the plugin: it is a view for tests and for a person at a terminal, and no script reads it.
 
-The page places memories before or after a pause by their clock times as written in the record, without converting time zones, since a resume block carries no offset. A memory written in another zone can therefore land on the wrong side of a pause; keep the record in its one time convention.
+The page places memories before or after a pause, and puts them in order, by the instant each stamp names. A marker's offset gives it; a stamp with a zone abbreviation that `zones.py` knows (PST, PDT, CET, UTC+2 and the like) is converted by that abbreviation's own offset; a stamp whose zone is not known is placed by the time GitHub gave its comment. The days the page writes ("On November 14") stay the days as written in the record. The scripts write their own stamps in the zone the record states (the `timezone` entry of the project file, as `setup.py` wrote it from the hub's convention line), and in UTC when it states none that `zones.py` knows.
 
 ## The plan and the changes of the text
 

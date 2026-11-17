@@ -758,7 +758,7 @@ class PlanIndexTests(PaperSandbox):
         self.save(data)
         self.ready()
         self.assertEqual(base, self.plan_json()["parts"])
-        self.assertEqual("3", self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
+        self.assertEqual("4", self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
         listed = [entry for entry in self.repo()["log"] if "issues/comments" in " ".join(entry)
                   and "per_page" in " ".join(entry)]
         self.assertLessEqual(len(listed), 2)  # the ordinary incremental listing; the derive read nothing again
@@ -772,7 +772,7 @@ class PlanIndexTests(PaperSandbox):
         self.ready()
         self.sql("DELETE FROM meta WHERE key = 'derive_version'")
         self.ready()
-        self.assertEqual("3", self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
+        self.assertEqual("4", self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
 
     def test_a_derive_by_an_older_version_on_a_shared_index_is_derived_again(self):
         """An older version re-derives the comments it stores by its own rules and then sets mind_derived to 1 again;
@@ -801,7 +801,7 @@ class PlanIndexTests(PaperSandbox):
         self.ready()
         self.add_comment(9990, 4, "A plain remark, no marker.", "2026-12-05T10:00:00Z")
         self.ready()
-        self.assertEqual("3", self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
+        self.assertEqual("4", self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
 
 
 class PlanNotesTests(PaperSandbox):
@@ -1819,6 +1819,7 @@ class PlanModelTests(PaperSandbox):
         self.assertEqual((3, 0, 0), tuple(summary["Discussion"][k] for k in ("planned", "backed", "doubt")))
         self.assertEqual({"unbacked": 1, "doubt": 1, "moved": 1, "display": 1, "sections": 2, "unused": 0, "limits": 2,
                           "comparisons": 1}, plan["gaps"])
+
 
     def test_the_plan_issue_is_the_first_thread_of_the_outline_and_tells_its_decision(self):
         model = self.model()

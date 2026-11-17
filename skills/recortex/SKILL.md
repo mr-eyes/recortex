@@ -17,7 +17,7 @@ A project opts in with a `.recortex.json` file at its root (example: [templates/
 |---|---|
 | `repo` | `owner/name` of the repository that holds the issues |
 | `hub` | Number of the hub issue |
-| `timezone` | The one time convention of the tracker, in words |
+| `timezone` | The one time convention of the tracker, in words; the stamps the scripts write follow it, and are UTC when it names no zone they know |
 | `profiles` | Any of `software`, `research`, `prototyping`, `manuscript` |
 | `topics` | Topic names, for `topic:<name>` labels |
 | `restricted_patterns` | Regular expressions that must never appear in a post, such as participant identifiers |

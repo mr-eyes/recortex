@@ -289,6 +289,24 @@ class WriteTrustTests(VersionBox):
         out = self.approvals("--apply").stdout
         self.assertIn("changed after the proposal was made; the proposal is not applied", out)   # the real moved case stays
 
+    def test_a_proposal_and_a_rejection_are_stamped_in_the_zone_the_record_states(self):
+        import zones
+        self.config = dict(self.config, timezone="Central European time, written as 2026-03-04 14:10 CET")
+        self.write_config(self.config)
+        self.proposed()
+        closed = self.fake("api", "-X", "PATCH", "repos/octo-org/sample-project/pulls/%d" % self.pull, stdin=json.dumps({"state": "closed"}))
+        self.assertEqual(0, closed.returncode, closed.stdout + closed.stderr)
+        self.approvals("--apply")
+        comments = self.repo()["comments"]
+        proposal = comments[str(self.proposal)]["body"]
+        checkpoint = next(c["body"] for c in comments.values() if "type=checkpoint" in c["body"].split("\n")[0] and c["issue"] == 5)
+        for body in (proposal, checkpoint):
+            lines = body.split("\n")
+            stamp, at = re.search(record_format.STAMP, lines[1]).group(0), re.search(r"at=(\S+)", lines[0]).group(1)
+            self.assertRegex(stamp, r" (CET|CEST)$")
+            self.assertRegex(at, r"\+0[12]:00$")
+            self.assertEqual(zones.stamp_utc(stamp).strftime("%Y-%m-%dT%H:%M:00Z"), record_format.sort_key(at))
+
     def test_a_text_that_no_longer_passes_the_checks_writes_nothing(self):
         self.proposed()
         self.merge()

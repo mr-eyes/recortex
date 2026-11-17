@@ -221,8 +221,8 @@ def open_proposals(db, items, allowed):
 
 def texts_since_pause(db, items):
     """The told text changes written since the newest told resume block (all of them when there is none)."""
-    pause = max([record_format.sort_key(row["at"]) for row in db.execute(
-        "SELECT at FROM events WHERE type = 'resume'")], default="")
+    pause = max([record_format.instant(row["at"], row["created_at"]) for row in db.execute(
+        "SELECT at, created_at FROM events WHERE type = 'resume'")], default="")
     return [row for row in text_memories(db, items) if row["time"] > pause]
 
 

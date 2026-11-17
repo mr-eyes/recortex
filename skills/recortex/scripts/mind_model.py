@@ -859,7 +859,7 @@ class Build(mind_plan.PlanMixin):
         return self.block_cache[number]
 
     def remind(self, memory):
-        before = [p for p in self.pauses if p["wall"] and memory["wall"] and p["wall"] < memory["wall"]
+        before = [p for p in self.pauses if p["time"] and memory["time"] and p["time"] < memory["time"]
                   and p["id"] != memory["id"]]
         root, hops = memory, 0
         while hops < 12:
@@ -884,7 +884,7 @@ class Build(mind_plan.PlanMixin):
         resume = clean(index.get_meta(self.db, "resume") or "").strip()
         last_id = None
         if hub is not None:
-            for row in self.db.execute("SELECT e.comment, e.at, e.author, c.body FROM events e JOIN comments c ON "
+            for row in self.db.execute("SELECT e.comment, e.at, e.author, e.created_at, c.body FROM events e JOIN comments c ON "
                                        "c.id = e.comment WHERE e.type = 'resume' AND e.issue = ? ORDER BY e.comment",
                                        (hub,)):
                 block = recortex.extract_resume_block(row["body"] or "")
@@ -896,14 +896,15 @@ class Build(mind_plan.PlanMixin):
                     continue
                 focus = next((text for label, text in record_format.fields(block) if label == "Current focus"), "")
                 pauses.append({"kind": "resume", "id": row["comment"], "at": clean(row["at"]),
+                               "time": record_format.instant(row["at"], row["created_at"]),
                                "wall": wall_key(row["at"]), "day": day_words(row["at"], self.years),
                                "focus": short(focus, CAP_FIELD)})
         for memory in self.order:
             if memory["kind"] == "checkpoint":
                 focus = memory["plain"] or self.field(memory["id"], "State") or memory["title"]
-                pauses.append({"kind": "checkpoint", "id": memory["id"], "at": memory["at"], "wall": memory["wall"],
-                               "day": memory["day"], "focus": short(focus, CAP_FIELD)})
-        pauses.sort(key=lambda p: (p["wall"], p["id"]))
+                pauses.append({"kind": "checkpoint", "id": memory["id"], "at": memory["at"], "time": memory["time"],
+                               "wall": memory["wall"], "day": memory["day"], "focus": short(focus, CAP_FIELD)})
+        pauses.sort(key=lambda p: (p["time"], p["id"]))   # by the instant, not the clock a stamp was written in
         for i, pause in enumerate(pauses):
             pause["index"] = i
         self.pauses = pauses
@@ -927,7 +928,7 @@ class Build(mind_plan.PlanMixin):
                     next_rows.append({"action": self.runs(cell(spots[0]), seen), "owner": short(cell(spots[1])),
                                       "where": self.runs(cell(spots[2]), seen)})
             summary = record_format.resume_in_short(resume)
-            self.last = {"id": last_id, "day": last["day"], "wall": last["wall"],
+            self.last = {"id": last_id, "day": last["day"], "wall": last["wall"], "time": last["time"],
                          "focus": self.doc(values.get("Current focus", ""), seen),
                          "next": next_rows, "holds": self.doc(values["Holds"], seen) if values.get("Holds") else None,
                          # the "In short" of the block, as text: two paragraphs at most, each cut like a field, marked with
@@ -991,7 +992,7 @@ class Build(mind_plan.PlanMixin):
             "memories": memories, "threads": threads, "outline": outline, "tree": tree, "words": words,
             "pauses": [{key: p[key] for key in ("kind", "id", "day", "focus", "wall")} for p in self.pauses],
             "last": self.last,
-            "since": [m["id"] for m in self.order if self.last and self.last["wall"] and m["wall"] > self.last["wall"]],
+            "since": [m["id"] for m in self.order if self.last and self.last["time"] and m["time"] > self.last["time"]],
             "latest_of": self.latest_of(),
             "cited": [self.cited[n] for n in sorted(self.cited)],
             "open": opened, "map": self.map_model(), "plan": self.plan, "versions": self.versions,

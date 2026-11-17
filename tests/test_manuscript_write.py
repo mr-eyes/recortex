@@ -966,6 +966,29 @@ class WriteTests(WritingBox):
         self.ready()
         self.assertIn("due: #5 Results", self.cmd("write.py", "status").stdout)
 
+    def test_text_changes_since_the_last_pause_are_counted_by_instant_and_not_by_the_clock_a_stamp_was_written_in(self):
+        import datetime
+        self.ready()
+        self.mode("autonomous")
+        self.write_once()
+        written = datetime.datetime.strptime(re.search(r"at=(\S+)", self.text_memories()[0][1]).group(1), "%Y-%m-%dT%H:%MZ")
+        self.assertEqual(1, self.plan_json()["counts"]["texts"])   # the pauses of the record are older than the change
+
+        def pause(cid, hours, zone_hours):
+            """A resume block `hours` after the text change, stamped in a zone `zone_hours` east of UTC."""
+            instant = written + datetime.timedelta(hours=hours)
+            stamp = (instant + datetime.timedelta(hours=zone_hours)).strftime("%Y-%m-%d %H:%M") + " UTC%+d" % zone_hours
+            body = ("### Resume block: %s\n\n<!-- ghim:resume:start -->\n**Last updated:** %s by the session\n**Current focus:** "
+                    "Waiting.\n**Active issues:** none\n**Last decisions:** none\n**Next actions:**\n\n| Action | Owner | Where |\n"
+                    "|---|---|---|\n| Wait | the session | this hub |\n\n**Holds:** none\n<!-- ghim:resume:end -->\n" % (stamp, stamp))
+            self.add_comment(cid, 1, body, "2026-12-%02dT00:00:00Z" % (cid - 9450))
+            self.ready()
+
+        pause(9461, -1, 5)    # an hour before the change, stamped far east: its clock reads later than the change's
+        self.assertEqual(1, self.plan_json()["counts"]["texts"])
+        pause(9462, 1, -10)   # an hour after it, stamped far west: its clock reads earlier than the change's
+        self.assertEqual(0, self.plan_json()["counts"]["texts"])
+
     def test_a_hand_edit_that_versions_sync_recorded_is_still_the_authors_and_protected(self):
         """versions.py sync tells a hand edit as a text change (form "edited") whose after is the live body; it must not
         make the plugin believe it wrote that body."""
@@ -1752,6 +1775,95 @@ class SharedHeadingTests(WritingBox):
         checked = self.cmd("write.py", "check", "--dir", folder)
         self.assertEqual(1, checked.returncode, checked.stdout)
         self.assertIn("'## Limitations' is the heading of rd:limitations and ms:limitations", checked.stdout)
+
+
+class ZoneTests(unittest.TestCase):
+    """The time zone of the record (zones.py): the stamps the plugin writes follow the zone the record states, and the
+    stamps it reads become instants. Pure; no sandbox."""
+
+    @staticmethod
+    def moment(*parts):
+        import datetime
+        return datetime.datetime(*parts, tzinfo=datetime.timezone.utc)
+
+    def test_the_stated_zone_is_the_abbreviation_of_the_example_stamp_then_an_offset_then_the_words(self):
+        import zones
+        for statement, label in (("US Pacific time, written as 2026-03-04 14:10 PST", "PST"),
+                                 ("Central European time, written as 2026-03-04 14:10 CET", "CET"),
+                                 ("written as 2026-03-04 14:10 UTC+2", "UTC+2"), ("UTC+5:30", "UTC+5:30"),
+                                 ("US Pacific time", "PST"), ("Central European time", "CET"), ("UTC", "UTC"),
+                                 ("Eastern time, written as 2026-03-04 14:10 EDT", "EDT")):
+            self.assertEqual(label, zones.zone_of(statement).label, statement)
+        for statement in (None, "", 5, "local time", "Mars time, written as 2026-03-04 14:10 MST7", "UTC+99",
+                          "written as 2026-03-04 14:10 IST"):
+            self.assertIsNone(zones.zone_of(statement), repr(statement))
+
+    def test_a_stamp_is_written_with_the_abbreviation_and_offset_of_its_moment(self):
+        import zones
+        pacific = zones.zone_of("US Pacific time, written as 2026-03-04 14:10 PST")
+        for moment, stamp, iso in ((self.moment(2026, 12, 3, 15, 1), "2026-12-03 07:01 PST", "2026-12-03T07:01-08:00"),
+                                   (self.moment(2026, 7, 1, 17, 0), "2026-07-01 10:00 PDT", "2026-07-01T10:00-07:00"),
+                                   (self.moment(2026, 3, 8, 9, 59), "2026-03-08 01:59 PST", "2026-03-08T01:59-08:00"),
+                                   (self.moment(2026, 3, 8, 10, 0), "2026-03-08 03:00 PDT", "2026-03-08T03:00-07:00"),
+                                   (self.moment(2026, 11, 1, 8, 59), "2026-11-01 01:59 PDT", "2026-11-01T01:59-07:00"),
+                                   (self.moment(2026, 11, 1, 9, 0), "2026-11-01 01:00 PST", "2026-11-01T01:00-08:00")):
+            self.assertEqual((stamp, iso), (pacific.stamp(moment), pacific.iso(moment)), stamp)
+        europe = zones.zone_of("CET")
+        self.assertEqual("2026-03-29 01:59 CET", europe.stamp(self.moment(2026, 3, 29, 0, 59)))
+        self.assertEqual("2026-03-29 03:00 CEST", europe.stamp(self.moment(2026, 3, 29, 1, 0)))
+        self.assertEqual("2026-10-25 02:59 CEST", europe.stamp(self.moment(2026, 10, 25, 0, 59)))
+        self.assertEqual("2026-10-25 02:00 CET", europe.stamp(self.moment(2026, 10, 25, 1, 0)))
+        south = zones.zone_of("AEST")
+        self.assertEqual("2026-01-04 03:00 AEDT", south.stamp(self.moment(2026, 1, 3, 16, 0)))
+        self.assertEqual("2026-07-01 20:00 AEST", south.stamp(self.moment(2026, 7, 1, 10, 0)))
+        fixed = zones.zone_of("UTC+5:30")
+        self.assertEqual(("2026-07-01 15:30 UTC+5:30", "2026-07-01T15:30+05:30"),
+                         (fixed.stamp(self.moment(2026, 7, 1, 10, 0)), fixed.iso(self.moment(2026, 7, 1, 10, 0))))
+        self.assertEqual("2026-07-01T10:00Z", zones.zone_of("GMT").iso(self.moment(2026, 7, 1, 10, 0)))   # GMT is kept as stated
+
+    def test_a_stamp_is_read_by_the_offset_of_its_own_abbreviation(self):
+        import zones
+        for stamp, at in (("2026-07-01 10:00 PDT", self.moment(2026, 7, 1, 17, 0)), ("2026-01-01 10:00 PST", self.moment(2026, 1, 1, 18, 0)),
+                          ("2026-07-01 10:00 BST", self.moment(2026, 7, 1, 9, 0)), ("2026-07-01 10:00 UTC", self.moment(2026, 7, 1, 10, 0)),
+                          ("2026-07-01 10:00 UTC+5:30", self.moment(2026, 7, 1, 4, 30)), ("2026-07-01 10:00 UTC-1", self.moment(2026, 7, 1, 11, 0))):
+            self.assertEqual(at, zones.stamp_utc(stamp), stamp)
+        for stamp in ("2026-07-01 10:00 IST", "2026-07-01 10:00", "2026-13-01 10:00 UTC", "later", None, "2026-07-01 10:00 PST7"):
+            self.assertIsNone(zones.stamp_utc(stamp), repr(stamp))
+
+    def test_the_record_writes_utc_when_it_states_no_zone_that_is_known(self):
+        for config in (None, {}, {"timezone": ""}, {"timezone": "local time"}, {"timezone": 7}, {"timezone": "written as 2026-03-04 14:10 IST"}):
+            self.assertEqual("2026-12-03 15:01 UTC", recortex.stamp(self.moment(2026, 12, 3, 15, 1), config), repr(config))
+            self.assertEqual("2026-12-03T15:01Z", recortex.marker_time(self.moment(2026, 12, 3, 15, 1), config), repr(config))
+        config = {"timezone": "US Pacific time, written as 2026-03-04 14:10 PST"}
+        self.assertEqual("2026-12-03 07:01 PST", recortex.stamp(self.moment(2026, 12, 3, 15, 1), config))
+        self.assertEqual("2026-12-03T07:01-08:00", recortex.marker_time(self.moment(2026, 12, 3, 15, 1), config))
+
+    def test_a_stamp_the_linter_accepts_comes_back_as_the_same_instant_in_the_marker_and_the_heading(self):
+        import lint_drafts
+        config = {"timezone": "US Pacific time, written as 2026-03-04 14:10 PST"}
+        for moment in (self.moment(2026, 12, 3, 15, 1), self.moment(2026, 7, 9, 3, 30)):
+            stamp, at = recortex.stamp(moment, config), recortex.marker_time(moment, config)
+            self.assertRegex(stamp, "^" + lint_drafts.STAMP + "$")
+            self.assertRegex(at, "^" + record_format.ISO + "$")
+            self.assertEqual(stamp[:16], at[:16].replace("T", " "))
+            self.assertEqual(moment.strftime("%Y-%m-%dT%H:%M:00Z"), record_format.sort_key(at))
+            import zones
+            self.assertEqual(moment, zones.stamp_utc(stamp))
+
+    def test_a_heading_stamp_becomes_an_iso_time_with_its_offset_and_an_unknown_zone_stays_without_one(self):
+        for stamp, iso in (("2026-03-04 14:10 UTC", "2026-03-04T14:10Z"), ("2026-03-04 14:10 PST", "2026-03-04T14:10-08:00"),
+                           ("2026-07-04 14:10 PDT", "2026-07-04T14:10-07:00"), ("2026-03-04 14:10 UTC+5:30", "2026-03-04T14:10+05:30"),
+                           ("2026-03-04 14:10 IST", "2026-03-04T14:10"), ("2026-03-04 14:10", "2026-03-04T14:10"), ("", None)):
+            self.assertEqual(iso, record_format.to_iso(stamp), stamp)
+
+    def test_a_stamp_with_no_zone_is_placed_by_the_time_github_gave_the_comment(self):
+        self.assertEqual("2026-03-04T22:10:00Z", record_format.instant("2026-03-04T14:10-08:00", "2026-03-05T01:00:00Z"))
+        self.assertEqual("2026-03-04T14:10:00Z", record_format.instant("2026-03-04T14:10Z", "2026-03-05T01:00:00Z"))
+        self.assertEqual("2026-03-05T01:00:00Z", record_format.instant("2026-03-04T14:10", "2026-03-05T01:00:00Z"))
+        self.assertEqual("2026-03-04T14:10:00Z", record_format.instant("2026-03-04T14:10", None))   # nothing better is known
+
+
+HUB_111 = os.path.join(ROOT, "tests", "fixtures", "hub-1.1.1-manuscript.md")
 
 
 if __name__ == "__main__":

@@ -66,7 +66,7 @@ import record_format  # noqa: E402
 import storage  # noqa: E402
 
 FORMAT = "2"
-DERIVE_VERSION = "3"   # what derive makes of a comment; a stored index that differs is derived again, with no network
+DERIVE_VERSION = "4"   # what derive makes of a comment (4: a heading's zone abbreviation becomes an offset); a stored index that differs is derived again, with no network
 OVERLAP = 60  # seconds read again at each incremental sync, so items stamped in the same second are not missed
 ISO_UTC = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")  # used with fullmatch
 IDENTITY = ("repo", "format", "mark")
@@ -1504,8 +1504,8 @@ def consistency(db, profiles):
         body_time = sort_key(issue["last_edited_at"] or issue["created_at"])
         events = db.execute("SELECT * FROM events WHERE issue = ? AND type IN ('result', 'decision', 'correction', "
                             "'failure')", (number,)).fetchall()
-        newest = max(events, key=lambda e: sort_key(e["at"])) if events else None
-        if newest and sort_key(newest["at"]) > body_time:
+        newest = max(events, key=lambda e: record_format.instant(e["at"], e["created_at"])) if events else None
+        if newest and record_format.instant(newest["at"], newest["created_at"]) > body_time:
             findings.append({"kind": "stale-body", "issue": number, "detail": "the body was last written %s; the %s "
                              "comment of %s is newer: check that the body says what it changed (%s)"
                              % (body_time, newest["type"], newest["at"], newest["url"])})
@@ -1751,7 +1751,7 @@ def memories(db, allowed):
     kinds = record_format.MEMORY_TYPES
     counts = counts_for(allowed)
     every = {row["comment"]: row for row in db.execute(
-        "SELECT comment, issue, type, at, title, author, reconstructed FROM events WHERE type IN (%s)"
+        "SELECT comment, issue, type, at, title, author, reconstructed, created_at FROM events WHERE type IN (%s)"
         % ",".join("?" * len(kinds)), kinds)}
     plains = plain_lines(db)
     changed = edited_comments(db) if allowed else set()
@@ -1765,15 +1765,16 @@ def memories(db, allowed):
             edited.append(cid)
             continue
         items[cid] = {"id": cid, "issue": row["issue"], "kind": row["type"], "at": row["at"] or "",
-                      "time": sort_key(row["at"]), "title": row["title"] or "", "plain": plains.get(cid),
+                      "time": record_format.instant(row["at"], row["created_at"]), "title": row["title"] or "",
+                      "plain": plains.get(cid),
                       "reconstructed": bool(row["reconstructed"]), "author": row["author"],
                       "changed": cid in cleared, "links": [], "state": ""}
     for row in db.execute("SELECT source, kind, target FROM links ORDER BY rowid"):
         source, target = items.get(row["source"]), every.get(row["target"])
         if source is None or target is None or row["source"] == row["target"] or source["reconstructed"]:
             continue  # a reconstructed memory carries no link in this version
-        if sort_key(target["at"]) > source["time"] or not record_format.link_allowed(source["kind"], row["kind"],
-                                                                                      target["type"]):
+        if record_format.instant(target["at"], target["created_at"]) > source["time"] \
+                or not record_format.link_allowed(source["kind"], row["kind"], target["type"]):
             continue
         if (row["kind"], row["target"]) not in source["links"]:
             source["links"].append((row["kind"], row["target"]))
@@ -1808,7 +1809,7 @@ def explained(db, allowed, kind):
     kinds = record_format.MEMORY_TYPES
     changed = unconfirmed_edits(db, allowed)
     rows = []
-    for row in db.execute("SELECT x.*, e.issue, e.at, e.author FROM explanations x JOIN events e ON e.comment = "
+    for row in db.execute("SELECT x.*, e.issue, e.at, e.author, e.created_at AS created FROM explanations x JOIN events e ON e.comment = "
                           "x.comment WHERE x.kind = ? AND e.type IN (%s)" % ",".join("?" * len(kinds)),
                           (kind,) + kinds):
         if counts(row["author"]) and row["comment"] not in changed:
@@ -1819,8 +1820,9 @@ def explained(db, allowed, kind):
             rows.append({"comment": row["comment"], "issue": row["issue"], "at": row["at"] or "",
                          "word": row["word"] or "", "key": record_format.word_key(row["word"]),
                          "revised": bool(row["revised"]), "meaning": row["meaning"] or "", "why": row["why"] or "",
-                         "also": also, "story": row["story"] or "", "ordinal": row["ordinal"]})
-    return sorted(rows, key=lambda r: (sort_key(r["at"]), r["comment"], r["ordinal"]))
+                         "also": also, "story": row["story"] or "", "ordinal": row["ordinal"],
+                         "time": record_format.instant(row["at"], row["created"])})
+    return sorted(rows, key=lambda r: (r["time"], r["comment"], r["ordinal"]))
 
 
 def standing_words(db, allowed):

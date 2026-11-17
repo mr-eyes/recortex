@@ -1023,9 +1023,13 @@ def hub_body(answers, config):
 
 
 def resume_comment(answers):
-    stamp = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
-    if not re.fullmatch(lint_drafts.STAMP, stamp):
-        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    stated = {"timezone": answers.get("timezone")}
+    if recortex.record_zone(stated):   # the zone the answers state for the record
+        stamp = recortex.stamp(datetime.datetime.now(datetime.timezone.utc), stated)
+    else:                              # none stated: this machine's own zone, as before
+        stamp = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+        if not re.fullmatch(lint_drafts.STAMP, stamp):
+            stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     actions = "| Draft the first topic issues | the owner and the session | this hub |\n"
     if answers["catch_up"]:
         actions += "| Catch up on earlier work: catchup.py inventory | the session | this hub |\n"

@@ -107,8 +107,9 @@ def one_line(text, cap=300):
     return value if len(value) <= cap else value[:cap - 3] + "..."
 
 
-def now_stamp():
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+def now_stamp(config=None):
+    """The time of the copy, in the zone the record states, else in UTC."""
+    return recortex.stamp(datetime.datetime.now(datetime.timezone.utc), config)
 
 
 # ---------------------------------------------------------------- the body copy
@@ -168,7 +169,7 @@ def body_text(config, plan, state, db, allowed):
         "# The plan of the %s" % noun, "",
         "This body is a readable copy of the plan. The plan itself is the dated plan comments on this issue; where "
         "they differ, the comments are right.", "",
-        "Copy made: %s" % now_stamp(), "",
+        "Copy made: %s" % now_stamp(config), "",
         "## Message", "", message[-1] if message else "None yet.", "",
         "## Claims", "", "\n".join(claims) or "None yet.", "",
         "## Figures and tables", "", "\n".join(shown) or "None yet.", "",

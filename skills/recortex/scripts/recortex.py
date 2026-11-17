@@ -13,6 +13,7 @@ import subprocess
 import sys
 
 import names
+import zones
 
 CONFIG_NAME = names.CONFIG_NAME
 BODY_LIMIT = 65536
@@ -646,6 +647,25 @@ def own_manuscript(config):
     if "path" in value and own_path_ok(value["path"]) and "outside" not in value:
         return {"state": "inside", "path": value["path"], "brought": brought}
     return {"state": "none", "path": "", "brought": {}}
+
+
+def record_zone(config):
+    """The time zone the record states, a zones.Zone, or None. The statement is the project file's `timezone`, the one time
+    convention of the tracker in words, which the hub repeats ("US Pacific time, written as 2026-03-04 14:10 PST");
+    None when the project states none, or one that zones.py does not know."""
+    return zones.zone_of((config or {}).get("timezone"))
+
+
+def stamp(moment, config=None):
+    """`moment` (aware) as the record writes a time: '2026-03-04 14:10 PST' in the zone the record states, with the
+    abbreviation of that moment, else '2026-03-04 22:10 UTC'. Every stamp a script writes into the record is made here."""
+    return (record_zone(config) or zones.UTC).stamp(moment)
+
+
+def marker_time(moment, config=None):
+    """The same moment as the `at=` of an event marker, with its offset: '2026-03-04T14:10-08:00', else
+    '2026-03-04T22:10Z'. The heading's stamp and the marker's time always come from the same zone."""
+    return (record_zone(config) or zones.UTC).iso(moment)
 
 
 def plan_issue(config, profile):

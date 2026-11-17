@@ -703,7 +703,7 @@ def refresh_summary(repo, config, store, options, invoke, root):
     store.complete_invocation(review_id, valid, digest if valid else "")
     if not valid or not answer["accepted"] or answer["reason"] != "supported":
         return "summary-rejected"
-    moment = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    moment = recortex.stamp(datetime.datetime.now(datetime.timezone.utc), config)
     if not post_summary(repo, config, summary_block(material, paragraphs, moment)):
         return "post-failed"
     store.set_control("sync_needed", True)   # the next refresh reads the new block, which makes the summary current

@@ -17,6 +17,7 @@ import decimal
 import re
 
 import recortex
+import zones
 
 EVENT_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question", "record", "triage",
                "plan", "text", "proposal")
@@ -240,13 +241,22 @@ def mentions(body):
 # ---------------------------------------------------------------- times
 
 def to_iso(stamp):
-    """'2026-03-04 14:10 UTC' to ISO; other zones are kept as local date and time without offset."""
+    """'2026-03-04 14:10 PST' to ISO with the offset of its abbreviation ('2026-03-04T14:10-08:00'; UTC and any zone at
+    offset zero give 'Z'). A zone that zones.py does not know is kept as local date and time without an offset: the time
+    GitHub gave the comment orders it (see instant)."""
     if not stamp:
         return None
-    match = re.match(r"([0-9]{4}-[0-9]{2}-[0-9]{2}) ([0-9]{2}:[0-9]{2})", stamp)
+    match = re.match(r"([0-9]{4}-[0-9]{2}-[0-9]{2}) ([0-9]{2}:[0-9]{2})(?: ([A-Z]{2,5}|UTC[+-][0-9]{1,2}(?::[0-9]{2})?)(?![A-Za-z0-9+:-]))?",
+                     stamp)
     if not match:
         return None
-    return "%sT%s%s" % (match.group(1), match.group(2), "Z" if stamp.endswith("UTC") else "")
+    minutes = zones.offset_of(match.group(3)) if match.group(3) else None
+    if minutes is None:
+        return "%sT%s" % (match.group(1), match.group(2))
+    if minutes == 0:
+        return "%sT%sZ" % (match.group(1), match.group(2))
+    return "%sT%s%s%02d:%02d" % (match.group(1), match.group(2), "-" if minutes < 0 else "+", abs(minutes) // 60,
+                                  abs(minutes) % 60)
 
 
 def sort_key(at):
@@ -260,6 +270,15 @@ def sort_key(at):
         return value.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     except ValueError:
         return at
+
+
+def instant(at, created_at=None):
+    """The time of a stamp on one UTC axis, sortable: `at` itself when it carries a zone (a marker's offset, Z, or what
+    to_iso made of a heading's abbreviation), else `created_at`, the time GitHub gave the comment, when that is known.
+    A stamp with no zone cannot be placed by its own words, so it is never taken for UTC."""
+    if at and re.search(r"(?:Z|[+-][0-9]{2}:[0-9]{2})$", at):
+        return sort_key(at)
+    return sort_key(created_at) if created_at else sort_key(at)
 
 
 def event_at(event, created_at):

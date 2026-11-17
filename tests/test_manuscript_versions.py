@@ -1071,5 +1071,98 @@ class CompileVersionTests(VersionBox):
         self.assertEqual(branch["content/20.results.md"], open(os.path.join(again, "content", "20.results.md")).read())
 
 
+class RecordZoneTests(VersionBox):
+    """The stamps the plugin writes (a text change and its approval, a hand edit it records, a version name) follow the zone
+    the project file states for the record, and are UTC when it states none that zones.py knows. The heading's stamp and
+    the marker's time always name one instant."""
+
+    STATED = "US Eastern time, written as 2026-11-16 10:10 EST"
+
+    def stated(self, zone=STATED):
+        self.config = dict(self.config, timezone=zone)
+        self.write_config(self.config)
+
+    @staticmethod
+    def stamps(body):
+        """(the stamp of the heading, the time of the marker) of an event comment."""
+        lines = body.split("\n")
+        return re.search(record_format.STAMP, lines[1]).group(0), re.search(r"at=(\S+)", lines[0]).group(1)
+
+    def same_instant(self, stamp, at):
+        import zones
+        self.assertEqual(zones.stamp_utc(stamp).strftime("%Y-%m-%dT%H:%M:00Z"), record_format.sort_key(at), (stamp, at))
+
+    def text(self, form="By the author in the chat"):
+        found = [body for cid, body in self.text_memories() if form in body]
+        self.assertEqual(1, len(found), form)
+        return found[0]
+
+    def test_a_text_change_and_its_approval_are_stamped_in_the_zone_the_record_states(self):
+        self.stated()
+        self.written("review")
+        body = self.text()
+        stamp, at = self.stamps(body)
+        self.assertRegex(stamp, r" (EST|EDT)$")
+        self.assertRegex(at, r"-0[45]:00$")
+        self.assertEqual(stamp.endswith("EST"), at.endswith("-05:00"))
+        self.same_instant(stamp, at)
+        approved = dict(record_format.fields(body))["Approved"]
+        self.assertTrue(approved.startswith("By the author in the chat, %s:" % stamp), approved)
+
+    def test_a_record_that_states_no_zone_or_one_that_is_not_known_gets_utc_as_before(self):
+        for zone in (None, "local time", "Mars time, written as 2026-11-16 10:10 IST"):
+            self.setUp() if zone != None else None
+            if zone:
+                self.stated(zone)
+            self.written("review")
+            stamp, at = self.stamps(self.text())
+            self.assertTrue(stamp.endswith(" UTC") and at.endswith("Z"), (zone, stamp, at))
+            self.same_instant(stamp, at)
+
+    def test_the_restore_form_and_the_copy_of_the_plan_follow_the_zone_too(self):
+        import datetime
+        import write
+        import plan
+        moment = datetime.datetime(2026, 12, 3, 15, 1, tzinfo=datetime.timezone.utc)
+        config = {"timezone": self.STATED}
+        self.assertEqual("Restored by the author in the chat, 2026-12-03 10:01 EST:\n\n> Put it back",
+                         write.approved_field(config, "review", "Put it back", None, "the author", moment, restore=True))
+        self.assertEqual("Restored by the author in the chat, 2026-12-03 15:01 UTC:\n\n> Put it back",
+                         write.approved_field({}, "review", "Put it back", None, "the author", moment, restore=True))
+        self.assertRegex(plan.now_stamp(config), r"^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} (EST|EDT)$")
+        self.assertRegex(plan.now_stamp({}), r" UTC$")
+
+    def test_the_first_resume_block_of_a_setup_is_stamped_in_the_zone_the_answers_state(self):
+        import setup
+        text = setup.resume_comment({"catch_up": False, "timezone": "Bangkok time, written as 2026-03-04 14:10 UTC+7"})
+        self.assertRegex(text.split("\n")[0], r"^### Resume block: [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} UTC\+7$")
+        self.assertIn("**Last updated:** %s by the setup" % text.split("Resume block: ")[1].split("\n")[0], text)
+        none = setup.resume_comment({"catch_up": False, "timezone": ""})   # no zone stated: this machine's, else UTC
+        self.assertRegex(none.split("\n")[0], "^### Resume block: " + record_format.STAMP + "$")
+
+    def test_a_version_name_is_stamped_in_the_zone_the_record_states(self):
+        self.stated()
+        self.written()
+        done = self.cmd("versions.py", "name", "submitted", "--words-file", self.words("Call this one submitted"))
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        body = next(c["body"] for c in self.repo()["comments"].values() if "type=decision" in c["body"].split("\n")[0]
+                    and "Version name:" in c["body"])
+        stamp, at = self.stamps(body)
+        self.assertRegex(stamp, r" (EST|EDT)$")
+        self.same_instant(stamp, at)
+        self.assertEqual("the author, %s" % stamp, dict(record_format.fields(body))["Decided by"])
+        self.assertEqual(0, self.cmd("versions.py", "status").returncode)
+
+    def test_a_hand_edit_the_sync_records_is_stamped_by_the_edit_in_the_zone_of_the_record(self):
+        self.stated()
+        self.two_written()
+        body = self.text("Edited by octocat on GitHub")
+        stamp, at = self.stamps(body)
+        self.assertRegex(stamp, r" (EST|EDT)$")
+        self.same_instant(stamp, at)
+        self.assertEqual("Edited by octocat on GitHub, 2026-12-02 05:00 EST.", dict(record_format.fields(body))["Approved"])   # 10:00 UTC
+        self.assertEqual("form edited", "form " + record_format.approved_form(dict(record_format.fields(body))["Approved"]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -29,7 +29,7 @@ A broken diagram shows as a red error box in place of the map, and the preview i
 | Fact | Consequence |
 |---|---|
 | An issue or comment body holds at most 65,536 characters | A final record that needs more is split into two topics, a long comment into two comments; the linter warns within 5,000 characters of the limit |
-| The API and `gh` report times in UTC | Convert to the tracker's convention before writing; a merge at 01:30 UTC is the previous day in the Americas |
+| The API and `gh` report times in UTC | Convert to the tracker's convention before writing; a merge at 01:30 UTC is the previous day in the Americas. The scripts do it for the stamps they write (text changes, version names, proposals, the plan's copy), by the `timezone` entry of the project file |
 | Stored bodies may come back with different line endings | Read-back comparison ignores line-ending style and trailing whitespace only |
 | Up to three issues can be pinned per repository | One hub per repository |
 | Label names hold at most 50 characters, descriptions 100 | `setup_labels.py` checks before writing |

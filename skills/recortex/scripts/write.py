@@ -494,10 +494,6 @@ def unprotected_from(args):
 
 # ---------------------------------------------------------------- the write (section 7.5)
 
-def utc_stamp(moment):
-    return moment.strftime("%Y-%m-%d %H:%M UTC")
-
-
 def quote(words):
     text = re.sub(r"[ \t]+", " ", words).strip()
     if len(text) > WORDS_CAP:
@@ -505,16 +501,16 @@ def quote(words):
     return "\n".join("> " + line if line.strip() else ">" for line in text.split("\n"))
 
 
-def approved_field(mode, words, asked, who, moment, restore=False):
+def approved_field(config, mode, words, asked, who, moment, restore=False):
     if restore:   # a restore is always asked in the chat, in every mode
         if not words:
             sys.exit("error: a restore is always asked in the chat: pass --words-file with the author's answer")
-        return "Restored by %s in the chat, %s:\n\n%s" % (who, utc_stamp(moment), quote(words))
+        return "Restored by %s in the chat, %s:\n\n%s" % (who, recortex.stamp(moment, config), quote(words))
     if mode == "autonomous":
         return "Written without asking, under the autonomous mode."
     if not words:
         sys.exit("error: in review mode the author's own words are needed: pass --words-file with their answer in the chat")
-    first = "By %s in the chat, %s:\n\n%s" % (who, utc_stamp(moment), quote(words))
+    first = "By %s in the chat, %s:\n\n%s" % (who, recortex.stamp(moment, config), quote(words))
     return first + ("\n\n" + quote(asked) if asked else "")
 
 
@@ -525,11 +521,11 @@ def kept_field(count):
         "%d paragraphs were changed by hand and were left as they are." % count
 
 
-def memory_text(issue, title, headings, files, approved, kept, before, after, version, because, moment):
-    at = moment.strftime("%Y-%m-%dT%H:%MZ")
+def memory_text(config, issue, title, headings, files, approved, kept, before, after, version, because, moment):
+    at = recortex.marker_time(moment, config)
     marker = "<!-- ghim:event type=text at=%s%s -->" % (at, " because=" + ",".join(str(c) for c in because) if because else "")
     memory = files["memory.json"]
-    lines = [marker, "### Text: %s - %s" % (utc_stamp(moment), one_line("%s of %s" % (", ".join(headings), title), 90)), "",
+    lines = [marker, "### Text: %s - %s" % (recortex.stamp(moment, config), one_line("%s of %s" % (", ".join(headings), title), 90)), "",
              "**In plain words, we changed the text to say that:** %s" % one_line(memory.get("plain", "")), "",
              "**Section:** %s" % ", ".join(headings), "", "**What changed:** %s" % one_line(memory.get("changed", "")), "",
              "**Why:** %s" % one_line(memory.get("why", "")), "", "**Approved:** %s" % approved, "",
@@ -622,7 +618,7 @@ def apply_command(args):
             moment = linked + datetime.timedelta(minutes=1)
     merged = getattr(args, "merged", None)   # (login, pull request number) of a proposal that was merged on GitHub
     approved = ("By %s on GitHub, by merging pull request %d." % merged if merged
-                else approved_field(mode, words, asked, args.who, moment, restore=files.get("restore") is not None))
+                else approved_field(config, mode, words, asked, args.who, moment, restore=files.get("restore") is not None))
     protected = files["protected.json"]["paragraphs"]
     kept = len([p for i, p in enumerate(protected) if i not in unprotect])
     before = record_format.body_sha(files["base.md"]) if files["base.md"].strip() else None  # the body this change starts from
@@ -638,7 +634,7 @@ def apply_command(args):
                 because.append(cid)
     because = because[:4]
     # 1. the memory is built and linted before anything is written, with the version it will carry
-    draft_memory = memory_text(issue, title, headings, files, approved, kept_field(kept), before, after,
+    draft_memory = memory_text(config, issue, title, headings, files, approved, kept_field(kept), before, after,
                                record_format.NOT_KEPT[3], because, moment)
     problems = [f for f in lint_drafts.lint_text(draft_memory, kind="text", config=config, profiles=config.get("profiles"))
                 if f.level == "error"]
@@ -688,7 +684,7 @@ def apply_command(args):
         save_state(repo, record, done)
     # 6. the text memory
     if "memory" not in done:
-        text = memory_text(issue, title, headings, files, approved, kept_field(kept), before, after, done["version"],
+        text = memory_text(config, issue, title, headings, files, approved, kept_field(kept), before, after, done["version"],
                            because, moment)
         path = os.path.join(args.dir, "text-memory.md")
         recortex.write_working_files(args.dir, {"text-memory.md": text})

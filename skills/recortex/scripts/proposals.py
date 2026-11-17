@@ -136,10 +136,10 @@ def topic_file_differs(config, repo, hub, allowed, issue, merged=None):
         db.close()
 
 
-def proposal_text(heading, changed, why, pull, base, text, moment):
+def proposal_text(heading, changed, why, pull, base, text, moment, config=None):
     return "\n".join([
-        "<!-- ghim:event type=proposal at=%s -->" % moment.strftime("%Y-%m-%dT%H:%MZ"),
-        "### Proposal: %s - %s" % (versions.stamp(moment), heading), "",
+        "<!-- ghim:event type=proposal at=%s -->" % recortex.marker_time(moment, config),
+        "### Proposal: %s - %s" % (versions.stamp(moment, config), heading), "",
         "**Section:** %s" % heading, "", "**What would change:** %s" % write.one_line(changed), "",
         "**Why:** %s" % write.one_line(why), "", "**Pull request:** #%d" % pull, "",
         "**Base:** sha256 `%s`" % base, "", "**Text:** sha256 `%s`" % text, ""])
@@ -213,7 +213,8 @@ def propose_command(args):
     moment = versions.utc_now()
     memory = files["memory.json"]
     cid = versions.post_comment(repo, issue, "proposal", proposal_text(
-        ", ".join(headings), memory.get("changed", ""), memory.get("why", ""), pull, base, text, moment), versions.scratch_folder(repo))
+        ", ".join(headings), memory.get("changed", ""), memory.get("why", ""), pull, base, text, moment, config),
+        versions.scratch_folder(repo))
     if cid is None:
         SAY("write: the pull request #%d is open and its proposal comment was not posted; close the pull request and try again" % pull)
         return 1
@@ -383,8 +384,8 @@ def drop_proposal(config, repo, issue, pull):
     """A checkpoint on the topic says that a proposal was closed without being merged."""
     moment = versions.utc_now()
     text = "\n".join([
-        "<!-- ghim:event type=checkpoint at=%s -->" % moment.strftime("%Y-%m-%dT%H:%MZ"),
-        "### Checkpoint: %s - proposal closed" % versions.stamp(moment), "",
+        "<!-- ghim:event type=checkpoint at=%s -->" % recortex.marker_time(moment, config),
+        "### Checkpoint: %s - proposal closed" % versions.stamp(moment, config), "",
         "**In plain words, we paused here:** a proposed change of the text was closed on GitHub without being merged", "",
         "**State:** The author closed pull request %d without merging it, so the proposed change is dropped and the text is as it "
         "was." % pull, "",

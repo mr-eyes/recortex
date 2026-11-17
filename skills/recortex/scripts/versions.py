@@ -565,8 +565,18 @@ def utc_now():
     return datetime.datetime.now(datetime.timezone.utc).replace(second=0, microsecond=0)
 
 
-def stamp(moment):
-    return moment.strftime("%Y-%m-%d %H:%M UTC")
+def stamp(moment, config=None):
+    """The heading's time of a comment this script writes: `moment` in the zone the record states, else in UTC."""
+    return recortex.stamp(moment, config)
+
+
+def edited_stamp(when, moment, config=None):
+    """The stamp of a hand edit: `when` is GitHub's time of the edit (ISO, UTC); `moment` is used when it cannot be read."""
+    try:
+        at = datetime.datetime.strptime((when or "")[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        at = moment
+    return stamp(at, config)
 
 
 def post_comment(repo, issue, kind, text, folder):
@@ -721,7 +731,7 @@ def sync_command(args):
                     here = file_at(repo, made_head, "topics/%d.md" % number)
                     if newest is not None and not SHA40.fullmatch(newest["version"] or "") and here is not None \
                             and record_format.body_sha(here) == newest["after"]:
-                        tell_kept_later(repo, number, newest, made_head)
+                        tell_kept_later(repo, number, newest, made_head, config)
             return 0 if result == "made" else 1
         head, versions, found = compare(repo, db, config, hub, allowed)
         for number, how in sorted(found.items()):
@@ -752,7 +762,7 @@ def sync_command(args):
                 if SHA40.fullmatch(newest["version"] or ""):
                     say("versions: #%d is now in step; its version was missing and its text change already says why." % number)
                 else:
-                    tell_kept_later(repo, number, newest, result)
+                    tell_kept_later(repo, number, newest, result, config)
                 continue
             if actor is None or actor.lower() not in allowed:
                 say("versions: #%d changed, and the account that edited it is not known here; the version was kept without a "
@@ -761,13 +771,13 @@ def sync_command(args):
             headings = changed_headings(repo, head, number, body, config)
             moment = utc_now()
             memory = "\n".join([
-                "<!-- ghim:event type=text at=%s -->" % moment.strftime("%Y-%m-%dT%H:%MZ"),
-                "### Text: %s - %s" % (stamp(moment), "%s of #%d" % (", ".join(headings)[:60], number)), "",
+                "<!-- ghim:event type=text at=%s -->" % recortex.marker_time(moment, config),
+                "### Text: %s - %s" % (stamp(moment, config), "%s of #%d" % (", ".join(headings)[:60], number)), "",
                 "**In plain words, we changed the text to say that:** the text of this part was edited by hand on GitHub; its "
                 "new wording is the body of the topic", "",
                 "**Section:** %s" % ", ".join(headings), "", "**What changed:** The author edited the text by hand.", "",
                 "**Why:** Not recorded: the text was edited by hand.", "",
-                "**Approved:** Edited by %s on GitHub, %s." % (actor, (when or stamp(moment))[:16].replace("T", " ") + " UTC"), "",
+                "**Approved:** Edited by %s on GitHub, %s." % (actor, edited_stamp(when, moment, config)), "",
                 "**Kept from the author:** Nothing was changed by hand.", "",
                 "**Body:** before sha256 `%s`; after sha256 `%s`" % (before or "none", sha), "",
                 "**Version:** `%s`" % result, ""])
@@ -783,19 +793,20 @@ def sync_command(args):
             db.close()
 
 
-def tell_kept_later(repo, number, newest, commit):
+def tell_kept_later(repo, number, newest, commit, config=None):
     """Post the text change that ties `commit` to the earlier text change `newest` (whose Version field says "Not kept")."""
-    cid = post_comment(repo, number, "text", kept_later_text(newest, newest["after"], commit, utc_now()), scratch_folder(repo))
+    cid = post_comment(repo, number, "text", kept_later_text(newest, newest["after"], commit, utc_now(), config),
+                       scratch_folder(repo))
     say("versions: #%d is now in step; its file was kept afterwards%s." % (
         number, " (comment %d)" % cid if cid else ", but the comment that says so was not posted"))
 
 
-def kept_later_text(newest, sha, commit, moment):
+def kept_later_text(newest, sha, commit, moment, config=None):
     """The text change that ties the commit made later to the text change whose Version field says "Not kept": the same
     text (the same body hash before and after), the commit in its Version field, and the fixed form "Kept as a file later"."""
     return "\n".join([
-        "<!-- ghim:event type=text at=%s -->" % moment.strftime("%Y-%m-%dT%H:%MZ"),
-        "### Text: %s - %s" % (stamp(moment), "%s of #%d" % (", ".join(newest["sections"])[:60], newest["issue"])), "",
+        "<!-- ghim:event type=text at=%s -->" % recortex.marker_time(moment, config),
+        "### Text: %s - %s" % (stamp(moment, config), "%s of #%d" % (", ".join(newest["sections"])[:60], newest["issue"])), "",
         "**In plain words, we changed the text to say that:** the text of this part is as the earlier change said; its file on the "
         "branch was kept afterwards", "",
         "**Section:** %s" % ", ".join(newest["sections"]), "", "**What changed:** Nothing; the file of the earlier text change was "
@@ -905,14 +916,14 @@ def diff_command(args):
 
 # ---------------------------------------------------------------- names
 
-def decision_text(name, commit, manifest, words, moment, issue_title):
+def decision_text(name, commit, manifest, words, moment, issue_title, config=None):
     quoted = "\n".join(("> " + line) if line.strip() else ">" for line in re.sub(r"[ \t]+", " ", words).strip().split("\n"))
     return "\n".join([
-        "<!-- ghim:event type=decision at=%s -->" % moment.strftime("%Y-%m-%dT%H:%MZ"),
-        "### Decision: %s - name this version of the paper %s" % (stamp(moment), name), "",
+        "<!-- ghim:event type=decision at=%s -->" % recortex.marker_time(moment, config),
+        "### Decision: %s - name this version of the paper %s" % (stamp(moment, config), name), "",
         "**In plain words, we decided to:** call this version of the paper %s" % name, "",
         "**Decision:** The paper as it stands is named %s." % name, "",
-        "**Decided by:** the author, %s" % stamp(moment), "",
+        "**Decided by:** the author, %s" % stamp(moment, config), "",
         "**Exact words:**", "", quoted, "",
         "**Where recorded:** chat", "",
         "**Effect:** Version name: %s; commit %s; manifest sha256 %s" % (name, commit, manifest), "",
@@ -958,7 +969,7 @@ def name_command(args):
         title = db.execute("SELECT title FROM issues WHERE number = ?", (target,)).fetchone()["title"]
     finally:
         db.close()
-    memory = decision_text(args.name, head, manifest, words, utc_now(), title)
+    memory = decision_text(args.name, head, manifest, words, utc_now(), title, config)
     if getattr(args, "dry_run", False):
         say("would run: " + recortex.show_command(["issue", "comment", str(target), "--repo", repo, "--body-file", "-"],
                                                   "the decision that names %s, %d characters" % (args.name, len(memory))))

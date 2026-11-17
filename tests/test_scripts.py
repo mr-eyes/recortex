@@ -2799,7 +2799,8 @@ class GuardTests(RecordSandbox):
         db.execute("INSERT INTO comments(id, issue, body, created_at) VALUES (7, 6, ?, '2026-03-06T00:00:00Z')",
                    (event % "2026-03-05T09:00-08:00".translate(arabic),))
         index_module.derive(db)
-        self.assertEqual(("failure", "2026-03-05T09:00"), tuple(db.execute("SELECT type, at FROM events").fetchone()))
+        self.assertEqual(("failure", "2026-03-05T09:00-08:00"),   # the heading's PST as an offset
+                         tuple(db.execute("SELECT type, at FROM events").fetchone()))
         self.ready()
         self.meta(synced_at=late)
         self.assertIn("synced: unknown (", self.tool("index.py", "status").stdout)
@@ -4568,6 +4569,7 @@ class SetupTests(Sandbox):
         self.assertFalse(os.path.exists(os.path.join(self.dir, "trusted-repos")))
         refused = self.setup_script("apply", "--answers", self.answers("single"), "--root", self.project())
         self.assertIn("pass --dry-run to see the changes, or --yes", refused.stderr)
+
 
     NOT_FOUND = ("not ready: the GitHub CLI gh was not found. Install it from https://cli.github.com, then run "
                  "`gh auth login` in a terminal, and start setup again.\n")
@@ -6344,7 +6346,6 @@ class EarlierNameTests(RecordSandbox):
         self.assertFalse(os.path.exists(planted))
 
 
-
     def field_answers(self):
         entry = model_sheet("engineering")
         entry.pop("form")
@@ -7176,6 +7177,17 @@ class MindIndexTests(MindSandbox):
         self.assertEqual([9102], [row["id"] for row in json.loads(listing.stdout)])
         self.ready()
         self.assertNotIn(9600, [row["comment"] for row in self.query("timeline")])
+
+    def test_an_index_derived_before_zones_became_offsets_is_derived_again_and_keeps_the_heading_zone(self):
+        late = memory_draft("result", "2026-03-09T18:00Z").split("\n", 1)[1].replace(" UTC - ", " PST - ")   # a heading, no marker
+        self.put(9701, 5, late)
+        self.ready()
+        self.assertEqual("2026-03-09T18:00-08:00", self.sql("SELECT at FROM events WHERE comment = 9701")[0][0])
+        self.sql("UPDATE events SET at = '2026-03-09T18:00' WHERE comment = 9701",   # what the index held before this derive
+                 "UPDATE meta SET value = '3' WHERE key = 'derive_version'")
+        self.ready()
+        self.assertEqual(("2026-03-09T18:00-08:00", "4"), (self.sql("SELECT at FROM events WHERE comment = 9701")[0][0],
+                                                          self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0]))
 
     # ------------------------------------------------------------ the tables
 
@@ -8502,6 +8514,51 @@ class MindModelTests(MindSandbox):
         self.sql("UPDATE meta SET value = '' WHERE key = 'resume'")
         none = self.model()
         self.assertEqual((None, [], None), (none["last"], none["since"], none["open"]["holds"]))
+
+    def since_pause(self, pause, memories, created="2026-04-12T00:00:00Z"):
+        """The ids of what the model tells since the newest pause: the pause is a resume comment stamped `pause`, and each
+        memory is (id, at) with its marker's time."""
+        for cid, at in memories:
+            self.put(cid, 5, memory_draft("result", at))
+        self.put(9700, 4, resume_comment("THE PAUSE", pause), created=created)
+        self.ready()
+        model = self.model()
+        self.assertEqual(9700, model["last"]["id"])
+        return [m for m in model["since"] if m >= 9701]
+
+    def test_since_that_pause_compares_instants_when_the_block_is_in_utc_and_the_memories_in_pst(self):
+        # the pause is 2026-03-10 02:00 UTC, which is 2026-03-09 18:00 PST
+        found = self.since_pause("2026-03-10 02:00 UTC", [(9701, "2026-03-09T16:00-08:00"),    # 00:00 UTC: before the pause
+                                                          (9702, "2026-03-09T20:00-08:00")])   # 04:00 UTC: after it, though its clock reads earlier
+        self.assertEqual([9702], found)
+
+    def test_since_that_pause_compares_instants_when_the_block_is_in_pst_and_the_memories_in_utc(self):
+        # the pause is 2026-03-09 16:00 PST, which is 2026-03-10 00:00 UTC
+        found = self.since_pause("2026-03-09 16:00 PST", [(9701, "2026-03-09T23:00Z"),    # before it, though its clock reads later
+                                                          (9702, "2026-03-10T01:00Z")])   # after it
+        self.assertEqual([9702], found)
+
+    def test_a_pause_in_a_zone_that_is_not_known_is_placed_by_the_time_github_gave_its_comment(self):
+        # the stamp says 16:00 IST (zone not known); GitHub gave the comment 2026-04-12 00:00 UTC
+        found = self.since_pause("2026-04-11 16:00 IST", [(9701, "2026-04-11T23:00Z"), (9702, "2026-04-12T01:00Z")],
+                                 created="2026-04-12T00:00:00Z")
+        self.assertEqual([9702], found)
+
+    def test_a_memory_whose_heading_has_an_unknown_zone_is_placed_by_its_comments_time(self):
+        late = memory_draft("result", "2026-03-09T18:00Z").split("\n", 1)[1].replace(" UTC - ", " IST - ")   # no marker, zone unknown
+        self.put(9701, 5, late, created="2026-03-10T03:00:00Z")                   # GitHub: 03:00 UTC, after the pause below
+        self.put(9702, 5, late.replace("18:00", "19:00"), created="2026-03-09T23:00:00Z")   # GitHub: 23:00 UTC, before it
+        self.put(9700, 4, resume_comment("THE PAUSE", "2026-03-10 02:00 UTC"), created="2026-04-12T00:00:00Z")
+        self.ready()
+        model = self.model()
+        self.assertEqual([9701], [m for m in model["since"] if m >= 9701])   # by wall clock both would read as earlier
+
+    def test_a_memory_in_pst_and_one_in_utc_are_ordered_by_the_instant(self):
+        self.put(9701, 5, memory_draft("result", "2026-03-09T20:00-08:00"))   # 2026-03-10 04:00 UTC
+        self.put(9702, 5, memory_draft("result", "2026-03-10T03:00Z"))        # one hour earlier
+        self.ready()
+        order = [m["id"] for m in self.model()["memories"] if m["id"] >= 9701]
+        self.assertEqual([9702, 9701], order)
 
     def test_evidence_resolves_to_checked_parts(self):
         self.add_chain()
@@ -10981,7 +11038,6 @@ class MindTextTests(unittest.TestCase):
         self.assertIsNone(self.t.fence_of(""))
 
 
-
 class StatusLineTests(RecordSandbox):
     """The status line segment (statusline.py): its lines, its refusals and its few imports."""
 
@@ -11045,6 +11101,7 @@ class StatusLineTests(RecordSandbox):
         with open(os.path.join(parent, recortex.CONFIG_NAME), "w") as handle:
             handle.write("{}")
         self.assertEqual("", self.line({"workspace": {"project_dir": os.path.join(parent, "child")}}))  # never a parent
+
 
     def test_a_state_file_that_does_not_pass_its_checks_gives_the_doctor_line_and_none_of_its_text(self):
         fallback = "recortex off \u00b7 run hooks.py --doctor"
@@ -11783,7 +11840,6 @@ class FieldFormTests(unittest.TestCase):
         self.assertEqual(["confidential"], marks({"fields": dict(self.entry(), sensitive=["people", "x"])}, REPO))
         self.assertEqual(["confidential"], marks({"fields": dict(self.entry(), sensitive="people")}, REPO))
         self.assertEqual(["people"], marks({"fields": {"names": "broken", "sensitive": ["people"]}}, "octo-org/x"))
-
 
 
 FIELD_ON = ("Field guidance: this project has a field sheet that the user approved on %s. Every subagent gets it in its "
