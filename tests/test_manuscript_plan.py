@@ -1820,6 +1820,27 @@ class PlanModelTests(PaperSandbox):
         self.assertEqual({"unbacked": 1, "doubt": 1, "moved": 1, "display": 1, "sections": 2, "unused": 0, "limits": 2,
                           "comparisons": 1}, plan["gaps"])
 
+    def test_agreed_on_is_the_day_of_the_decision_that_adopted_the_plan_and_not_of_the_earliest_decision_a_part_links(self):
+        """Live check of 1.3.0: a claim said "Agreed on November 14" for a plan the author adopted on November 17, since the
+        part also linked an older decision and the page took the earliest decision a part links."""
+        data = self.repo()
+        body = data["comments"]["9302"]["body"]
+        self.assertIn("because=9300,9140", body)
+        data["comments"]["9302"]["body"] = body.replace("because=9300,9140", "because=9106,9300,9140", 1)   # 9106: 14 September
+        self.save(data)
+        model = self.model()
+        part = next(p for p in model["plan"]["parts"] if p["id"] == 9302)
+        self.assertEqual("November 16", part["agreed_day"].replace(", 2026", ""))   # 9300, the adoption, on the plan issue
+        words = json.dumps(model["plan"])
+        self.assertNotIn("September 14", words.replace(", 2026", ""))
+
+    def test_a_part_that_links_no_decision_on_the_plan_issue_takes_the_earliest_decision_it_links(self):
+        data = self.repo()
+        body = data["comments"]["9302"]["body"]
+        data["comments"]["9302"]["body"] = body.replace("because=9300,9140", "because=9106,9140", 1)
+        self.save(data)
+        part = next(p for p in self.model()["plan"]["parts"] if p["id"] == 9302)
+        self.assertEqual("September 14", part["agreed_day"].replace(", 2026", ""))
 
     def test_the_plan_issue_is_the_first_thread_of_the_outline_and_tells_its_decision(self):
         model = self.model()

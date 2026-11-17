@@ -131,6 +131,15 @@ class PlanMixin:
             words = PHRASES["plan." + state]
         return words, STATE_CSS[state], EXPLAIN_KEY[state]
 
+    def agreed_day(self, found, items):
+        """The day the author agreed a part: the day of the decision that adopted the plan, which is a decision on the
+        plan issue that the part links, and the earliest such decision when there are several. A part that links no
+        decision there takes the day of the earliest decision it links. None when it links none."""
+        decisions = found["decisions"]
+        adopting = [d for d in decisions if items[d]["issue"] == self.plan_state["issue"]]
+        chosen = adopting or decisions
+        return self.day_of(items[min(chosen, key=lambda d: (items[d]["time"], d))]["at"]) if chosen else None
+
     def part_model(self, cid, found):
         """One planned part for the page: its words, its state, who agreed it and what bears on it."""
         items = self.plan_state["found"]["items"]
@@ -144,8 +153,7 @@ class PlanMixin:
             "block": found["block"], "agreed": found["agreed"], "standing": found["standing"], "state": found["state"],
             "chip": words, "css": css, "explain": explain, "plain": self.sentence_words(cid),
             "day": self.plan_part_day(cid), "issue": items[cid]["issue"],
-            "agreed_day": self.day_of(items[min(found["decisions"], key=lambda d: items[d]["time"])]["at"])
-            if found["decisions"] else None,
+            "agreed_day": self.agreed_day(found, items),
             "backs": self.page_ids(found["backs"]), "against": self.page_ids(found["against"]),
             "against_days": [self.day_of(items[a]["at"]) for a in found["against"] if a in self.m],
             "rests": self.page_ids(found["rests"]), "waits_for": found["waits_for"],
