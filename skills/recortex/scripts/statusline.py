@@ -4,7 +4,9 @@
     python3 statusline.py < the JSON that Claude Code gives a status line command
 
 Prints one line, `recortex on · read 2 h ago`, `recortex on · reading`, `recortex off · not trusted` and the like, or
-nothing at all when the folder holds no project file (.recortex.json, or the name from before the rename). It reads one
+nothing at all when the folder holds no project file (.recortex.json, or the name from before the rename). Before the hooks
+have written their file for the folder (a folder not seen before) it prints `recortex · starting`: that is no off state,
+and the first hook replaces it. It reads one
 small file that the plugin's session-start and prompt hooks write (see hooks.py write_status) and nothing else: no
 plugin module, no index, no network, no git. setup.py apply copies it to <config home>/recortex/statusline.py, so that
 the command in settings.json survives plugin updates; the hooks keep that copy current.
@@ -12,7 +14,7 @@ the command in settings.json survives plugin updates; the hooks keep that copy c
 The project folder is workspace.project_dir of the JSON Claude Code passes on stdin, else $CLAUDE_PROJECT_DIR, else the
 current folder, never a parent. The state file is opened without following a symlink and is used only when it is a plain
 file of this user with no access for group or others, at most 2 KB, whose every value fits its pattern or table.
-Anything else gives `recortex off · run hooks.py --doctor`, never a word of the file.
+A file that is there and fails a check gives `recortex off · run hooks.py --doctor`, never a word of the file.
 
 Standard library only, and only os, sys, json, time, hashlib and stat: it starts in about 15 ms.
 """
@@ -33,6 +35,8 @@ SHORT = {  # the same codes as hooks.STATUS_REASONS, in a few words (a test hold
     "error": "error",
 }
 FALLBACK = "recortex off · run hooks.py --doctor"
+STARTING = "recortex · starting"   # a configured folder whose hooks have not written their file yet
+MISSING = {}   # what read_state returns for no file at all, as against None for a file that fails its checks
 KEYS = ("v", "state", "reason", "repo", "synced_at")
 MAX_BYTES = 2048
 
@@ -119,9 +123,11 @@ def status_file(root, environ):
 
 
 def read_state(path):
-    """The state dict when the file passes every check, else None."""
+    """The state dict when the file passes every check, MISSING when there is no file (or no folder for it) yet, else None."""
     try:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except FileNotFoundError:
+        return MISSING
     except OSError:
         return None
     try:
@@ -159,6 +165,8 @@ def line(stdin_text="", environ=None, now=None):
     if not any(os.path.isfile(os.path.join(root, name)) for name in CONFIG_NAMES):
         return ""
     data = read_state(status_file(root, environ))
+    if data is MISSING:
+        return STARTING
     if data is None:
         return FALLBACK
     if data["state"] == "off":

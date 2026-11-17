@@ -11087,7 +11087,9 @@ class StatusLineTests(RecordSandbox):
                                                         self.sl.epoch("2026-03-04T12:00:00Z")))  # then the variable
 
     def test_a_folder_without_a_project_file_and_a_missing_state_file_give_their_lines(self):
-        self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.line())  # a project file, no state file
+        self.assertEqual("recortex \u00b7 starting", self.line())  # a project file, no state file yet: no off state
+        self.assertNotIn("off", self.sl.STARTING)
+        self.assertNotIn("doctor", self.sl.STARTING)
         other = os.path.join(self.dir, "no-project")
         os.makedirs(other)
         self.assertEqual("", self.line({"workspace": {"project_dir": other}}))
@@ -11095,13 +11097,27 @@ class StatusLineTests(RecordSandbox):
         self.assertEqual("", self.line())
         with open(os.path.join(self.project, ".gh-issues-manager.json"), "w") as handle:
             handle.write("{}")
-        self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.line())  # the earlier name counts
+        self.assertEqual("recortex \u00b7 starting", self.line())  # the earlier name counts
         parent = os.path.join(self.dir, "parent")
         os.makedirs(os.path.join(parent, "child"))
         with open(os.path.join(parent, recortex.CONFIG_NAME), "w") as handle:
             handle.write("{}")
         self.assertEqual("", self.line({"workspace": {"project_dir": os.path.join(parent, "child")}}))  # never a parent
 
+    def test_a_state_folder_that_is_not_there_yet_is_the_same_as_no_state_file(self):
+        fresh = {"XDG_STATE_HOME": os.path.join(self.dir, "never-seen"), "HOME": self.dir}
+        text = json.dumps({"workspace": {"project_dir": self.root}})
+        self.assertEqual("recortex \u00b7 starting", self.sl.line(text, fresh, 0))
+
+    def test_a_real_off_state_and_a_file_that_fails_its_checks_are_not_the_starting_word(self):
+        self.put(state="off", reason="not-trusted", repo="")
+        self.assertEqual("recortex off \u00b7 not trusted", self.line())
+        with open(self.path, "w") as handle:
+            handle.write("{not json")
+        self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.line())   # present and broken: a problem to look at
+        os.unlink(self.path)
+        os.mkdir(self.path)                                                            # something else where the file belongs
+        self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.line())
 
     def test_a_state_file_that_does_not_pass_its_checks_gives_the_doctor_line_and_none_of_its_text(self):
         fallback = "recortex off \u00b7 run hooks.py --doctor"
