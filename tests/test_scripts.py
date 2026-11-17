@@ -10542,6 +10542,87 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual([], found)
 
 
+class MindFigureTests(RecordSandbox):
+    """The pictures of figure blocks (mind_figures.py): what is judged a picture, what source may be fetched, the
+    fetch through the fake gh, the budgets, and the private cache. Nothing here builds the page."""
+
+    COMMIT = "0123456789abcdef0123456789abcdef01234567"
+    OTHER = "fedcba9876543210fedcba9876543210fedcba98"
+    FIGURES = os.path.join(FIXTURES, "figures")
+
+    def setUp(self):
+        super().setUp()
+        self.in_process()
+        self.setenv(FAKE_GH_FAIL_ON=None, FAKE_GH_SLEEP=None)
+        sys.path.insert(0, SCRIPTS)
+        import mind_figures
+        self.mf = mind_figures
+
+    def setenv(self, **changes):
+        """Set (or, with None, remove) variables of this process until the test ends."""
+        for key, value in changes.items():
+            before = os.environ.get(key)
+            self.addCleanup(lambda k=key, v=before: os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v))
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def fixture(self, name):
+        with open(os.path.join(self.FIGURES, name), "rb") as handle:
+            return handle.read()
+
+    def stash(self, ref, path, raw, size=None):
+        """A file of the fake repository at `ref`: its bytes, or its first bytes and its whole size."""
+        import base64
+        data = self.repo()
+        value = base64.b64encode(raw).decode("ascii")
+        data.setdefault("files", {})["%s:%s" % (ref, path)] = {"base64": value, "size": size} if size else value
+        self.save(data)
+
+    def commits(self, **named):
+        data = self.repo()
+        data.setdefault("commits", {}).update(named)
+        self.save(data)
+
+    def asked(self, word=None):
+        """The api calls for a file or a commit that the fake has seen, as one string each."""
+        return [" ".join(call[:2]) for call in self.repo()["log"]
+                if call[0] == "api" and re.search(r"/(contents|commits)/", call[1]) and (word is None or word in call[1])]
+
+    def load(self, items, fetch=True, code_repo=None, **more):
+        return self.mf.load(items, REPO, code_repo, fetch, **more)
+
+    def cache_file(self, commit, path):
+        import hashlib
+        return os.path.join(self.data, "private", "octo-org__octo-repo", "figures", commit,
+                            hashlib.sha256(path.encode("utf-8")).hexdigest())
+
+    def test_gh_gives_a_file_as_bytes_and_text_as_before(self):
+        raw = bytes(range(256)) + b"\xff\xfe\r\n\x00end"
+        self.stash(self.COMMIT, "bin.dat", raw)
+        path = "repos/%s/contents/bin.dat?ref=%s" % (REPO, self.COMMIT)
+        got = recortex.gh(["api", path, "-H", "Accept: application/vnd.github.raw"], binary=True)
+        self.assertEqual((bytes, raw), (type(got), got))
+        text = recortex.gh(["api", path, "--jq", ".size"])  # without the raw type: the JSON answer, as text
+        self.assertEqual(str, type(text))
+        self.assertEqual(str, type(recortex.gh(["api", "repos/%s" % REPO, "--jq", ".private"])))
+        with self.assertRaises(recortex.GhError) as caught:
+            recortex.gh(["api", "repos/%s/contents/none?ref=%s" % (REPO, self.COMMIT)], binary=True)
+        self.assertIn("Not Found", str(caught.exception))  # the error text is text for bytes too
+        self.assertEqual("", recortex.gh(["auth", "status"], binary=True).decode("utf-8")[:0])
+        # the fake answers a file only for a key it holds
+        for ref, name in ((self.OTHER, "bin.dat"), (self.COMMIT, "other.dat")):
+            with self.assertRaises(recortex.GhError):
+                recortex.gh(["api", "repos/%s/contents/%s?ref=%s" % (REPO, name, ref)], binary=True)
+        with self.assertRaises(recortex.GhError):
+            recortex.gh(["api", "repos/%s/commits/v9" % REPO, "--jq", ".sha"])
+        self.commits(v1=self.COMMIT)
+        self.assertEqual(self.COMMIT + "\n", recortex.gh(["api", "repos/%s/commits/v1" % REPO, "--jq", ".sha"]))
+        self.assertEqual(self.COMMIT + "\n", recortex.gh(["api", "repos/%s/commits/%s" % (REPO, self.COMMIT),
+                                                          "--jq", ".sha"]))
+
+
 class GraphqlReaderTests(unittest.TestCase):
     """The reader that checks a GraphQL operation against the schema excerpt (tests/graphql_check.py): queries as
     before, and since 0.9.0 mutations, inline fragments, __typename and literal inputs."""

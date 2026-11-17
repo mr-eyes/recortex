@@ -42,6 +42,16 @@ longer resolves) and "resolves" (how many more times its node resolves), to test
 A comment of another repository is one whose state entry has a "repo" other than the repository in the request:
 reading it by id answers "Not Found", as for an id that does not exist, and the listings leave it out. A comment
 without "repo" belongs to every repository.
+Files and commits (the mind page's pictures, mind_figures.py): `api repos/<owner>/<name>/contents/<path>?ref=<ref>`
+answers from the state's "files", a map from "<ref>:<path>" to the file's bytes as base64, or to
+{"base64": <the first bytes as base64>, "size": N} for a file that is N bytes long (the rest is zero bytes, so that a
+test need not store megabytes). With the raw media type (`-H "Accept: application/vnd.github.raw"`) the bytes are
+printed as they are; without it the JSON of the contents API (type, encoding, size, content). A key that is not in
+"files" answers "Not Found". `api repos/<owner>/<name>/commits/<ref>` answers {"sha": ...}, or the bare sha with
+`--jq .sha`, from the state's "commits" (a map from a tag or a short commit to whatever it answers), or a 40-digit
+commit that is the ref of some key in "files" (it answers itself); any other ref answers "Not Found". The calls are in
+the state's "log" like every other; FAKE_GH_FAIL_ON="api repos/octo-org/octo-repo/contents" fails the fetches alone,
+and FAKE_GH_SLEEP slows every call.
 """
 
 import base64
@@ -464,6 +474,33 @@ def main():
                 return
             sys.stdout.write(json.dumps(rows[:2]) + json.dumps(rows[2:]))
             save(state)
+            return
+        elif re.fullmatch(r"repos/[^/]+/[^/]+/commits/[^/?]+", path):
+            ref = path.rsplit("/", 1)[1]
+            sha = state.get("commits", {}).get(ref)
+            if sha is None and re.fullmatch(r"[0-9a-f]{40}", ref) and any(
+                    key.split(":", 1)[0] == ref for key in state.get("files", {})):
+                sha = ref
+            if sha is None:
+                sys.stdout.write('{"message":"Not Found","status":"404"}')
+                fail("gh: Not Found (HTTP 404)")
+            print(sha if jq == ".sha" else json.dumps({"sha": sha}))
+            return
+        elif re.fullmatch(r"repos/[^/]+/[^/]+/contents/[^?]+\?ref=[^&]+", path):
+            filepath, ref = re.fullmatch(r"repos/[^/]+/[^/]+/contents/([^?]+)\?ref=([^&]+)", path).groups()
+            entry = state.get("files", {}).get("%s:%s" % (ref, filepath))
+            if entry is None:
+                sys.stdout.write('{"message":"Not Found","status":"404"}')
+                fail("gh: Not Found (HTTP 404)")
+            data = base64.b64decode(entry["base64"] if isinstance(entry, dict) else entry)
+            if isinstance(entry, dict) and entry.get("size", 0) > len(data):
+                data += b"\0" * (entry["size"] - len(data))
+            if any("vnd.github.raw" in value for value in option(args, "-H", many=True)):
+                sys.stdout.flush()
+                sys.stdout.buffer.write(data)
+            else:
+                print(json.dumps({"type": "file", "encoding": "base64", "size": len(data),
+                                  "content": base64.b64encode(data).decode("ascii")}))
             return
         else:
             fail("fake gh: unsupported api path %s" % path, 3)

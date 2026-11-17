@@ -42,13 +42,15 @@ def gh_command():
     return shlex.split(names.env("GH", "gh"))
 
 
-def gh(args, stdin=None, timeout=60, errors=None):
+def gh(args, stdin=None, timeout=60, errors=None, binary=False):
     """Run gh with the given arguments and return stdout. Raise GhError on failure. errors="replace" reads an answer
-    that is not text in the locale's encoding with replacement characters; by default it raises UnicodeDecodeError."""
+    that is not text in the locale's encoding with replacement characters; by default it raises UnicodeDecodeError.
+    binary=True returns stdout as bytes, for a file (the mind page's pictures); `errors` is then not used."""
     cmd = gh_command() + list(args)
     try:
         proc = subprocess.run(
-            cmd, input=stdin, capture_output=True, text=True, timeout=timeout, errors=errors
+            cmd, input=stdin, capture_output=True, text=not binary, timeout=timeout,
+            errors=None if binary else errors
         )
     except FileNotFoundError:
         raise GhMissing("gh CLI not found (looked for: %s)" % cmd[0])
@@ -57,9 +59,10 @@ def gh(args, stdin=None, timeout=60, errors=None):
     except subprocess.TimeoutExpired:
         raise GhTimeout("gh timed out after %ss: %s" % (timeout, " ".join(args[:3])))
     if proc.returncode != 0:
+        stderr = proc.stderr.decode("utf-8", "replace") if binary else proc.stderr
         raise GhError(
             "gh %s failed (exit %d): %s"
-            % (" ".join(args[:3]), proc.returncode, proc.stderr.strip())
+            % (" ".join(args[:3]), proc.returncode, stderr.strip())
         )
     return proc.stdout
 
