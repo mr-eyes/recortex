@@ -1866,5 +1866,109 @@ class ZoneTests(unittest.TestCase):
 HUB_111 = os.path.join(ROOT, "tests", "fixtures", "hub-1.1.1-manuscript.md")
 
 
+class OlderHubTests(WritingBox):
+    """A hub made by the 1.1.1 setup (the text its setup.hub_body made for a manuscript project, kept in
+    tests/fixtures/hub-1.1.1-manuscript.md) needs no hand edit for planning, writing and the page. The 1.1.1 hub has no
+    row for a topic, and none for Introduction or Discussion, which the manuscript profile gained after it; the labels
+    place the topics, and every command leaves the hub as it was."""
+
+    plan = False
+
+    def older_hub(self):
+        data = self.repo()
+        data["issues"]["1"]["body"] = recortex.read_text(HUB_111)
+        data["issues"]["1"]["updated_at"] = "2026-11-17T00:00:00Z"
+        self.save(data)
+        self.ready()
+        return self.repo()["issues"]["1"]["body"]
+
+    def test_the_fixture_is_a_hub_the_linter_accepts_and_the_current_setup_makes_the_same_way(self):
+        import lint_drafts
+        import setup
+        text = recortex.read_text(HUB_111)
+        self.assertEqual([], [f for f in lint_drafts.lint_text(text, kind="hub", config={"profiles": ["manuscript"]})
+                              if f.level == "error"])
+        answers = setup.check_answers({"repo": "octo-org/sample-project", "record": "this", "deliverables": [{"kind": "paper"}],
+                                       "project": "A two-season field trial of a winter rye cover crop and its effect on topsoil "
+                                                  "moisture.", "decision_makers": ["the principal investigator"],
+                                       "timezone": "US Eastern time, written as 2026-11-16 10:10 EST", "topics": ["moisture"]})
+        now = setup.hub_body(answers, setup.new_config({}, answers)[0])
+        then, current = ({s["heading"]: s["text"] for s in record_format.sections(body)} for body in (text, now))
+        self.assertEqual(list(then), list(current))   # the same sections, in the same order
+        for heading in ("Deliverable text", "Resume here", "Project", "Active issues", "Pull requests", "Older tracker",
+                        "Recording rules"):
+            self.assertEqual(then[heading], current[heading], heading)   # the setup's own text has not changed since
+        self.assertIn("`ms:results`", then["Deliverable sections"])
+        self.assertNotIn("ms:discussion", text)    # what the profile gained after 1.1.1 is not in an older hub
+        self.assertIn("ms:discussion", current["Labels"])
+
+    def test_enabling_planning_and_writing_changes_nothing_in_the_hub(self):
+        hub = self.older_hub()
+        dry = self.cmd("plan.py", "setup", "--dry-run")
+        self.assertEqual(0, dry.returncode, dry.stdout + dry.stderr)
+        self.assertIn("would link the new issue under hub #1 as a sub-issue", dry.stdout)
+        self.assertEqual(hub, self.repo()["issues"]["1"]["body"])
+        done = self.cmd("plan.py", "setup")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn("plan: #", done.stdout)
+        self.mode("review")
+        self.assertEqual(hub, self.repo()["issues"]["1"]["body"])        # not one byte of the hub
+        with open(os.path.join(self.dir, "project", ".recortex.json")) as handle:
+            self.assertEqual({"manuscript": 13}, json.load(handle)["plans"])
+        status = self.cmd("write.py", "status")
+        self.assertEqual(0, status.returncode, status.stdout + status.stderr)
+        self.assertIn("due: #3 Methods (methods; parts [], results [], decisions [9106])", status.stdout)   # the record is read
+        folder = self.start(3)
+        base = self.base(folder)
+        self.draft(folder, base.replace("### Table: plots", "The four plots of the wet corner were left out of the moisture "
+                                                            "analysis.\n\n### Table: plots", 1), parts=(), results=(),
+                   decisions=(9106,))
+        written = self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words("Approve"))
+        self.assertEqual(0, written.returncode, written.stdout + written.stderr)
+        self.assertIn("left out of the moisture analysis", self.body(3))
+        self.assertEqual(0, self.cmd("versions.py", "status").returncode)
+        self.assertEqual(0, self.tool("mind.py", gh="false").returncode)
+        self.assertEqual(hub, self.repo()["issues"]["1"]["body"])
+
+
+class OlderHubWriteTests(WritingBox):
+    """The same hub, on a record with a plan and parts that are due: the write, the version and the page work as they do on
+    the hand-made hub of the tests, and the hub stays as it was."""
+
+    def test_a_write_and_the_page_need_no_edit_of_the_hub(self):
+        data = self.repo()
+        data["issues"]["1"]["body"] = recortex.read_text(HUB_111)
+        data["issues"]["1"]["updated_at"] = "2026-11-17T00:00:00Z"
+        self.save(data)
+        self.ready()
+        self.mode("autonomous")
+        hub = self.repo()["issues"]["1"]["body"]
+        folder = self.start(5)
+        self.draft(folder)
+        self.assertEqual(0, self.cmd("write.py", "apply", "--dir", folder).returncode)
+        self.ready()
+        self.assertIn("The pooled fit and the dry-spell comparison agree", self.body(5))
+        self.assertEqual(hub, self.repo()["issues"]["1"]["body"])
+        self.assertEqual(0, self.cmd("versions.py", "sync").returncode)
+        built = self.tool("mind.py", gh="false")
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        model = json.loads(self.tool("index.py", "query", "mind", "--json", gh="false").stdout)
+        placed = {section["label"]: sorted({p["thread"] for p in section["parts"]})
+                  for group in model["outline"]["deliverables"] for section in group["sections"]}
+        threads = {t["n"]: t["issues"] for t in model["threads"]}
+        topics = {int(n) for n, issue in self.repo()["issues"].items() if "final-record" in issue["labels"]}
+        placed = {heading: sorted(n for t in threads_of for n in threads[t] if n in topics) for heading, threads_of in placed.items()}
+        heading_of = dict(recortex.section_labels(["manuscript"]))
+        carried = {}
+        for number, issue in self.repo()["issues"].items():
+            if "final-record" in issue["labels"]:
+                for label in issue["labels"]:
+                    if label in heading_of:
+                        carried.setdefault(heading_of[label], set()).add(int(number))
+        self.assertEqual({"Introduction", "Methods", "Results", "Discussion", "Limitations"}, set(carried))
+        self.assertEqual({heading: sorted(numbers) for heading, numbers in carried.items()}, placed)   # the labels place them
+        self.assertEqual(hub, self.repo()["issues"]["1"]["body"])
+
+
 if __name__ == "__main__":
     unittest.main()
