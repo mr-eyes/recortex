@@ -1094,12 +1094,12 @@ class Page:
             elif note:
                 lines.append(E("p", {"class": "quiet"}, mind_model.PHRASES[note]))
             if restore is not None and kept and memory is not None:
-                day, clock = self.day_of(entry.get("day")), text_of(entry.get("time"))
+                day, clock, shown = self.day_of(entry.get("day")), text_of(entry.get("time")), self.copy_heading(restore)
                 came = mind_model.PHRASES["history.how"] % words if words else ""
-                request = mind_model.PHRASES["history.restore"] % (restore, day, clock) if CLOCK.fullmatch(clock) else \
-                    mind_model.PHRASES["history.restore.day"] % (restore, day)
+                request = mind_model.PHRASES["history.restore"] % (shown, day, clock) if CLOCK.fullmatch(clock) else \
+                    mind_model.PHRASES["history.restore.day"] % (shown, day)
                 lines.append(E("p", {"class": "askline"}, self.sheet_copy(request[:-1] + came + ".",
-                                                                          mind_model.PHRASES["history.copy"] % (restore, day))))
+                                                                          mind_model.PHRASES["history.copy"] % (shown, day))))
             items.append(E("li", {"class": "hist"}, *lines))
         return kept, entries, items
 
@@ -1388,6 +1388,13 @@ class Page:
         self.sheet_ids[prefix] = self.sheet_ids.get(prefix, 0) + 1
         return "%s-%d" % (prefix, self.sheet_ids[prefix])
 
+    @staticmethod
+    def copy_heading(value):
+        """A section heading as a request for the chat may carry it: only a heading of the form the profiles' headings have
+        (recortex.HEADING_TEXT), else the word "section". What a copied request holds is the plugin's own fixed words, a
+        heading, a number and a checked id, never a word of the record: the request becomes the user's own message."""
+        return value if isinstance(value, str) and recortex.HEADING_TEXT.fullmatch(value) else "section"
+
     def sheet_copy(self, request, short_name):
         """A request for the chat in quotation marks and a button, named by the request, that copies it. The script copies the words
         of the element before the button, so it holds none."""
@@ -1420,8 +1427,9 @@ class Page:
                  E("div", {"class": "mn", "role": "note"}, *note) if note else "")
         empty = ""
         if not has_text:
+            shown = self.copy_heading(label)
             ask = J(E("span", None, mind_model.PHRASES["empty.draft"]), self.sheet_copy(
-                mind_model.PHRASES["empty.request"] % label, mind_model.PHRASES["copy.draft"] % label)) \
+                mind_model.PHRASES["empty.request"] % shown, mind_model.PHRASES["copy.draft"] % shown)) \
                 if section.get("write") is True else ""
             empty = E("div", {"class": "row"}, E("div", None, E("p", {"class": "notext"}, mind_model.PHRASES["empty.line"])),
                       E("div", {"class": "mn", "role": "note"}, ask) if ask else "")
@@ -1450,8 +1458,11 @@ class Page:
         label, rows = self.sheet_id("hole"), []
         for slot in items:
             kind = text_of(slot.get("part"))
-            ask = self.sheet_copy(mind_model.PHRASES["slot.request"] % (text_of(slot.get("heading")), text_of(slot.get("plain"))),
-                                  mind_model.PHRASES["slot.write"]) if slot.get("write") is True else ""
+            # the request holds the heading and the plan comment's id only; the plan's own line, which is record text, stays
+            # beside the button and the session reads it from the index (index.py query plan) as data
+            part_id = integer(slot.get("id"))
+            ask = self.sheet_copy(mind_model.PHRASES["slot.request"] % (self.copy_heading(slot.get("heading")), part_id),
+                                  mind_model.PHRASES["slot.write"]) if slot.get("write") is True and part_id > 0 else ""
             rows.append(E("li", {"class": "hole"}, E("span", {"class": "kind"}, mind_model.PHRASES["slot.kind"] % (
                 kind if PART_KIND.fullmatch(kind) else "part", text_of(slot.get("tail")))), text_of(slot.get("plain")), ask))
         margin = slots.get("margin") if isinstance(slots, dict) and isinstance(slots.get("margin"), dict) else {}

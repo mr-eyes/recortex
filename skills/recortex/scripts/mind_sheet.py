@@ -101,7 +101,7 @@ PHRASES = {
     "slot.label": "Planned for the %s and not in the text yet", "slot.kind": "Planned %s \u00b7 %s",
     "slot.more": "and %d more in the plan", "slot.write": "write this part",
     "slot.margin": ("1 planned part is not in the text yet: %s", "%d planned parts are not in the text yet: %s"),
-    "slot.request": "Write this part of the %s: %s.",
+    "slot.request": "Write this part of the %s: planned part %d.",
     "tail.planned": "nothing backs it yet", "tail.failed": "an attempt to show it failed",
     "tail.waits": "waits for the part it follows", "tail.doubt": "a finding speaks against it",
     "tail.moved": "what it rested on has changed", "tail.can be made": "can be made now",

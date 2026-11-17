@@ -20,6 +20,8 @@ Triggers: the session brief says "Start the plan run in the background now"; or 
 
 `agents/record-planner.md` is the brief. It states the one message the standing results can carry; names the fewest claims that carry it, each in its section and at the strength its results allow; chooses the one figure or table that would convince a skeptical reader of each; plans the discussion (an interpretation per main claim with the explanations it must rule out, every limitation the results state under "Not established" and every failure on a feeding topic, comparisons only with work the record or the author names, implications no further than the claims); lists the gaps, each with an experiment as an idea draft that links its claim; and writes one draft per part. A statement holds a number only when a finding it links holds it. It never names a paper from memory, and missing is not zero. The sheet's "What counts as proof" line decides what a claim needs.
 
+A planned part is named by the id of its plan comment. The mind page's manuscript view puts that id, and no word of the plan's line, into the request that its "write this part" button copies ("Write this part of the Results: planned part 9302."); read the part with `index.py query plan` and follow "Write the text" in [writing.md](writing.md).
+
 ## Keep the plan current
 
 Triggers: the session brief says the plan is behind the record; or a result was just recorded on a thread that feeds planned parts (`index.py query recall --issue N` lists them, with their states).
