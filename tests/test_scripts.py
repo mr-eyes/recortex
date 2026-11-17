@@ -6623,8 +6623,28 @@ class MindSandbox(RecordSandbox):
         for offset, (name, kind) in enumerate(CHAIN[:upto]):
             self.put(9103 + offset, 5, chain_text(name))
 
+    def slug(self):
+        """The record's folder name beside the index: owner__name of the project file's repository."""
+        return self.config["repo"].replace("/", "__")
+
     def index_file(self):
-        return os.path.join(self.data, "private", "octo-org__octo-repo", "index.sqlite")
+        return os.path.join(self.data, "private", self.slug(), "index.sqlite")
+
+    def manuscript_record(self):
+        """Replace the example record with the invented manuscript record of octo-org/sample-project
+        (tests/manuscript_record.py): a hub with a "Deliverable sections" table, five topics over the research profile
+        (one feeds three sections), three tasks as sub-issues (one with two topic labels), sub-headings, a numbered
+        list, bold, inline and display formulas, an HTML table with spans, a pipe table, a figure block, a table block,
+        memories of every link kind, an idea that a decision took up, a checkpoint and three resume blocks. Returns
+        the repository's name, and syncs nothing: call self.ready()."""
+        import manuscript_record
+        state, config, trusted = manuscript_record.build()
+        self.save(state)
+        self.config = config
+        self.write_config(config)
+        with open(self.trusted, "w") as handle:
+            handle.write(trusted)
+        return config["repo"]
 
     def sql(self, *statements):
         import sqlite3
@@ -8510,7 +8530,7 @@ class MindPageTests(MindSandbox):
     """The mind page (mind.py): its contract, hostile text, addresses, storage, gates and the command."""
 
     def page_file(self):
-        return os.path.join(self.data, "private", "octo-org__octo-repo", "mind.html")
+        return os.path.join(self.data, "private", self.slug(), "mind.html")
 
     def build(self, *args, env=None, gh="false"):
         return self.tool("mind.py", *args, env=env, gh=gh)
