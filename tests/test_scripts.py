@@ -12402,6 +12402,14 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("python -m unittest discover -s tests -v", workflow)
         self.assertIn("timeout-minutes: 45", workflow)
 
+    def test_every_class_of_test_scripts_is_in_one_of_the_four_commands(self):
+        text = recortex.read_text(os.path.join(ROOT, "CONTRIBUTING.md"))
+        listed = {name for group in re.findall(r"tests\.test_scripts\.\{([^}]*)\}", text) for name in group.split(",")}
+        defined = {name for name, value in globals().items() if isinstance(value, type)
+                   and issubclass(value, unittest.TestCase) and any(n.startswith("test_") for n in vars(value))}
+        self.assertEqual(set(), defined - listed)
+        self.assertEqual(set(), listed - defined)   # no name that is not a class
+
     def test_the_settings_snippet_registers_what_the_plugin_registers(self):
         """A plain-skill install merges the snippet: it registers the same events, matchers, scripts, arguments and
         timeouts as hooks/hooks.json, so that both installs pay the same per-call cost."""
