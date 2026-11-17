@@ -1539,14 +1539,15 @@ def writing_command(args):
     print("recorded: the writing mode for %s on this machine is %s (%s)" % (repo, args.mode, day))
     if args.mode != "off":
         print("\n".join(writing.consent_lines(repo)))
+    if repo.lower() not in recortex.trusted_repos():
+        print("note: %s is not in your trusted repositories, so nothing is written for it until it is" % repo)
+    elif args.mode != "off":
         try:
             import versions  # noqa: E402 - the versions are prepared in the same run (references/versions.md)
         except ImportError:
             versions = None
         if versions is not None:
             versions.ensure(config, repo)
-    if repo.lower() not in recortex.trusted_repos():
-        print("note: %s is not in your trusted repositories, so nothing is written for it until it is" % repo)
     return 0
 
 

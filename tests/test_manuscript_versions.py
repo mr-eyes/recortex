@@ -75,8 +75,68 @@ class VersionBox(tw.WritingBox):
     def tags(self):
         return {ref: sha for ref, sha in self.git()["refs"].items() if ref.startswith("tags/")}
 
+    def untrust(self):
+        """The user's trusted list no longer names the repository (or never did)."""
+        with open(self.trusted, "w") as handle:
+            handle.write("")
+
+    def call(self, code):
+        """Run Python code in the project's folder with versions imported and the project's config loaded as `config`: for
+        the entry points that are not commands (versions.ensure and versions.commit, which setup and the writers call)."""
+        import subprocess
+        env = ts.environment_for(os.environ, {"RECORTEX_GH": ts.FAKE, "FAKE_GH_STATE": self.state})
+        env.update(XDG_CACHE_HOME=os.path.join(self.dir, "xdg-cache"), XDG_STATE_HOME=os.path.join(self.dir, "xdg-state"),
+                   XDG_CONFIG_HOME=os.path.join(self.dir, "xdg-config"))
+        env = ts.overlay(env, self.env, None)
+        script = "import sys; sys.path.insert(0, %r); import recortex, versions; config = recortex.load_config(); %s" % (
+            ts.SCRIPTS, code)
+        return subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env, cwd=self.project)
+
 
 class VersionTests(VersionBox):
+    def test_the_commit_command_with_the_mode_off_writes_no_commit(self):
+        self.written()                      # the branch exists from a write in autonomous mode
+        head = self.head()
+        self.mode("off")                    # then the user switches writing off on this machine
+        body = os.path.join(self.dir, "body.md")
+        with open(body, "w") as handle:
+            handle.write(self.body(5) + "\nA line.\n")
+        done = self.cmd("versions.py", "commit", "--issue", "5", "--body-file", body)
+        self.assertNotEqual(0, done.returncode)
+        self.assertEqual(head, self.head())
+
+    def test_ensure_with_the_mode_off_makes_no_branch(self):
+        self.ready()
+        self.mode("off")
+        made = self.call("print(versions.ensure(config, 'octo-org/sample-project'))")
+        self.assertEqual("off", made.stdout.strip().splitlines()[-1], made.stdout + made.stderr)
+        self.assertIsNone(self.head())
+
+    def test_choosing_a_mode_for_a_repository_that_is_not_trusted_writes_no_branch(self):
+        self.ready()
+        self.untrust()
+        done = self.cmd("setup.py", "writing", "set", "--mode", "review", "--yes")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn("is not in your trusted repositories, so nothing is written for it until it is", done.stdout)
+        self.assertIsNone(self.head())
+        self.assertNotIn("recortex keeps every version", done.stdout)
+
+    def test_ensure_called_directly_makes_no_branch_for_a_repository_that_is_not_trusted(self):
+        self.ready()
+        self.untrust()
+        self.mode("review")   # chosen here; the branch is not made, the note says why
+        made = self.call("print(versions.ensure(config, 'octo-org/sample-project'))")
+        self.assertEqual("off", made.stdout.strip().splitlines()[-1], made.stdout + made.stderr)
+        self.assertIsNone(self.head())
+
+    def test_commit_called_directly_adds_no_version_for_a_repository_that_is_not_trusted(self):
+        self.written()
+        head = self.head()
+        self.untrust()
+        kept = self.call("print(versions.commit(config, 'octo-org/sample-project', 5, 'A line the branch must not get.\\n'))")
+        self.assertEqual(recortex_reason("off"), kept.stdout.strip().splitlines()[-1], kept.stdout + kept.stderr)
+        self.assertEqual(head, self.head())
+
     def test_a_mode_of_review_makes_the_branch_with_a_first_commit_that_has_no_parent(self):
         self.ready()
         done = self.cmd("setup.py", "writing", "set", "--mode", "review", "--yes")

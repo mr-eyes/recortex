@@ -391,8 +391,9 @@ def version_at(repo, ref):
 def ensure(config, repo):
     """Make the branch when it is missing (with the first commit of the current text and the workflow). Only with a mode of
     review or autonomous, only when the account can write, and never with force. Prints one line. Returns "off", "kept",
-    "refused" or "made"."""
-    if not kept_here(repo):
+    "refused" or "made". A repository that is not in the trusted list is never written to, whoever calls: the check is here
+    and not only in the commands that call this, because setup and the writers call it directly."""
+    if not kept_here(repo) or not recortex.allowed_users(repo):
         return "off"
     if not can_push(repo):
         refuse(repo, "push")
@@ -460,8 +461,9 @@ def add_workflow(config, repo, head):
 def commit(config, repo, issue, text):
     """The version commit of one topic's new text: the 40-character commit id, or one of record_format.NOT_KEPT (the reason is
     said in one fixed line first). Used by write.py and post_verified.py after the body was written. The mode is checked
-    first: with the mode off or not chosen nothing is written and no branch is made."""
-    if not kept_here(repo):
+    first: with the mode off or not chosen nothing is written and no branch is made, and a repository that is not in the
+    trusted list is never written to."""
+    if not kept_here(repo) or not recortex.allowed_users(repo):
         return REASON["off"]
     db = open_index(repo)
     if db is None:
