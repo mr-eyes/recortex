@@ -171,7 +171,7 @@ def file_at(repo, ref, path):
         return None
 
 
-def post_commit(repo, files, message, head, delete=()):
+def post_commit(repo, files, message, head, delete=(), ref=None):
     """One tree on top of `head`'s tree with `files` ({path: text}) and without `delete`, one commit and the move of the
     branch (made when there is no head). Raises GitError with the status of the step that failed in `.step`."""
     entries = [{"path": path, "mode": "100644", "type": "blob", "content": text} for path, text in sorted(files.items())]
@@ -185,7 +185,9 @@ def post_commit(repo, files, message, head, delete=()):
     except (KeyError, TypeError):
         raise GitError(0, "no sha")
     try:
-        if head:
+        if ref:   # a branch of its own (a proposal), made from the head and never moved afterwards
+            api(repo, "POST", "git/refs", {"ref": "refs/" + ref, "sha": commit})
+        elif head:
             api(repo, "PATCH", "git/refs/heads/%s" % BRANCH, {"sha": commit, "force": False})
         else:
             api(repo, "POST", "git/refs", {"ref": "refs/heads/%s" % BRANCH, "sha": commit})
@@ -560,7 +562,7 @@ def post_comment(repo, issue, kind, text, folder):
         handle.write(text)
     ran = subprocess.run([sys.executable, os.path.join(HERE, "post_verified.py"), "comment", "--repo", repo, "--issue", str(issue),
                           "--kind", kind, "--body-file", path], capture_output=True, text=True)
-    found = re.search(r"^memory id: ([0-9]+)$", ran.stdout, re.M)
+    found = re.search(r"^memory id: ([0-9]+)$", ran.stdout, re.M) or re.search(r"^posted: \S+#issuecomment-([0-9]+)$", ran.stdout, re.M)
     if ran.returncode != 0 or not found:
         say((ran.stdout.strip() or ran.stderr.strip())[:600])
         return None

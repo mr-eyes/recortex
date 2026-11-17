@@ -609,7 +609,9 @@ def apply_command(args):
             continue
         if linked >= moment:
             moment = linked + datetime.timedelta(minutes=1)
-    approved = approved_field(mode, words, asked, args.who, moment, restore=files.get("restore") is not None)
+    merged = getattr(args, "merged", None)   # (login, pull request number) of a proposal that was merged on GitHub
+    approved = ("By %s on GitHub, by merging pull request %d." % merged if merged
+                else approved_field(mode, words, asked, args.who, moment, restore=files.get("restore") is not None))
     protected = files["protected.json"]["paragraphs"]
     kept = len([p for i, p in enumerate(protected) if i not in unprotect])
     before = record_format.body_sha(files["base.md"]) if files["base.md"].strip() else None  # the body this change starts from
@@ -758,7 +760,19 @@ def main(argv=None):
             p.add_argument("--who", default="the author", help="the name or role the words are quoted under")
         if name == "log":
             p.add_argument("--issue", type=int)
+    for name in ("propose", "approvals"):
+        p = sub.add_parser(name, help="approval on GitHub: put the checked draft in a pull request" if name == "propose" else
+                           "list the proposals, and with --apply write the ones that were merged by an allowed account")
+        p.add_argument("--repo", help="owner/name (default: from the project file)")
+        if name == "propose":
+            p.add_argument("--dir", required=True)
+        else:
+            p.add_argument("--apply", action="store_true")
+            p.add_argument("--issue", type=int)
     args = parser.parse_args(argv)
+    if args.command in ("propose", "approvals"):
+        import proposals  # noqa: E402 - the second way to approve a change (references/writing.md)
+        return {"propose": proposals.propose_command, "approvals": proposals.approvals_command}[args.command](args)
     return {"status": status_command, "start": start_command, "check": check_command, "apply": apply_command,
             "log": log_command}[args.command](args)
 
