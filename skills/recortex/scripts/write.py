@@ -346,13 +346,27 @@ def changed_paragraphs(base, draft):
     return out
 
 
+def wanted_labels(db, config, issue, draft):
+    """The section labels a draft calls for when its headings are read with the labels the issue carries (the way
+    post_verified.py body reads them), or None when they do not resolve: a project with two profiles can have a heading,
+    such as Results, that both define, and the issue's own labels say which one this body means. None leaves the
+    linter to report what does not resolve."""
+    try:
+        wanted, problems = recortex.labels_from_headings(draft, config.get("profiles") or [],
+                                                         intended=index.issue_labels(db, issue))
+    except ValueError:
+        return None   # an unknown profile is the linter's to report
+    return None if problems else wanted
+
+
 def check_files(db, config, plan, state, repo, files, unprotect=()):
     """[(number of the check, line)] for a draft; the six files are read. `unprotect` holds indexes of protected
     paragraphs the author chose to take the new text for."""
     base, draft = files["base.md"], files["draft.md"]
     material, protected, used = files["material.json"], files["protected.json"]["paragraphs"], files["used.json"]
     problems = []
-    errors = [f for f in lint_drafts.lint_text(draft, kind="final-record", config=config, labels=None,
+    errors = [f for f in lint_drafts.lint_text(draft, kind="final-record", config=config,
+                                               labels=wanted_labels(db, config, material["issue"], draft),
                                                profiles=config.get("profiles")) if f.level == "error"]
     for finding in errors[:5]:
         problems.append((1, "the draft does not pass the linter: %s" % finding))

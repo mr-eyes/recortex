@@ -1614,5 +1614,65 @@ class TextPageTests(WritingBox):
         self.assertNotIn("History (", said)   # and a part whose text is not told has no history to tell
 
 
+class SharedHeadingTests(WritingBox):
+    """A project with the research and the manuscript profiles: Methods, Results and Limitations are headings of both,
+    and a body is linted with the labels of its own issue, so that the heading resolves to the label the issue carries."""
+
+    def both(self):
+        self.write_config(dict(self.config, profiles=["research", "manuscript"]))
+        self.ready()
+        self.mode("review")
+
+    def test_a_draft_passes_the_linter_with_both_profiles_by_the_labels_of_the_issue(self):
+        self.both()
+        folder = self.start(5)
+        self.draft(folder)
+        checked = self.cmd("write.py", "check", "--dir", folder)
+        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+        self.assertNotIn("is the heading of", checked.stdout)
+        self.assertIn("write: the draft passes every check", checked.stdout)
+
+    def test_apply_and_a_proposal_work_with_both_profiles_and_the_labels_stay_the_issues_own(self):
+        self.both()
+        folder = self.start(5)
+        self.draft(folder)
+        before = sorted(self.repo()["issues"]["5"]["labels"])
+        done = self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words())
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn("in dry spells the cover plots stayed moist on 9 of 11 spells", self.body(5))
+        self.assertEqual(before, sorted(self.repo()["issues"]["5"]["labels"]))
+        self.assertEqual(1, len(self.text_memories()))
+
+    def test_methods_and_limitations_resolve_too(self):
+        self.both()
+        folder = self.start(3)
+        base = self.base(folder)
+        self.draft(folder, base.replace("### Table: plots", "The four plots of the wet corner were left out of the moisture "
+                                                            "analysis.\n\n### Table: plots", 1), parts=(), results=(),
+                   decisions=(9106,))
+        checked = self.cmd("write.py", "check", "--dir", folder)
+        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+        folder = self.start(6, "w6")
+        base = self.base(folder)
+        self.assertIn("## Limitations", base)
+        self.assertIn("## Discussion", base)
+        self.draft(folder, base, parts=(9308,), results=())
+        checked = self.cmd("write.py", "check", "--dir", folder)
+        self.assertNotIn("is the heading of", checked.stdout, "the base body itself lints")
+
+    def test_a_heading_the_issues_labels_cannot_settle_is_still_refused(self):
+        self.both()
+        folder = self.start(5)
+        data = self.repo()
+        data["issues"]["5"]["labels"] = [label for label in data["issues"]["5"]["labels"] if label != "ms:limitations"]
+        data["issues"]["5"]["updated_at"] = "2026-12-05T10:00:00Z"   # what the incremental sync reads by
+        self.save(data)
+        self.ready()
+        self.draft(folder)
+        checked = self.cmd("write.py", "check", "--dir", folder)
+        self.assertEqual(1, checked.returncode, checked.stdout)
+        self.assertIn("'## Limitations' is the heading of rd:limitations and ms:limitations", checked.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
