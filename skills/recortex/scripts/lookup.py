@@ -105,6 +105,19 @@ class Lookup:
         return self.remember(("opening", number), lambda: self._from_index(lambda db, index: self._standing(
             index.standing_opening(db, number, self.allowed))))
 
+    def plan_agreed(self, cid):
+        """Whether the plan memory `cid` is agreed (plan_rules: a told decision of an allowed account links it, or it
+        narrows or rewords an agreed part): True, False, or UNKNOWN when the local index is not usable."""
+        return self.remember(("agreed", cid), lambda: self._from_index(lambda db, index: self._agreed(db, index, cid)))
+
+    def _agreed(self, db, index, cid):
+        try:
+            config = recortex.load_config()
+        except (OSError, ValueError):
+            return UNKNOWN
+        state = index.planned(db, config, self.allowed) if self.trusted else None
+        return bool(state and state["parts"].get(cid, {}).get("agreed"))
+
     # ------------------------------------------------------------ sources
 
     @staticmethod

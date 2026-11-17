@@ -820,3 +820,209 @@ def build():
     state = {"labels": [{"name": name, "color": "ededed", "description": ""} for name in LABELS],
              "issues": issues, "comments": comments, "next_issue": 13, "next_comment": 9200}
     return state, {"repo": REPO, "hub": HUB_NUMBER, "profiles": ["research"]}, "%s octocat\n" % REPO
+
+
+# ------------------------------------------------------------------ the same record as a paper, with a plan (1.3.0)
+# The record above is a report (the research profile). The paper is the same project under the manuscript profile,
+# whose profile names a plan: the topics carry the manuscript's section labels, and the plan issue (#13) holds the
+# plan comments. paper() returns (state, config, trusted) like build().
+
+PAPER_LABELS = {"rd:question": "ms:introduction", "rd:methods": "ms:methods", "rd:results": "ms:results",
+                "rd:limitations": "ms:limitations", "rd:next": "ms:discussion"}
+PAPER_HEADINGS = {"## Question": "## Introduction", "## Recommendations": "## Discussion"}
+PLAN_ISSUE = 13
+ADOPTION = 9300
+PLAN_LABEL = "plan"
+PLAN_BODY = """# The plan of the paper
+
+This body is a readable copy of the plan. The plan itself is the dated plan comments on this issue; where they differ, the comments are right.
+
+Copy made: 2026-11-16 09:45 EST
+
+## Message
+
+None yet.
+
+## Claims
+
+None yet.
+
+## Figures and tables
+
+None yet.
+
+## Discussion
+
+None yet.
+
+## Open gaps
+
+None.
+"""
+
+
+def plan_memory(at, part, title, plain, section, topic, statement, needs, have, otherwise, nxt, ident=None, change=None,
+                links=""):
+    marker = "<!-- ghim:event type=plan at=%s%s -->" % (at, (" " + links) if links else "")
+    out = [marker, "### Plan: %s - %s: %s" % (heading_time(at), part, title), "",
+           "**In plain words, we plan to:** %s" % plain, "", "**Part:** %s" % part, "", "**Section:** %s" % section, "",
+           "**Topic:** %s" % topic, ""]
+    if ident:
+        out += ["**Id:** %s" % ident, ""]
+    out += ["**Statement:** %s" % statement, "", "**It needs:** %s" % needs, "", "**We have:** %s" % have, "",
+            "**If it does not hold:** %s" % otherwise, ""]
+    if change:
+        out += ["**Change:** %s" % change, ""]
+    out += ["**Next step:** %s" % nxt, ""]
+    return "\n".join(out)
+
+
+PLAN_MEMORIES = []
+
+
+def add_plan(cid, body, user=None, issue=PLAN_ISSUE):
+    PLAN_MEMORIES.append((cid, issue, body, user))
+
+
+# the adoption decision and the parts, 16 November
+add_plan(ADOPTION, decision(
+    "2026-11-16T09:30-05:00", "adopt the plan", "adopt the plan for the paper as it was shown",
+    "The plan for the paper is adopted.", "the first author", "Yes, adopt this plan.", "Chat, 2026-11-16.",
+    "The session keeps the plan current from now on.", "Post the plan, owner Claude session"))
+add_plan(9301, plan_memory(
+    "2026-11-16T10:00-05:00", "message", "the one message", "tell one story: a rye cover keeps the topsoil wetter in dry "
+    "spells", "All", "None yet",
+    "A winter rye cover keeps the topsoil wetter in dry spells, in both seasons, though by less than the first season "
+    "alone suggested.", "The dry-spell comparison and the pooled fit.", "The pooled fit and the dry-spell result.",
+    "The paper reports what the pooled fit shows and drops the dry-spell framing.", "None for now, owner the first author",
+    links="because=9300"))
+add_plan(9302, plan_memory(
+    "2026-11-16T10:10-05:00", "claim", "wetter topsoil in dry spells",
+    "claim that a rye cover keeps the topsoil wetter during dry spells", "Results", "#5",
+    "In dry spells the plots with a rye cover stayed above the wilting point on more spells than the bare plots.",
+    "The dry-spell comparison in both seasons.", "The dry-spell result.", "The paper reports the season effect only.",
+    "Answer the texture question, owner Claude session", links="because=9300,9140"))
+add_plan(9303, plan_memory(
+    "2026-11-16T10:15-05:00", "claim", "the pooled effect", "claim that the pooled effect of the cover is above zero",
+    "Results", "#4", "Pooled over both seasons, the cover raises topsoil moisture.", "The pooled fit.",
+    "The pooled fit.", "The paper reports each season alone.", "None for now, owner Claude session", links="because=9130"))
+add_plan(9304, plan_memory(
+    "2026-11-16T10:20-05:00", "claim", "texture does not explain it",
+    "claim that soil texture does not explain the dry-spell effect", "Results", "#5",
+    "Soil texture does not explain the dry-spell effect.", "The dry-spell comparison with texture as a covariate.",
+    "Nothing yet.", "The paper says that texture cannot be ruled out.", "Find the texture data, owner the first author",
+    links="because=9141"))
+add_plan(9305, plan_memory(
+    "2026-11-16T10:25-05:00", "figure", "the longest dry spell", "show the longest dry spell in one figure", "Results",
+    "#5", "The cover plots stay above the wilting point through the longest dry spell.",
+    "The daily readings of the longest spell.", "The daily readings.", "The figure moves to the supplement.",
+    "None for now, owner Claude session", ident="dryspell", links="because=9302"))
+add_plan(9306, plan_memory(
+    "2026-11-16T10:30-05:00", "table", "dry spells by length", "tabulate the spells by length", "Results", "#5",
+    "The number of spells above the wilting point, by length of the spell.", "The spell table.", "The spell counts.",
+    "The table moves to the supplement.", "Make the table, owner Claude session", ident="spell-length",
+    links="because=9302"))
+add_plan(9307, plan_memory(
+    "2026-11-16T10:35-05:00", "interpretation", "residue shading", "read the effect as shading by the residue",
+    "Discussion", "#6", "The effect is most likely the shading of the surface by the residue.",
+    "A comparison with plots whose residue was removed.", "Nothing yet.", "The paper names shading as one explanation "
+    "among others.", "None for now, owner the first author", links="because=9302"))
+add_plan(9308, plan_memory(
+    "2026-11-16T10:36-05:00", "limitation", "one field", "state that the trial ran on one field", "Limitations", "#6",
+    "The trial ran on one field of one soil type for two seasons.", "Nothing; it is a limit.", "The trial's design.",
+    "None; it is stated.", "None for now, owner the first author", links="because=9143"))
+add_plan(9309, plan_memory(
+    "2026-11-16T10:37-05:00", "comparison", "other cover-crop trials", "compare the effect with other trials",
+    "Discussion", "#6", "The effect is of the size other cover-crop trials report.", "The other trials' numbers.",
+    "Nothing yet.", "The paper does not compare.", "Search the literature, owner the first author", links="because=9150"))
+add_plan(9310, plan_memory(
+    "2026-11-16T10:38-05:00", "implication", "sandy soils", "suggest a trial on sandy soil", "Discussion", "#6",
+    "A trial on sandy soil would show how far the effect reaches.", "Nothing; it is a suggestion.",
+    "The question about sandy soils.", "None.", "None for now, owner the first author", links="because=9151"))
+add_plan(9311, plan_memory(
+    "2026-11-16T10:40-05:00", "claim", "weekly means", "claim that weekly means would do as well as daily readings",
+    "Results", "#4", "Weekly means give the same effect as daily readings.", "A fit on weekly means.", "Nothing yet.",
+    "The paper uses daily readings.", "None for now, owner Claude session", links="because=9125"))
+add_plan(9312, plan_memory(
+    "2026-11-16T10:45-05:00", "claim", "the lag term", "claim that a lag term is needed", "Results", "#4",
+    "The residuals are correlated from day to day, so the model needs a lag term.", "The residual autocorrelation.",
+    "The autocorrelation of the plain model.", "The paper uses the plain model.", "None for now, owner Claude session",
+    links="because=9122"))
+# what happened afterwards
+add_plan(9313, plan_memory(
+    "2026-11-17T09:00-05:00", "claim", "texture, in the plots we can test",
+    "claim that texture does not explain the dry-spell effect in the plots with texture data", "Results", "#5",
+    "In the plots with texture data, texture does not explain the dry-spell effect.",
+    "The covariate model on the plots with texture data.", "The texture data of some plots.",
+    "The paper says that texture cannot be ruled out.", "Fit the covariate model, owner Claude session",
+    change="narrows", links="replaces=9304 because=9143"))
+add_plan(9314, failure(
+    "2026-11-18T14:00-05:00", "the covariate model", "the covariate model on the plots with texture data would not fit",
+    "The model with clay as a covariate did not converge.", "`Rscript analysis/clay.R`, commit 3f9c2ab.",
+    "Too few plots with texture data.", "No answer to the texture question.", "Whether more plots can be sampled.",
+    "Ask the technician, owner the first author", links="checks=9313"), issue=9)
+add_plan(9315, decision(
+    "2026-11-19T10:00-05:00", "drop the weekly claim", "drop the claim about weekly means",
+    "The weekly-means claim is dropped from the plan.", "the first author", "Drop it, the dry spells are the paper.",
+    "Chat, 2026-11-19.", "The part leaves the plan.", "Update the plan, owner Claude session", links="instead=9311"))
+add_plan(9316, result(
+    "2026-11-20T11:00-05:00", "a trimmed fit", "with the first week of each season left out the pooled effect is smaller",
+    "`Rscript analysis/fit_model.R --season both --trim`, commit 3f9c2ab.",
+    "Seasons 1 and 2, 20 plots each, the first week of each season left out.",
+    table([("Effect of cover, pooled, trimmed", "0.009 m³/m³ (-0.004 to 0.022)", "40 plot-seasons",
+            "results/fit_trim.csv")]),
+    "None", "An hour.", "Whether the trimmed fit is the right one.", "Decide which fit to report, owner the first author",
+    links="against=9303"), issue=4)
+add_plan(9317, correction(
+    "2026-11-21T09:00-05:00", "the autocorrelation", "we corrected the residual autocorrelation we reported",
+    "Result 9122 on the model thread.", "0.62", "0.58", "The first value came from a run with the wrong season.",
+    "None.", links="replaces=9122"), issue=4)
+
+
+def text_memory(at, section, plain, changed, why, approved, kept="Nothing was changed by hand.",
+                before="none", after="a" * 64, version="b" * 40, links=""):
+    """A text comment (the kind of 1.3.0 that records a change of a topic body). `approved` is the field's whole text;
+    before is "none" or 64 hex characters; version is 40 hex characters or the words after "Not kept: "."""
+    marker = "<!-- ghim:event type=text at=%s%s -->" % (at, (" " + links) if links else "")
+    hashes = "before sha256 `%s`; after sha256 `%s`" % (before, after)
+    kept_version = "`%s`" % version if len(version) == 40 else "Not kept: %s" % version
+    return "\n".join([marker, "### Text: %s - %s" % (heading_time(at), section), "",
+                      "**In plain words, we changed the text to say that:** %s" % plain, "",
+                      "**Section:** %s" % section, "", "**What changed:** %s" % changed, "", "**Why:** %s" % why, "",
+                      "**Approved:** %s" % approved, "", "**Kept from the author:** %s" % kept, "",
+                      "**Body:** %s" % hashes, "", "**Version:** %s" % kept_version, ""])
+
+
+def proposal(at, section, changed, why, pull, base, text):
+    return "\n".join(["<!-- ghim:event type=proposal at=%s -->" % at, "### Proposal: %s - %s" % (heading_time(at), section), "",
+                      "**Section:** %s" % section, "", "**What would change:** %s" % changed, "", "**Why:** %s" % why, "",
+                      "**Pull request:** #%d" % pull, "", "**Base:** sha256 `%s`" % base, "",
+                      "**Text:** sha256 `%s`" % text, ""])
+
+
+def paper(plan=True):
+    """(state, config, trusted line) of the record as a paper; plan=False leaves the plan issue and its comments out."""
+    state, config, trusted = build()
+    for number, item in state["issues"].items():
+        item["labels"] = [PAPER_LABELS.get(label, label) for label in item["labels"]]
+        for old, new in PAPER_HEADINGS.items():
+            item["body"] = item["body"].replace(old, new)
+    state["date"] = "2026-12-01"  # what the fake creates is dated after the record, as GitHub's clock is
+    names = sorted({label for item in state["issues"].values() for label in item["labels"]} | {PLAN_LABEL})
+    state["labels"] = [{"name": name, "color": "ededed", "description": ""} for name in names]
+    config = dict(config, profiles=["manuscript"])
+    if plan:
+        state["issues"][str(PLAN_ISSUE)] = issue("The plan of the paper", PLAN_BODY, [PLAN_LABEL],
+                                                 "2026-11-16T14:30:00Z", parent=1)
+        state["next_issue"] = PLAN_ISSUE + 1
+        latest = {}
+        for cid, number, text, user in PLAN_MEMORIES:
+            at = text.split(" at=", 1)[1].split(" ", 1)[0]
+            state["comments"][str(cid)] = {"issue": number, "body": text, "created_at": utc(at)}
+            if user:
+                state["comments"][str(cid)]["user"] = user
+            latest[number] = max(latest.get(number, ""), utc(at))
+        for number, stamp in latest.items():
+            state["issues"][str(number)]["updated_at"] = max(state["issues"][str(number)]["updated_at"], stamp)
+        config["plans"] = {"manuscript": PLAN_ISSUE}
+    return state, config, trusted

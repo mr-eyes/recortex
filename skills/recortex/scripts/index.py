@@ -60,11 +60,13 @@ import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import names  # noqa: E402
+import plan_rules  # noqa: E402
 import recortex  # noqa: E402
 import record_format  # noqa: E402
 import storage  # noqa: E402
 
 FORMAT = "2"
+DERIVE_VERSION = "3"   # what derive makes of a comment; a stored index that differs is derived again, with no network
 OVERLAP = 60  # seconds read again at each incremental sync, so items stamped in the same second are not missed
 ISO_UTC = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")  # used with fullmatch
 IDENTITY = ("repo", "format", "mark")
@@ -151,7 +153,7 @@ COMMENT_NODE = re.compile(r"[A-Za-z0-9_=-]{1,100}")      # used with fullmatch b
 CURSOR = re.compile(r"[A-Za-z0-9+/=_-]{1,200}")          # used with fullmatch before a cursor enters a query
 # An open issue with none of these labels has not been placed in the record. `type:` labels other than the
 # closed-out ones describe an issue; they do not place it. The `triage` label always asks for triage.
-ROLE_LABELS = {"hub", "final-record", "active"}
+ROLE_LABELS = {"hub", "final-record", "active", "plan"}
 CLOSED_OUT_TYPES = {"type:duplicate", "type:out-of-scope"}
 
 
@@ -603,7 +605,8 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
         set_meta(db, "issues_newest", stale)
     # Anything but "1" means that an older version wrote comments or events since this version's last derive, or
     # that this version never derived this index: the tables of MIND are behind, so everything is derived again.
-    full = rebuild or not get_meta(db, "synced_at") or get_meta(db, "derive_pending") == "1" or not mind_ready(db)
+    full = rebuild or not get_meta(db, "synced_at") or get_meta(db, "derive_pending") == "1" or not mind_ready(db) \
+        or get_meta(db, "derive_version") != DERIVE_VERSION
     set_meta(db, "derive_pending", "1")  # cleared next to synced_at, once everything stored has been derived
     db.commit()
     summary = {"issues": 0, "comments": 0, "timelines": 0, "edits": 0, "comment_edits": 0, "complete": True, "pages": 0}
@@ -785,6 +788,7 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
         set_meta(db, "partial_at", now_utc())
     set_meta(db, "sync_complete", "1" if summary["complete"] else "0")
     db.commit()
+    plan_step(db, repo)
     summary["board"] = board_step(db, repo, clock, timeout)
     db.close()
     return summary
@@ -1325,6 +1329,8 @@ def derive(db, issues=None, comments=None):
         if before:
             db.execute("INSERT INTO changes VALUES (?,?,?)", (before["comment"], edit["issue"], edit["at"]))
     derive_mind(db, None if touched is None else comments)
+    if touched is None:
+        set_meta(db, "derive_version", DERIVE_VERSION)  # every comment was derived by this version's rules
     set_meta(db, "mind_derived", "1")  # last, in the same transaction as the rows: the tables of MIND are current
     db.commit()
 
@@ -1507,11 +1513,43 @@ def consistency(db, profiles):
                 findings.append({"kind": "sub-issue", "issue": child, "detail": "the record puts #%d under #%d; GitHub "
                                  "shows %s. sub_issues.py plan says more" % (
                                      child, parent, "its parent as #%d" % row["parent"] if row else "no parent")})
+    findings.extend(plan_findings(db, profiles))
     # figures and tables without a source
     for row in db.execute("SELECT * FROM blocks WHERE has_source = 0 ORDER BY issue"):
         findings.append({"kind": "unsourced-block", "issue": row["issue"],
                          "detail": "%s %s has no row in Sources" % (row["kind"].capitalize(), row["id"])})
     return findings
+
+
+def plan_findings(db, profiles):
+    """Consistency findings of the plan, for a project that has one: the copy in the plan issue's body is older than
+    the newest told plan memory (plan-body); a part has a finding against it or rests on something that changed
+    (plan-doubt). Never edits anything; it reads the project's file for the plan issue's number."""
+    plan = recortex.plan_profile(profiles)
+    if plan is None:
+        return []
+    try:
+        config = recortex.load_config()
+    except (OSError, ValueError):
+        return []
+    repo = get_meta(db, "repo") or ""
+    allowed = recortex.allowed_users(repo) if repo else set()
+    state = planned(db, config, allowed, plan) if allowed else None
+    if state is None:
+        return []
+    out, items = [], state["found"]["items"]
+    row = db.execute("SELECT body FROM issues WHERE number = ?", (state["issue"],)).fetchone()
+    newest = max((items[cid]["time"] for cid in state["parts"]), default="")
+    made = record_format.copy_made(row["body"] if row else "")
+    if newest and (made is None or sort_key(made) < newest):
+        out.append({"kind": "plan-body", "issue": state["issue"], "detail": "the copy of the plan in the body is %s than "
+                    "the newest planned part; plan.py render writes it again" % ("missing" if made is None else "older")})
+    for cid, found in sorted(state["parts"].items()):
+        if found["standing"] and found["state"] in ("doubt", "moved"):
+            out.append({"kind": "plan-doubt", "issue": state["issue"], "detail": "planned part %d (%s) %s; follow \"Keep "
+                        "the plan current\"" % (cid, found["part"], "has a finding against it" if found["state"] == "doubt"
+                                                 else "rests on something that changed")})
+    return out
 
 
 def impact(db, path=None, commit=None):
@@ -1790,9 +1828,204 @@ def topic_issues(db, number):
         if topics else []
 
 
-def recall(db, number, allowed):
-    """What a new memory on issue `number` could link to and which words it may use, as a dict (see print_recall)."""
+# ---------------------------------------------------------------- the plan
+
+PLAN_COUNT_KEYS = ("issue", "parts", "against", "moved", "unbacked", "unused", "limits", "due", "proposals", "texts")
+NOTHING_STATED = re.compile(r"(?:none|n/a|nothing)\b.*", re.I)
+
+
+def body_told(db, number, allowed):
+    """The topic-body rule (mind_model.Build.body_shown): an allowed account opened the issue, its edit history is
+    read, and every edit of its body was made by an allowed account."""
+    row = db.execute("SELECT author, edits_read, is_pr FROM issues WHERE number = ?", (number,)).fetchone()
+    if not allowed or row is None or row["is_pr"] or not row["edits_read"] or (row["author"] or "").lower() not in allowed:
+        return False
+    return all((actor or "").lower() in allowed for (actor,) in db.execute(
+        "SELECT actor FROM timeline WHERE issue = ? AND event = 'edited'", (number,)))
+
+
+def plan_issue_of(db, config, plan, allowed):
+    """The number of the plan issue: the project file's `plans` entry for the plan's profile, used only when that
+    issue is in the index, carries the label `plan` and was opened by an allowed account; else None."""
+    number = recortex.plan_issue(config, plan["profile"]) if plan else None
+    if number is None or not allowed:
+        return None
+    row = db.execute("SELECT author FROM issues WHERE number = ? AND is_pr = 0", (number,)).fetchone()
+    if row is None or (row["author"] or "").lower() not in allowed or "plan" not in {l.lower() for l in issue_labels(db, number)}:
+        return None
+    return number
+
+
+def plan_details(db, plan, issue):
+    """{plan memory id: {"part", "section", "topic", "block", "change"}} for the plan memories posted on the plan
+    issue whose part is one of the profile's. A value that does not fit its form leaves the memory out."""
+    found = {}
+    rows = db.execute("SELECT f.comment, f.label, f.text FROM event_fields f JOIN events e ON e.comment = f.comment "
+                      "WHERE e.type = 'plan' AND e.issue = ? ORDER BY f.comment, f.ordinal", (issue,))
+    for row in rows:
+        found.setdefault(row["comment"], {}).setdefault(row["label"], (row["text"] or "").strip())
+    out = {}
+    for cid, fields in found.items():
+        part, topic = fields.get("Part", ""), fields.get("Topic", "")
+        if part not in plan["parts"] or not (re.fullmatch(r"#[1-9][0-9]{0,8}", topic) or topic == "None yet"):
+            continue
+        change = fields.get("Change", "")
+        out[cid] = {"part": part, "section": fields.get("Section", ""), "topic": int(topic[1:]) if topic != "None yet" else None,
+                    "block": fields.get("Id", ""), "change": change if change in record_format.PLAN_CHANGES else ""}
+    return out
+
+
+def planned(db, config, allowed, plan=None, found=None):
+    """The plan as it stands, or None when the project has none: a dict with plan (the profile's), issue, found (the
+    memories as index.memories returns them), details and parts ({plan memory id: plan_rules.assess}). Nothing is told
+    that is not told by memories(); the rules are plan_rules'."""
+    plan = plan or recortex.plan_profile(recortex.shipped_profiles((config or {}).get("profiles")))
+    issue = plan_issue_of(db, config, plan, allowed) if plan else None
+    if issue is None:
+        return None
+    found = found or memories(db, allowed)
+    every = {row["comment"]: row["type"] for row in db.execute(
+        "SELECT comment, type FROM events WHERE type IN (%s)" % ",".join("?" * len(record_format.MEMORY_TYPES)),
+        record_format.MEMORY_TYPES)}
+    blocks = {(row["issue"], row["id"]) for row in db.execute("SELECT issue, id FROM blocks")}
+    details = plan_details(db, plan, issue)
+    parts = plan_rules.assess(found["items"], details, blocks, every, plan["evidence"], plan["display"])
+    return {"plan": plan, "issue": issue, "found": found, "details": details, "parts": parts, "config": config}
+
+
+def plan_topics(db, plan, config=None):
+    """The topic issues that carry a section label of the plan's profile (the issues the paper's text is in)."""
+    profiles = recortex.shipped_profiles((config or {}).get("profiles")) or [plan["profile"]]
+    headings = {h.lower() for h in plan["sections"]}
+    wanted = {label.lower() for label, heading in recortex.section_labels(profiles) if heading.lower() in headings}
+    return sorted({row["issue"] for row in db.execute("SELECT issue, label FROM labels")
+                   if row["label"].lower() in wanted})
+
+
+def event_field(db, cid, label):
+    row = db.execute("SELECT text FROM event_fields WHERE comment = ? AND label = ? ORDER BY ordinal LIMIT 1",
+                     (cid, label)).fetchone()
+    return (row["text"] or "").strip() if row else ""
+
+
+def unused_and_limits(db, state):
+    """(unused, limits): the ids of standing told results on the paper's topics. Unused: newer than the newest told
+    memory on the plan issue, linked by no plan memory and linking none. Limits: their "Not established" is not "None"
+    and no standing `limitation` part links them."""
+    items, issue = state["found"]["items"], state["issue"]
+    topics = set(plan_topics(db, state["plan"], state.get("config")))
+    newest = max((m["time"] for m in items.values() if m["issue"] == issue), default="")
+    plan_ids = {cid for cid, m in items.items() if m["kind"] == "plan"}
+    every_plan = {row["comment"] for row in db.execute("SELECT comment FROM events WHERE type = 'plan'")}
+    linked = {target for cid in plan_ids for key, target in items[cid]["links"]}
+    limited = {target for cid, found in state["parts"].items() if found["standing"] and found["part"] == "limitation"
+               for key, target in items[cid]["links"]}
+    unused, limits = [], []
+    for cid, memory in sorted(items.items(), key=lambda row: (row[1]["time"], row[0])):
+        if memory["kind"] != "result" or memory["state"] != "stands" or memory["issue"] not in topics:
+            continue
+        if memory["time"] > newest and cid not in linked and not any(target in every_plan for _, target in memory["links"]):
+            unused.append(cid)
+        stated = event_field(db, cid, "Not established")
+        if stated and not NOTHING_STATED.fullmatch(stated.split("\n")[0].strip()) and cid not in limited:
+            limits.append(cid)
+    return unused, limits
+
+
+def plan_counts(db, config, allowed, state=None):
+    """The counts that the session brief's plan line is made of, as integers (see PLAN_COUNT_KEYS), or None when the
+    project has no plan-capable profile. issue is 0 until a plan issue exists. due, proposals and texts are the
+    writing's (write_rules.counts)."""
+    plan = recortex.plan_profile(recortex.shipped_profiles((config or {}).get("profiles")))
+    if plan is None:
+        return None
+    counts = dict.fromkeys(PLAN_COUNT_KEYS, 0)
+    state = state or planned(db, config, allowed, plan)
+    if state is None:
+        return counts
+    standing = [found for found in state["parts"].values() if found["standing"]]
+    unused, limits = unused_and_limits(db, state)
+    counts.update(issue=state["issue"], parts=len(standing),
+                  against=sum(1 for f in standing if f["state"] == "doubt"),
+                  moved=sum(1 for f in standing if f["state"] == "moved"),
+                  unbacked=sum(1 for f in standing if f["state"] in ("planned", "failed") and f["part"] in plan["evidence"]),
+                  unused=len(unused), limits=len(limits))
+    try:
+        import write_rules  # noqa: E402 - the writing's counts, when this version has them
+    except ImportError:
+        return counts
+    counts.update(write_rules.counts(db, config, allowed, state))
+    return counts
+
+
+def plan_step(db, repo):
+    """The step of a sync that keeps meta.plan_counts, for a project whose profiles have a plan: JSON of integers, or
+    "" when there is none. Local only: it reads the index and writes one meta key, and it never raises."""
+    try:
+        config = recortex.load_config()
+        value = ""
+        if isinstance(config, dict) and str(config.get("repo", "")).lower() == repo.lower():
+            allowed = recortex.allowed_users(repo)
+            counts = plan_counts(db, config, allowed) if allowed else None
+            value = json.dumps(counts, sort_keys=True) if counts is not None else ""
+    except Exception:  # noqa: BLE001 - the record's sync is done; the plan counts are a summary of it
+        value = ""
+    set_meta(db, "plan_counts", value)
+    db.commit()
+
+
+def gaps(db, config, allowed, state=None):
+    """What the plan still lacks, as a dict of lists of comment ids (and, for sections, headings): unbacked (claims
+    nothing backs, with the ideas that link each), doubt, moved, display (display parts not made), sections (headings
+    with no part and no text), unused, limits, comparisons (comparison parts that name no paper). None when the project
+    has no plan."""
+    state = state or planned(db, config, allowed)
+    if state is None:
+        return None
+    plan, items = state["plan"], state["found"]["items"]
+    standing = {cid: f for cid, f in state["parts"].items() if f["standing"]}
+    ideas = {}
+    for cid, item in items.items():
+        if item["kind"] == "idea":
+            for key, target in item["links"]:
+                if key == "because" and target in standing:
+                    ideas.setdefault(target, []).append(cid)
+    unused, limits = unused_and_limits(db, state)
+    text_of = {row["heading"].lower() for row in db.execute(
+        "SELECT s.heading FROM sections s WHERE s.issue IN (%s) AND length(trim(s.text)) > 0"
+        % ",".join(str(n) for n in plan_topics(db, plan, state.get("config")) or [0]))}
+    covered = {f["section"].lower() for f in standing.values()}
+    comparisons = []
+    for cid, found in standing.items():
+        if found["part"] == "comparison":
+            words = " ".join(event_field(db, cid, label) for label in ("Statement", "It needs", "We have"))
+            if not record_format.citations_manubot(words) and not record_format.URL.search(words) \
+                    and not re.search(r"10\.[0-9]{4,9}/", words):
+                comparisons.append(cid)
+    return {"unbacked": [{"part": cid, "ideas": sorted(ideas.get(cid, []))} for cid, f in sorted(standing.items())
+                         if f["state"] in ("planned", "failed") and f["part"] in plan["evidence"]],
+            "doubt": [cid for cid, f in sorted(standing.items()) if f["state"] == "doubt"],
+            "moved": [cid for cid, f in sorted(standing.items()) if f["state"] == "moved"],
+            "display": [cid for cid, f in sorted(standing.items())
+                        if f["part"] in plan["display"] and f["state"] in ("planned", "can be made", "waits")],
+            "sections": [h for h in plan["sections"] if h.lower() not in covered and h.lower() not in text_of],
+            "unused": unused, "limits": limits, "comparisons": sorted(comparisons)}
+
+
+def planned_for(state, issues):
+    """The standing parts whose Topic is one of `issues`, oldest first, as dicts with id, part, state, plain."""
+    items = state["found"]["items"]
+    rows = [dict(id=cid, part=f["part"], state=f["state"], plain=items[cid]["plain"] or "", agreed=f["agreed"])
+            for cid, f in state["parts"].items() if f["standing"] and f["topic"] in issues]
+    return sorted(rows, key=lambda row: (items[row["id"]]["time"], row["id"]))
+
+
+def recall(db, number, allowed, config=None):
+    """What a new memory on issue `number` could link to and which words it may use, as a dict (see print_recall).
+    With the project's `config`, a project that has a plan also gets "planned": the standing parts whose Topic is an
+    issue of this thread (id, part, state, agreed, plain line), or None."""
     found = memories(db, allowed)
+    state = planned(db, config, allowed, found=found) if config else None
     labels, issues = thread_of(db, number)
     thread = sorted((m for m in found["items"].values() if m["issue"] in issues and m["kind"] != "checkpoint"),
                     key=lambda m: (m["time"], m["id"]), reverse=True)
@@ -1801,6 +2034,7 @@ def recall(db, number, allowed):
                     key=lambda m: (m["time"], m["id"]))
     words = sorted(standing_words(db, allowed).values(), key=lambda r: r["key"])
     return {"labels": labels, "issues": issues, "opening": standing_opening(db, number, allowed),
+            "planned": planned_for(state, set(issues)) if state else None,
             "memories": thread[:RECALL_MEMORIES], "more_memories": max(0, len(thread) - RECALL_MEMORIES),
             "others": others[:RECALL_OTHERS], "more_others": max(0, len(others) - RECALL_OTHERS),
             "words": words[:RECALL_WORDS], "more_words": max(0, len(words) - RECALL_WORDS),
@@ -1833,6 +2067,14 @@ def print_recall(found):
         print("(none yet)")
     if found["more_memories"]:
         print("%d older memor%s of this thread %s not listed." % plural(found["more_memories"], "y", "ies"))
+    if found.get("planned") is not None:
+        print("Planned parts this thread feeds: id, part, state, plain line (link a finding that bears one out with "
+              "checks=<id>, one that speaks against it with against=<id>)")
+        for row in found["planned"]:
+            print("%s  %-14s  %-11s  %s%s" % (clean(row["id"], 30), clean(row["part"], 20), clean(row["state"], 20),
+                                            clean(row["plain"]), "" if row["agreed"] else "  [added by the session]"))
+        if not found["planned"]:
+            print("(none)")
     print("Open questions and untried ideas in other threads:")
     for memory in found["others"]:
         print("%s  %s  %-8s  %-7s  #%s  %s" % (clean(memory["id"], 30), clean(memory["at"][:10], 10),
@@ -1860,6 +2102,43 @@ def print_recall(found):
         count = found["edited"]
         print("1 memory was edited after it was posted and is not listed." if count == 1 else
               "%d memories were edited after they were posted and are not listed." % count)
+
+
+def plan_report(db, config, allowed):
+    """The plan as the session reads it, with no network: issue, parts (oldest first), counts and gaps; None when the
+    project has no plan issue (yet)."""
+    state = planned(db, config, allowed)
+    if state is None:
+        return None
+    items = state["found"]["items"]
+    rows = []
+    for cid, found in sorted(state["parts"].items(), key=lambda row: (items[row[0]]["time"], row[0])):
+        rows.append({"id": cid, "at": items[cid]["at"], "plain": items[cid]["plain"] or "", **found})
+    return {"issue": state["issue"], "parts": rows, "counts": plan_counts(db, config, allowed, state),
+            "gaps": gaps(db, config, allowed, state)}
+
+
+def print_plan(report):
+    """The text of query plan and plan.py status: every value from the record through clean(), under DATA_HEADER."""
+    print(DATA_HEADER)
+    if report is None:
+        print("There is no plan yet: no plan issue is set up for this project, or none of its profiles has a plan.")
+        return
+    counts = report["counts"]
+    print("Plan issue #%d: %d standing parts; %d against, %d moved, %d unbacked, %d findings unused, %d limits not planned"
+          % (report["issue"], counts["parts"], counts["against"], counts["moved"], counts["unbacked"], counts["unused"],
+             counts["limits"]))
+    print("id  part  section  topic  state  agreed  plain line")
+    for row in report["parts"]:
+        mark = "" if row["standing"] else "  [%s]" % ("dropped" if row["dropped_by"] else "revised")
+        print("%s  %s  %s  %s  %s  %s  %s%s" % (
+            clean(row["id"], 30), clean(row["part"], 20), clean(row["section"], 40),
+            "#%d" % row["topic"] if row["topic"] else "none", clean(row["state"], 20),
+            "agreed" if row["agreed"] else "added by the session", clean(row["plain"]), mark))
+    gap = report["gaps"]
+    for name in ("unbacked", "doubt", "moved", "display", "sections", "unused", "limits", "comparisons"):
+        if gap[name]:
+            print("gap %s: %s" % (name, clean(json.dumps(gap[name]), 400)))
 
 
 def describe_index(db):
@@ -1894,7 +2173,7 @@ def main(argv=None):
                         "folder, for at most background_sync_seconds (default 300)")
     p.add_argument("--lock-held", action="store_true", help=argparse.SUPPRESS)
     p = sub.add_parser("query", help="answer from the index, with no network")
-    p.add_argument("name", choices=["brief", "consistency", "impact", "mind", "recall", "timeline", "triage"])
+    p.add_argument("name", choices=["brief", "consistency", "impact", "mind", "plan", "recall", "timeline", "triage"])
     p.add_argument("--path")
     p.add_argument("--commit")
     p.add_argument("--issue", type=int)
@@ -1960,13 +2239,23 @@ def main(argv=None):
                 print("#%d  %s  %s  %s" % (row["issue"], row["kind"], clean(row["where"]), clean(row["value"])))
             print("%d place(s) cite %s" % (len(rows), args.path or args.commit))
         return 0
+    if args.name == "plan":
+        if not mind_ready(db):
+            print(NOT_READY)
+            return 1
+        report = plan_report(db, config, recortex.allowed_users(repo))
+        if args.json:
+            print(json.dumps(report, indent=1))
+        else:
+            print_plan(report)
+        return 0
     if args.name == "recall":
         if args.issue is None:
             parser.error("recall needs --issue N, the issue the new memory goes to")
         if not mind_ready(db):
             print(NOT_READY)
             return 1
-        found = recall(db, args.issue, recortex.allowed_users(repo))
+        found = recall(db, args.issue, recortex.allowed_users(repo), config)
         if args.json:
             print(json.dumps(found, indent=1))
         else:

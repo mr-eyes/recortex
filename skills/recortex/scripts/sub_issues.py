@@ -57,6 +57,9 @@ def wanted(db, hub):
     for topic in sorted(labelled.get("final-record", ())):
         if hub and topic != hub:
             links.append((hub, topic))
+    for plan_issue in sorted(labelled.get("plan", ())):
+        if hub and plan_issue != hub:
+            links.append((hub, plan_issue))  # the plan of the paper sits under the hub, beside the topics
     for task in sorted(labelled.get("active", ())):
         topic = destination(db, task)
         if topic is not None and topic != task:

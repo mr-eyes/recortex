@@ -10,6 +10,7 @@ lastEditedAt for it).
 Fault switches:
   FAKE_GH_FAIL_ON="issue edit"   exit 1 for commands starting with these words
   FAKE_GH_FAIL_AFTER="issue create"  do the work, then exit 1 (a timeout after GitHub acted)
+  FAKE_GH_FAIL_NTH="issue comment:3"  exit 1 for the 3rd call of that command in the state's log, and only for it
   FAKE_GH_CHANGE_ON_READ=2       change the issue body just before the 2nd REST read of an issue
   FAKE_GH_COMMENT_ORDER=reversed list comments newest first in GraphQL answers
   FAKE_GH_CORRUPT=1              store bodies with one character changed
@@ -28,6 +29,8 @@ Fault switches:
                                  sets one that is not a GitHub login
   FAKE_GH_NOT_TEXT="auth status" that command (or "api user") answers with bytes that are not UTF-8, and exits 0
 `auth status` answers as a gh signed in to github.com, and `api user` with the login.
+A state "date" (YYYY-MM-DD) moves the stamps the fake gives to what it creates (default 2026-04-02 for issues and edits,
+2026-04-01 for comments), so that a record whose own comments are dated later is still synced incrementally.
 Projects and sub-issues (tests/fake_projects.py answers them, and lists its own fault switches): a closed issue has
 "closed_at", a merged pull request "merged_at", a sub-issue "parent" (the parent's number).
 The repository itself (`api repos/<owner>/<name>`, no further path) answers from the state's "private" key, default
@@ -207,6 +210,11 @@ def main():
     fail_on = os.environ.get("FAKE_GH_FAIL_ON")
     if fail_on and words.startswith(fail_on):
         fail("gh: simulated failure (HTTP 502)")
+    nth = os.environ.get("FAKE_GH_FAIL_NTH")
+    if nth:
+        command, _, count = nth.rpartition(":")
+        if words == command and sum(1 for entry in state["log"] if " ".join(entry[:2]) == command) == int(count):
+            fail("gh: simulated failure (HTTP 502)")
     repo = option(args, "--repo", "octo/demo")
     login = os.environ.get("FAKE_GH_LOGIN", ME)
 
@@ -226,7 +234,7 @@ def main():
         number = state["next_issue"]
         state["next_issue"] += 1
         state["clock"] = state.get("clock", 0) + 1
-        stamp = "2026-04-02T%02d:%02d:00Z" % divmod(state["clock"], 60)
+        stamp = "%sT%02d:%02d:00Z" % (state.get("date", "2026-04-02"), *divmod(state["clock"], 60))
         state["issues"][str(number)] = {"title": option(args, "--title"), "body": body_from(args),
                                         "labels": option(args, "--label", many=True),
                                         "created_at": stamp, "updated_at": stamp}
@@ -248,7 +256,7 @@ def main():
         if "--body-file" in args:
             issue["body"] = body_from(args)
             state["clock"] = state.get("clock", 0) + 1
-            stamp = "2026-04-02T%02d:%02d:00Z" % divmod(state["clock"], 60)
+            stamp = "%sT%02d:%02d:00Z" % (state.get("date", "2026-04-02"), *divmod(state["clock"], 60))
             if not issue.get("edits"):
                 issue["edits"] = [{"at": issue.get("created_at", "2026-01-05T17:00:00Z"), "by": issue.get("user", ME)}]
             issue["edits"].insert(0, {"at": stamp, "by": ME})
@@ -265,7 +273,7 @@ def main():
         cid = state["next_comment"]
         state["next_comment"] += 1
         state["comments"][str(cid)] = {"issue": int(args[2]), "body": body_from(args),
-                                       "created_at": "2026-04-01T%02d:%02d:00Z" % divmod(cid - 9100, 60)}
+                                       "created_at": "%sT%02d:%02d:00Z" % (state.get("date", "2026-04-01"), *divmod(cid - 9100, 60))}
         state["issues"][args[2]]["updated_at"] = state["comments"][str(cid)]["created_at"]
         print("https://github.com/%s/issues/%s#issuecomment-%d" % (repo, args[2], cid))
     elif words == "issue pin":
