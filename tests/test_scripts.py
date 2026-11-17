@@ -8997,6 +8997,343 @@ class MindPageTests(MindSandbox):
         self.assertEqual([], page_problems(mind.render(model)))
 
 
+class MindTextTests(unittest.TestCase):
+    """Record text as blocks, runs and formula trees (mind_text.py): pure functions, no index and no sandbox."""
+
+    REVIEW_TABLE = (
+        '<table>\n  <thead>\n    <tr><th rowspan="2">Season</th><th colspan="2">Effect of cover at 5 cm (m\u00b3/m\u00b3)'
+        '</th><th rowspan="2">Plot-seasons</th></tr>\n    <tr><th>Estimate</th><th>95% CI</th></tr>\n  </thead>\n'
+        '  <tbody>\n    <tr><td>Season 1</td><td><b>0.031</b></td><td>0.018 to 0.044</td><td>20 of 20</td></tr>\n'
+        '    <tr><td>Season 2</td><td>0.019</td><td>0.006 to 0.032</td><td>20 of 20</td></tr>\n'
+        '    <tr><td>Pooled</td><td>0.024</td><td>0.013 to 0.035</td><td>40 of 40</td></tr>\n  </tbody>\n</table>')
+
+    def setUp(self):
+        import mind_text
+        self.t = mind_text
+
+    @staticmethod
+    def words(runs):
+        """The text of runs, with a mark for bold (*), italic (/), superscript (^) and subscript (_) in front."""
+        out = []
+        for run in runs:
+            if "t" in run:
+                marks = "".join(mark for key, mark in (("b", "*"), ("i", "/"), ("sup", "^"), ("sub", "_")) if run.get(key))
+                out.append(marks + run["t"])
+            elif "code" in run:
+                out.append("`" + run["code"] + "`")
+            elif "link" in run:
+                out.append("[" + "".join(MindTextTests.words(run["link"])) + "]")
+            else:
+                out.append("$" + ("m" if "m" in run["math"] else "s") + "$")
+        return "|".join(out)
+
+    def cells(self, row):
+        return [(self.words(cell["r"]), cell["rs"], cell["cs"], cell["h"], cell["a"]) for cell in row]
+
+    def walk(self, value):
+        """Every key and every string value of a result, to look for what must never be there."""
+        if isinstance(value, dict):
+            for key, item in value.items():
+                yield key
+                for found in self.walk(item):
+                    yield found
+        elif isinstance(value, list):
+            for item in value:
+                for found in self.walk(item):
+                    yield found
+        elif isinstance(value, str):
+            yield value
+
+    def test_a_paragraph_joins_its_lines_and_a_blank_line_ends_it(self):
+        blocks = self.t.blocks("First line\nsecond line.\n\nNext paragraph.\n")
+        self.assertEqual(["First line second line.", "Next paragraph."],
+                         [self.words(block["p"]) for block in blocks])
+        self.assertEqual([], self.t.blocks(""))
+        self.assertEqual([], self.t.blocks("  \n\n"))
+        self.assertEqual([], self.t.blocks(None))
+
+    def test_headings_have_three_levels_and_a_figure_heading_is_no_heading(self):
+        blocks = self.t.blocks("### Plots\n\n#### Sampling\n\n##### Depth\n\n###### Probe\n\n#7 is no heading")
+        self.assertEqual([("h", 1, "Plots"), ("h", 2, "Sampling"), ("h", 3, "Depth"), ("h", 3, "Probe"),
+                          ("p", None, "#7 is no heading")],
+                         [("h", b["h"]["level"], self.words(b["h"]["r"])) if "h" in b else ("p", None, self.words(b["p"]))
+                          for b in blocks])
+        blocks = self.t.blocks("### Figure: dryspell - Soil moisture\n\nA caption.\n\n![x](https://example.org/a.png)\n\n"
+                               "### Table: plots - Plots\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n### After\n\nText.")
+        self.assertEqual([{"block": {"kind": "figure", "id": "dryspell"}}, {"block": {"kind": "table", "id": "plots"}}],
+                         blocks[:2])
+        self.assertEqual("After", self.words(blocks[2]["h"]["r"]))
+        self.assertEqual(4, len(blocks))  # the lines of a block are not read again
+
+    def test_bullet_and_numbered_lists_and_the_start_number(self):
+        blocks = self.t.blocks("- one\n* two\n+ three\n\n1. first\n2) second\n\nA paragraph.\n\n4. fourth\n5. fifth\n")
+        self.assertEqual(["ul", "ol", "p", "ol"], [next(k for k in block if k in ("ul", "ol", "p")) for block in blocks])
+        self.assertEqual(["one", "two", "three"], [self.words(i["r"]) for i in blocks[0]["ul"]])
+        self.assertEqual(["first", "second"], [self.words(i["r"]) for i in blocks[1]["ol"]])
+        self.assertEqual((1, 4), (blocks[1]["start"], blocks[3]["start"]))
+        self.assertEqual(1, self.t.blocks("99999. x")[0]["start"])  # out of range
+        self.assertEqual(9999, self.t.blocks("9999. x")[0]["start"])
+        self.assertEqual(["ul", "ol"], [next(iter(b)) for b in self.t.blocks("- a\n1. b")])  # another kind starts a list
+        blocks = self.t.blocks("The steps were:\n1. install\n2. calibrate\n3. check\nMore text.\n")  # a list ends a paragraph
+        self.assertEqual(["p", "ol"], [next(iter(b)) for b in blocks])
+        self.assertEqual(["install", "calibrate", "check More text."], [self.words(i["r"]) for i in blocks[1]["ol"]])
+        self.assertEqual("a b", self.words(self.t.blocks("- a\n  b")[0]["ul"][0]["r"]))  # a continuation line
+        self.assertEqual(["p"], [next(iter(b)) for b in self.t.blocks("See page\n2. later")])  # 2. does not interrupt
+
+    def test_lists_nest_by_two_spaces_to_three_levels(self):
+        text = "- a\n  - b\n    - c\n  - d\n- e\n"
+        block = self.t.blocks(text)[0]
+        self.assertEqual(["a", "e"], [self.words(i["r"]) for i in block["ul"]])
+        sub = block["ul"][0]["sub"]
+        self.assertEqual(["b", "d"], [self.words(i["r"]) for i in sub["ul"]])
+        self.assertEqual(["c"], [self.words(i["r"]) for i in sub["ul"][0]["sub"]["ul"]])
+        self.assertIsNone(sub["ul"][0]["sub"]["ul"][0]["sub"])
+        self.assertEqual("ol", next(k for k in self.t.blocks("- a\n   1. b\n   2. c")[0]["ul"][0]["sub"]))
+        self.assertEqual(2, len(self.t.blocks("- a\n - b")[0]["ul"]))  # one space is no nesting
+
+    def test_a_list_four_levels_deep_keeps_three_and_deeper_items_join_their_parent(self):
+        block = self.t.blocks("- one\n  - two\n    - three\n      - four\n        - five\n- next\n")[0]
+        self.assertEqual(["one", "next"], [self.words(i["r"]) for i in block["ul"]])
+        two = block["ul"][0]["sub"]["ul"][0]
+        three = two["sub"]["ul"][0]
+        self.assertEqual("three four five", self.words(three["r"]))
+        self.assertIsNone(three["sub"])
+
+    def test_a_quote_joins_its_lines(self):
+        blocks = self.t.blocks("> We said\n> something exact.\n\nNot quoted.")
+        self.assertEqual(["We said something exact.", "Not quoted."],
+                         [self.words(b["quote"] if "quote" in b else b["p"]) for b in blocks])
+        self.assertEqual({"quote"}, set(blocks[0]))
+
+    def test_a_fenced_block_is_kept_as_written_with_its_dollars_and_pipes(self):
+        text = "Before.\n\n```python\nprice = '$5'  # | pipe | $x$\n\n**not bold** <b>\n```\n\n~~~\nplain $$ fence\n~~~\nAfter."
+        blocks = self.t.blocks(text)
+        self.assertEqual([{"p": [{"t": "Before."}]},
+                          {"code": "price = '$5'  # | pipe | $x$\n\n**not bold** <b>"},
+                          {"code": "plain $$ fence"}, {"p": [{"t": "After."}]}], blocks)
+        self.assertEqual([{"code": "cut here\n$$ x"}], self.t.blocks("```\ncut here\n$$ x"))  # a text that was cut
+
+    def test_display_math_on_one_line_on_several_and_in_a_math_fence(self):
+        one = self.t.blocks("$$ x^2 $$")[0]["math"]
+        self.assertEqual((True, "msup"), (one["d"], one["m"]["c"][0]["m"]))
+        several = self.t.blocks("Text.\n$$\n\\theta = a\n  + b\n$$\nMore.")
+        self.assertEqual(["p", "math", "p"], [next(iter(b)) for b in several])
+        self.assertEqual("mrow", several[1]["math"]["m"]["m"])
+        fenced = self.t.blocks("```math\n\\frac{1}{2}\n```")[0]["math"]
+        self.assertEqual("mfrac", fenced["m"]["c"][0]["m"])
+        outside = self.t.blocks("$$\n\\begin{aligned} a &= b \\end{aligned}\n$$")[0]["math"]
+        self.assertEqual({"d": True, "s": "\\begin{aligned} a &= b \\end{aligned}"}, outside)
+        self.assertEqual({"d": True, "s": "\\unknown"}, self.t.blocks("```math\n\\unknown\n```")[0]["math"])
+        self.assertEqual(["p"], [next(iter(b)) for b in self.t.blocks("$$ not closed\nstill text")])  # no partner
+
+    def test_a_pipe_table_takes_its_alignment_from_the_separator(self):
+        table = self.t.blocks("| Season | Effect | n |\n|:---|:---:|---:|\n| 1 | **0.03** | 20 |\n| 2 | 0.01 | 20 |\n")[0]
+        self.assertEqual({"head", "rows", "cut", "caption"}, set(table["table"]))
+        table = table["table"]
+        self.assertEqual([[("Season", 1, 1, True, "l"), ("Effect", 1, 1, True, "c"), ("n", 1, 1, True, "r")]],
+                         [self.cells(row) for row in table["head"]])
+        self.assertEqual([("1", 1, 1, False, "l"), ("*0.03", 1, 1, False, "c"), ("20", 1, 1, False, "r")],
+                         self.cells(table["rows"][0]))
+        self.assertEqual((2, False, None), (len(table["rows"]), table["cut"], table["caption"]))
+        plain = self.t.blocks("| a | b |\n|---|---|\n| x \\| y | z |")[0]["table"]
+        self.assertEqual([("x | y", 1, 1, False, None), ("z", 1, 1, False, None)], self.cells(plain["rows"][0]))
+        self.assertEqual(["p"], [next(iter(b)) for b in self.t.blocks("| not | a table |\n| just | lines |")])
+        rows = "\n".join("| %d | %s |" % (n, "x" * 3) for n in range(50))
+        capped = self.t.blocks("| n | c |\n|---|---|\n" + rows)[0]["table"]
+        self.assertEqual((40, True), (len(capped["rows"]), capped["cut"]))
+        wide = "| " + " | ".join("c%d" % n for n in range(15)) + " |\n|" + "---|" * 15 + "\n"
+        self.assertEqual((12, True), (len(self.t.blocks(wide)[0]["table"]["head"][0]),
+                                      self.t.blocks(wide)[0]["table"]["cut"]))
+
+    def test_a_line_that_is_only_an_image_is_dropped(self):
+        blocks = self.t.blocks("Before.\n![Soil](https://github.com/o/r/blob/v1/a.png?raw=true)\nAfter.")
+        self.assertEqual(["Before.", "After."], [self.words(b["p"]) for b in blocks])
+
+    def test_comments_are_dropped_outside_code_only(self):
+        text = ("One <!-- gone --> two.\n\n<!-- a\nmulti-line comment -->\n\nThree `<!--` in code stays.\n\n"
+                "```\n<!-- kept -->\n```\n")
+        blocks = self.t.blocks(text)
+        self.assertEqual(["One  two.", "Three |`<!--`| in code stays."], [self.words(b["p"]) for b in blocks[:2]])
+        self.assertEqual({"code": "<!-- kept -->"}, blocks[2])
+        self.assertNotIn("gone", json.dumps(blocks))
+
+    def test_bold_italic_superscript_and_subscript(self):
+        runs = self.t.inline("A **bold** and __bold__ and *it* and _it_ and ***both*** and m<sup>3</sup> and "
+                             "H<sub>2</sub>O and <b>b</b> <i>i</i> <em>e</em> <strong>s</strong>.")
+        self.assertEqual("A |*bold| and |*bold| and |/it| and |/it| and |*/both| and m|^3| and H|_2|O and |*b| |/i| "
+                         "|/e| |*s|.", self.words(runs))
+        self.assertIn({"t": "both", "b": True, "i": True}, runs)
+        self.assertIn({"t": "3", "sup": True}, runs)
+        self.assertEqual([{"t": "*not* a mark and snake_case"}], self.t.inline("\\*not\\* a mark and snake_case"))
+        self.assertEqual([{"t": "a "}, {"t": "b", "b": True, "i": True}], self.t.inline("a <b><i>b</i></b>"))
+
+    def test_a_mark_with_no_partner_stays_text_as_written(self):
+        for text in ("an **unmatched mark", "2 * 3 * 4 and a_b_c and snake_case_name", "a <b>never closed", "x</i> y",
+                     "***", "**** four", "a_b"):
+            self.assertEqual([{"t": text}], self.t.inline(text), text)
+        runs = self.t.inline("**a **b**")
+        self.assertEqual([("**a ", None), ("b", True)], [(r["t"], r.get("b")) for r in runs])
+        self.assertEqual([{"t": "x<sup>y"}], self.t.inline("x<sup>y"))
+
+    def test_code_spans_are_read_first(self):
+        runs = self.t.inline("Run `**not bold** $x$ [a](b)` then **`code` in bold**.")
+        self.assertEqual([{"t": "Run "}, {"code": "**not bold** $x$ [a](b)"}, {"t": " then "}, {"code": "code"},
+                          {"t": " in bold", "b": True}, {"t": "."}], runs)
+
+    def test_inline_math_and_the_dollar_rule(self):
+        self.assertEqual([{"t": "It costs $5 and $10 in all."}], self.t.inline("It costs $5 and $10 in all."))
+        self.assertEqual([{"t": "$ x $ is text"}], self.t.inline("$ x $ is text"))
+        self.assertEqual([{"t": "a $b and c"}], self.t.inline("a $b and c"))
+        runs = self.t.inline("Let $\\theta$ be, and $u_p$ too; also $`a^2`$ and \\$5 and 4$.")
+        self.assertEqual("Let |$m$| be, and |$m$| too; also |$m$| and $5 and 4$.", self.words(runs))
+        self.assertEqual({"math": {"d": False, "m": {"m": "mrow", "c": [{"m": "mi", "t": "\u03b8"}]}}}, runs[1])
+        outside = self.t.inline("Then $\\unknown x$ here.")
+        self.assertEqual({"math": {"d": False, "s": "\\unknown x"}}, outside[1])
+        self.assertEqual("$m$", self.words(self.t.inline("$$x$$")))  # written inline
+        self.assertEqual("$s$", self.words(self.t.inline("$" + "x" * 450 + "$")))  # over the limit: the source
+        self.assertEqual([{"t": "$" + "x" * 600 + "$"}], self.t.inline("$" + "x" * 600 + "$"))  # too far for a partner
+
+    def test_link_runs_carry_checked_parts_or_none(self):
+        runs = self.t.inline("See [the thread](https://github.com/octo-org/sample-project/issues/4) and "
+                             "[**a** page](https://example.org/x) and [t](javascript:alert(1)).")
+        self.assertEqual("See |[the thread]| and |[*a| page]| and [t](javascript:alert(1)).", self.words(runs))
+        link = runs[1]
+        self.assertEqual({"link", "to", "said"}, set(link))
+        self.assertEqual({"kind": "issue", "repo": "octo-org/sample-project", "n": 4}, link["to"])
+        self.assertEqual("https://github.com/octo-org/sample-project/issues/4", link["said"])
+        other = runs[3]
+        self.assertEqual((None, "https://example.org/x"), (other["to"], other["said"]))
+        self.assertEqual({"t": "a", "b": True}, other["link"][0])
+        self.assertEqual("![a](https://example.org/x) text", self.words(self.t.inline("![a](https://example.org/x) text")))
+        self.assertEqual({"link": [{"t": "x"}], "to": None, "said": "javascript:alert"},
+                         self.t.inline("[x](javascript:alert)")[0])  # kept as words and an address to show as text
+
+    def test_github_parts_of_each_form(self):
+        parts = self.t.github_parts
+        base = "https://github.com/octo-org/sample-project"
+        self.assertEqual({"kind": "issue", "repo": "octo-org/sample-project", "n": 12}, parts(base + "/issues/12"))
+        self.assertEqual({"kind": "memory", "repo": "octo-org/sample-project", "n": 12, "cid": 345},
+                         parts(base + "/issues/12#issuecomment-345"))
+        self.assertEqual({"kind": "pull", "repo": "octo-org/sample-project", "n": 7}, parts(base + "/pull/7"))
+        self.assertEqual({"kind": "lines", "repo": "octo-org/sample-project", "commit": "9c3e1ab",
+                          "path": "scripts/fit.R", "first": 3, "last": 3}, parts(base + "/blob/9c3e1ab/scripts/fit.R#L3"))
+        self.assertEqual(5, parts(base + "/blob/9c3e1ab/scripts/fit.R#L3-L5")["last"])
+        self.assertEqual({"kind": "picture", "repo": "octo-org/sample-project", "ref": "v0.4",
+                          "path": "figures/a.png"}, parts(base + "/blob/v0.4/figures/a.png?raw=true"))
+        self.assertEqual("picture", parts(base + "/blob/9c3e1ab/figures/a.png")["kind"])
+
+    def test_github_parts_rejects_what_is_not_one_of_the_forms(self):
+        parts = self.t.github_parts
+        base = "https://github.com/octo-org/sample-project"
+        for bad in (None, 5, "", "http://github.com/o/r/issues/1", "https://github.com.evil.org/o/r/issues/1",
+                    "https://example.org/o/r/issues/1", "javascript:alert(1)", "data:text/html,x", "//github.com/o/r/issues/1",
+                    base + "/issues/0", base + "/issues/" + "1" * 11, base + "/issues/1/", base + "/issues/1x",
+                    base + "/issues/1#issuecomment-0", base + "/issues/1#other", base + "/pull/1#x", base + "/pull/1?x=1",
+                    base + "/blob/v1/../a.png", base + "/blob/v1/a/../b.png", base + "/blob/v1/./a.png",
+                    base + "/blob/v1//a.png", base + "/blob/../a.png", base + "/blob/v1/a b.png", base + '/blob/v1/a".png',
+                    base + "/blob/v1/a.png?raw=false", base + "/blob/v1/a.py#L5-L3", base + "/blob/v1/a.py#L1",
+                    base + "/blob/9c3e1ab/a.py?raw=true#L1", base + "/blob/9c3e1ab/" + "a/" * 150 + "b.py",
+                    base + "/tree/main/a", base + "/issues", "https://github.com/o/../issues/1",
+                    "https://github.com/octo org/r/issues/1", "https://github.com/o/r\x00/issues/1"):
+            self.assertIsNone(parts(bad), repr(bad))
+
+    def test_the_html_table_of_the_review_is_read_with_its_spans(self):
+        table = self.t.blocks(self.REVIEW_TABLE)[0]["table"]
+        self.assertEqual([[("Season", 2, 1, True, None), ("Effect of cover at 5 cm (m\u00b3/m\u00b3)", 1, 2, True, None),
+                           ("Plot-seasons", 2, 1, True, None)],
+                          [("Estimate", 1, 1, True, None), ("95% CI", 1, 1, True, None)]],
+                         [self.cells(row) for row in table["head"]])
+        self.assertEqual([("Season 1", 1, 1, False, None), ("*0.031", 1, 1, False, None),
+                          ("0.018 to 0.044", 1, 1, False, None), ("20 of 20", 1, 1, False, None)],
+                         self.cells(table["rows"][0]))
+        self.assertEqual(3, len(table["rows"]))
+        self.assertEqual((False, None), (table["cut"], table["caption"]))
+        withcaption = self.t.blocks("<table><caption>The <b>fit</b></caption><tr><th>A</th></tr><tr><td>$x$</td></tr>"
+                                    "</table>")[0]["table"]
+        self.assertEqual("The |*fit", self.words(withcaption["caption"]))
+        self.assertEqual("$m$", self.words(withcaption["rows"][0][0]["r"]))  # a cell goes through the inline reader
+        mixed = self.t.blocks("Before.\n<table><tr><td align='Right'>x &amp; y<br>z</td><td>a<sup>2</sup> <code>c`d</code>"
+                              "</td></tr></table> after\n")
+        self.assertEqual(["p", "table", "p"], [next(iter(b)) for b in mixed])
+        row = mixed[1]["table"]["rows"][0]
+        self.assertEqual([("x & y z", 1, 1, False, "r"), ("a|^2| |`cd`", 1, 1, False, None)], self.cells(row))
+
+    def test_an_html_table_outside_the_subset_is_a_note_each_way(self):
+        note = [{"note": {"key": "html-table"}}]
+        rows = "".join("<tr><td>%d</td></tr>" % n for n in range(41))
+        wide = "<tr>" + "<td>x</td>" * 13 + "</tr>"
+        for name, text in (
+                ("a table in a table", "<table><tr><td><table><tr><td>x</td></tr></table></td></tr></table>"),
+                ("41 rows", "<table>" + rows + "</table>"),
+                ("13 columns", "<table>" + wide + "</table>"),
+                ("a colspan of 13", '<table><tr><td colspan="13">x</td></tr></table>'),
+                ("a rowspan of 41", '<table><tr><td rowspan="41">x</td></tr></table>'),
+                ("a span of 0", '<table><tr><td colspan="0">x</td></tr></table>'),
+                ("a span that is no number", '<table><tr><td rowspan="two">x</td></tr></table>'),
+                ("an empty span", '<table><tr><td colspan="">x</td></tr></table>'),
+                ("a span of three digits", '<table><tr><td colspan="002">x</td></tr></table>'),
+                ("no row", "<table></table>"), ("no cell", "<table><tr></tr></table>"),
+                ("never closed", "<table><tr><td>x</td></tr>"),
+                ("a script that swallows the end", "<table><tr><td>x<script>y</td></tr></table>")):
+            self.assertEqual(note, self.t.blocks(text), name)
+        self.assertEqual(12, self.t.blocks("<table><tr>" + "<td>x</td>" * 12 + "</tr></table>")[0]["table"]["rows"][0][11]
+                         ["cs"] + 11)  # 12 columns are the limit and still a table
+        self.assertEqual(40, len(self.t.blocks("<table>" + rows[:-len("<tr><td>40</td></tr>")] + "</table>")[0]["table"]
+                                 ["rows"]))
+        self.assertEqual(40, self.t.blocks('<table><tr><td rowspan="40">x</td></tr></table>')[0]["table"]["rows"][0][0]["rs"])
+
+    def test_the_text_of_script_and_style_is_dropped_and_no_attribute_survives(self):
+        text = ('<table><tr><td onclick="steal()" style="color:red" id="x" class="y">Keep <script>alert(1)</script>'
+                '<style>.a{b:c}</style>this</td><td><a href="javascript:alert(2)" onmouseover="z()">link text</a>'
+                '<img src="x" onerror="alert(3)">after<iframe src="http://evil">frame text</iframe></td></tr></table>')
+        blocks = self.t.blocks(text)
+        cells = blocks[0]["table"]["rows"][0]
+        self.assertEqual(["Keep this", "link textafterframe text"], [self.words(cell["r"]) for cell in cells])
+        found = " ".join(self.walk(blocks))
+        for word in ("alert", "steal", "onclick", "onerror", "onmouseover", "javascript", "style", "href", "evil",
+                     "script", "color", "iframe", ".a{b:c}"):
+            self.assertNotIn(word, found, word)
+        self.assertEqual({"r", "rs", "cs", "h", "a"}, set(cells[0]))
+        self.assertEqual({"head", "rows", "cut", "caption"}, set(blocks[0]["table"]))
+
+    def test_other_html_in_a_paragraph_stays_text_as_written(self):
+        text = 'A <img src=x onerror=alert(1)> and <script>alert(2)</script> and <a href="x">y</a> and <u>z</u>.'
+        self.assertEqual([{"t": text}], self.t.inline(text))
+        self.assertEqual([{"p": [{"t": "<div onclick=x>hi</div>"}]}], self.t.blocks("<div onclick=x>hi</div>"))
+
+    def test_an_html_table_of_more_than_twenty_thousand_characters_is_a_note(self):
+        cell = "<td>%s</td>" % ("x" * 100)
+        small = "<table><tr>" + cell * 190 + "</tr></table>"  # under the cap in characters, over 12 columns: use rows
+        rows = "<table>" + ("<tr><td>%s</td></tr>" % ("x" * 800)) * 24 + "</table>"
+        self.assertLess(len(rows), 20000)
+        self.assertEqual("table", next(iter(self.t.blocks(rows)[0])))
+        big = "<table>" + ("<tr><td>%s</td></tr>" % ("x" * 800)) * 25 + "</table>"
+        self.assertGreater(len(big), 20000)
+        self.assertEqual([{"note": {"key": "html-table"}}], self.t.blocks(big))
+        self.assertTrue(small)
+
+    def test_text_after_a_table_on_its_last_line_is_kept(self):
+        blocks = self.t.blocks("<table><tr><td>a</td></tr></table> trailing words\nNext.")
+        self.assertEqual(["table", "p"], [next(iter(b)) for b in blocks])
+        self.assertEqual("trailing words Next.", self.words(blocks[1]["p"]))
+
+    def test_results_are_plain_data_and_the_same_every_time(self):
+        text = ("### Plots\n\nSome **bold** text with $x^2$ and a [link](https://github.com/o/r/pull/2).\n\n1. a\n   - b\n\n"
+                "| a | b |\n|---|---|\n| 1 | 2 |\n\n" + self.REVIEW_TABLE + "\n\n$$ \\frac{a}{b} $$\n\n```\ncode\n```\n")
+        first = self.t.blocks(text)
+        self.assertEqual(json.dumps(first, sort_keys=False), json.dumps(self.t.blocks(text), sort_keys=False))
+        self.assertEqual(first, json.loads(json.dumps(first)))
+        self.assertEqual(self.t.tex("\\frac{a}{b}", True), self.t.tex("\\frac{a}{b}", True))
+
+    def test_a_long_text_of_unmatched_dollar_signs_and_marks_is_read_quickly(self):
+        import time
+        for text in ("$a " * 14000, "$\\" * 14000, "**a " * 10000, "* " * 20000 + "\n" + "[a](b " * 5000,
+                     "<table>" * 3000, "$$\n" * 5000):
+            began = time.time()
+            self.t.blocks(text)
+            self.assertLess(time.time() - began, 5, text[:12])
+
+
 COMPAT = os.path.join(FIXTURES, "compat-0.5.0")
 COMPAT_SHA256 = {  # the four files as they are at 6979c65 (0.5.0); never edited
     "names.py": "bd1dc538ab698224081f12ece3a1706d6920d5ee2e26a5f7da54de4d2ae65c97",
