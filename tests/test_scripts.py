@@ -7277,8 +7277,10 @@ class MindIndexTests(MindSandbox):
         self.assertIn("9120  2026-03-14  idea      taken up   ", self.recall(6).stdout)
         listed = self.recall(5).stdout.split("Open questions and untried ideas in other threads:")[1].split("Words")[0]
         self.assertNotRegex(listed, r"9120|9121")
+        self.put(9137, 6, memory_draft("idea", "2026-03-15T11:00-08:00", "because=9122"))  # an idea changes nothing
         self.put(9140, 6, memory_draft("decision", "2026-03-16T10:00-08:00", "instead=9121"))
         self.ready()
+        self.assertEqual("untried", self.states()[9122])
         self.assertEqual("set aside", self.states()[9121])  # set aside comes before taken up
 
     def test_recall_keeps_to_its_limits_and_cleans_what_it_prints(self):
@@ -9380,6 +9382,30 @@ class MindPageTests(MindSandbox):
         self.assertRegex(view, r"Nothing here stands yet\. <a href=\"#thread-6\">2 points are open</a>")
         self.assertRegex(view, r'<h3>About the project as a whole</h3>')
         self.assertRegex(view, r'<h3>Set aside</h3><ul class="leftout"><li><a href="#thread-7">Low-cost sensor network</a>')
+
+    def test_a_part_cut_at_its_cap_ends_with_a_link_to_the_issue_and_a_cut_field_with_a_link_to_the_comment(self):
+        self.manuscript_record()
+        data = self.repo()
+        paragraph = " ".join("word%05d" % n for n in range(1, 4800))  # 48,000 characters in one section
+        data["issues"]["6"]["body"] = data["issues"]["6"]["body"].replace(
+            "## Limitations\n", "## Limitations\n\n" + paragraph + "\n", 1)
+        reason = data["comments"]["9141"]["body"]
+        self.assertIn("**Why it matters:** ", reason)
+        data["comments"]["9141"]["body"] = reason.replace("**Why it matters:** ", "**Why it matters:** " + " ".join(
+            "qz%04d" % n for n in range(1, 700)) + " ", 1)  # more than the 1,200 characters of a field
+        self.save(data)
+        self.ready()
+        built = self.build()
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        text = recortex.read_text(self.page_file())
+        words = self.words_of(text)
+        self.assertIn("word00001", words)
+        self.assertNotIn("word04799", words)  # cut at 40,000 characters
+        self.assertIn('This part is long, so the page stops here. <a href="https://github.com/octo-org/sample-project/'
+                      'issues/6" rel="noopener noreferrer">Read the rest on GitHub.</a>', text)
+        self.assertNotIn("This is cut here", text)
+        self.assertIn('This part is long, so the page stops here. <a href="https://github.com/octo-org/sample-project/'
+                      'issues/9#issuecomment-9141" rel="noopener noreferrer">Read the rest on GitHub.</a>', text)
 
     def test_the_last_lines_show_in_full_under_the_first_view_only(self):
         text = self.ms_page()
