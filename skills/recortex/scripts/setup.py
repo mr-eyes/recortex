@@ -20,6 +20,12 @@ apply   Makes every change, from an answers file written after the user's final
         all of it and writes nothing; a real run
         needs --yes. Run again with new answers, it adds deliverables, sections
         and labels and never removes what is there.
+questions  The setup questions an update added that this project and this machine have not answered yet
+        (references/setup.md, "Questions added after setup"): each with its exact commands, and nothing else. It
+        reads GitHub once at most (the labels) and writes only the note that no label is missing.
+answer  `--id ID --answer yes|no|later|reset`: records the user's answer to one setup question on this machine.
+status-line, observer  The two steps of the wizard, as commands of their own for the setup questions:
+        `status-line --dry-run|--yes` and `observer --mode automatic|shadow --model M --dry-run|--yes`.
 fields  The field sheet (references/fields.md), local only: `show` prints its
         state and the sheet; `set --answers <file>` writes the "fields" entry of
         the answers and records the user's approval (--dry-run, or --yes;
@@ -52,6 +58,8 @@ Examples:
   setup.py preflight
   setup.py detect
   setup.py detect --fields --json
+  setup.py questions
+  setup.py answer --id status-line --answer later
   setup.py apply --answers answers.json --dry-run
   setup.py apply --answers answers.json --yes
   setup.py fields show
@@ -93,6 +101,7 @@ import setup_labels  # noqa: E402
 import storage  # noqa: E402
 import field_sheet  # noqa: E402
 import board_api  # noqa: E402
+import setup_questions  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(HERE, "..", "templates")
@@ -414,6 +423,9 @@ def check_answers(answers):
     if not isinstance(status_line, bool):
         raise AnswerError("status_line must be true or false")
     out["status_line"] = status_line
+    # What the file said in so many words, for the setup questions: a "no" the wizard asked and wrote down.
+    out["given"] = {"status_line": "status_line" in answers, "observer_off": observer["mode"] == "off"
+                    and "observer" in answers}
     out["fields"], out["restricted"] = None, []
     if "fields" in answers:
         out["fields"], out["restricted"] = check_field_answers(answers["fields"])
@@ -1343,6 +1355,45 @@ def observer_step(answers, root, python, dry):
                                                       "this machine"))
 
 
+def settle_questions(answers, had_file, config, root, dry):
+    """What the wizard has just asked is not asked again by the setup questions. The labels are made by this run, so
+    `labels` is recorded as yes. For a project with no setup file before, the wizard asked the status line, the observer
+    and the paper: each of the three that is still open, because the answer was no, is recorded as no. On a rerun only a
+    "no" written in the answers file in so many words ("status_line": false, an observer of mode off) is. A dry run
+    prints what it would record; a write that is refused prints one line, and the setup stays done."""
+    repo = answers["repo"]
+    wanted = ["labels"]
+    if not had_file:
+        wanted += [item for item, asked in (("status-line", not answers["status_line"]),
+                                            ("observer", not answers["observer"]), ("manuscript-profile", True)) if asked]
+    else:
+        given = answers.get("given", {})
+        if given.get("status_line") and not answers["status_line"]:
+            wanted.append("status-line")
+        if given.get("observer_off"):
+            wanted.append("observer")
+    try:
+        context = setup_questions.Context(repo, config, os.path.realpath(root))
+        chosen = [("labels", "yes")]
+        for question_id in wanted[1:]:
+            if setup_questions.find(question_id).check(context)[0] == setup_questions.OPEN:
+                chosen.append((question_id, "no"))
+        text = ", ".join("%s %s" % pair for pair in chosen)
+        if dry:
+            print("would record as answered on this machine: %s   # so that the setup questions do not ask them again" % text)
+            return
+        setup_questions.load()  # a file that cannot be read stops it, and is never replaced
+        for question_id, answer in chosen:
+            setup_questions.record(repo, question_id, answer)
+            if question_id == "manuscript-profile":
+                remember_told(repo, ["paper"])
+        print("recorded as answered on this machine: %s" % text)
+    except (OSError, ValueError, storage.StorageError) as error:
+        print("not recorded: the answers of this machine to the setup questions, because the local storage was refused: "
+              "%s. The first session asks the questions that remain" % (
+                  setup_questions.NOT_READABLE.get(str(error), error) if isinstance(error, ValueError) else error))
+
+
 def apply(answers, root, dry, drafts):
     if not dry:
         print(preflight())  # before anything is written; a dry run writes nothing and makes no such check
@@ -1365,7 +1416,8 @@ def apply(answers, root, dry, drafts):
     if answers["claude_md"]:
         refuse_unsafe(root, claude_md)
     existing = {}
-    if os.path.isfile(config_path):
+    had_file = os.path.isfile(config_path)
+    if had_file:
         try:
             existing = json.loads(recortex.read_text(config_path))
         except ValueError as error:
@@ -1492,6 +1544,7 @@ def apply(answers, root, dry, drafts):
     if answers["observer"]:
         observer_step(answers, root, python, dry)
     status_line_step(answers, dry)
+    settle_questions(answers, had_file, config, root, dry)
     present = [item["kind"] for item in detect(root)]
     if dry:
         print("would record as known: %s   # the hooks suggest only deliverables that appear later" %
@@ -1555,9 +1608,161 @@ def writing_command(args):
     return 0
 
 
+NOT_SET_UP = ("setup questions: this project is not set up (no project file with a repository and a hub), so there is "
+              "nothing to ask.")
+NOT_TRUSTED = "setup questions: the repository of this project is not in your trusted list, so nothing is asked."
+UNREAD_LABELS = "setup questions: GitHub could not be read, so the labels are not checked now; the next run checks them."
+NOT_NOTED = "setup questions: the note that no label is missing could not be kept on this machine; it is checked again next time."
+
+
+def questions_project():
+    """(config, repo, ""), or (None, None, one fixed line) when the project is not set up or its repository is not
+    trusted."""
+    try:
+        config = recortex.load_config()
+    except (OSError, ValueError):
+        return None, None, NOT_SET_UP
+    repo, hub = config.get("repo"), config.get("hub")
+    if not config.get("_path") or not recortex.valid_repo(repo) or type(hub) is not int or hub < 1:
+        return None, None, NOT_SET_UP
+    if repo.lower() not in recortex.trusted_repos():
+        return None, None, NOT_TRUSTED
+    return config, repo, ""
+
+
+def questions_results(config, repo, data):
+    """The Results of setup_questions.evaluate for this project, with the record from the local index (None when there
+    is none, so that the questions that need the plan are not asked) and the labels read from GitHub."""
+    import brief
+    import index
+    root = os.path.realpath(recortex.project_root())
+    db = None
+    try:
+        db = index.connect(repo, create=False, tighten=False)
+        if db is not None and not index.get_meta(db, "synced_at"):
+            db.close()
+            db = None
+    except (storage.StorageError, ValueError, OSError):
+        db = None
+    try:
+        record = brief.Record(db, config, repo) if db is not None else None
+        return setup_questions.evaluate(setup_questions.Context(repo, config, root, record), data,
+                                        labels=lambda: setup_questions.missing_labels(repo, config))
+    finally:
+        if db is not None:
+            db.close()
+
+
+def questions_command(args):
+    """setup.py questions [--json]: the open setup questions with their exact commands. It reads GitHub once at most, for
+    the labels, and writes only the note that none is missing."""
+    config, repo, line = questions_project()
+    if config is None:
+        print(line)
+        return 0
+    found = setup_questions.read()
+    if found["state"] == "unreadable":
+        print("setup questions: the answers of this machine cannot be read (%s), so no question is asked. Run hooks.py "
+              "--doctor." % setup_questions.NOT_READABLE[found["why"]])
+        return 0
+    results = questions_results(config, repo, found["data"])
+    noted = True
+    for result in results:
+        if result.question.id == "labels" and result.reason == "complete":
+            try:
+                setup_questions.record(repo, "labels", "yes")
+            except (OSError, ValueError, storage.StorageError):
+                noted = False
+    shown = [r for r in results if r.status == "open"]
+    unread = [r.question.id for r in results if r.status == "unread"]
+    if args.json:
+        print(json.dumps({"open": [{
+            "id": r.question.id, "since": r.question.since, "scope": r.question.where,
+            "question": setup_questions.question_text(r, repo),
+            "answers_file": setup_questions.answers_file(repo, config) if r.question.id == "manuscript-profile" else None,
+            "options": [{"label": o.label, "answer": o.answer, "recommended": o.recommended, "note": o.note,
+                         "commands": [setup_questions.render_command(words) for words in o.commands],
+                         "record": setup_questions.render_command(setup_questions.record_words(r.question, o.answer))}
+                        for o in r.question.options],
+            "record": setup_questions.render_command(setup_questions.record_words(r.question, "yes|no|later"))}
+            for r in shown],
+            "unread": unread, "count": len(shown)}, indent=1))
+        return 0
+    for result in shown:
+        print("\n".join(setup_questions.describe(result, repo, config)))
+    if unread:
+        print(UNREAD_LABELS)
+    if not noted:
+        print(NOT_NOTED)
+    print("%d setup question%s open" % (len(shown), "" if len(shown) == 1 else "s") if shown
+          else "no setup question is open")
+    return 0
+
+
+def answer_command(args):
+    """setup.py answer --id ID --answer yes|no|later|reset: one answer of the user, kept on this machine."""
+    config, repo, line = questions_project()
+    if config is None:
+        sys.exit("error: %s" % line.split(": ", 1)[1])
+    found = setup_questions.read()
+    if found["state"] == "unreadable":
+        sys.exit("error: the answers of this machine cannot be read (%s); the file %s is not replaced. Move it aside by "
+                 "hand and run again" % (setup_questions.NOT_READABLE[found["why"]], setup_questions.path()))
+    try:
+        day = setup_questions.record(repo, args.id, args.answer)
+    except (OSError, storage.StorageError, ValueError) as error:
+        sys.exit("error: the answer was not recorded: %s" % (
+            "the lock file %s cannot be used (%s)" % (error.path, error) if isinstance(error, field_sheet.LockError)
+            else "%s cannot be written (%s)" % (setup_questions.path(), error)))
+    if args.answer == "reset":
+        print("reset: setup question %s is asked again when it is open" % args.id)
+        return 0
+    print("recorded: setup question %s is answered %s on this machine (%s)" % (args.id, args.answer, day))
+    if args.id == "manuscript-profile" and args.answer in ("yes", "no"):
+        try:
+            remember_told(repo, ["paper"])  # the hook's line about paper files is not made again
+        except (OSError, storage.StorageError) as error:
+            print("not recorded: the paper files as known, because the local storage was refused: %s" % error)
+    return 0
+
+
+def status_line_command(args):
+    """setup.py status-line --dry-run|--yes: the wizard's status line step, for the setup questions."""
+    status_line_step({"status_line": True}, args.dry_run)
+    return 0
+
+
+def observer_command(args):
+    """setup.py observer --mode M --model MODEL --dry-run|--yes: the wizard's observer step, for the setup questions."""
+    config, repo, line = questions_project()
+    if config is None:
+        sys.exit("error: %s" % line.split(": ", 1)[1])
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", args.model):
+        sys.exit("error: the model must be a Claude alias or model ID, such as sonnet")
+    observer_step({"repo": repo, "observer": {"mode": args.mode, "model": args.model}},
+                  os.path.abspath(recortex.project_root()), sys.executable, args.dry_run)
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("questions", help="the setup questions an update added that are still open (reads GitHub once at "
+                       "most, for the labels)")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("answer", help="record the user's answer to one setup question on this machine")
+    p.add_argument("--id", required=True, choices=setup_questions.IDS)
+    p.add_argument("--answer", required=True, choices=setup_questions.ANSWERS + ("reset",))
+    p = sub.add_parser("status-line", help="show recortex in the status line (the wizard's step, for the setup questions)")
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true", help="print every change; write nothing")
+    mode.add_argument("--yes", action="store_true", help="the user agreed")
+    p = sub.add_parser("observer", help="turn on the observer (the wizard's step, for the setup questions)")
+    p.add_argument("--mode", required=True, choices=("automatic", "shadow"))
+    p.add_argument("--model", required=True, help="a Claude alias or model ID, such as sonnet")
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true", help="print every step; run none")
+    mode.add_argument("--yes", action="store_true", help="the user agreed")
     p = sub.add_parser("writing", help="show or set whether recortex writes the paper's text (local; this machine)")
     actions = p.add_subparsers(dest="action", required=True)
     actions.add_parser("show", help="the mode chosen here, in one sentence (read-only)")
@@ -1595,6 +1800,10 @@ def main(argv=None):
         return fields_command(args)
     if args.command == "writing":
         return writing_command(args)
+    for name, command in (("questions", questions_command), ("answer", answer_command),
+                          ("status-line", status_line_command), ("observer", observer_command)):
+        if args.command == name:
+            return command(args)
     root = os.path.abspath(args.root or recortex.project_root())
     if args.command == "detect":
         fields = detect_fields(root)
