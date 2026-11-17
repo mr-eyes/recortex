@@ -11,7 +11,6 @@ import re
 import shlex
 import subprocess
 import sys
-import tempfile
 
 import names
 
@@ -885,28 +884,67 @@ def read_text(path):
 
 def write_working_files(folder, files):
     """Write the files of a working folder, {name: text or bytes}: the folder a script is told to fill and a drafting agent may
-    also write. Nothing is written through a link: the folder itself must be a folder and no name may be a symlink (the
-    author's paper or any other file could be at the other end), and each file is written through a fresh temporary file
-    in the folder and moved into place, so that a hard link at the name is replaced and never written through. The
-    names are all checked before the first is written. Exits with one line when the folder or a name is a link."""
-    if os.path.islink(folder) or (os.path.lexists(folder) and not os.path.isdir(folder)):
-        sys.exit("error: %s is a link or not a folder; use a new folder of your own" % folder)
+    also write. Nothing is written through a link, whatever the agent does while this runs:
+
+    - no part of the folder's path may be a symlink (a trailing slash or a link in a parent folder included): the path must
+      be what realpath says it is;
+    - the folder is opened once, without following a link, and its device and inode must be those of the folder that was
+      checked; every file is then made and moved into place through that open folder, so a link put in place of the folder
+      afterwards redirects nothing;
+    - no name may be a symlink, and each file is a fresh temporary file (mode 0600, made exclusively and without following
+      a link) moved over the name, so that a hard link at the name is replaced and never written through.
+
+    The names are all checked before the first is written. Exits with one line when something is refused, and where this
+    system lacks O_DIRECTORY, O_NOFOLLOW or the calls that take a folder's descriptor, which are what makes this safe."""
+    import secrets
+    import stat
+    if not (hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW") and os.open in os.supports_dir_fd
+            and os.stat in os.supports_dir_fd and os.unlink in os.supports_dir_fd and os.rename in os.supports_dir_fd):
+        sys.exit("error: this system cannot write a working folder without following links, so nothing was written")
+    folder = os.fspath(folder)
+    where = os.path.abspath(folder)
+    if not folder or "\0" in folder or os.path.realpath(folder) != where:
+        sys.exit("error: %s, or a folder on its path, is a link or not a usable folder; use a new folder of your own" % folder)
     for name in files:
-        if os.path.islink(os.path.join(folder, name)):
-            sys.exit("error: %s in %s is a link and is never written through; use a new folder of your own" % (name, folder))
-    os.makedirs(folder, exist_ok=True)
-    for name, text in files.items():
-        descriptor, temporary = tempfile.mkstemp(dir=folder, prefix=".part-")
-        try:
-            if hasattr(os, "fchmod"):
-                os.fchmod(descriptor, 0o600)
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(text.encode("utf-8") if isinstance(text, str) else text)
-            os.replace(temporary, os.path.join(folder, name))
-        except BaseException:
-            if os.path.lexists(temporary):
-                os.unlink(temporary)
-            raise
+        if not name or name in (".", "..") or os.sep in name or "\0" in name:
+            sys.exit("error: %r is not a file name of a working folder" % name)
+    try:
+        os.makedirs(where, exist_ok=True)
+        checked = os.lstat(where)
+    except OSError:
+        sys.exit("error: %s is not a usable folder; use a new folder of your own" % folder)
+    if not stat.S_ISDIR(checked.st_mode) or os.path.realpath(where) != where:
+        sys.exit("error: %s, or a folder on its path, is a link or not a usable folder; use a new folder of your own" % folder)
+    try:
+        descriptor = os.open(where, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        sys.exit("error: %s could not be opened as a folder without following a link; use a new folder of your own" % folder)
+    try:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != (checked.st_dev, checked.st_ino):
+            sys.exit("error: %s changed while it was being opened; nothing was written" % folder)
+        for name in files:
+            try:
+                found = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(found.st_mode):
+                sys.exit("error: %s in %s is a link and is never written through; use a new folder of your own" % (name, folder))
+        for name, text in files.items():
+            temporary = ".part-%s" % secrets.token_hex(8)
+            handle_fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=descriptor)
+            try:
+                with os.fdopen(handle_fd, "wb") as handle:
+                    handle.write(text.encode("utf-8") if isinstance(text, str) else text)
+                os.replace(temporary, name, src_dir_fd=descriptor, dst_dir_fd=descriptor)
+            except BaseException:
+                try:
+                    os.unlink(temporary, dir_fd=descriptor)
+                except OSError:
+                    pass
+                raise
+    finally:
+        os.close(descriptor)
 
 
 def extract_resume_block(body):

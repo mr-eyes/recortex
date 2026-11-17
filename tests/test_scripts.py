@@ -455,6 +455,145 @@ class LintTests(unittest.TestCase):
             self.assertIn("Evidence", words.split('"None"')[1][:200], path)  # not the "Add Evidence" of step 5
 
 
+class WorkingFolderTests(unittest.TestCase):
+    """recortex.write_working_files: the folder a drafting agent may also write is never written through a link, and a link
+    put there while the writer runs redirects nothing."""
+
+    def setUp(self):
+        os.makedirs(os.path.join(ROOT, ".tmp"), exist_ok=True)
+        holder = tempfile.mkdtemp(prefix="test-working-", dir=os.path.join(ROOT, ".tmp"))
+        self.addCleanup(shutil.rmtree, holder, True)
+        self.holder = os.path.realpath(holder)
+        self.folder = os.path.join(self.holder, "work")
+        self.decoy = os.path.join(self.holder, "decoy")
+        os.makedirs(self.decoy)
+
+    def write(self, folder=None, files=None):
+        recortex.write_working_files(folder or self.folder, files or {"base.md": "text\n", "start.json": "{}"})
+
+    def refused(self, folder=None, files=None):
+        with self.assertRaises(SystemExit) as caught:
+            self.write(folder, files)
+        self.assertIn("error:", str(caught.exception))
+        self.assertEqual([], os.listdir(self.decoy))
+
+    def swapping(self, swap, when="open"):
+        """Patch os.open so that `swap()` runs once, just before the writer opens the folder ("open") or just after (at its
+        next call); os.supports_dir_fd is told that the patched function still takes a folder's descriptor."""
+        opener = self.swapper(swap, when)
+        stack = mock.patch("os.open", opener)
+        both = mock.patch.object(os, "supports_dir_fd", set(os.supports_dir_fd) | {opener})
+
+        class Both:
+            def __enter__(self_inner):
+                stack.__enter__()
+                both.__enter__()
+
+            def __exit__(self_inner, *exc):
+                both.__exit__(*exc)
+                stack.__exit__(*exc)
+        return Both()
+
+    def swapper(self, swap, when="open"):
+        real, state = os.open, {"armed": True, "seen": False}
+
+        def opener(path, flags, *args, **kwargs):
+            directory = bool(flags & getattr(os, "O_DIRECTORY", 0))
+            if state["armed"] and ((when == "open" and directory) or (when == "after" and state["seen"])):
+                state["armed"] = False
+                swap()
+            if directory:
+                state["seen"] = True
+            return real(path, flags, *args, **kwargs)
+        return opener
+
+    def test_a_folder_is_made_and_written_with_private_files(self):
+        self.write(files={"base.md": "text\n", "proposal.new": b"bytes\n"})
+        self.assertEqual("text\n", open(os.path.join(self.folder, "base.md")).read())
+        self.assertEqual(b"bytes\n", open(os.path.join(self.folder, "proposal.new"), "rb").read())
+        self.assertEqual(0o600, os.stat(os.path.join(self.folder, "base.md")).st_mode & 0o777)
+        self.assertEqual(["base.md", "proposal.new"], sorted(os.listdir(self.folder)))
+        self.write(folder=self.folder + os.sep)   # a trailing slash on a real folder is fine
+
+    def test_a_trailing_slash_after_a_symlinked_folder_is_refused(self):
+        os.symlink(self.decoy, self.folder)
+        self.refused(self.folder + os.sep)
+        self.refused(self.folder)
+
+    def test_a_symlinked_parent_folder_is_refused(self):
+        os.symlink(self.decoy, os.path.join(self.holder, "parent"))
+        self.refused(os.path.join(self.holder, "parent", "work"))
+
+    def test_a_name_that_is_a_link_is_refused_before_anything_is_written(self):
+        os.makedirs(self.folder)
+        os.symlink(os.path.join(self.decoy, "target"), os.path.join(self.folder, "start.json"))
+        self.refused()
+        self.assertEqual(["start.json"], os.listdir(self.folder))
+
+    def test_a_link_put_in_place_of_the_folder_between_the_check_and_the_open_redirects_nothing(self):
+        os.makedirs(self.folder)
+
+        def swap():
+            os.rename(self.folder, self.folder + ".moved")
+            os.symlink(self.decoy, self.folder)
+        with self.swapping(swap):
+            self.refused()
+
+    def test_a_link_to_the_same_folder_is_not_followed_either(self):
+        os.makedirs(self.folder)
+
+        def swap():
+            os.rename(self.folder, self.folder + ".moved")
+            os.symlink(self.folder + ".moved", self.folder)   # a link that leads to the very folder that was checked
+        with self.swapping(swap):
+            self.refused()
+        self.assertEqual([], os.listdir(self.folder + ".moved"))
+
+    def test_another_folder_put_at_the_path_between_the_check_and_the_open_is_not_the_one_that_was_checked(self):
+        os.makedirs(self.folder)
+
+        def swap():
+            os.rename(self.folder, self.folder + ".moved")
+            os.makedirs(self.folder)
+        with self.swapping(swap):
+            self.refused()
+        self.assertEqual([], os.listdir(self.folder))
+        self.assertEqual([], os.listdir(self.folder + ".moved"))
+
+    def test_a_link_put_in_place_of_the_folder_after_it_was_opened_redirects_no_file(self):
+        os.makedirs(self.folder)
+
+        def swap():
+            os.rename(self.folder, self.folder + ".moved")
+            os.symlink(self.decoy, self.folder)
+        with self.swapping(swap, when="after"):
+            self.write()
+        self.assertEqual([], os.listdir(self.decoy))
+        self.assertEqual(["base.md", "start.json"], sorted(os.listdir(self.folder + ".moved")))
+
+    def test_a_hard_link_at_a_name_is_replaced_and_the_other_end_is_left_as_it_was(self):
+        os.makedirs(self.folder)
+        other = os.path.join(self.decoy, "authors-paper.tex")
+        open(other, "w").write("the author's paper\n")
+        os.link(other, os.path.join(self.folder, "base.md"))
+        self.write()
+        self.assertEqual("the author's paper\n", open(other).read())
+        self.assertEqual("text\n", open(os.path.join(self.folder, "base.md")).read())
+
+    def test_a_name_with_a_slash_or_dots_is_never_a_file_of_the_folder(self):
+        for name in ("a/b", "..", ".", ""):
+            with self.assertRaises(SystemExit):
+                self.write(files={name: "x"})
+        self.assertFalse(os.path.exists(self.folder))
+
+    def test_a_system_without_the_safe_calls_fails_closed(self):
+        with mock.patch.object(os, "supports_dir_fd", set()):
+            with self.assertRaises(SystemExit) as caught:
+                self.write()
+        self.assertIn("cannot write a working folder without following links", str(caught.exception))
+        self.assertFalse(os.path.exists(self.folder))
+
+
 class HelperTests(unittest.TestCase):
     def test_normalize_ignores_only_trailing_whitespace(self):
         self.assertEqual(recortex.normalize("a  \r\nb\r\n\r\n"), recortex.normalize("a\nb"))
