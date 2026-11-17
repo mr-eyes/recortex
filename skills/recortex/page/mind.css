@@ -324,3 +324,35 @@ math{font-family:"STIX Two Math","Cambria Math","Latin Modern Math","Noto Sans M
 .settled .sh{margin:0 0 8px}
 .struck{margin:0 0 6px}
 .tree{display:block}
+
+.js .mappane{display:none}.js .mappane.on{display:block}
+.switch{display:flex;gap:8px;margin:0 0 18px}
+.switch button.on{background:var(--thread);border-color:var(--thread);color:var(--sheet)}
+.hintnarrow{display:none}
+.pauseln{border-top-style:dotted;border-top-color:var(--quiet)}
+#map.view{max-width:1180px}
+.figpic{display:block;max-width:100%;height:auto;margin:10px 0;border-radius:6px;background:#fff}
+.treebar{display:flex;gap:8px;margin:0 0 16px}
+.treebar button{font-size:13.5px;padding:3px 12px}
+.treecols{display:grid;grid-template-columns:minmax(0,1fr) minmax(210px,290px) minmax(0,1fr);gap:26px;align-items:start}
+.tside{list-style:none;margin:0;padding:0}
+.tside ul{list-style:none;margin:0;padding:0}
+.tright>li{border-left:2px solid var(--brand);padding:0 0 10px 16px;margin:0 0 6px}
+.tleft>li{border-right:2px solid var(--brand);padding:0 16px 10px 0;margin:0 0 6px;text-align:right}
+.tleft .foldbtn,.tleft li>a{text-align:right;justify-content:flex-end}
+.tside .foldbtn{border:0;background:none;padding:2px 0;width:auto;font:600 16px/1.35 var(--serif);border-radius:6px;display:inline-flex}
+.tside .tp>.foldbtn{font-size:15px}
+.tside .lf>.foldbtn{font:500 13.5px/1.4 var(--sans);color:var(--quiet)}
+.tside .tp{margin:6px 0 4px 8px}
+.tleft .tp{margin:6px 8px 4px 0}
+.tside .lf>ul{margin:2px 0 6px 14px;font-size:14.5px}
+.tleft .lf>ul{margin:2px 14px 6px 0}
+.tside .lf li{margin:2px 0}
+.hubnode{background:var(--sheet);border:2px solid var(--brand);border-radius:20px;padding:16px 18px;text-align:center;position:sticky;top:12px}
+.hubnode .question{font:600 19px/1.4 var(--serif);margin:4px 0 8px}
+.hubnode .question p{margin:0 0 6px}
+.tmid{margin-top:10px;text-align:left}
+.tmid>li{margin:6px 0}
+@media (max-width:860px){.treecols{display:block}.tside{margin-top:14px}.tleft>li{border-right:0;border-left:2px solid var(--brand);padding:0 0 10px 16px;text-align:left}
+.tleft .foldbtn,.tleft li>a{text-align:left;justify-content:flex-start}.tleft .tp{margin:6px 0 4px 8px}.tleft .lf>ul{margin:2px 0 6px 14px}
+.hubnode{position:static}.hintnarrow{display:block}}

@@ -8362,6 +8362,65 @@ class MindModelTests(MindSandbox):
                                                                        for e in model["open"]["unknown"]])
         self.assertEqual([8, 9], [t["issue"] for t in model["open"]["tasks"]])
 
+    def test_the_tree_has_the_question_in_the_middle_two_halves_of_sections_and_six_sentences_at_most(self):
+        model = self.ms_model()
+        tree = model["tree"]
+        self.assertEqual("A two-season field trial of winter rye as a cover crop and its effect on topsoil moisture.",
+                         tree["question"]["blocks"][0]["p"][0]["t"])
+        self.assertEqual(([1, 2], [3, 4]), ([s["n"] for s in tree["right"]], [s["n"] for s in tree["left"]]))
+        self.assertEqual([["Question", "Methods"], ["Results", "Limitations"]],
+                         [[s["label"] for s in tree["right"]], [s["label"] for s in tree["left"]]])
+        self.assertEqual({"found", "decided", "open", "thread"}, set(tree["right"][1]["topics"][1]))
+        self.assertEqual([7], tree["aside"])
+        self.assertEqual(0, tree["other"]["thread"])
+        topics = [t for side in ("right", "left") for s in tree[side] for t in s["topics"]] + [tree["other"]]
+        standing = [m["id"] for m in model["memories"] if m["kind"] == "result" and m["css"] == "stands"
+                    and m["thread"] != 7]
+        found = [mid for t in topics for mid in t["found"]["ids"]]
+        self.assertEqual(sorted(standing), sorted(found))  # each standing result once
+        self.assertEqual(len(found), len(set(found)))
+        self.assertNotRegex(json.dumps(tree), r'"(x|y|x1|y1|cx|cy)":')  # no coordinates
+        # more than six: the newest six and the whole count
+        for n in range(8):
+            self.put(9400 + n, 6, memory_draft("result", "2026-11-20T10:%02d-05:00" % n),
+                     created="2026-11-25T10:%02d:00Z" % n)
+        self.ready()
+        topic = [t for side in ("right", "left") for s in self.model()["tree"][side] for t in s["topics"]
+                 if t["thread"] == 6][0]
+        self.assertEqual(6, len(topic["found"]["ids"]))
+        self.assertEqual(8, topic["found"]["count"])
+        self.assertEqual([9407, 9406, 9405, 9404, 9403, 9402], topic["found"]["ids"])
+        # the middle holds the project's name when the hub's text may not be shown
+        data = self.repo()
+        data["issues"]["1"]["edits"] = [{"at": "2026-11-30T10:00:00Z", "by": "ghost"},
+                                        {"at": data["issues"]["1"]["created_at"], "by": "octocat"}]
+        data["issues"]["1"]["updated_at"] = "2026-11-30T10:00:00Z"
+        self.save(data)
+        self.ready()
+        self.assertIsNone(self.model()["tree"]["question"])
+
+    def test_the_map_has_rows_in_the_outlines_order_a_name_column_and_no_two_pause_labels_closer_than_60(self):
+        model = self.ms_model()
+        layout = model["map"]
+        self.assertEqual([2, 3, 4, 5, 6, 7, 0], [row["n"] for row in layout["rows"]])  # the outline's order
+        self.assertEqual(max(150, int(min(34, max(len(r["name"] or "") for r in layout["rows"])) * 8.6) + 40),
+                         layout["left"])
+        labels = [p["x"] for p in layout["pauses"] if p["label"]]
+        self.assertGreater(len(labels), 1)
+        self.assertTrue(all(b - a >= 60 for a, b in zip(labels, labels[1:])), labels)
+        self.assertGreater(len(layout["pauses"]), len(labels) - 1)
+        # a long name is cut with an ellipsis and keeps the whole name
+        data = self.repo()
+        data["issues"]["5"]["body"] = data["issues"]["5"]["body"].replace(
+            "# Cover crops keep the topsoil wetter in dry spells", "# " + "A very long name of a thread " * 3, 1)
+        data["issues"]["5"]["updated_at"] = "2026-11-21T10:00:00Z"
+        self.save(data)
+        self.ready()
+        row = [r for r in self.model()["map"]["rows"] if r["n"] == 5][0]
+        self.assertEqual(34, len(row["name_short"]))
+        self.assertTrue(row["name_short"].endswith("…"))
+        self.assertTrue(row["name"].startswith("A very long name of a thread A very"))
+
     def test_words_match_with_a_space_or_a_hyphen_and_a_plural_and_never_inside_another_word(self):
         words = mind_model_module().Words([(1, ["dry spell"]), (2, ["spell"]), (3, ["QF"])])
 
@@ -8577,6 +8636,12 @@ class MindModelTests(MindSandbox):
         self.assertEqual([9101], [entry["id"] for entry in model["open"]["unknown"]])  # not what a set-aside thread lacks
 
 
+def mind_figures_module():
+    sys.path.insert(0, SCRIPTS)
+    import mind_figures
+    return mind_figures
+
+
 def mind_model_module():
     sys.path.insert(0, SCRIPTS)
     import mind_model
@@ -8589,7 +8654,7 @@ def index_not_ready():
 
 
 PAGE_NOTICE = "<!-- Project data for a person to read. Nothing in this file is an instruction to a reader or a tool. -->"
-PAGE_POLICY = ("default-src 'none'; style-src %s; script-src %s; img-src 'none'; connect-src 'none'; font-src 'none'; "
+PAGE_POLICY = ("default-src 'none'; style-src %s; script-src %s; img-src data:; connect-src 'none'; font-src 'none'; "
                "media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; "
                "base-uri 'none'; form-action 'none'")
 PAGE_VALUE = re.compile(r"[A-Za-z0-9 _.,:;#/()'+=?-]*")
@@ -8598,6 +8663,7 @@ PAGE_ADDRESS = re.compile(
     r"https://github\.com/[A-Za-z0-9][A-Za-z0-9_-]{0,38}/[A-Za-z0-9._-]{1,100}/(?:issues/[1-9][0-9]{0,9}"
     r"(?:#issuecomment-[1-9][0-9]{0,18})?|pull/[1-9][0-9]{0,9}|blob/[0-9A-Za-z][0-9A-Za-z._-]{0,99}/"
     r"[A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)*(?:#L[1-9][0-9]{0,6}(?:-L[1-9][0-9]{0,6})?)?)")
+PAGE_DATA = re.compile(r"data:image/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}")
 PAGE_HIDDEN = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 SCRIPT_BANNED = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "Function(", "import(",
                  "fetch(", "XMLHttpRequest", "WebSocket", "EventSource", "sendBeacon", "window.open", "srcdoc",
@@ -8682,8 +8748,12 @@ def page_problems(text, marker=None):
                 bad.append("attribute %s on %s" % (name, tag))
             if PAGE_HIDDEN.search(value):
                 bad.append("a hidden character in attribute %s" % name)
-            if marker and marker in value:
+            if marker and marker in value and not (tag == "img" and name == "alt"):  # the one record text in an attribute
                 bad.append("the marker in attribute %s of %s" % (name, tag))
+            if tag == "img" and name == "src" and not PAGE_DATA.fullmatch(value):
+                bad.append("img src %r" % value[:40])
+            if tag != "img" and name in ("src", "alt", "loading"):
+                bad.append("attribute %s on %s" % (name, tag))
             if name == "href":
                 if value.startswith("#"):
                     wanted.append(value[1:])
@@ -9153,6 +9223,177 @@ class MindPageTests(MindSandbox):
         model = self.model()
         self.assertEqual(mind.render(model), mind.render(json.loads(json.dumps(model))))
 
+    def test_the_map_is_a_tree_of_what_we_know_and_the_timeline_with_a_switch(self):
+        text = self.ms_page()
+        self.assertEqual([], page_problems(text))
+        view = text[text.index('<section class="view" id="map"'):text.index('<section class="view" id="ask"')]
+        for said in ('<button type="button" class="on" data-fold="pane-know">What we know</button>',
+                     '<button type="button" data-fold="pane-time">Over time</button>',
+                     '<button type="button" data-fold="open-all">Open everything</button>',
+                     '<button type="button" data-fold="close-all">Close everything</button>',
+                     'id="map-know"', 'id="map-time"', "What we are finding out",
+                     "A two-season field trial of winter rye as a cover crop", "We found (", "We decided (", "Still open (",
+                     "Set aside (1)", "Scroll sideways to follow time.", "Point at a mark, or choose it, to read it.",
+                     "a pause: the work stopped and a note was left", "Corrected", "faded: replaced or set aside"):
+            self.assertIn(said, view, said)
+        self.assertNotIn("Show me the whole mind</h2>", view)
+        branches = re.findall(r'<li class="fold closed lf">', view)
+        self.assertGreater(len(branches), 5)
+        self.assertEqual(0, len(re.findall(r'<li class="fold tp closed', view)))  # sections and topics start open
+        self.assertIn("and ", view)
+        # the legend names every mark and line class that the picture uses
+        classes = set(re.findall(r'class="dot (k-[a-z]+)', view)) - {"k-checkpoint"}
+        legend = view[view.index('<ul class="legend">'):]
+        for cls in classes:
+            self.assertIn('class="mk %s"' % cls, legend)
+        for line in set(re.findall(r'class="link (l-[a-z]+)', view)):
+            self.assertIn('class="ln %s"' % line, legend)
+        self.assertEqual(len(re.findall(r'<text class="pauselab"', view)),
+                         len([p for p in self.model()["map"]["pauses"] if p["label"]]))
+
+    FIG_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+    @staticmethod
+    def picture_bytes(name):
+        import base64
+        path = os.path.join(FIXTURES, "figures", name)
+        if os.path.exists(path + ".b64"):
+            with open(path + ".b64", encoding="ascii") as handle:
+                return base64.b64decode(handle.read())
+        with open(path, "rb") as handle:
+            return handle.read()
+
+    def figure_state(self, raw, tag="v0.4", path="figures/dryspell.png"):
+        import base64
+        data = self.repo()
+        data.setdefault("commits", {})[tag] = self.FIG_COMMIT
+        data.setdefault("files", {})["%s:%s" % (self.FIG_COMMIT, path)] = base64.b64encode(raw).decode("ascii")
+        self.save(data)
+
+    def contents_calls(self):
+        return [call[1] for call in self.repo()["log"] if call[0] == "api" and re.search(r"/(contents|commits)/", call[1])]
+
+    def test_a_figure_shows_its_picture_when_fetched_at_build_time_and_from_the_cache_after(self):
+        self.manuscript_record()
+        self.ready()
+        self.figure_state(self.picture_bytes("figure.png"))
+        offline = self.build()
+        self.assertEqual(0, offline.returncode, offline.stdout + offline.stderr)
+        self.assertEqual([], self.contents_calls())  # no figure is fetched without --sync or --figures
+        self.assertNotIn("<img", recortex.read_text(self.page_file()))
+        self.assertIn("shown without the picture", offline.stdout)
+        fetched = self.build("--figures", gh=FAKE)
+        self.assertEqual(0, fetched.returncode, fetched.stdout + fetched.stderr)
+        calls = self.contents_calls()
+        self.assertEqual(2, len(calls), calls)  # the tag's commit, then the picture
+        text = recortex.read_text(self.page_file())
+        self.assertEqual([], page_problems(text))
+        images = re.findall(r'<img [^>]*>', text)
+        self.assertEqual(2, len(images))  # in the text, and in the memory that points at the figure
+        for image in images:
+            self.assertRegex(image, r'^<img src="data:image/png;base64,[A-Za-z0-9+/=]+" alt="Soil moisture through the '
+                                    r'longest dry spell" width="8" height="6" loading="lazy" class="figpic">$')
+        self.assertIn("Open the picture on GitHub", text)
+        self.assertIn("Soil moisture through the longest dry spell", self.words_of(text))
+        self.assertNotIn("figures shown without", fetched.stdout)
+        # the picture is kept: an offline build shows it again and asks GitHub for nothing
+        again = self.build()
+        self.assertEqual(0, again.returncode, again.stdout)
+        self.assertEqual(calls, self.contents_calls())
+        self.assertEqual(2, recortex.read_text(self.page_file()).count("<img "))
+        cached = os.path.join(self.data, "private", self.slug(), "figures", self.FIG_COMMIT)
+        self.assertEqual(0o700, os.stat(cached).st_mode & 0o777)
+
+    def test_a_figure_that_cannot_be_embedded_shows_title_caption_and_link_with_one_fixed_line(self):
+        self.manuscript_record()
+        self.ready()
+        mf = mind_figures_module()
+        cases = [("a drawing in SVG is not embedded", self.picture_bytes("drawing.svg"), None),
+                 (mf.REASONS["not-an-image"], self.picture_bytes("page.html"), None),
+                 (mf.REASONS["fetch-failed"], self.picture_bytes("figure.png"),
+                  {"FAKE_GH_FAIL_ON": "api repos/octo-org/sample-project/contents"})]
+        for words, raw, env in cases:
+            self.figure_state(raw)
+            built = self.build("--figures", gh=FAKE, env=env)
+            self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+            self.assertIn(words, built.stdout)
+            text = recortex.read_text(self.page_file())
+            self.assertNotIn("<img", text, words)
+            self.assertIn("Open the picture on GitHub", text)
+            self.assertIn("Soil moisture through the longest dry spell", self.words_of(text))
+            self.assertEqual([], page_problems(text))
+            shutil.rmtree(os.path.join(self.data, "private", self.slug(), "figures"), ignore_errors=True)
+        # another repository, and a path with ..: no call is made for them
+        for source in ("https://github.com/other-org/elsewhere/blob/v0.4/figures/dryspell.png?raw=true",
+                       "https://github.com/octo-org/sample-project/blob/v0.4/figures/../x.png?raw=true"):
+            data = self.repo()
+            body = data["issues"]["5"]["body"]
+            data["issues"]["5"]["body"] = re.sub(r"https://github\.com/octo-org/sample-project/blob/v0\.4/figures/dryspell\.png"
+                                                 r"\?raw=true", source, body)
+            data["issues"]["5"]["updated_at"] = "2026-11-22T10:00:00Z"
+            data["log"] = []
+            self.save(data)
+            self.ready()
+            built = self.build("--figures", gh=FAKE)
+            self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+            self.assertEqual([], self.contents_calls(), source)
+            self.assertNotIn("<img", recortex.read_text(self.page_file()))
+
+    def test_an_img_is_made_only_from_bytes_the_page_checked_and_the_policy_allows_data_pictures_only(self):
+        mind = self.mind()
+        png = self.picture_bytes("figure.png")
+        uri, width, height = mind.picture(png)
+        self.assertIsInstance(uri, mind.DataUri)
+        self.assertEqual((8, 6), (width, height))
+        self.assertTrue(uri.startswith("data:image/png;base64,"))
+        for raw in (self.picture_bytes("drawing.svg"), self.picture_bytes("page.html"), b"", b"GIF89a", "text", None):
+            self.assertIsNone(mind.picture(raw))
+        self.assertTrue(mind.picture(self.picture_bytes("figure.jpg"))[0].startswith("data:image/jpeg;base64,"))
+        image = mind.E("img", {"src": uri, "alt": "x", "width": 8, "height": 6, "loading": "lazy"})
+        self.assertTrue(image.startswith('<img src="data:image/png;base64,'))
+        forged = mind.DataUri
+        for attrs in ({"src": "data:image/png;base64,AAAA"}, {"src": forged("data:text/html;base64,AAAA")},
+                      {"src": forged("javascript:alert(1)")}, {"src": forged("data:image/svg+xml;base64,AAAA")},
+                      {"src": forged("data:image/png;base64,AA AA")}, {"src": mind.anchor("m-1")},
+                      {"src": mind.github_url("issue", REPO, 1)}, {"src": uri, "alt": 'x" onerror="y'},
+                      {"src": uri, "alt": "a<b"}, {"src": uri, "loading": "eager"}, {"src": uri, "width": 0},
+                      {"src": uri, "height": 20001}, {"src": uri, "width": "9px"}, {"src": uri, "onerror": "y()"},
+                      {"src": uri, "srcset": "x"}):
+            with self.assertRaises(ValueError, msg=repr(attrs)[:60]):
+                mind.E("img", attrs)
+        for tag in ("div", "a", "span"):
+            for name, value in (("src", uri), ("alt", "x"), ("loading", "lazy")):
+                with self.assertRaises(ValueError, msg=(tag, name)):
+                    mind.E(tag, {name: value})
+        self.assertEqual("a b c d", mind.alt_text('a"b<c>\nd'))
+        self.assertEqual("", mind.alt_text(None))
+        self.assertEqual(150, len(mind.alt_text("word " * 100)))
+        # the policy changed in one directive, and only that
+        old = ("default-src 'none'; style-src %s; script-src %s; img-src 'none'; connect-src 'none'; font-src 'none'; "
+               "media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; "
+               "base-uri 'none'; form-action 'none'")
+        self.assertEqual(old.replace("img-src 'none'", "img-src data:"), mind.POLICY)
+        self.assertEqual(PAGE_POLICY, mind.POLICY)
+
+    def test_the_alt_text_of_a_picture_holds_only_the_characters_every_attribute_may_hold(self):
+        mind = self.mind()
+        payloads = json.loads(recortex.read_text(os.path.join(FIXTURES, "hostile-mind.json")))["payloads"]
+        self.manuscript_record()
+        self.ready()
+        model = self.model()
+        hostile, _ = hostile_model(model, payloads)
+        items = [b for t in hostile["threads"] for b in t["blocks"] if b["kind"] == "figure"] + [
+            e for m in hostile["memories"] for e in m["evidence"] if e["kind"] == "figure" and e.get("found")]
+        keys = {(b["repo"] or hostile["repo"], b["ref"], b["path"]) for b in items}
+        self.assertGreater(len(keys), 1)  # the block and the memory's copy of it carry different hostile strings
+        text = mind.render(hostile, {key: self.picture_bytes("figure.png") for key in keys})
+        self.assertEqual([], page_problems(text, marker="HOSTILE-"))
+        alts = re.findall(r'<img [^>]*alt="([^"]*)"', text)
+        self.assertGreater(len(alts), 0)
+        for alt in alts:
+            self.assertRegex(alt, r"^[A-Za-z0-9 _.,:;#/()'+=?-]{0,150}$")
+            self.assertIn("HOSTILE-", alt)
+
     def test_a_missing_escape_breaks_the_contract(self):
         mind = self.mind()
         self.chain_page()
@@ -9170,7 +9411,7 @@ class MindPageTests(MindSandbox):
 
     def test_the_element_builder_refuses_what_the_contract_forbids(self):
         mind = self.mind()
-        for tag in ("script", "style", "img", "iframe", "form", "object", "base", "link", "template", "foreignObject"):
+        for tag in ("script", "style", "iframe", "form", "object", "base", "link", "template", "foreignObject"):
             with self.assertRaises(ValueError, msg=tag):
                 mind.E(tag)
         for name in ("onclick", "style", "src", "srcdoc", "action", "formaction", "target", "download", "ping",
@@ -9422,7 +9663,8 @@ class MindPageTests(MindSandbox):
         self.assertIn("keep one more idea", recortex.read_text(path))
         self.assertNotEqual(first, recortex.read_text(path))
         self.assertIn("wrote %s (" % path, again.stdout)
-        self.assertIn("): 8 memories in 2 threads\nopen it in a browser: file://", again.stdout)
+        self.assertIn("): 8 memories in 2 threads\n1 figure shown without the picture: the picture is not in the local copy, "
+                      "and this build did not fetch\nopen it in a browser: file://", again.stdout)
         os.unlink(path)
         outside = self.write("outside.html", "outside")
         os.symlink(outside, path)

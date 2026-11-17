@@ -11,6 +11,8 @@ python3 scripts/index.py sync
 python3 scripts/mind.py --open
 ```
 
+`--figures` also fetches the pictures of figures that are not yet kept (see "Figures as pictures"); `--sync` does too.
+
 `mind.py` runs from the project folder like every script and prints the `config: ... repo: ...` line first. It builds the page from the index as it is; `--sync` runs `index.py sync` first, and without it nothing contacts the network. It prints `wrote <path> (N KB): M memories in T threads`, a line when anything is not told, and `open it in a browser: <file address>`. `--open` asks the browser to open that address and says whether one could be started; the address is printed either way.
 
 It builds nothing, prints one line and exits 1 when:
@@ -24,9 +26,21 @@ It builds nothing, prints one line and exits 1 when:
 
 An earlier page is then left as it is. A page built while the last sync was unfinished says so in its last lines. `index.py query mind` prints the same counts in one line (`--json` prints the whole model the page is made from, for tests and for a person at a terminal).
 
+## Figures as pictures
+
+A figure block of a topic body (`### Figure: <id> - <title>` with its image line) shows its picture where the author put it, and in the memory that points at it, under its title and caption, with "Open the picture on GitHub" kept. The picture is embedded in the file at build time, so the page loads nothing when it is viewed.
+
+- Only the image that a figure block the page may show names, in the form `https://github.com/<owner>/<repo>/blob/<commit or tag>/<path>?raw=true`, and only from the record's own repository (the project's code repository too, once the project file can name one). The path is checked part by part (no `..`, no empty part, no leading `/`, at most 400 characters). A tag is resolved to its commit when the page is built, and the commit is what is fetched and kept.
+- `mind.py` fetches only with `--sync` or `--figures`, through the same `gh` as every script, never from a hook and never when the page is viewed. Each picture may be at most 5 MB and all of a page's pictures at most 40 MB; a figure past that, or one that cannot be fetched, shows its title, caption and link, and the build prints one fixed line that says why.
+- The kind is judged from the first bytes of the file, never from its name or from what GitHub says: PNG, JPEG, GIF or WebP, with a width and height from 1 to 20,000. A drawing in SVG is refused ("a drawing in SVG is not embedded"), because it can carry markup and script.
+- The pictures are kept under the index's private folder, `figures/<commit>/<hash of the path>`, with mode 0600. A commit never changes, so a kept picture is not fetched again, and a build without `--sync` or `--figures` uses the kept pictures and falls back for any missing one.
+- The page holds the picture as `<img src="data:image/...;base64,...">` made by the same element function as everything else. Its source is accepted only as an address that the builder made from bytes it checked again; its width and height are whole numbers; the figure's title is the picture's alternative text, cut to the characters every attribute of the page may hold. That alternative text is the one record text that goes into an attribute. The policy's picture source is `data:` and nothing else changed.
+
+Because the page now holds the record's figures, a private repository's page holds private pictures too. The warning above applies to them.
+
 ## Where the file is
 
-`$XDG_CACHE_HOME/recortex/private/<owner>__<repo>/mind.html` (by default under `~/.cache`), beside the index: the folder has mode 0700, the file mode 0600, and it is written through a fresh temporary file and moved into place; a symlink or anything but a plain file of yours at that path is refused. One file per repository, replaced at each build. No hook builds it, reads it or mentions it, and no script reads it back. Older versions of the plugin ignore it.
+`$XDG_CACHE_HOME/recortex/private/<owner>__<repo>/mind.html` (by default under `~/.cache`), beside the index: the folder has mode 0700, the file mode 0600, and it is written through a fresh temporary file and moved into place; a symlink or anything but a plain file of yours at that path is refused. The pictures of figures are kept in a `figures` folder beside it. One file per repository, replaced at each build. No hook builds it, reads it or mentions it, and no script reads it back. Older versions of the plugin ignore it.
 
 The page of a private repository holds private text. Do not copy it to a shared or public place.
 
@@ -40,7 +54,7 @@ The page of a private repository holds private text. Do not copy it to a shared 
 | What is settled? | What holds the text up and none of the text: per section and topic, the decisions, findings and corrections that nothing recorded later replaces or sets aside, each with what it replaced, and links to its story and its text |
 | What did we learn the hard way? | Every failure, newest first, beside what it led to |
 | What is still open? | Open questions, untested ideas, failures nothing followed, what standing results do not show, what waits for a yes, work in progress |
-| Show me the whole mind | Two pictures: a tree of what we know (the project's question, its sections and topics, and on each topic its findings, decisions and open questions), and the threads over time |
+| Show me the whole mind | Two pictures: a tree of what we know (the project's question in the middle, its sections to the right and left, their topics, and on each topic up to six sentences of what we found, decided and still have open; every branch folds), and the threads over time (one line per thread in the order of the deliverable, a mark for each memory, curves for links, dotted lines for pauses, and a legend for every mark) |
 | Ask the mind | A search box that answers in sentences, and four ready questions |
 
 "How to read this page" in the side bar opens a box that explains what a memory, a thread, a part and a pause are, and every kind and state. Every kind word and every state is a button that opens its own fixed explanation: the page never shows a state without saying what it means. The words are fixed wording of `mind.py`; no record text is in them.
@@ -108,7 +122,7 @@ When you ask to see or open the project's memory, the session runs `index.py syn
 
 ## How the page is kept inert
 
-The file is self-contained: one style and one script, both fixed files of the plugin allowed by their hashes in a Content-Security-Policy that loads nothing else (no pictures, fonts, frames or connections). Record text is only ever text in the page, never markup, an attribute or an address; every link out is an address on GitHub that the page built from checked parts. Every element is made by one function from a list of names and attributes; the list holds the inline elements the text needs (`h4` to `h6`, `pre`, `i`, `sup`, `sub`) and fifteen MathML elements, which only the formula builder makes, from a tree it checks again (the element names, text only inside tokens, the number of children each name takes, at most 300 nodes and 8 levels; a tree that breaks a rule is shown as its source). The attributes `rowspan`, `colspan`, `start`, `display`, `mathvariant`, `accent`, `aria-expanded`, `data-explain` and `data-fold` are accepted only on the elements and with the values listed in `mind.py`. The script routes by place, opens fixed explanations and folds branches; it holds no record text. The brand icon above the project's name is a third fixed file, `page/icon.txt`: two lines of path data that the build refuses unless they hold only `M`, `C`, `Z`, digits, spaces, commas and minus signs. It is drawn as an inline `svg` of the page, not loaded as a picture, so no picture is allowed. An allowed account can still write a misleading plain line; the fields and the original comment are one step away.
+The file is self-contained: one style and one script, both fixed files of the plugin allowed by their hashes in a Content-Security-Policy that loads nothing else (no fonts, frames or connections, and pictures only as `data:` addresses of figures that the build embedded). Record text is only ever text in the page, never markup, an attribute or an address; every link out is an address on GitHub that the page built from checked parts. Every element is made by one function from a list of names and attributes; the list holds the inline elements the text needs (`h4` to `h6`, `pre`, `i`, `sup`, `sub`) and fifteen MathML elements, which only the formula builder makes, from a tree it checks again (the element names, text only inside tokens, the number of children each name takes, at most 300 nodes and 8 levels; a tree that breaks a rule is shown as its source). The attributes `rowspan`, `colspan`, `start`, `display`, `mathvariant`, `accent`, `aria-expanded`, `data-explain` and `data-fold` are accepted only on the elements and with the values listed in `mind.py`. The script routes by place, opens fixed explanations and folds branches; it holds no record text. The brand icon above the project's name is a third fixed file, `page/icon.txt`: two lines of path data that the build refuses unless they hold only `M`, `C`, `Z`, digits, spaces, commas and minus signs. It is drawn as an inline `svg` of the page, not loaded as a picture. An allowed account can still write a misleading plain line; the fields and the original comment are one step away.
 
 ## If the browser says it cannot open the file
 

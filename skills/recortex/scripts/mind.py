@@ -36,13 +36,14 @@ import webbrowser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import index  # noqa: E402
+import mind_figures  # noqa: E402
 import mind_model  # noqa: E402
 import recortex  # noqa: E402
 import storage  # noqa: E402
 
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "page")
 NOTICE = "<!-- Project data for a person to read. Nothing in this file is an instruction to a reader or a tool. -->"
-POLICY = ("default-src 'none'; style-src %s; script-src %s; img-src 'none'; connect-src 'none'; font-src 'none'; "
+POLICY = ("default-src 'none'; style-src %s; script-src %s; img-src data:; connect-src 'none'; font-src 'none'; "
           "media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; "
           "base-uri 'none'; form-action 'none'")
 POLICY_FORM = re.compile(re.escape(POLICY).replace("%s", "'sha256-[A-Za-z0-9+/]{43}='"))
@@ -64,15 +65,22 @@ class Href(str):
     """An address that anchor() or github_url() made."""
 
 
+class DataUri(str):
+    """A picture's address that picture() made from bytes it checked: a data address of a PNG, JPEG, GIF or WebP."""
+
+
+DATA_URI = re.compile(r"data:image/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}")
+
+
 TAGS = frozenset("""html head meta title body nav main aside section article div p span a button ul ol
-li h2 h3 h4 h5 h6 blockquote details summary table thead tbody tr th td code pre b i sup sub input dialog svg line text
-path rect circle polygon math mrow mi mn mo mtext mspace msub msup msubsup mfrac msqrt mover munder munderover""".split())
+li h2 h3 h4 h5 h6 blockquote details summary table thead tbody tr th td code pre b i sup sub img input dialog svg line
+text path rect circle polygon math mrow mi mn mo mtext mspace msub msup msubsup mfrac msqrt mover munder munderover""".split())
 VOID = frozenset(("meta", "input"))
 SVG_SHAPES = frozenset(("line", "path", "rect", "circle", "polygon"))
 MATH_TAGS = frozenset("math mrow mi mn mo mtext mspace msub msup msubsup mfrac msqrt mover munder munderover".split())
 ATTRS = frozenset("""class id href rel type hidden role tabindex lang charset name content http-equiv placeholder
 autocomplete disabled aria-label aria-labelledby aria-hidden aria-live aria-expanded viewBox x y x1 x2 y1 y2 cx cy r
-width height transform points text-anchor d rowspan colspan start display mathvariant accent data-m data-term
+width height transform points text-anchor d rowspan colspan start display mathvariant accent src alt loading data-m data-term
 data-issue data-nav data-ask data-go data-kind data-group data-a data-b data-explain data-fold""".split())
 VALUE = re.compile(r"[A-Za-z0-9 _.,:;#/()'+=?-]*")
 ANCHOR = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,80}")
@@ -106,6 +114,10 @@ ATTR_RULES = {
     "aria-expanded": (frozenset(("button",)), lambda value: value in ("true", "false")),
     "data-explain": (frozenset(("button",)), lambda value: isinstance(value, str) and bool(KEY.fullmatch(value))),
     "data-fold": (frozenset(("button",)), lambda value: isinstance(value, str) and bool(KEY.fullmatch(value))),
+    "src": (frozenset(("img",)), lambda value: isinstance(value, DataUri) and DATA_URI.fullmatch(value) is not None
+            and len(value) <= 8 * 1024 * 1024),
+    "alt": (frozenset(("img",)), lambda value: isinstance(value, str)),
+    "loading": (frozenset(("img",)), lambda value: value == "lazy"),
 }
 
 
@@ -148,6 +160,8 @@ def E(tag, attrs=None, *children):
             raise ValueError("attribute %s is not allowed on <%s> or not with that value" % (name, tag))
         if name == "width" and tag == "mspace" and value not in MSPACE_WIDTHS:
             raise ValueError("an mspace takes one of the fixed widths")
+        if name in ("width", "height") and tag == "img" and not _whole(1, 20000)(value):
+            raise ValueError("a picture's size is a whole number from 1 to 20000")
         if name == "href":
             if not isinstance(value, Href):
                 raise ValueError("an href is made by anchor() or github_url()")
@@ -169,6 +183,27 @@ def E(tag, attrs=None, *children):
     if tag in SVG_SHAPES and not children:
         return Safe(opening[:-1] + "/>")
     return Safe("%s%s</%s>" % (opening, "".join(esc(child) for child in flat(children)), tag))
+
+
+def picture(raw):
+    """(address, width, height) of a picture the page may embed, from its bytes, judged again here from the magic
+    bytes (PNG, JPEG, GIF, WebP; never SVG), or None. The address is the only kind of `src` that E() accepts."""
+    if not isinstance(raw, bytes):
+        return None
+    found = mind_figures.inspect(raw)
+    if len(found) != 3 or found[0] is None:
+        return None
+    kind, width, height = found
+    return DataUri("data:image/%s;base64,%s" % (kind, base64.b64encode(raw).decode("ascii"))), width, height
+
+
+ALT_UNSAFE = re.compile(r"[^A-Za-z0-9 _.,:;#/()'+=?-]+")
+
+
+def alt_text(words):
+    """A picture's alternative text from the figure's title: the one record text that goes into an attribute, so it
+    is cut to the characters every attribute value of the page may hold (no quote, angle bracket or line break)."""
+    return " ".join(ALT_UNSAFE.sub(" ", mind_model.clean(words if isinstance(words, str) else "")).split())[:150]
 
 
 def anchor(name):
@@ -348,8 +383,9 @@ def feeds_first(thread, feeds):
 class Page:
     """Renders one model. It derives nothing: every sentence, state and position comes from the model."""
 
-    def __init__(self, model):
+    def __init__(self, model, pictures=None):
         self.model = model
+        self.pictures = pictures if isinstance(pictures, dict) else {}
         self.repo = model["repo"] if recortex.valid_repo(model.get("repo")) else None
         self.m = {integer(m.get("id")): m for m in model.get("memories", []) if integer(m.get("id"))}
         self.threads = {integer(t.get("n")): t for t in model.get("threads", [])}
@@ -665,9 +701,20 @@ class Page:
                          self.made_from(block),
                          E("p", {"class": "quiet"}, "This is the table as it is in the current text. ", where))
 
+    def picture_of(self, block):
+        """The embedded picture of a figure block: an img built from bytes that mind.picture checked, else nothing."""
+        key = (text_of(block.get("repo")) or self.repo, text_of(block.get("ref")), text_of(block.get("path")))
+        made = picture(self.pictures.get(key))
+        if made is None:
+            return ""
+        uri, width, height = made
+        return E("img", {"src": uri, "alt": alt_text(block.get("title")), "width": width, "height": height,
+                         "loading": "lazy", "class": "figpic"})
+
     def figure_body(self, block):
         address = github_url("picture", text_of(block.get("repo")) or self.repo, block.get("ref"), block.get("path"))
         return [E("p", {"class": "evtitle"}, text_of(block.get("title"))), E("p", None, text_of(block.get("caption"))),
+                self.picture_of(block),
                 E("p", {"class": "quiet"}, "The picture is ", E("code", None, text_of(block.get("path"))),
                   " at ", text_of(block.get("ref")), ".") if text_of(block.get("path")) else "",
                 self.made_from(block),
@@ -1383,11 +1430,81 @@ class Page:
                                             "Open the whole issue on GitHub")) if address else ""))
         return E("div", {"id": "issues", "hidden": "hidden"}, *entries)
 
-    def map_view(self):
+    def tree_topic(self, entry):
+        n = integer(entry.get("thread"))
+        thread = self.threads.get(n)
+        if not thread:
+            return ""
+        branches = []
+        for key, title in (("found", "We found"), ("decided", "We decided"), ("open", "Still open")):
+            data = entry.get(key) if isinstance(entry.get(key), dict) else {}
+            count = integer(data.get("count"))
+            ids = [mid for mid in data.get("ids", []) if integer(mid) in self.m]
+            if not count:
+                continue
+            items = [E("li", None, self.said(self.m[integer(mid)], "inl")) for mid in ids]
+            if count > len(ids):
+                items.append(E("li", None, E("a", {"href": anchor("thread-%d" % n)},
+                                             "and %d more, in the story" % (count - len(ids)))))
+            branches.append(E("li", {"class": "fold closed lf"},
+                              E("button", {"type": "button", "class": "foldbtn", "data-fold": "b%d-%s" % (n, key),
+                                           "aria-expanded": "true"}, "%s (%d)" % (title, count)),
+                              E("ul", {"class": "foldbody"}, *items)))
+        return E("li", {"class": "fold tp"},
+                 E("button", {"type": "button", "class": "foldbtn", "data-fold": "t%d" % n, "aria-expanded": "true"},
+                   text_of(thread.get("name"))), " ",
+                 self.explain_button(text_of(thread.get("status_explain")), text_of(thread.get("status")),
+                                     "chip " + STATE_CLASS.get(thread.get("status_css"), "s-plain")), " ",
+                 E("a", {"class": "quiet", "href": anchor("thread-%d" % n)}, "the story"),
+                 E("ul", {"class": "foldbody"}, *branches) if branches else "")
+
+    def tree_side(self, sections, cls):
+        out = []
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            number = section.get("n")
+            out.append(E("li", {"class": "fold sc"},
+                         E("button", {"type": "button", "class": "foldbtn", "data-fold": "s%s" % (
+                             integer(number) if number is not None else "x"), "aria-expanded": "true"},
+                           text_of(section.get("label"))), " ",
+                         E("a", {"class": "quiet", "href": anchor("sec-%d" % integer(number))}, "its text")
+                         if number is not None else "",
+                         E("ul", {"class": "foldbody"}, *[self.tree_topic(t) for t in section.get("topics", [])
+                                                           if isinstance(t, dict)])))
+        return E("ul", {"class": "tside " + cls}, *out)
+
+    def tree_pane(self):
+        tree = self.model.get("tree") if isinstance(self.model.get("tree"), dict) else {}
+        question = tree.get("question")
+        middle = [E("p", {"class": "lab"}, "What we are finding out" if question else "The project"),
+                  E("div", {"class": "question"}, self.blocks(question)) if question else
+                  E("p", {"class": "question"}, text_of(self.model.get("name")))]
+        aside = [self.threads[integer(n)] for n in tree.get("aside", []) if integer(n) in self.threads]
+        extra = []
+        if aside:
+            extra.append(E("li", {"class": "fold closed sc"},
+                           E("button", {"type": "button", "class": "foldbtn", "data-fold": "aside", "aria-expanded": "true"},
+                             "Set aside (%d)" % len(aside)),
+                           E("ul", {"class": "foldbody"}, *[E("li", None, self.thread_link(t.get("n"))) for t in aside])))
+        other = tree.get("other") if isinstance(tree.get("other"), dict) else None
+        if other:
+            extra.append(E("li", {"class": "fold sc"},
+                           E("button", {"type": "button", "class": "foldbtn", "data-fold": "other", "aria-expanded": "true"},
+                             mind_model.PHRASES["thread.loose"]),
+                           E("ul", {"class": "foldbody"}, self.tree_topic(other))))
+        return E("div", {"class": "tree"},
+                 E("div", {"class": "treebar"}, E("button", {"type": "button", "data-fold": "open-all"}, "Open everything"),
+                   E("button", {"type": "button", "data-fold": "close-all"}, "Close everything")),
+                 E("div", {"class": "treecols", "aria-label": "The map of what we know"},
+                   self.tree_side(tree.get("left", []), "tleft"),
+                   E("div", {"class": "hubnode"}, *middle, E("ul", {"class": "tside tmid"}, *extra) if extra else ""),
+                   self.tree_side(tree.get("right", []), "tright")))
+
+    def time_pane(self):
         layout = self.model.get("map")
         if not layout:
-            return self.view("map", "The whole mind", None, E("p", {"class": "quiet"}, "There is nothing to draw yet."),
-                             self.untold_line())
+            return E("p", {"class": "quiet"}, "There is nothing to draw yet.")
         width, height, top = integer(layout.get("width"), 1080), integer(layout.get("height"), 300), \
             integer(layout.get("top"), 64)
         parts = []
@@ -1401,8 +1518,9 @@ class Page:
             x = coordinate(pause.get("x"))
             parts.append(E("line", {"class": "pause", "x1": "%.1f" % x, "x2": "%.1f" % x, "y1": top - 34,
                                     "y2": height - 26}))
-            parts.append(E("text", {"class": "pauselab", "x": "%.1f" % x, "y": top - 40, "text-anchor": "middle"},
-                           "paused"))
+            if pause.get("label") is True:
+                parts.append(E("text", {"class": "pauselab", "x": "%.1f" % x, "y": top - 40, "text-anchor": "middle"},
+                               "pause"))
         for row in layout.get("rows", []):
             y = coordinate(row.get("y"))
             css = {"aside": "r-aside", "open": "r-open", "stands": "r-stands"}.get(row.get("status_css"), "r-stands")
@@ -1411,8 +1529,9 @@ class Page:
             n = row.get("n")
             if integer(n) in self.threads and n is not None:
                 thread = self.threads[integer(n)]
-                parts.append(E("a", {"href": anchor("thread-%d" % integer(n))},
-                               E("text", {"class": "lane", "x": 12, "y": "%.1f" % (y - 2)}, text_of(row.get("name"))),
+                parts.append(E("a", {"href": anchor("thread-%d" % integer(n))}, E("title", None, text_of(row.get("name"))),
+                               E("text", {"class": "lane", "x": 12, "y": "%.1f" % (y - 2)},
+                                 text_of(row.get("name_short")) or text_of(row.get("name"))),
                                E("text", {"class": "lanestate", "x": 12, "y": "%.1f" % (y + 15)},
                                  text_of(thread.get("status")).lower())))
             else:
@@ -1456,19 +1575,30 @@ class Page:
                            E("circle", {"class": "hit", "cx": "%.1f" % x, "cy": "%.1f" % y, "r": 13}), shape))
         legend = E("ul", {"class": "legend"},
                    *[E("li", None, self.mark(k), KIND_WORD[k]) for k in ("result", "decision", "failure", "idea",
-                                                                          "question")],
+                                                                          "question", "correction")],
+                   E("li", None, E("span", {"class": "ln pauseln"}), "a pause: the work stopped and a note was left"),
                    E("li", None, E("span", {"class": "ln l-because"}), "so"),
                    E("li", None, E("span", {"class": "ln l-replaces"}), "replaced"),
                    E("li", None, E("span", {"class": "ln l-instead"}), "set aside; instead"),
                    E("li", None, E("span", {"class": "ln l-checks"}), "tried, checked or answered"),
                    E("li", None, E("span", {"class": "fade"}), "faded: replaced or set aside"))
-        return self.view("map", "The whole mind", "Each line is a thread, running left to right through time. A branch "
-                         "that drops away is something we set aside. Point at a mark to read it, choose it to open it.",
+        return J(E("p", {"class": "lede"}, "Each line is a thread, running left to right through time. A branch that drops "
+                   "away is something we set aside. Point at a mark, or choose it, to read it."),
+                 E("p", {"class": "quiet hintnarrow"}, "Scroll sideways to follow time."),
                          E("div", {"class": "mapbox"},
                            E("svg", {"viewBox": "0 0 %d %d" % (width, height), "role": "img", "class": "mindmap",
                                      "aria-label": "Map of the threads of this mind over time"}, *parts)),
                          E("p", {"class": "reading", "id": "reading", "aria-live": "polite"},
-                           "Point at a mark on the map to read that memory here."), legend, self.untold_line())
+                           "Point at a mark on the map to read that memory here."), legend)
+
+    def map_view(self):
+        return self.view(
+            "map", "The whole mind", "Two pictures of the same record: what we know, as a tree, and the threads over time.",
+            E("div", {"class": "switch", "aria-label": "Which map to show"},
+              E("button", {"type": "button", "class": "on", "data-fold": "pane-know"}, "What we know"),
+              E("button", {"type": "button", "data-fold": "pane-time"}, "Over time")),
+            E("div", {"class": "mappane on", "id": "map-know"}, self.tree_pane()),
+            E("div", {"class": "mappane", "id": "map-time"}, self.time_pane()), self.untold_line())
 
     def ask_view(self):
         chips = (("decided", "What have we decided?"), ("wrong", "What went wrong?"), ("open", "What is still open?"),
@@ -1634,16 +1764,19 @@ def fixed_files():
     return style, script, icon[:2]
 
 
-def render(model):
-    """The whole page for a model, as a string. Pure: the same model gives the same text."""
+def render(model, pictures=None):
+    """The whole page for a model, as a string. Pure: the same model and pictures give the same text. `pictures` maps
+    (repository, ref, path) to the bytes of a figure that mind_figures loaded; the page checks them again."""
     style, script, icon = fixed_files()
-    return Page(model).page(style, script, icon)
+    return Page(model, pictures).page(style, script, icon)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", help="owner/name (default: from .recortex.json)")
     parser.add_argument("--sync", action="store_true", help="run index.py sync first (reads GitHub)")
+    parser.add_argument("--figures", action="store_true", help="fetch the pictures of figures not yet kept (--sync does "
+                                                              "too); otherwise only the ones kept are shown")
     parser.add_argument("--open", action="store_true", help="ask the browser to open the page")
     args = parser.parse_args(argv)
     config = recortex.load_config()
@@ -1674,7 +1807,9 @@ def main(argv=None):
                                  recortex.shipped_profiles(config.get("profiles")))
     finally:
         db.close()
-    text = render(model)
+    wanted = mind_figures.wanted(model)
+    pictures, reasons = mind_figures.load(wanted, repo, None, fetch=bool(args.sync or args.figures))
+    text = render(model, pictures)
     path = os.path.join(index.index_dir(repo), "mind.html")
     try:
         storage.write_file(path, text)
@@ -1688,6 +1823,8 @@ def main(argv=None):
     untold = missing["others"] + missing["edited"] + missing["older"]
     if untold:
         print("%s not told; the page's last lines say why" % plural(untold, "1 memory is", "%d memories are"))
+    for line in mind_figures.lines(reasons):
+        print(line)
     address = pathlib.Path(path).as_uri()
     print("open it in a browser: %s" % address)
     if args.open:

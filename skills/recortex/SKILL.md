@@ -173,6 +173,7 @@ Why each rule exists, with the Mermaid and GitHub limits: [references/pitfalls.m
 | `snapshot.py` | Save all issues and comments as local Markdown with an index | no |
 | `index.py` | Local SQLite index of the record: `sync` from GitHub; `query` consistency, impact, recall (what a new memory could link to), mind, timeline, triage, brief | no (reads) |
 | `mind.py` | The mind page: one private local file that tells the project's memory in sentences | no |
+| `mind_figures.py` | Fetches, checks and keeps the pictures of figure blocks for the mind page, at build time only and never from a hook | no |
 | `mind_text.py` | Reads the text of a topic and of a memory as blocks and runs, and converts common LaTeX to MathML trees, for the mind page; pure, no index and no network | no |
 | `hooks.py`, `run_hook.sh` | The four hooks: SessionStart, SubagentStart, UserPromptSubmit, PreCompact; `hooks.py --print` shows the payloads | no |
 | `observer.py`, `observer_hooks.py`, `run_observer_hook.sh` | Experimental, off by default: source queue, bounded independent review, context and explicit holds; `status` and `pending` show progress | approved worker event comments only; `--dry-run` available |

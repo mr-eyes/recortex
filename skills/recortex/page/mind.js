@@ -35,6 +35,12 @@
       if (n.classList.contains('fold') && n.classList.contains('shut')) { setShut(n, false); }
     }
   }
+  // the two pictures of the map: only one shows at a time
+  function showPane(name) {
+    if (!KEY.test(name || '')) { return; }
+    $$('.mappane').forEach(function (pane) { pane.classList.toggle('on', pane.id === 'map-' + name); });
+    $$('[data-fold^="pane-"]').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-fold') === 'pane-' + name); });
+  }
   function narrow() { return !!(window.matchMedia && window.matchMedia('(max-width: 860px)').matches); }
   function mark(id) {
     $$('.cur').forEach(function (el) { el.classList.remove('cur'); });
@@ -80,6 +86,8 @@
       show(view.id);
       var thread = el.closest('.thread');
       if (thread) { showThread(thread.id); }
+      var pane = el.closest('.mappane');
+      if (pane) { showPane(pane.id.slice(4)); }
       unfold(el);
     } else { show('now'); }
     function settle() { if (el && view && el !== view) { el.scrollIntoView(); } else { window.scrollTo(0, 0); } }
@@ -164,6 +172,7 @@
     if (fold) {
       event.preventDefault();
       var key = fold.getAttribute('data-fold') || '';
+      if (key.indexOf('pane-') === 0) { showPane(key.slice(5)); return; }
       if (key === 'open-all' || key === 'close-all') {
         $$('.tree .fold').forEach(function (branch) { setShut(branch, key === 'close-all'); });
       } else {
