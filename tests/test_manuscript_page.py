@@ -1000,6 +1000,8 @@ class StateTests(Steps):
         self.assertNotIn('class="row rw r-', view)
         self.assertEqual("plain", model["sheet"]["mode"])    # nothing can be compared yet: no switch
         self.assertNotIn("This is the first kept version", words)      # two versions are kept: that line is not told
+        self.assertEqual("unchecked", model["sheet"]["versions"]["line"])   # and the bar says that nothing could be compared
+        self.assertIn("The current text, with no marks. The earlier versions of the text could not be compared here, so no changes are marked.", words)
 
     def test_a_part_past_the_cap_is_shown_as_it_is_with_its_cut_link_and_no_marks(self):
         self.mode("autonomous")

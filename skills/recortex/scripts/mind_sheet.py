@@ -88,7 +88,6 @@ PHRASES = {
     "since.same": "Same as version %d", "since.new": "New since version %d",
     "since.unfetched": "The text of version %d has not been fetched yet; build the page again with mind.py --versions.",
     "since.unchecked": "Its text at version %d could not be checked, so no changes are marked",
-    "since.before": "This part has no kept version at or before version %d, so nothing is compared.",
     "since.long": "This part is long, so its changes are not marked.",
     "since.budget": "This page marks changes in the newest versions only, so this part is shown without marks.",
     "since.reworded": "Reworded since version %d", "since.added": "Added since version %d",

@@ -1597,7 +1597,7 @@ class Page:
     def sheet_since_note(self, group):
         """How a part stands against the versions of a group: what changed, or why nothing is marked. It shows with those versions."""
         numbers, state = self.whole_numbers(group.get("for")), group.get("state")
-        if not numbers or state not in SINCE_STATES or state == "before":   # parts with no earlier version are counted in the bar
+        if not numbers or state not in SINCE_STATES:
             return ""
         attrs = {"class": "pn", "data-for": self.tokens(numbers)}
         if self.sheet_default in numbers:
@@ -1611,7 +1611,7 @@ class Page:
         if state == "new":
             return E("span", dict(attrs, **{"class": attrs["class"] + " st st-changed chg"}),
                      E("span", {"class": "stw"}, self.sheet_kv("since.new", numbers)))
-        key = {"same": "since.same", "unfetched": "since.unfetched", "unchecked": "since.unchecked"}.get(state)
+        key = {"same": "since.same", "unfetched": "since.unfetched", "unchecked": "since.unchecked"}.get(state)   # "before" is counted in the bar
         if key is not None:
             return E("span", attrs, self.sheet_kv(key, numbers))
         return E("span", attrs, mind_model.PHRASES["since.long" if state == "long" else "since.budget"]) \
