@@ -11,7 +11,8 @@ only when every row of this table holds, each read live from GitHub at that mome
   approved        the pull request is merged into the manuscript branch and `merged_by` is an allowed login
   what we sent    the topic's file at the merge commit has the sha256 of the proposal's Text
   not moved       the live body has the sha256 of the proposal's Base (a body that already is the proposal's text, or a text
-                  change that records it as written, means the proposal was applied: it is done and nothing more is said)
+                  change made after the proposal that records it as written, means the proposal was applied: it is done
+                  and nothing more is said)
   still fit       write.py check passes again on that text against the live body, and what it rests on still stands
   this machine    the mode here is review or autonomous and the repository is trusted
 
@@ -241,11 +242,16 @@ def newest_proposals(db, allowed):
     return [(row["comment"], row["issue"], (row["author"] or "").lower()) for row in newest.values()]
 
 
-def applied(db, state, allowed, issue, base, text):
-    """True when a told text change of the topic records this proposal as written: its body went from the proposal's Base to
-    the proposal's Text (what write.apply_command records). The body may have moved on since."""
+def applied(db, state, allowed, issue, base, text, cid):
+    """True when a told text change of the topic records this proposal as written: made after the proposal comment `cid`, with
+    its body going from the proposal's Base to the proposal's Text (what write.apply_command records). The body may have
+    moved on since. Both times are the machine's own clock, to the minute, so a skew against GitHub does not matter."""
+    posted = db.execute("SELECT at, created_at FROM events WHERE comment = ?", (cid,)).fetchone()
+    if posted is None:
+        return False
+    since = record_format.instant(posted["at"], posted["created_at"])
     items = state["found"]["items"] if state else index.memories(db, allowed)["items"]
-    return any(row["issue"] == issue and row["before"] == base and row["after"] == text
+    return any(row["issue"] == issue and row["before"] == base and row["after"] == text and row["time"] >= since
                for row in write_rules.text_memories(db, items))
 
 
@@ -286,7 +292,7 @@ def evaluate(config, repo, hub, plan, allowed, db, state, cid, issue, author):
     if merged is None or record_format.body_sha(merged) != text.group(1):
         return "other", number
     current = recortex.read_issue_body(repo, issue)
-    if record_format.body_sha(current) == text.group(1) or applied(db, state, allowed, issue, base.group(1), text.group(1)):
+    if record_format.body_sha(current) == text.group(1) or applied(db, state, allowed, issue, base.group(1), text.group(1), cid):
         return "done", number   # the text is in the body, or a told text change says it was written: nothing is left to judge
     if record_format.body_sha(current) != base.group(1):
         return "moved", number

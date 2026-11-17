@@ -307,6 +307,24 @@ class WriteTrustTests(VersionBox):
             self.assertRegex(at, r"\+0[12]:00$")
             self.assertEqual(zones.stamp_utc(stamp).strftime("%Y-%m-%dT%H:%M:00Z"), record_format.sort_key(at))
 
+    def test_a_text_change_from_before_the_proposal_does_not_make_it_done_even_with_its_base_and_text(self):
+        """An older text change that went from the same Base to the same Text is not the record of this proposal being written."""
+        self.proposed()
+        self.merge()
+        fields = dict(record_format.fields(self.repo()["comments"][str(self.proposal)]["body"]))
+        base, text = (re.search(r"[0-9a-f]{64}", fields[name]).group(0) for name in ("Base", "Text"))
+        old = manuscript_record.text_memory("2026-10-01T10:00-05:00", "Results", "an older text change", "It changed.", "It was due.",
+                                            "Written without asking, under the autonomous mode.", before=base, after=text)
+        self.add_comment(9610, 5, old, "2026-12-01T15:00:00Z")
+        data = self.repo()
+        data["issues"]["5"]["body"] = data["issues"]["5"]["body"] + "\nAn edit the proposal knows nothing about.\n"
+        data["issues"]["5"]["updated_at"] = "2026-12-09T10:00:00Z"
+        self.save(data)
+        self.ready()
+        out = self.approvals("--apply").stdout
+        self.assertIn("changed after the proposal was made; the proposal is not applied", out)
+        self.nothing_written(before_memories=1)       # the old one, which the test posted
+
     def test_a_text_that_no_longer_passes_the_checks_writes_nothing(self):
         self.proposed()
         self.merge()
