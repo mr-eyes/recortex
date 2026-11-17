@@ -549,6 +549,7 @@ def _process(repo, config, project_root=None, invoke_fn=None):
 
 SUMMARY_MEMORIES = 30   # the newest told memories since the last resume block that the summary may rest on
 SUMMARY_SOURCES = 6     # the newest typed prompts and agent messages shown to it
+SUMMARY_RETRY = 6 * 3600   # seconds before a refresh that did not post (refused, rejected, failed) is tried again
 
 
 def summary_wanted(repo, config):
@@ -668,6 +669,10 @@ def refresh_summary(repo, config, store, options, invoke, root):
     block. Both calls are counted in the daily cap. Returns a code; nothing is posted unless every step passed."""
     if not summary_wanted(repo, config):
         return "current"
+    last = store.get_control("summary_last", None)   # a refresh that did not post costs no further call for a while
+    if isinstance(last, dict) and last.get("code") != "posted" and type(last.get("at")) in (int, float) \
+            and 0 <= time.time() - last["at"] < SUMMARY_RETRY:
+        return "waiting"
     material = summary_material(repo, config)
     if material is None:
         return "no-block"
@@ -825,7 +830,7 @@ def run_once(repo, config, project_root=None, invoke_fn=None, settle_first=False
                     except (OSError, ValueError, sqlite3.Error, recortex.GhError, observer_store.StoreError,
                             subprocess.TimeoutExpired):
                         code = "summary-error"
-                    if code != "current":
+                    if code not in ("current", "waiting"):   # waiting does not renew the time
                         store.set_control("summary_last", {"at": time.time(), "code": code})
                     # Includes reviewed events left ready by a previous interrupted worker.
                     for event in store.events(states=["ready"], limit=4):

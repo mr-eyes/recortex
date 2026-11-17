@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -158,6 +159,18 @@ class SummaryRefreshTests(SummaryBox):
             self.assertEqual(['summary'], [purpose for purpose, _ in self.calls], name)
         self.assertEqual([], self.posted)
 
+    def test_a_refresh_that_did_not_post_is_not_tried_again_at_once(self):
+        rejecting = self.invoke(accepted=False, reason='unsupported')
+        self.assertEqual('summary-rejected', self.refresh(invoke=rejecting))
+        with store.Store(REPO, config=self.config) as db:
+            db.set_control('summary_last', {'at': time.time(), 'code': 'summary-rejected'})
+        self.assertEqual('waiting', self.refresh(invoke=rejecting))
+        self.assertEqual(['summary', 'summary_review'], [purpose for purpose, _ in self.calls])   # no call while it waits
+        with store.Store(REPO, config=self.config) as db:   # six hours on, it is tried again
+            db.set_control('summary_last', {'at': time.time() - worker.SUMMARY_RETRY - 1, 'code': 'summary-rejected'})
+        self.assertEqual('summary-rejected', self.refresh(invoke=rejecting))
+        self.assertEqual(4, len(self.calls))
+
     def test_a_secret_in_the_summary_stops_it_and_a_secret_in_the_material_stops_the_call(self):
         key = 'sk-' + 'a1B2c3D4' * 4
         self.assertEqual('summary-privacy', self.refresh(self.invoke(paragraphs=['The key is %s.' % key])))
@@ -203,12 +216,12 @@ class RunOnceTests(SummaryBox):
         self.wrapped = patcher.start()
         self.addCleanup(patcher.stop)
 
-    def pass_(self, mode='automatic', paused=False):
+    def pass_(self, mode='automatic', paused=False, invoke=None):
         self.config['observer']['mode'] = mode
         runtime.approve(REPO, self.config)
         with store.Store(REPO, config=self.config) as db:
             db.set_control('publication_paused', paused)
-        return worker.run_once(REPO, self.config, self.project, self.invoke())
+        return worker.run_once(REPO, self.config, self.project, invoke or self.invoke())
 
     def test_the_worker_refreshes_a_stale_summary_in_automatic_mode(self):
         self.pass_()
@@ -216,6 +229,18 @@ class RunOnceTests(SummaryBox):
         self.assertEqual(1, len(self.posted))
         with store.Store(REPO, config=self.config) as db:
             self.assertEqual('posted', db.get_control('summary_last')['code'])
+
+    def test_a_refresh_that_failed_is_not_tried_again_by_the_next_passes_and_the_wait_is_not_renewed(self):
+        rejecting = self.invoke(accepted=False, reason='unsupported')
+        self.pass_(invoke=rejecting)
+        with store.Store(REPO, config=self.config) as db:
+            first = db.get_control('summary_last')
+            self.assertEqual('summary-rejected', first['code'])
+        self.pass_(invoke=rejecting)
+        self.pass_(invoke=rejecting)
+        self.assertEqual(['summary', 'summary_review'], [purpose for purpose, _ in self.calls])
+        with store.Store(REPO, config=self.config) as db:
+            self.assertEqual(first, db.get_control('summary_last'))      # waiting leaves the time of the failure as it was
 
     def test_the_worker_posts_no_summary_in_shadow_mode_or_while_publication_is_paused(self):
         self.pass_('shadow')
