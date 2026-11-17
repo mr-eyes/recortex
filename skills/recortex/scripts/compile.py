@@ -56,50 +56,9 @@ def write_tsv(path, columns, rows):
             handle.write("\t".join(cell(row.get(c)) for c in columns) + "\n")
 
 
-def hub_order(db, hub, profiles):
-    """[(label, heading, [issue numbers])] in the order of the hub's deliverable tables, then the rest by profile."""
-    sections = recortex.section_labels(profiles)
-    by_heading = {}
-    for label, heading in sections:
-        by_heading.setdefault(heading.lower(), []).append(label)
-    labels_of = {}
-    for row in db.execute("SELECT issue, label FROM labels"):
-        labels_of.setdefault(row["issue"], set()).add(row["label"].lower())
-    topics = sorted(n for n, ls in labels_of.items() if "final-record" in ls)
-    order, members = [], {}
-
-    def place(label, number):
-        if label not in members:
-            order.append(label)
-            members[label] = []
-        if number not in members[label]:
-            members[label].append(number)
-
-    hub_row = db.execute("SELECT body FROM issues WHERE number = ?", (hub or 0,)).fetchone()
-    text = record_format.section_text(hub_row["body"] or "", "Deliverable sections") if hub_row else None
-    for line in (text or "").split("\n"):
-        cells = [c.strip() for c in line.strip().strip("|").split("|")] if line.strip().startswith("|") else []
-        if len(cells) < 2:
-            continue
-        found = re.search(r"#([0-9]+)", cells[1])
-        candidates = by_heading.get(cells[0].lower(), [])
-        if not found or not candidates:
-            continue
-        number = int(found.group(1))
-        chosen = [l for l in candidates if l.lower() in labels_of.get(number, set())]
-        if chosen:
-            place(chosen[0], number)
-    for label, heading in sections:
-        for number in topics:
-            if label.lower() in labels_of.get(number, set()):
-                place(label, number)
-    headings = dict(sections)
-    return [(label, headings[label], members[label]) for label in order]
-
-
 def build(db, config, repo, hub, out, ref=None, dry_run=False):
     profiles = recortex.shipped_profiles(config.get("profiles"))
-    plan = hub_order(db, hub, profiles)
+    plan = index.deliverable_order(db, hub, profiles)
     files = []
     issues = {r["number"]: r for r in db.execute("SELECT * FROM issues")}
     deliverable = os.path.join(out, "deliverable")

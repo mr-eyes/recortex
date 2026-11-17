@@ -1389,6 +1389,48 @@ def issue_labels(db, number):
     return [r["label"] for r in db.execute("SELECT label FROM labels WHERE issue = ?", (number,))]
 
 
+def deliverable_order(db, hub, profiles):
+    """[(label, heading, [issue numbers])]: the deliverable's sections in the order of the hub's "Deliverable sections"
+    table, then the rest by profile. A row names a section by its heading in the first cell and its topics by their
+    issue numbers in the second ("#3, #4" places both); a number counts only for an issue that carries a label of that
+    heading. compile.py writes the files in this order and the mind page reads the same list, so the two agree."""
+    sections = recortex.section_labels(profiles)
+    by_heading = {}
+    for label, heading in sections:
+        by_heading.setdefault(heading.lower(), []).append(label)
+    labels_of = {}
+    for row in db.execute("SELECT issue, label FROM labels"):
+        labels_of.setdefault(row["issue"], set()).add(row["label"].lower())
+    topics = sorted(n for n, ls in labels_of.items() if "final-record" in ls)
+    order, members = [], {}
+
+    def place(label, number):
+        if label not in members:
+            order.append(label)
+            members[label] = []
+        if number not in members[label]:
+            members[label].append(number)
+
+    hub_row = db.execute("SELECT body FROM issues WHERE number = ?", (hub or 0,)).fetchone()
+    text = record_format.section_text(hub_row["body"] or "", "Deliverable sections") if hub_row else None
+    for line in (text or "").split("\n"):
+        cells = [c.strip() for c in line.strip().strip("|").split("|")] if line.strip().startswith("|") else []
+        if len(cells) < 2:
+            continue
+        candidates = by_heading.get(cells[0].lower(), [])
+        for found in re.findall(r"#([0-9]+)", cells[1]):
+            number = int(found)
+            chosen = [l for l in candidates if l.lower() in labels_of.get(number, set())]
+            if chosen:
+                place(chosen[0], number)
+    for label, heading in sections:
+        for number in topics:
+            if label.lower() in labels_of.get(number, set()):
+                place(label, number)
+    headings = dict(sections)
+    return [(label, headings[label], members[label]) for label in order]
+
+
 def triage(db, allowed=frozenset()):
     """Open issues, not pull requests, that need triage: every issue labeled `triage`, and every issue with no role
     label and no closed-out type (people opened it by hand) that has no triage comment yet from an allowed account.

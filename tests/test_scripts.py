@@ -3919,6 +3919,32 @@ class CompileTests(RecordSandbox):
         self.assertEqual(4, manifest["counts"]["other_comments"])  # three in the fixture repository, one added
         self.assertIn("thanks, looks good", recortex.read_text(os.path.join(out, "history", "timeline.md")).lower())
 
+    def test_a_hub_cell_that_names_several_issues_places_all_of_them_in_its_order(self):
+        data = self.repo()
+        data["issues"]["6"]["labels"].append("rel:fixed")
+        data["issues"]["8"] = {"title": "Third topic", "body": "# Third topic\n\n## Fixed\n\nA third fix.\n",
+                               "labels": ["final-record", "rel:fixed", "topic:third"], "state": "open",
+                               "created_at": "2026-04-05T10:00:00Z", "updated_at": "2026-04-05T10:00:00Z"}
+        data["next_issue"] = 9
+        hub = data["issues"]["4"]
+        self.assertIn("| Fixed | #5 |", hub["body"])
+        hub["body"] = hub["body"].replace("| Fixed | #5 |", "| Fixed | #8, #6, #5 |")
+        self.save(data)
+        out = os.path.join(self.dir, "compiled")
+        result = self.tool("compile.py", "--out", out)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        fixed = recortex.read_text(os.path.join(out, "deliverable", "02-rel-fixed.md"))
+        self.assertEqual(["#8", "#6", "#5"], re.findall(r"^## .*\((#[0-9]+)\)$", fixed, re.M))
+        self.ready()
+        self.in_process()
+        import index
+        db = index.connect(REPO, create=False)
+        try:
+            plan = index.deliverable_order(db, 4, recortex.shipped_profiles(["software", "research"]))
+        finally:
+            db.close()
+        self.assertEqual([8, 6, 5], dict((label, numbers) for label, _, numbers in plan)["rel:fixed"])
+
 
 def without_evidence(text):
     """A memory's text without its Evidence field, which a reconstructed memory does not carry in this version."""
