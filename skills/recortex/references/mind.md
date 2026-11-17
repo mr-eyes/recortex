@@ -86,6 +86,19 @@ The text of a memory's plain line is one sentence and is not parsed. The text, i
 
 The page places memories before or after a pause by their clock times as written in the record, without converting time zones, since a resume block carries no offset. A memory written in another zone can therefore land on the wrong side of a pause; keep the record in its one time convention.
 
+## The plan and the changes of the text
+
+For a project that has a plan (`.recortex.json` has `plans`, [planning.md](planning.md)) the page tells the paper's plan beside its text; for any other project none of this appears and the page is what it was.
+
+- **The plan against the text**, at the top of "What does the manuscript say?": the paper's message as a sentence, then one row per section with how many parts are planned for it, how many are backed, how many have a finding against them or rest on something that changed, and whether the section has text. Each section is a link to its text.
+- **What we plan to say here**, under each section heading that has planned parts: one row per part, three cells (the part, its evidence, its text), each a sentence. The part's sentence opens its comment on GitHub; "Agreed on November 16" or "Added by the session" says who stands behind it. The evidence cell says "Backed by 2 findings", "A finding speaks against it (November 20). 1 finding for it" and so on, each linked to the finding it names. The text cell says "In the text since October 21", "In the text since October 21, before that finding" or "Not in the text yet". A figure or table whose claims are backed and whose block does not exist shows "Can be made now": the plugin never makes a figure.
+- **A part's status line** gains sentences: "4 planned parts belong here: 2 backed, 2 not backed yet."; "Last changed on October 21, 2026, by the plugin with your approval. See what changed."; and "You changed it by hand after that." when the body is not the text the newest change says it left.
+- **History**, a fold after each part that has changed: every version, newest first, with its day, how it came about in fixed words (written by the plugin without asking, with your approval, approved by you on GitHub, edited by you by hand, restored by you), the reason, and the names it carries. How to go back to a version is said once at the top, in fixed words: ask in the chat. The page changes nothing itself. With versions kept ([versions.md](versions.md)) each version also shows what changed, drawn on the page; with the writing mode off or not chosen, the fold lists only the days the body changed, from the edit history the index holds.
+- **What is still open?** gains three groups: planned claims nothing backs yet (with the experiment we thought of), planned claims a finding speaks against, and findings the plan does not use.
+- A finding that carries `checks=` or `against=` to a planned part says "This bore out a planned claim." or "This spoke against a planned claim." on its card; a change of the text is a card of its own ("We changed the text to say that ..."), with the hashes and the version it holds left out; the plan issue is the thread "The plan of the paper", first among the threads; and the map of what we know gets a branch "We plan to say (4)" under a section.
+
+The states of a part are the table in [issue-model.md](issue-model.md), "The plan of the deliverable"; the page computes none of them: the model (`mind_plan.py`) takes them from `plan_rules.py` and the page draws what the model says. A planned statement is record text: it is text on the page and never markup, an attribute or an address, and it is told only under the rules below, like a memory.
+
 ## Who is told
 
 The page speaks as "we", so it tells only what your allowed accounts wrote: the repository's owner and the logins listed for it in your trusted list.
@@ -93,7 +106,9 @@ The page speaks as "we", so it tells only what your allowed accounts wrote: the 
 | Text | Told when | Otherwise |
 |---|---|---|
 | A memory, with its fields, links and folds | An allowed account wrote it and either it was never edited, or every edit was made by an allowed account (its edit history was read) | Not told; its links do not count and its folds explain nothing. Counted in the last lines. A memory told after edits carries a quiet note when opened |
+| A planned part, a change of the text | It is a memory of an allowed account that was never edited, or edited only by allowed accounts (as any memory); a plan issue that another account opened is not used | Not told; it backs nothing, agrees nothing and links nothing |
 | A word's meaning, what a thread is about | The memory that holds it is told | Not used |
+| "You changed it by hand after that", the figure and table blocks a planned part names | The topic's body is told (the row below) | Not said; the part is not judged against a body nobody can vouch for |
 | The text of a topic (its name line, sections, tables, formulas, figures, sources), and the order of the deliverable's sections from the hub's table | An allowed account opened the issue, its edit history has been read, and every edit was made by an allowed account | One sentence and the thread's address; the thread is named after its `topic:` label |
 | The last pause | The resume block the sync checked (allowed author, never edited), when its comment is still one the page may tell | "No pause has been recorded yet", or one sentence that says to sync |
 | Another issue's title | An allowed account opened it, its history is read, and nobody else renamed it | "an issue someone else opened"; the box gives who, when, open or closed and the address |

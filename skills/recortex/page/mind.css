@@ -42,6 +42,8 @@ main{padding:46px 56px 120px;min-width:0}
 .mk{display:inline-block;width:11px;height:11px;background:var(--k,var(--quiet));flex:none}
 .k-result{--k:var(--found)}.k-decision{--k:var(--decided)}.k-failure{--k:var(--wrong)}.k-idea{--k:var(--idea)}
 .k-question{--k:var(--asked)}.k-correction{--k:var(--fixed)}.k-checkpoint{--k:var(--paused)}
+.k-plan{--k:var(--asked)}.k-text{--k:var(--fixed)}
+.mk.k-plan{clip-path:polygon(0 0,100% 0,100% 70%,70% 100%,0 100%)}.mk.k-text{border-radius:2px;width:12px;height:9px}
 .mk.k-result{border-radius:50%}
 .mk.k-decision,.mk.k-correction{clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);width:13px;height:13px}
 .mk.k-failure{clip-path:polygon(18% 0,50% 32%,82% 0,100% 18%,68% 50%,100% 82%,82% 100%,50% 68%,18% 100%,0 82%,32% 50%,0 18%)}
@@ -356,3 +358,10 @@ math{font-family:"STIX Two Math","Cambria Math","Latin Modern Math","Noto Sans M
 @media (max-width:860px){.treecols{display:block}.tside{margin-top:14px}.tleft>li{border-right:0;border-left:2px solid var(--brand);padding:0 0 10px 16px;text-align:left}
 .tleft .foldbtn,.tleft li>a{text-align:left;justify-content:flex-start}.tleft .tp{margin:6px 0 4px 8px}.tleft .lf>ul{margin:2px 0 6px 14px}
 .hubnode{position:static}.hintnarrow{display:block}}
+
+.plantable{margin:10px 0 18px;overflow-x:auto}.plantable table{width:100%;border-collapse:collapse;font:15px/1.45 var(--sans)}
+.plantable th{text-align:left;font-weight:600;color:var(--quiet);border-bottom:1px solid var(--rule);padding:4px 10px 4px 0}
+.plantable td{vertical-align:top;padding:7px 12px 7px 0;border-bottom:1px solid var(--rule);min-width:11em}
+.plantable tr.p-open td:nth-child(2){color:var(--idea)}.plantable tr.p-aside td,.plantable tr.p-replaced td{color:var(--quiet)}
+.plansum{margin:6px 0 22px}.plansum .lab{font-weight:600}.plansummary{list-style:none;padding:0;margin:8px 0;font:15px/1.6 var(--sans)}
+.histlist{list-style:none;padding:0;margin:8px 0}.hist{padding:8px 0;border-bottom:1px solid var(--rule)}.histhead{margin:0 0 3px}

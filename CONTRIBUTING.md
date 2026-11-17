@@ -11,6 +11,7 @@ python3 -m unittest tests.test_scripts.{GraphqlReaderTests,FakeProjectsTests,Sub
 python3 -m unittest discover -s tests -p 'test_observer_*.py'
 python3 -m unittest discover -s tests -p test_continuity.py
 python3 -m unittest discover -s tests -p test_manuscript_plan.py
+python3 -m unittest discover -s tests -p test_manuscript_write.py
 ```
 
 The six commands hold every test between them; each takes under five minutes. The first four hold every class in `tests/test_scripts.py`, the fifth the observer's tests and the sixth the continuity demonstration. `python3 -m unittest discover -s tests` runs them all in one command of about twelve minutes, which CI uses. A new class in `test_scripts.py` goes into one of the four lists; a new `test_*.py` file needs a command whose `-p` pattern matches it. `mkdir -p .tmp` makes the folder that a test needs when its class runs first in a fresh clone.

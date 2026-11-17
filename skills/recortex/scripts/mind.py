@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import index  # noqa: E402
 import mind_figures  # noqa: E402
 import mind_model  # noqa: E402
+import mind_plan  # noqa: E402
 import recortex  # noqa: E402
 import storage  # noqa: E402
 
@@ -281,6 +282,10 @@ KIND_TABLE = (  # (kind, the word, what it records)
     ("correction", "Corrected", "A correction: an earlier statement was wrong, and this says what is right."),
     ("checkpoint", "Pause", "A pause is where a stretch of work ended and a note was left for whoever came next. It is "
                             "not a claim, so it has no state. What came after it follows by time."),
+    ("plan", "Planned", "A part of the plan of the paper: something it will claim, show or concede. Its state is worked "
+                        "out from the findings that bear on it, never typed."),
+    ("text", "Text change", "A change of the paper's text: what changed, why, and how it came about: written by the plugin "
+                            "with your word or without asking, approved by you on GitHub, or changed by you by hand."),
 )
 STATE_TABLE = (  # (state, the key of its explanation, its title, what it means)
     ("stands", "state-stands", "Still stands", "Nothing recorded later replaces it or sets it aside. It is what we hold "
@@ -297,6 +302,24 @@ STATE_TABLE = (  # (state, the key of its explanation, its title, what it means)
     ("tried", "state-tried", "Tried", "A result or a failure put it to a test."),
     ("nothing", "state-nothing", "Nothing followed yet", "No decision or fix points back to this failure."),
     ("led", "state-led", "Led to a change", "A later memory was made because of it."),
+    ("plan-dropped", "state-plan-dropped", "Dropped", "A decision, or a later part of the plan, set this part aside."),
+    ("plan-revised", "state-plan-revised", "Revised", "A later part of the plan says it again, narrowed, reworded, widened or "
+                                                      "reversed. The newer one is the plan now."),
+    ("plan-doubt", "state-plan-doubt", "A finding speaks against it", "A finding that still stands was recorded as "
+                                                                     "speaking against this part."),
+    ("plan-moved", "state-plan-moved", "What it rested on has changed", "A finding or decision this part follows from was "
+                                                                       "replaced, corrected or set aside."),
+    ("plan-waits", "state-plan-waits", "Waits for another part", "It depends on a part of the plan that nothing backs yet."),
+    ("plan-text", "state-plan-text", "In the text", "The text says it: its block is in a topic's text, or a change of the "
+                                                    "text followed from it."),
+    ("plan-can-be-made", "state-plan-can-be-made", "Can be made now", "Every claim it shows is backed, so the figure or "
+                                                                      "table can be made."),
+    ("plan-backed", "state-plan-backed", "Backed", "A finding that still stands is linked to it. That does not make it "
+                                                   "true: the finding can still turn out wrong."),
+    ("plan-failed", "state-plan-failed", "An attempt to show it failed", "An attempt to show it failed. Not tested is not "
+                                                                         "negative, so this does not put it in doubt."),
+    ("plan-planned", "state-plan-planned", "Planned", "Planned, and nothing backs it yet."),
+    ("plan-stands", "state-plan-stands", "Stands", "A part that is no claim: it stands as planned."),
 )
 THREAD_TABLE = (  # (the key of its explanation, its title, what it means)
     ("thread-open", "Open points", "Its open questions, untested ideas and failures nothing followed."),
@@ -559,6 +582,8 @@ class Page:
             return E("div", {"class": "formula"}, self.math(block["math"], True))
         if "table" in block:
             return self.table(block["table"])
+        if "plan" in block:
+            return self.plan_table(block["plan"])
         if "note" in block:
             address = github_url("issue", self.repo, issue)
             return E("p", {"class": "quiet"}, HTML_TABLE_NOTE, " ", E("a", {"href": address}, "Open it on GitHub")
@@ -823,6 +848,9 @@ class Page:
                  self.meta(memory, date=True),
                  E("p", {"class": "big"}, self.sentence(memory, "button")),
                  self.remind(memory),
+                 E("p", {"class": "quiet plannote"}, {"bore": "This bore out a planned claim.",
+                                                     "against": "This spoke against a planned claim."}[memory["plan_note"]])
+                 if memory.get("plan_note") in ("bore", "against") else "",
                  E("p", {"class": "ans"}, text_of(memory.get("passage"))),
                  E("p", {"class": "inthread"}, "Part of the thread ", self.thread_link(memory.get("thread")), "."),
                  *[self.field(entry, address) for entry in memory.get("fields", [])],
@@ -888,7 +916,7 @@ class Page:
 
     # ------------------------------------------------------------ the text
 
-    OPEN_GROUPS = ("questions", "ideas", "failures", "unknown", "holds", "tasks")
+    OPEN_GROUPS = ("questions", "ideas", "failures", "unknown", "plan-unbacked", "plan-doubt", "plan-unused", "holds", "tasks")
 
     def sentences(self, items):
         """The sentences of a part's status line, each a list of segments, as plain nodes."""
@@ -899,7 +927,9 @@ class Page:
                 if not isinstance(seg, dict):
                     continue
                 words = text_of(seg.get("t"))
-                if "thread" in seg and integer(seg["thread"]) in self.threads:
+                if "gh" in seg:
+                    out.append(self.plan_link(seg, words))
+                elif "thread" in seg and integer(seg["thread"]) in self.threads:
                     out.append(self.thread_link(seg["thread"]))
                 elif "m" in seg and integer(seg["m"]) in self.m:
                     out.append(E("a", {"class": "inl", "href": anchor("m-%d" % integer(seg["m"])),
@@ -910,6 +940,114 @@ class Page:
                     out.append(words)
             out.append(" ")
         return out
+
+    # ------------------------------------------------------------ the plan and the history of a part
+
+    def plan_link(self, seg, words=None):
+        """A planned part as a sentence that opens its comment on GitHub: the address is built from checked numbers."""
+        words = words if words is not None else text_of(seg.get("t"))
+        address = github_url("memory", self.repo, seg.get("issue"), seg.get("gh"))
+        return E("a", {"class": "inl", "href": address}, words) if address else words
+
+    def plan_cell(self, segs):
+        out = []
+        for seg in segs if isinstance(segs, list) else []:
+            if not isinstance(seg, dict):
+                continue
+            words = text_of(seg.get("t"))
+            if "gh" in seg:
+                out.append(self.plan_link(seg, words))
+            elif "m" in seg and integer(seg["m"]) in self.m:
+                out.append(E("a", {"class": "inl", "href": anchor("m-%d" % integer(seg["m"])), "data-m": integer(seg["m"])},
+                             words))
+            else:
+                out.append(words)
+        return J(*out)
+
+    def plan_table(self, data):
+        """"What we plan to say here": one row per planned part, three cells, each a sentence."""
+        rows = [row for row in (data.get("rows") if isinstance(data, dict) else []) or [] if isinstance(row, dict)]
+        head = mind_model.PHRASES["plan.table.head"]
+        body = []
+        for row in rows:
+            cells = row.get("cells") if isinstance(row.get("cells"), list) else []
+            body.append(E("tr", {"class": "p-" + (row.get("state") if row.get("state") in STATE_CLASS else "plain")},
+                          *[E("td", None, self.plan_cell(cells[i] if i < len(cells) else [])) for i in range(3)]))
+        return E("div", {"class": "plantable"}, E("table", None, E("thead", None, E("tr", None, *[E("th", None, w) for w in head])),
+                                                   E("tbody", None, *body)))
+
+    def plan_summary(self):
+        """"The plan against the text": the message, then one row per section with its counts, each a link."""
+        plan = self.model.get("plan")
+        if not isinstance(plan, dict):
+            return ""
+        number = {}
+        for group in (self.model.get("outline") or {}).get("deliverables", []):
+            for section in group.get("sections", []) if isinstance(group, dict) else []:
+                if isinstance(section, dict):
+                    number.setdefault(text_of(section.get("label")).lower(), integer(section.get("n")))
+        rows = []
+        for entry in plan.get("summary", []) if isinstance(plan.get("summary"), list) else []:
+            if not isinstance(entry, dict):
+                continue
+            label = text_of(entry.get("section"))
+            n = number.get(label.lower())
+            words = []
+            if integer(entry.get("planned")):
+                words.append(plural(integer(entry.get("planned")), "1 planned part", "%d planned parts"))
+                words.append("%d backed" % integer(entry.get("backed")))
+                if integer(entry.get("doubt")):
+                    words.append(plural(integer(entry.get("doubt")), "1 with a finding against it or resting on something "
+                                        "that changed", "%d with a finding against them or resting on something that changed"))
+            else:
+                words.append("nothing planned for it")
+            words.append("text written" if entry.get("has_text") is True else "no text yet")
+            rows.append(E("li", None, E("a", {"href": anchor("sec-%d" % n)}, label) if n else label, ": " + "; ".join(words) + "."))
+        message = plan.get("message") if isinstance(plan.get("message"), dict) else None
+        return E("section", {"class": "plansum", "id": "plan-against-text"},
+                 E("h3", None, mind_model.PHRASES["plan.summary"]),
+                 E("p", None, E("span", {"class": "lab"}, mind_model.PHRASES["plan.message"] + ": "),
+                   self.plan_link({"gh": message.get("id"), "issue": message.get("issue")}, text_of(message.get("plain")))
+                   if message else "not planned yet", "."),
+                 E("ul", {"class": "plansummary"}, *rows) if rows else "")
+
+    def history(self, part):
+        """The History of a part: a fold, newest version first, each with its day, how it came about, the reason and the
+        names it carries; the difference is drawn by Page.diff() (mind_versions) when the model holds one."""
+        data = part.get("history") if isinstance(part.get("history"), dict) else None
+        entries = [e for e in (data.get("entries") if data else []) or [] if isinstance(e, dict)]
+        if not entries:
+            return ""
+        kept = data.get("kept") is True
+        items = []
+        for entry in entries:
+            how = text_of(entry.get("how"))
+            words = mind_model.PHRASES.get("how." + how) if how in mind_plan.HOW else None
+            lines = [E("p", {"class": "histhead"}, E("b", None, text_of(entry.get("day"))), ", " + words if words else "")]
+            memory = self.m.get(integer(entry.get("id")))
+            if memory is not None:
+                lines.append(E("p", None, self.said(memory, "inl"), "  ", text_of(entry.get("why"))))
+            for name in entry.get("names", []) if isinstance(entry.get("names"), list) else []:
+                if isinstance(name, dict):
+                    lines.append(E("p", {"class": "quiet"}, "Named %s on %s." % (text_of(name.get("name")), text_of(name.get("day")))))
+            note = {"days": "hist.nodiff.days", "unfetched": "hist.nodiff.unfetched",
+                    "unchecked": "hist.nodiff.unchecked"}.get(entry.get("no_diff"))
+            diff = entry.get("diff")
+            if isinstance(diff, list) and diff and hasattr(self, "diff"):
+                lines.append(self.show("What changed", self.diff(diff)))
+            elif note:
+                lines.append(E("p", {"class": "quiet"}, mind_model.PHRASES[note]))
+            items.append(E("li", {"class": "hist"}, *lines))
+        title = plural(len(entries), "History (1 version)", "History (%d versions)") if kept else "History"
+        first = E("p", {"class": "quiet"}, mind_model.PHRASES["hist.first"]) if kept else ""
+        guide = E("p", {"class": "quiet"}, mind_model.PHRASES["hist.restore"] % text_of(entries[0].get("day"))) if kept else \
+            E("p", {"class": "quiet"}, mind_model.PHRASES["hist.days"])
+        return self.show(title, guide, E("ol", {"class": "histlist"}, *items), first)
+
+    def open_plan_group(self, key, title, hint, rows, empty):
+        return E("section", {"class": "ogroup", "id": "open-%s" % key}, E("h3", None, title),
+                 E("p", {"class": "quiet"}, hint), E("ul", {"class": "notes"}, *rows) if rows else
+                 E("p", {"class": "nothing"}, empty))
 
     def part_link(self, part):
         n, ordinal = integer(part.get("thread")), part.get("ordinal")
@@ -935,6 +1073,7 @@ class Page:
             ident = None
         return E("article", {"class": "part", "id": ident},
                  E("p", {"class": "status"}, *self.sentences(part.get("status"))), E("div", {"class": "parttext"}, body),
+                 self.history(part),
                  E("p", {"class": "partlinks"}, E("a", {"href": anchor("settled-%d" % n)}, "Why it says this"), "  ",
                    E("a", {"href": anchor("thread-%d" % n)}, "How we got here")))
 
@@ -983,7 +1122,7 @@ class Page:
                 numbers.append(self.show(J("Where the numbers of ", self.thread_name(n), " come from"), E("ul", {
                     "class": "srcs"}, *[E("li", None, E("b", None, self.runs(row.get("statement"))), ": ",
                                           self.runs(row.get("source"))) for row in sources])))
-        return self.view("text", title, TEXT_LEDE,
+        return self.view("text", title, TEXT_LEDE, self.plan_summary(),
                          E("ul", {"class": "contents", "aria-label": "The parts of the text, in order"}, *contents),
                          *body, E("h3", None, "Where the numbers come from") if numbers else "", *numbers,
                          self.untold_line())
@@ -1292,6 +1431,43 @@ class Page:
             return ""
         return "open since today" if days == 0 else "open for 1 day" if days == 1 else "open for %d days" % days
 
+    def open_plan_groups(self, opened):
+        """The three groups the plan adds to "What is still open?" (none for a project without a plan)."""
+        plan = opened.get("plan") if isinstance(opened.get("plan"), dict) else None
+        if plan is None:
+            return []
+        parts = {integer(p.get("id")): p for p in (self.model.get("plan") or {}).get("parts", []) if isinstance(p, dict)}
+
+        def sentence(part_id):
+            part = parts.get(integer(part_id))
+            return self.plan_link({"gh": part.get("id"), "issue": part.get("issue")}, "%s: %s" % (
+                text_of(part.get("part")).capitalize(), text_of(part.get("plain")))) if part else ""
+
+        unbacked = []
+        for entry in plan.get("unbacked", []):
+            if not isinstance(entry, dict):
+                continue
+            ideas = [self.said_id(i) for i in entry.get("ideas", [])]
+            unbacked.append(E("li", {"class": "onote"}, sentence(entry.get("part")),
+                              J(" The experiment we would run: ", *ideas) if ideas else ""))
+        doubt = []
+        for entry in plan.get("doubt", []):
+            if not isinstance(entry, dict):
+                continue
+            against = [self.said_id(i) for i in entry.get("against", [])]
+            doubt.append(E("li", {"class": "onote"}, sentence(entry.get("part")),
+                           J(" Against it: ", *against) if against else ""))
+        unused = [E("li", {"class": "onote"}, self.said_id(i)) for i in plan.get("unused", [])]
+        return [
+            self.open_plan_group("plan-unbacked", "Planned claims nothing backs yet", "No finding that still stands is linked "
+                                 "to them. Where we thought of an experiment, it is named.", unbacked,
+                                 "Every planned claim has a finding behind it."),
+            self.open_plan_group("plan-doubt", "Planned claims a finding speaks against", "A finding that still stands was "
+                                 "recorded against them.", doubt, "No finding speaks against a planned claim."),
+            self.open_plan_group("plan-unused", "Findings the plan does not use", "Recorded since the plan last changed, and "
+                                 "linked to no part of it.", unused, "Every recent finding is used by the plan."),
+        ]
+
     def open_view(self):
         opened = self.model.get("open") or {}
 
@@ -1338,6 +1514,7 @@ class Page:
                   "Everything that went wrong has been followed up."),
             group("unknown", "What our results do not show", "Said by the results that still stand, in their own words. "
                   "What nothing followed comes first.", unknown, "No result that still stands leaves a gap open."),
+            *self.open_plan_groups(opened),
             group("holds", "Waiting for a yes", "From the last pause.",
                   [E("li", {"class": "onote k-checkpoint"}, E("div", {"class": "said"}, self.blocks(holds)))]
                   if holds else [], "Nothing waits for a yes."),
@@ -1458,6 +1635,25 @@ class Page:
                  E("a", {"class": "quiet", "href": anchor("thread-%d" % n)}, "the story"),
                  E("ul", {"class": "foldbody"}, *branches) if branches else "")
 
+    def tree_plan(self, data, number):
+        """The branch "We plan to say (4)" under a section of the map: the planned parts as sentences."""
+        if not isinstance(data, dict) or not integer(data.get("count")):
+            return ""
+        parts = {integer(p.get("id")): p for p in (self.model.get("plan") or {}).get("parts", []) if isinstance(p, dict)}
+        items = []
+        for pid in data.get("ids", []):
+            part = parts.get(integer(pid))
+            if part:
+                items.append(E("li", None, self.plan_link({"gh": part.get("id"), "issue": part.get("issue")}, "%s: %s" % (
+                    text_of(part.get("part")).capitalize(), text_of(part.get("plain"))))))
+        if integer(data.get("count")) > len(items):
+            items.append(E("li", None, E("a", {"href": anchor("sec-%d" % integer(number))}, "and %d more, in the text" % (
+                integer(data.get("count")) - len(items)))))
+        return E("li", {"class": "fold closed lf"},
+                 E("button", {"type": "button", "class": "foldbtn", "data-fold": "p%s" % (
+                     integer(number) if number is not None else "x"), "aria-expanded": "true"},
+                   "We plan to say (%d)" % integer(data.get("count"))), E("ul", {"class": "foldbody"}, *items))
+
     def tree_side(self, sections, cls):
         out = []
         for section in sections:
@@ -1470,8 +1666,8 @@ class Page:
                            text_of(section.get("label"))), " ",
                          E("a", {"class": "quiet", "href": anchor("sec-%d" % integer(number))}, "its text")
                          if number is not None else "",
-                         E("ul", {"class": "foldbody"}, *[self.tree_topic(t) for t in section.get("topics", [])
-                                                           if isinstance(t, dict)])))
+                         E("ul", {"class": "foldbody"}, self.tree_plan(section.get("plan"), number),
+                           *[self.tree_topic(t) for t in section.get("topics", []) if isinstance(t, dict)])))
         return E("ul", {"class": "tside " + cls}, *out)
 
     def tree_pane(self):
@@ -1804,7 +2000,7 @@ def main(argv=None):
             print(index.NOT_READY)
             return 1
         model = mind_model.build(db, repo, allowed, datetime.date.today(),
-                                 recortex.shipped_profiles(config.get("profiles")))
+                                 recortex.shipped_profiles(config.get("profiles")), config)
     finally:
         db.close()
     wanted = mind_figures.wanted(model)

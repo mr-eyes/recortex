@@ -1,0 +1,1145 @@
+"""Tests of the writing of the paper's text (1.3.0): the mode, what is due, the write and its checks, the author's own
+edits, the author's own paper and the lines the hooks print about them. Nothing here reaches GitHub; the scripts run
+against tests/fake_gh.py."""
+
+import hashlib
+import json
+import os
+import re
+import stat
+import sys
+import unittest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "tests"))
+import test_manuscript_plan as tp  # noqa: E402
+import test_scripts as ts  # noqa: E402
+import manuscript_record  # noqa: E402
+
+sys.path.insert(0, ts.SCRIPTS)
+import record_format  # noqa: E402
+import recortex  # noqa: E402
+
+NOT_CHOSEN = ("Writing: the user has not chosen whether recortex writes the paper's text. Ask once with the "
+              "multiple-choice prompt (review, autonomous, off), then run setup.py writing set.")
+
+
+class WritingBox(tp.PaperSandbox):
+    """The paper record with its plan, and helpers for the writing mode, a writing folder and its files."""
+
+    def mode(self, mode):
+        done = self.tool("setup.py", "writing", "set", "--mode", mode, "--yes")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+
+    def cmd(self, name, *args, env=None):
+        return self.tool(name, *args, env=dict({"TMPDIR": self.dir}, **(env or {})))
+
+    def start(self, issue=5, name=None):
+        folder = os.path.join(self.dir, name or "w%d" % issue)
+        done = self.cmd("write.py", "start", "--issue", str(issue), "--out", folder)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        return folder
+
+    def read(self, folder, name):
+        with open(os.path.join(folder, name), encoding="utf-8") as handle:
+            return handle.read()
+
+    def write_file(self, folder, name, text):
+        with open(os.path.join(folder, name), "w", encoding="utf-8") as handle:
+            handle.write(text if isinstance(text, str) else json.dumps(text))
+
+    def base(self, folder):
+        return self.read(folder, "base.md").replace("\r\n", "\n")
+
+    def draft(self, folder, text=None, parts=(9302,), results=(9140,), decisions=(), plain=None):
+        """Write draft.md (the base with one new paragraph in Results unless `text` is given), used.json and memory.json."""
+        base = self.base(folder)
+        if text is None:
+            text = base.replace("\n### Figure: dryspell", "\nThe pooled fit and the dry-spell comparison agree: in dry spells the cover "
+                                "plots stayed moist on 9 of 11 spells.\n\n### Figure: dryspell", 1)
+        self.write_file(folder, "draft.md", text)
+        self.write_file(folder, "used.json", {"parts": list(parts), "results": list(results), "decisions": list(decisions)})
+        self.write_file(folder, "memory.json", {"plain": plain or "in dry spells the cover plots stayed moist more often than "
+                                                "the bare plots", "changed": "One paragraph on the dry spells is new.",
+                                                "why": "The claim that the dry spells show it is backed."})
+
+    def words(self, text="Approve"):
+        path = os.path.join(self.dir, "words-%d.txt" % len(os.listdir(self.dir)))
+        with open(path, "w") as handle:
+            handle.write(text)
+        return path
+
+    def text_memories(self, issue=5):
+        return [(cid, c["body"]) for cid, c in sorted(self.repo()["comments"].items(), key=lambda row: int(row[0]))
+                if c["issue"] == issue and "type=text" in c["body"].split("\n")[0]]
+
+    def body(self, issue):
+        return self.repo()["issues"][str(issue)]["body"].replace("\r\n", "\n")
+
+    def modes_file(self):
+        return os.path.join(self.dir, "xdg-config", "recortex", "private", "writing-modes.json")
+
+
+class WritingModeTests(WritingBox):
+    """Section 7.1: the mode is the user's, per machine and repository, and nothing is written before it is chosen."""
+
+    def test_no_choice_means_not_chosen_and_nothing_is_written(self):
+        self.ready()
+        shown = self.cmd("setup.py", "writing", "show")
+        self.assertIn("writing: no mode has been chosen for octo-org/sample-project on this machine, so recortex writes "
+                      "nothing.", shown.stdout)
+        refused = self.cmd("write.py", "start", "--issue", "5", "--out", os.path.join(self.dir, "w"))
+        self.assertNotEqual(0, refused.returncode)
+        self.assertIn("write: writing is not chosen on this machine, so nothing is written.", refused.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "w")))
+
+    def test_the_mode_is_recorded_privately_and_read_back(self):
+        for mode in ("review", "autonomous", "off"):
+            done = self.cmd("setup.py", "writing", "set", "--mode", mode, "--yes")
+            self.assertEqual(0, done.returncode, done.stderr)
+            self.assertIn("recorded: the writing mode for octo-org/sample-project on this machine is %s" % mode, done.stdout)
+            self.assertEqual("on" if mode != "off" else "", "on" if "keeps every version of the manuscript" in done.stdout
+                             else "")
+            self.assertIn("is %s (chosen on" % mode, self.cmd("setup.py", "writing", "show").stdout)
+        path = self.modes_file()
+        self.assertEqual(0o600, stat.S_IMODE(os.stat(path).st_mode))
+        self.assertEqual(0o700, stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode))
+        self.assertEqual({"octo-org/sample-project"}, set(json.load(open(path))["modes"]))
+
+    def test_the_consent_lines_are_printed_for_review_and_autonomous_only(self):
+        for mode, lines in (("review", True), ("autonomous", True), ("off", False)):
+            out = self.cmd("setup.py", "writing", "set", "--mode", mode, "--yes").stdout
+            self.assertEqual(lines, "With review or autonomous, recortex also keeps every version of the manuscript for "
+                             "you in octo-org/sample-project, and shows them on the mind page." in out, mode)
+            self.assertEqual(lines, "It adds one workflow there that builds the paper as HTML, PDF and Word for each "
+                             "version you name, and at most once a day when the text changed. A build takes a few minutes of "
+                             "the repository's GitHub Actions allowance, and its files stay private to people who can read "
+                             "the repository." in out, mode)
+
+    def test_a_choice_needs_the_users_yes_and_a_valid_mode(self):
+        self.assertNotEqual(0, self.cmd("setup.py", "writing", "set", "--mode", "review").returncode)
+        self.assertNotEqual(0, self.cmd("setup.py", "writing", "set", "--mode", "sometimes", "--yes").returncode)
+        self.assertFalse(os.path.exists(self.modes_file()))
+
+    def test_a_project_file_cannot_choose_the_mode(self):
+        self.ready()
+        for key in ("writing", "mode", "writing_mode", "writing-mode", "autonomous"):
+            self.write_config(dict(self.config, **{key: "autonomous"}))
+            self.assertIn("no mode has been chosen", self.cmd("setup.py", "writing", "show").stdout, key)
+            self.assertNotEqual(0, self.cmd("write.py", "start", "--issue", "5", "--out", os.path.join(self.dir, "w")).returncode)
+        self.write_config(dict(self.config, writing={"mode": "autonomous"}))
+        self.assertIn("no mode has been chosen", self.cmd("setup.py", "writing", "show").stdout)
+
+    def test_an_unreadable_file_counts_as_off_and_is_never_replaced(self):
+        self.ready()
+        self.mode("review")
+        path = self.modes_file()
+        good = open(path).read()
+        for how in ("not json", "wrong form", "bad mode", "symlink", "loose"):
+            if os.path.lexists(path):
+                os.chmod(path, 0o600)
+                os.unlink(path)
+            if how == "not json":
+                open(path, "w").write("{not json")
+            elif how == "wrong form":
+                open(path, "w").write(json.dumps({"form": 1}))
+            elif how == "bad mode":
+                open(path, "w").write(json.dumps({"form": 1, "modes": {"octo-org/sample-project": {"mode": "always",
+                                                                                                      "set": "2026-11-16"}}}))
+            elif how == "symlink":
+                target = os.path.join(self.dir, "elsewhere.json")
+                open(target, "w").write(good)
+                os.symlink(target, path)
+            else:
+                open(path, "w").write(good)
+                os.chmod(path, 0o644)
+            shown = self.cmd("setup.py", "writing", "show").stdout
+            self.assertIn("writing: the setting of this machine cannot be read", shown, how)
+            self.assertIn("so recortex writes nothing. Run hooks.py --doctor.", shown, how)
+            refused = self.cmd("write.py", "start", "--issue", "5", "--out", os.path.join(self.dir, "w"))
+            self.assertIn("the writing setting of this machine cannot be read, so nothing is written", refused.stderr, how)
+            again = self.cmd("setup.py", "writing", "set", "--mode", "autonomous", "--yes")
+            self.assertNotEqual(0, again.returncode, how)
+            self.assertIn("cannot be read", again.stderr, how)
+            lines = self.payload_lines()
+            self.assertIn("recortex: the writing setting of this machine cannot be read, so recortex writes nothing. Run "
+                          "hooks.py --doctor.", lines, how)
+            self.assertNotIn(NOT_CHOSEN, lines, how)
+
+    def payload_lines(self):
+        self.ready()
+        text = self.tool("index.py", "query", "brief").stdout
+        return text.split("===== BEGIN PROJECT STATUS DATA")[0]
+
+    def test_another_repositorys_entry_is_kept(self):
+        self.mode("review")
+        data = json.load(open(self.modes_file()))
+        data["modes"]["someone/else"] = {"mode": "autonomous", "set": "2026-11-01"}
+        os.chmod(self.modes_file(), 0o600)
+        json.dump(data, open(self.modes_file(), "w"))
+        self.mode("off")
+        modes = json.load(open(self.modes_file()))["modes"]
+        self.assertEqual({"someone/else": {"mode": "autonomous", "set": "2026-11-01"}}, {k: v for k, v in modes.items()
+                                                                                          if k == "someone/else"})
+        self.assertEqual("off", modes["octo-org/sample-project"]["mode"])
+
+    def test_the_brief_asks_until_answered_and_then_says_what_is_due(self):
+        lines = self.payload_lines()
+        self.assertEqual(1, lines.count(NOT_CHOSEN))
+        self.assertIn(NOT_CHOSEN, self.outside(self.session()))
+        self.mode("review")
+        self.ready()
+        lines = self.payload_lines()
+        self.assertNotIn(NOT_CHOSEN, lines)
+        self.assertIn("Writing (review mode): 4 parts of the text are due. Follow \"Write the text\" in the recortex skill.",
+                      lines)
+        self.mode("autonomous")
+        self.assertIn("Writing (autonomous mode): 4 parts of the text are due.", self.payload_lines())
+        self.mode("off")
+        lines = self.payload_lines()
+        self.assertNotIn("Writing", lines)
+        self.assertNotIn(NOT_CHOSEN, lines)
+
+    def outside(self, text):
+        return text.split("===== BEGIN PROJECT STATUS DATA")[0]
+
+    def session(self):
+        done = self.hook("session-start", gh="false", env={"RECORTEX_NOTICE": "0"})
+        return done.stdout
+
+    def test_a_project_without_a_plan_is_not_asked(self):
+        self.plan = False
+        self.setUp()
+        self.ready()
+        self.assertNotIn("Writing", self.payload_lines())
+
+    def test_the_doctor_says_the_mode_and_never_a_path(self):
+        self.ready()
+        self.mode("review")
+        doctor = self.cmd("hooks.py", "--doctor").stdout
+        self.assertIn("writing: the mode for octo-org/sample-project on this machine is review (chosen on", doctor)
+        self.assertIn("own paper: no place is recorded", doctor)
+
+
+class WriteTests(WritingBox):
+    """Sections 7.2, 7.3 and 7.5: what is due, the material, the checks and the write."""
+
+    def test_status_lists_what_is_due_on_the_paper_record(self):
+        self.ready()
+        self.mode("review")
+        out = self.cmd("write.py", "status").stdout
+        self.assertIn("due: #3 Methods (methods; parts [], results [], decisions [9106])", out)
+        self.assertIn("due: #5 Results (claim; parts [9302], results [9140], decisions [])", out)
+        self.assertIn("due: #6 Discussion (claim; parts [9307, 9310], results [], decisions [])", out)
+        self.assertIn("due: #6 Limitations (claim; parts [9308], results [], decisions [])", out)
+        self.assertNotIn("9303", out)   # a claim in doubt is never material
+        self.assertNotIn("9306", out)   # a table is not text
+        self.assertNotIn("9309", out)   # a comparison that names no paper
+
+    def test_a_claim_in_doubt_moved_planned_or_failed_is_never_due_or_material(self):
+        self.ready()
+        self.mode("review")
+        found = json.loads(self.cmd("write.py", "status", "--json").stdout.split("\n", 1)[1])
+        parts = {cid for entry in found["due"] for cid in entry["parts"]}
+        for never in (9303, 9304, 9311, 9312, 9313):   # doubt, revised, dropped, moved, failed
+            self.assertNotIn(never, parts, never)
+        results = {cid for entry in found["due"] for cid in entry["results"]}
+        self.assertNotIn(9316, results)
+
+    def test_a_backed_claim_is_due_once_and_not_after_its_text_change(self):
+        self.ready()
+        self.mode("review")
+        folder = self.start(5)
+        self.draft(folder)
+        self.assertEqual(0, self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words()).returncode)
+        self.ready()
+        out = self.cmd("write.py", "status").stdout
+        self.assertNotIn("due: #5 Results", out)
+        self.assertEqual("text", self.part_state(9302))
+        self.assertEqual(3, self.plan_json()["counts"]["due"])
+
+    def part_state(self, cid):
+        return self.part(self.plan_json(), cid)["state"]
+
+    def test_the_material_holds_the_backed_claim_and_its_standing_findings_only(self):
+        self.ready()
+        self.mode("review")
+        folder = self.start(5)
+        material = self.read(folder, "material.md")
+        self.assertIn("### Planned part 9302: claim, agreed", material)
+        self.assertIn("Statement: In dry spells the plots with a rye cover stayed above the wilting point", material)
+        self.assertIn("### Standing result 9140 (2026-10-21)", material)
+        self.assertIn("Figure and table blocks the body has: figure dryspell.", material)
+        self.assertNotIn("9141", material)    # a question
+        self.assertNotIn("9143", material)    # a failure
+        self.assertNotIn("9144", material)    # a decision of another account
+        meta = json.loads(self.read(folder, "material.json"))
+        self.assertEqual((5, [9302], [9140]), (meta["issue"], meta["parts"], meta["results"]))
+        self.assertEqual(record_format.body_sha(self.base(folder)), meta["base"])
+
+    def test_nothing_due_for_a_topic_is_one_line(self):
+        self.ready()
+        self.mode("review")
+        done = self.cmd("write.py", "start", "--issue", "2", "--out", os.path.join(self.dir, "w2"))
+        self.assertNotEqual(0, done.returncode)
+        self.assertIn("write: nothing is due for #2", done.stderr)
+
+    # ------------------------------------------------------------ the write
+
+    def test_a_write_in_review_mode_changes_the_body_keeps_a_copy_and_posts_its_comment(self):
+        self.ready()
+        self.mode("review")
+        folder = self.start(5)
+        self.draft(folder)
+        checked = self.cmd("write.py", "check", "--dir", folder)
+        self.assertEqual(0, checked.returncode, checked.stdout)
+        self.assertIn("Results: 1 new or changed paragraph, 0 gone", checked.stdout)
+        self.assertIn("write: the draft passes every check", checked.stdout)
+        refused = self.cmd("write.py", "apply", "--dir", folder)
+        self.assertNotEqual(0, refused.returncode)
+        self.assertIn("in review mode the author's own words are needed", refused.stderr)
+        self.assertEqual(self.base(folder).rstrip(), self.body(5).rstrip())
+        done = self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words("Approve"))
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn("The pooled fit and the dry-spell comparison agree", self.body(5))
+        (cid, memory), = self.text_memories()
+        self.assertEqual([], [f for f in tp.lint_drafts.lint_text(memory, kind="text", config=self.config) if f.level == "error"])
+        fields = dict(record_format.fields(memory))
+        self.assertTrue(fields["Approved"].startswith("By the author in the chat, "))
+        self.assertIn("> Approve", fields["Approved"])
+        self.assertEqual("Nothing was changed by hand.", fields["Kept from the author"])
+        before, after = record_format.sha_pair(fields["Body"])
+        self.assertEqual(record_format.body_sha(self.base(folder)), before)
+        self.assertEqual(record_format.body_sha(self.body(5)), after)
+        self.assertEqual("Not kept: versions are not kept here", fields["Version"])
+        marker = record_format.parse_marker(memory.split("\n")[0])
+        self.assertEqual("9302,9140", marker["because"])
+        kept = os.path.join(self.data, "private", self.slug(), "texts", "5", after + ".md")
+        self.assertEqual(self.body(5).rstrip(), open(kept).read().rstrip())
+        self.assertEqual(0o600, stat.S_IMODE(os.stat(kept).st_mode))
+        self.assertIn("write: Results of #5 changed (review mode); comment %s says why." % cid, done.stdout)
+
+    def test_a_write_in_autonomous_mode_needs_no_words_and_says_so(self):
+        self.ready()
+        self.mode("autonomous")
+        folder = self.start(5)
+        self.draft(folder)
+        done = self.cmd("write.py", "apply", "--dir", folder)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        (cid, memory), = self.text_memories()
+        self.assertEqual("autonomous", record_format.approved_form(dict(record_format.fields(memory))["Approved"]))
+        self.assertIn("(autonomous mode)", done.stdout)
+
+    def test_the_log_lists_the_text_changes_newest_first(self):
+        self.ready()
+        self.mode("autonomous")
+        folder = self.start(5)
+        self.draft(folder)
+        self.assertEqual(0, self.cmd("write.py", "apply", "--dir", folder).returncode)
+        self.ready()
+        out = self.cmd("write.py", "log").stdout
+        self.assertRegex(out, r"[0-9]+  20[0-9-]+  #5  Results  autonomous  in dry spells the cover plots stayed moist")
+        self.assertEqual([], [l for l in self.cmd("write.py", "log", "--issue", "6").stdout.splitlines() if l[:1].isdigit()])
+
+    def test_a_stop_after_the_body_is_finished_by_the_next_apply_with_one_edit_and_one_comment(self):
+        self.ready()
+        self.mode("autonomous")
+        folder = self.start(5)
+        self.draft(folder)
+        stopped = self.cmd("write.py", "apply", "--dir", folder, env={"FAKE_GH_FAIL_NTH": "issue comment:1"})
+        self.assertEqual(1, stopped.returncode)
+        self.assertIn("write: the body is written and its comment is not; run write.py apply again to finish", stopped.stdout)
+        self.assertEqual([], self.text_memories())
+        self.assertIn("The pooled fit", self.body(5))
+        edits = len([entry for entry in self.repo()["log"] if entry[:2] == ["issue", "edit"]])
+        finished = self.cmd("write.py", "apply", "--dir", folder)
+        self.assertEqual(0, finished.returncode, finished.stdout + finished.stderr)
+        self.assertEqual(1, len(self.text_memories()))
+        self.assertEqual(edits, len([entry for entry in self.repo()["log"] if entry[:2] == ["issue", "edit"]]))
+        again = self.cmd("write.py", "apply", "--dir", folder)
+        self.assertEqual(1, len(self.text_memories()))
+
+    def test_what_the_text_rested_on_changing_while_it_waited_stops_the_write(self):
+        self.ready()
+        self.mode("autonomous")
+        folder = self.start(5)
+        self.draft(folder)
+        result = manuscript_record.result(
+            "2026-12-02T11:00-05:00", "a trimmed look", "with the shortest spells left out the dry-spell picture is weaker",
+            "ran", "config", "| Measure | Value |\n|---|---|\n| e | 0.009 |", "None", "An hour.", "Nothing.",
+            "Decide, owner the first author", links="against=9302")
+        self.add_comment(9400, 5, result, tp.later(self))
+        done = self.cmd("write.py", "apply", "--dir", folder)
+        self.assertEqual(1, done.returncode)
+        self.assertIn("not written: what this text rests on changed while it waited; draft it again.", done.stdout)
+        self.assertEqual([], self.text_memories())
+        self.assertNotIn("The pooled fit", self.body(5))
+
+    def test_a_body_that_changed_while_the_draft_was_made_is_refused(self):
+        self.ready()
+        self.mode("autonomous")
+        folder = self.start(5)
+        self.draft(folder)
+        data = self.repo()
+        data["reads"] = 0
+        self.save(data)
+        done = self.cmd("write.py", "apply", "--dir", folder, env={"FAKE_GH_CHANGE_ON_READ": "2"})
+        self.assertEqual(1, done.returncode)
+        self.assertIn("differs from --expected-body-file", done.stdout)
+        self.assertIn("write: the body was not written", done.stdout)
+        self.assertEqual([], self.text_memories())
+        self.assertNotIn("The pooled fit", self.body(5))
+
+    def test_nothing_is_written_with_the_mode_off_for_an_untrusted_repository_or_a_body_someone_else_changed(self):
+        self.ready()
+        self.mode("autonomous")
+        folder = self.start(5)
+        self.draft(folder)
+        self.mode("off")
+        done = self.cmd("write.py", "apply", "--dir", folder)
+        self.assertNotEqual(0, done.returncode)
+        self.assertIn("write: writing is off on this machine", done.stderr)
+        self.mode("autonomous")
+        with open(self.trusted, "w") as handle:
+            handle.write("someone/else octocat\n")
+        self.assertIn("is not in your trusted repositories", self.cmd("write.py", "apply", "--dir", folder).stderr)
+        with open(self.trusted, "w") as handle:
+            handle.write("octo-org/sample-project octocat\n")
+        data = self.repo()
+        issue = data["issues"]["5"]
+        issue["edits"] = [{"at": "2026-12-02T10:00:00Z", "by": "hubot"}, {"at": issue["created_at"], "by": "octocat"}]
+        issue["last_edited_at"] = issue["updated_at"] = "2026-12-02T10:00:00Z"
+        self.save(data)
+        self.ready()
+        done = self.cmd("write.py", "apply", "--dir", folder)
+        self.assertEqual(1, done.returncode)
+        self.assertIn("someone outside your allowed list changed this text, so recortex does not write it; ask the user",
+                      done.stderr)
+        self.assertEqual([], self.text_memories())
+        self.assertNotEqual(0, self.cmd("write.py", "start", "--issue", "5", "--out", os.path.join(self.dir, "w5b")).returncode)
+
+    # ------------------------------------------------------------ the checks
+
+    def refused(self, folder, number, *words):
+        before = (len(self.text_memories()), self.body(5))
+        done = self.cmd("write.py", "check", "--dir", folder)
+        self.assertEqual(1, done.returncode, done.stdout)
+        self.assertIn("not ready (check %d)" % number, done.stdout)
+        for word in words:
+            self.assertIn(word, done.stdout)
+        applied = self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words())
+        self.assertEqual(1, applied.returncode)
+        self.assertEqual(before, (len(self.text_memories()), self.body(5)))  # nothing was written
+
+    def setup_check(self):
+        self.ready()
+        self.mode("review")
+        folder = self.start(5)
+        self.draft(folder)
+        return folder
+
+    def test_check_1_the_linter(self):
+        folder = self.setup_check()
+        text = self.read(folder, "draft.md").replace("## Results", "## Results\n\nAs of 2026-11-02 the cover wins.", 1)
+        self.draft(folder, text)
+        self.refused(folder, 1, "the draft does not pass the linter")
+
+    def test_check_2_only_the_headings_of_the_write_list_differ(self):
+        folder = self.setup_check()
+        base = self.base(folder)
+        for variant in (base.replace("# Cover crops keep the topsoil wetter in dry spells", "# A new title", 1),
+                        base.replace("## Limitations", "## Introduction\n\nA new introduction.\n\n## Limitations", 1)):
+            self.draft(folder, variant)
+            done = self.cmd("write.py", "check", "--dir", folder)
+            self.assertEqual(1, done.returncode)
+            self.assertIn("not ready (check 2)", done.stdout)
+        self.draft(folder, base.replace("# Cover crops keep the topsoil wetter in dry spells", "# A new title", 1))
+        self.refused(folder, 2, "the title line and the role sentence before the first section are the author's and differ")
+
+    def test_check_2_sources_may_gain_rows_and_not_lose_one(self):
+        folder = self.setup_check()
+        base = self.base(folder)
+        gain = base.replace("## Sources\n\n", "## Sources\n\n| A new statement | `results/new.csv`, commit 3f9c2ab |\n", 1)
+        self.draft(folder, gain.replace("\n### Figure: dryspell", "\nThe dry spells agree on 9 of 11 spells.\n\n### Figure: dryspell", 1))
+        done = self.cmd("write.py", "check", "--dir", folder)
+        self.assertEqual(0, done.returncode, done.stdout)
+        lose = base.replace("| 0.004 per day | `results/spell_slope.csv`, commit 3f9c2ab |\n", "")
+        self.draft(folder, lose.replace("\n### Figure: dryspell", "\nThe dry spells agree on 9 of 11 spells.\n\n### Figure: dryspell", 1))
+        self.refused(folder, 2, "'Sources' may gain rows but not lose or change one")
+
+    def test_check_3_every_number_stands_in_the_material_or_the_base(self):
+        folder = self.setup_check()
+        base = self.base(folder)
+        for text, ok in (("in 11 dry spells and 9 of 11 spells", True), ("on 17 of 23 spells", False),
+                         ("by about 77 percent", False), ("in 2 million spells", False)):
+            self.draft(folder, base.replace("\n### Figure: dryspell", "\nThe cover plots stayed moist %s.\n\n### Figure: dryspell" % text, 1))
+            done = self.cmd("write.py", "check", "--dir", folder)
+            self.assertEqual(0 if ok else 1, done.returncode, text + done.stdout)
+            if not ok:
+                self.assertIn("not ready (check 3): the number", done.stdout)
+                self.assertIn("stands in no result of the material and not in the base", done.stdout)
+
+    def test_check_4_no_figure_or_table_block_is_added(self):
+        folder = self.setup_check()
+        base = self.base(folder)
+        block = ("\n### Figure: new - A new figure\n\nA caption.\n\n![x](https://github.com/octo-org/sample-project/blob/v0.4/"
+                 "f.png?raw=true)\n")
+        self.draft(folder, base.replace("\n## Limitations", block + "\n## Limitations", 1).replace(
+            "| Figure dryspell |", "| Figure new | data `a.csv`; command `b` |\n| Figure dryspell |", 1))
+        self.refused(folder, 4, "the draft adds the figure block 'new'; the plugin adds no figure or table block")
+
+    def test_check_6_the_draft_differs_from_the_base(self):
+        folder = self.setup_check()
+        self.draft(folder, self.base(folder))
+        self.refused(folder, 6, "the draft does not differ from the base")
+
+    def test_check_7_methods_hold_no_commit_tag_job_or_path_and_use_decisions_that_stand(self):
+        self.ready()
+        self.mode("review")
+        folder = self.start(3)
+        base = self.base(folder)
+        self.assertIn("### Standing decision 9106", self.read(folder, "material.md"))
+        for sentence in ("The plots were fitted at commit 3f9c2ab.", "The model is tagged v0.4.", "The job 123456 ran it.",
+                         "See `analysis/fit_model.R` for the fit.", "It is pull request #10 of the project."):
+            self.draft(folder, base.replace("### Table: plots", "%s\n\n### Table: plots" % sentence, 1), parts=(), results=(),
+                       decisions=(9106,))
+            done = self.cmd("write.py", "check", "--dir", folder)
+            self.assertEqual(1, done.returncode, sentence)
+            self.assertIn("not ready (check 7)", done.stdout)
+        self.draft(folder, base.replace("### Table: plots", "The four plots of the wet corner were left out of the moisture "
+                                                            "analysis.\n\n### Table: plots", 1), parts=(), results=(),
+                   decisions=(9106,))
+        self.assertEqual(0, self.cmd("write.py", "check", "--dir", folder).returncode)
+        self.draft(folder, base.replace("### Table: plots", "A new sentence about the design.\n\n### Table: plots", 1),
+                   parts=(), results=(), decisions=(9123,))   # 9123 was replaced and is not in the material
+        done = self.cmd("write.py", "check", "--dir", folder)
+        self.assertIn("used.json names decision 9123, which the material does not hold", done.stdout)
+        self.assertIn("decision 9123 no longer stands", done.stdout)
+
+    def test_check_7_the_material_holds_no_replaced_or_set_aside_decision(self):
+        self.ready()
+        self.mode("review")
+        for number in (3, 4):
+            folder = os.path.join(self.dir, "m%d" % number)
+            done = self.cmd("write.py", "start", "--issue", str(number), "--out", folder)
+            if done.returncode:
+                continue
+            material = self.read(folder, "material.md")
+            for gone in ("9123", "9125", "9110"):
+                self.assertNotIn("decision %s" % gone, material)
+
+    def test_a_new_decision_makes_methods_due_and_a_checkpoint_settles_it(self):
+        self.ready()
+        self.mode("review")
+        decision = manuscript_record.decision(
+            "2026-11-23T10:00-05:00", "sample the margins", "sample the margins of every plot as well", "Margins are sampled.",
+            "the principal investigator", "Sample the margins too.", "Lab meeting, 2026-11-23.", "The Methods change.",
+            "Write it, owner Claude session")
+        self.add_comment(9400, 3, decision, tp.later(self))
+        self.ready()
+        out = self.cmd("write.py", "status").stdout
+        self.assertIn("due: #3 Methods (methods; parts [], results [], decisions [9106, 9400])", out)
+        checkpoint = manuscript_record.checkpoint(
+            "2026-11-24T10:00-05:00", "methods already say it", "the Methods text already says everything the decisions "
+            "say", "Nothing to add.", "Checked.", "Nothing.", "Go on, owner the session", "None.")
+        self.add_comment(9401, 3, checkpoint, tp.later(self))
+        self.ready()
+        self.assertNotIn("due: #3 Methods", self.cmd("write.py", "status").stdout)
+
+    def test_check_8_a_comparison_is_written_only_with_a_documented_citation(self):
+        self.ready()
+        self.mode("review")
+        named = manuscript_record.plan_memory(
+            "2026-11-22T09:00-05:00", "comparison", "one trial", "compare the effect with one named trial", "Discussion",
+            "#6", "The effect is of the size [@doi:10.1234/example] reports.", "The trial's number.", "Nothing yet.",
+            "No comparison.", "None for now, owner the first author", links="because=9150")
+        self.add_comment(9400, 13, named, tp.later(self))
+        self.ready()
+        folder = self.start(6, "w6")
+        material = self.read(folder, "material.md")
+        self.assertIn("### Planned part 9400: comparison", material)
+        self.assertNotIn("9309", material)
+        base = self.base(folder)
+        text = base.replace("\n## Sources", "\n\nThe effect is of the size another trial reports.\n\n## Sources", 1)
+        self.draft(folder, text, parts=(9309,), results=())
+        done = self.cmd("write.py", "check", "--dir", folder)
+        self.assertIn("used.json names part 9309, which the material does not hold", done.stdout)
+        # even a material file that lists the comparison with no citation cannot get it written
+        meta = json.loads(self.read(folder, "material.json"))
+        meta["parts"].append(9309)
+        self.write_file(folder, "material.json", meta)
+        done = self.cmd("write.py", "check", "--dir", folder)
+        self.assertEqual(1, done.returncode)
+        self.assertIn("not ready (check 8): a comparison is written only when its planned part holds a citation of a "
+                      "documented form; part 9309 holds none", done.stdout)
+
+    # ------------------------------------------------------------ the author's own edits (section 7.6)
+
+    def write_once(self, issue=5):
+        folder = self.start(issue)
+        self.draft(folder)
+        done = self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words())
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.ready()
+        return folder
+
+    def author_edits(self, old, new, issue=5, at="2026-12-02T10:00:00Z"):
+        data = self.repo()
+        item = data["issues"][str(issue)]
+        item["body"] = item["body"].replace(old, new, 1)
+        item["edits"] = [{"at": at, "by": "octocat"}, {"at": item["created_at"], "by": "octocat"}]
+        item["last_edited_at"] = item["updated_at"] = at
+        self.save(data)
+        self.ready()
+
+    def test_a_first_write_on_a_topic_with_text_protects_every_paragraph_so_it_can_only_add(self):
+        self.ready()
+        self.mode("review")
+        folder = self.start(5)
+        protected = json.loads(self.read(folder, "protected.json"))["paragraphs"]
+        self.assertEqual(11, len(protected))   # the 12 paragraphs of the body, but the table of Sources
+        self.assertNotIn("| Statement or number | Source |", "\n".join(protected))
+        self.assertTrue(protected[0].startswith("# Cover crops keep the topsoil wetter in dry spells"))
+        base = self.base(folder)
+        self.draft(folder, base.replace("Over the whole season the difference", "Over the whole season the pooled difference", 1))
+        self.refused(folder, 5, "protected paragraph")
+        self.assertNotIn("last.md", os.listdir(folder))
+
+    def test_a_paragraph_edited_by_hand_after_a_write_is_kept_and_the_rest_is_written_around_it(self):
+        self.ready()
+        self.mode("review")
+        self.write_once()
+        self.author_edits("The wilting point was taken from the texture class of the field, not measured per plot.",
+                          "The wilting point was taken from the texture class of the field; I measured it in six plots.")
+        # a part is due again once a new finding backs the claim
+        folder = self.start(5, "second") if "5" in self.cmd("write.py", "status").stdout and "due: #5" in \
+            self.cmd("write.py", "status").stdout else None
+        self.assertIsNone(folder)
+
+    def second_round(self):
+        """After a write and a hand edit: a new reason to write #5 again, a rewording of the claim the text follows."""
+        claim = manuscript_record.plan_memory(
+            "2026-12-03T10:00-05:00", "claim", "wetter topsoil in dry spells, reworded",
+            "claim that a rye cover keeps the topsoil wetter during dry spells", "Results", "#5",
+            "In dry spells the plots with a rye cover stayed above the wilting point on more spells than the bare plots, "
+            "in both seasons.", "The dry-spell comparison in both seasons.", "The dry-spell result.",
+            "The paper reports the season effect only.", "None for now, owner Claude session", change="rewords",
+            links="replaces=9302 because=9140")
+        self.add_comment(9410, 13, claim, tp.later(self))
+        self.ready()
+
+    def test_only_the_paragraphs_the_author_changed_are_protected_once_this_machine_has_the_last_text(self):
+        self.ready()
+        self.mode("review")
+        self.write_once()
+        self.author_edits("The wilting point was taken from the texture class of the field, not measured per plot.",
+                          "The wilting point was taken from the texture class of the field; I measured it in six plots.")
+        self.second_round()
+        out = self.cmd("write.py", "status").stdout
+        self.assertIn("due: #5 Results (changed;", out.replace("(claim;", "(changed;"))
+        folder = self.start(5, "second")
+        self.assertIn("last.md", os.listdir(folder))
+        protected = json.loads(self.read(folder, "protected.json"))["paragraphs"]
+        self.assertEqual(["## Limitations\n\nThe wilting point was taken from the texture class of the field; I measured it "
+                          "in six plots. Soil texture was measured\nin 12 of 20 plots only, so differences in texture "
+                          "between plots cannot be ruled out as a cause."][0][:0] + protected[0][:0], "")
+        self.assertEqual(1, len(protected))
+        self.assertIn("I measured it in six plots", protected[0])
+        base = self.base(folder)
+        self.draft(folder, base.replace("on 9 of 11 spells.", "on 9 of 11 spells and, with a third season, on 12 of 14.", 1),
+                   parts=(9410,), results=(9140,))
+        checked = self.cmd("write.py", "check", "--dir", folder)
+        self.assertEqual(0, checked.returncode, checked.stdout)
+        self.draft(folder, base.replace("I measured it in six plots", "I measured it in every plot", 1), parts=(9410,),
+                   results=(9140,))
+        self.refused(folder, 5, "protected paragraph 0")
+        done = self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words())
+        self.assertEqual(1, done.returncode)
+
+    def test_without_the_copy_of_the_last_text_every_paragraph_is_protected_again(self):
+        self.ready()
+        self.mode("review")
+        self.write_once()
+        self.author_edits("not measured per plot.", "not measured per plot, as I said.")
+        self.second_round()
+        import shutil
+        shutil.rmtree(os.path.join(self.data, "private", self.slug(), "texts"))
+        folder = self.start(5, "second")
+        self.assertNotIn("last.md", os.listdir(folder))
+        self.assertEqual(12, len(json.loads(self.read(folder, "protected.json"))["paragraphs"]))
+
+    def test_asking_the_author_unprotects_only_the_paragraph_they_name_and_their_words_are_recorded(self):
+        self.ready()
+        self.mode("review")
+        self.write_once()
+        self.author_edits("not measured per plot.", "not measured per plot, as I said.")
+        self.second_round()
+        folder = self.start(5, "second")
+        base = self.base(folder)
+        self.draft(folder, base.replace("not measured per plot, as I said.", "measured in every plot.", 1), parts=(9410,),
+                   results=(9140,))
+        self.refused(folder, 5, "protected paragraph 0")
+        asked = self.words("Take the new text")
+        refused = self.cmd("write.py", "check", "--dir", folder, "--unprotect", "0")
+        self.assertNotEqual(0, refused.returncode)
+        self.assertIn("--unprotect needs --asked-file with the author's words", refused.stderr)
+        done = self.cmd("write.py", "check", "--dir", folder, "--asked-file", asked, "--unprotect", "0")
+        self.assertEqual(0, done.returncode, done.stdout)
+        applied = self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words("Approve"), "--asked-file", asked,
+                           "--unprotect", "0")
+        self.assertEqual(0, applied.returncode, applied.stdout)
+        memory = self.text_memories()[-1][1]
+        approved = dict(record_format.fields(memory))["Approved"]
+        self.assertIn("> Approve", approved)
+        self.assertIn("> Take the new text", approved)
+        self.assertEqual("Nothing was changed by hand.", dict(record_format.fields(memory))["Kept from the author"])
+
+    def test_the_kept_paragraphs_are_counted_in_the_comment(self):
+        self.ready()
+        self.mode("review")
+        self.write_once()
+        self.author_edits("not measured per plot.", "not measured per plot, as I said.")
+        self.second_round()
+        folder = self.start(5, "second")
+        self.draft(folder, self.base(folder).replace("on 9 of 11 spells.", "on 9 of 11 spells and on 12 of 14 with a third "
+                                                      "season.", 1), parts=(9410,), results=(9140,))
+        applied = self.cmd("write.py", "apply", "--dir", folder, "--words-file", self.words())
+        self.assertEqual(0, applied.returncode, applied.stdout + applied.stderr)
+        memory = self.text_memories()[-1][1]
+        self.assertEqual("1 paragraph was changed by hand and was left as it is.",
+                         dict(record_format.fields(memory))["Kept from the author"])
+
+    def test_the_text_drift_finding_follows_a_body_that_is_not_the_text_last_written(self):
+        self.ready()
+        self.mode("review")
+        self.assertEqual([], [r for r in self.query("consistency") if r["kind"] == "text-drift"])
+        self.write_once()
+        self.assertEqual([], [r for r in self.query("consistency") if r["kind"] == "text-drift"])
+        self.author_edits("not measured per plot.", "not measured per plot, as I said.")
+        found = [r for r in self.query("consistency") if r["kind"] == "text-drift"]
+        self.assertEqual([5], [r["issue"] for r in found])
+        self.assertIn("the body is not the text that the newest text change", found[0]["detail"])
+        self.mode("off")
+        self.assertEqual([], [r for r in self.query("consistency") if r["kind"] == "text-drift"])
+
+
+PAPER_TEX = r"""\documentclass{article}
+\begin{document}
+\section{Results}
+Over the whole season the difference between cover and bare plots was small.
+In dry spells the cover plots stayed above the wilting point on 9 of 11 spells.
+\section{Limitations}
+The wilting point was taken from the texture class of the field.
+\end{document}
+"""
+
+
+class OwnPaperTests(WritingBox):
+    """Section 7.7: the author's own paper is theirs. It is never written without their words and never on its own."""
+
+    def paper(self, name="paper/paper.tex", text=PAPER_TEX, mode=0o644):
+        path = os.path.join(self.project, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as handle:
+            handle.write(text)
+        os.chmod(path, mode)
+        return path
+
+    def own(self, *args, env=None):
+        return self.cmd("own_paper.py", *args, env=env)
+
+    def project_file(self):
+        return json.load(open(os.path.join(self.project, recortex.CONFIG_NAME)))
+
+    def sha_of(self, path):
+        return hashlib.sha256(open(path, "rb").read()).hexdigest()
+
+    def place(self, path=None):
+        path = path or self.paper()
+        done = self.own("where", "--set", path, "--yes")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        return path
+
+    def bring(self, issue=5, heading="Results", new_text=None, words="Apply"):
+        """since, a new copy, propose and apply for one part; returns the folder."""
+        folder = os.path.join(self.dir, "since-%d-%d" % (issue, len(os.listdir(self.dir))))
+        done = self.own("since", "--issue", str(issue), "--section", heading, "--out", folder)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        path = self.own("where").stdout.rsplit("the file is ", 1)[-1].strip()
+        new = os.path.join(self.dir, "new-%d.tex" % len(os.listdir(self.dir)))
+        with open(new, "w") as handle:
+            handle.write(new_text or open(path).read().replace("9 of 11 spells.", "9 of 11 spells, and 12 of 14 with a third "
+                                                                "season."))
+        proposed = self.own("propose", "--file", new, "--out", folder)
+        self.assertEqual(0, proposed.returncode, proposed.stdout + proposed.stderr)
+        return folder
+
+    def test_the_place_inside_the_project_goes_into_the_project_file(self):
+        self.ready()
+        path = self.paper()
+        self.assertIn("own paper: no place is recorded", self.own("where").stdout)
+        done = self.own("where", "--set", path, "--yes")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual({"path": "paper/paper.tex", "brought": {}}, self.project_file()["own_manuscript"])
+        self.assertIn("kept inside the project", self.own("where").stdout)
+        self.assertNotEqual(0, self.own("where", "--set", path).returncode)   # the author's yes is needed
+
+    def test_a_place_outside_the_project_is_kept_on_this_machine_only(self):
+        self.ready()
+        outside = os.path.join(self.dir, "elsewhere", "paper.tex")
+        os.makedirs(os.path.dirname(outside))
+        open(outside, "w").write(PAPER_TEX)
+        self.assertEqual(0, self.own("where", "--set", outside, "--yes").returncode)
+        self.assertEqual({"outside": True, "brought": {}}, self.project_file()["own_manuscript"])
+        self.assertNotIn("elsewhere", json.dumps(self.project_file()))
+        kept = os.path.join(self.dir, "xdg-config", "recortex", "private", "own-paper.json")
+        self.assertEqual(0o600, stat.S_IMODE(os.stat(kept).st_mode))
+        self.assertIn(os.path.realpath(outside), self.own("where").stdout)
+
+    def test_no_means_none_and_nothing_of_this_part_is_shown_again(self):
+        self.ready()
+        self.mode("review")
+        self.assertEqual(0, self.own("where", "--set", "no", "--yes").returncode)
+        self.assertIs(False, self.project_file()["own_manuscript"])
+        self.assertIn("the author keeps none", self.own("status").stdout)
+        self.assertNotIn("Your own paper", self.tool("index.py", "query", "brief").stdout)
+
+    def test_a_path_that_breaks_a_rule_in_the_project_file_is_not_used(self):
+        self.ready()
+        self.paper()
+        outside = os.path.join(self.dir, "secret.tex")
+        open(outside, "w").write("secret")
+        os.symlink(outside, os.path.join(self.project, "link.tex"))
+        os.symlink(self.dir, os.path.join(self.project, "dirlink"))
+        for bad in ("../secret.tex", "/etc/passwd", outside, "paper//paper.tex", "./paper/paper.tex", "paper\\paper.tex",
+                    "a/" * 300 + "paper.tex", "", None, ["paper/paper.tex"], 5):
+            self.write_config(dict(self.config, own_manuscript={"path": bad, "brought": {}}))
+            out = self.own("status").stdout
+            self.assertIn("own paper: no place is recorded", out, repr(bad)[:40])
+        for symlinked, why in (("link.tex", "symlink"), ("dirlink/secret.tex", "symlinked folder"),
+                               ("paper", "a folder")):
+            self.write_config(dict(self.config, own_manuscript={"path": symlinked, "brought": {}}))
+            out = self.own("status").stdout
+            self.assertIn("the recorded place is not used", out, why)
+            self.assertNotIn("secret", out)
+        refused = self.own("where", "--set", os.path.join(self.project, "link.tex"), "--yes")
+        self.assertNotEqual(0, refused.returncode)
+        self.assertIn("is not a plain file", refused.stderr)
+
+    def test_a_project_file_cannot_point_at_a_file_outside_the_project(self):
+        self.ready()
+        outside = os.path.join(self.dir, "secret.tex")
+        open(outside, "w").write("secret")
+        self.write_config(dict(self.config, own_manuscript={"outside": True, "path": outside, "brought": {}}))
+        self.assertIn("no place is recorded", self.own("status").stdout)
+        self.write_config(dict(self.config, own_manuscript={"outside": True, "brought": {}}))
+        self.assertIn("the recorded place is not used (no place is kept on this machine)", self.own("status").stdout)
+
+    def test_status_says_never_in_step_and_changed_per_part(self):
+        self.ready()
+        self.place()
+        out = self.own("status").stdout
+        self.assertIn("Results of #5: never brought over", out)
+        folder = self.bring()
+        done = self.own("apply", "--dir", folder, "--words-file", self.words("Apply"), "--parts", "5:Results")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        out = self.own("status").stdout
+        self.assertIn("Results of #5: in step with the record", out)
+        self.assertIn("Limitations of #5: never brought over", out)
+        entry = self.project_file()["own_manuscript"]["brought"]["5"]["Results"]
+        self.assertEqual(record_format.section_sha(self.body(5), "Results"), entry["text"])
+        data = self.repo()
+        data["issues"]["5"]["body"] = data["issues"]["5"]["body"].replace("not. Across", "not at all. Across")
+        data["issues"]["5"]["edits"] = [{"at": "2026-12-02T10:00:00Z", "by": "octocat"},
+                                        {"at": data["issues"]["5"]["created_at"], "by": "octocat"}]
+        data["issues"]["5"]["last_edited_at"] = data["issues"]["5"]["updated_at"] = "2026-12-02T10:00:00Z"
+        self.save(data)
+        self.ready()
+        self.assertIn("Results of #5: the record's text changed since you last took it", self.own("status").stdout)
+
+    def test_apply_writes_the_file_with_a_backup_its_own_mode_and_a_read_back_and_records_what_was_brought(self):
+        self.ready()
+        path = self.place(self.paper(mode=0o640))
+        before = self.sha_of(path)
+        folder = self.bring()
+        diff = self.read(folder, "proposal.diff")
+        self.assertIn("+In dry spells the cover plots stayed above the wilting point on 9 of 11 spells, and 12 of 14", diff)
+        self.assertEqual(before, self.sha_of(path))   # propose changes nothing
+        done = self.own("apply", "--dir", folder, "--words-file", self.words("Apply"), "--parts", "5:Results")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn("and read it back", done.stdout)
+        self.assertNotEqual(before, self.sha_of(path))
+        self.assertIn("12 of 14", open(path).read())
+        self.assertEqual(0o640, stat.S_IMODE(os.stat(path).st_mode))
+        self.assertEqual([], [n for n in os.listdir(os.path.dirname(path)) if n.startswith(".recortex-")])
+        backup = os.path.join(self.data, "private", self.slug(), "own", "backup-%s.txt" % before)
+        self.assertEqual(PAPER_TEX, open(backup).read())
+        self.assertIn("recorded that Results of #5 was brought over", done.stdout)
+
+    def test_apply_needs_the_authors_words_in_every_mode_autonomous_included(self):
+        self.ready()
+        self.mode("autonomous")
+        path = self.place()
+        before = self.sha_of(path)
+        folder = self.bring()
+        for words in (None, "", "   \n"):
+            args = ["apply", "--dir", folder, "--parts", "5:Results"]
+            if words is not None:
+                args += ["--words-file", self.words(words)]
+            done = self.own(*args)
+            self.assertNotEqual(0, done.returncode)
+            self.assertIn("the author's words are needed, in every writing mode", done.stderr)
+        self.assertEqual(before, self.sha_of(path))
+        self.assertEqual({}, self.project_file()["own_manuscript"]["brought"])
+
+    def test_a_file_that_changed_after_the_difference_was_made_is_refused(self):
+        self.ready()
+        path = self.place()
+        folder = self.bring()
+        open(path, "a").write("% a note the author added meanwhile\n")
+        after_edit = self.sha_of(path)
+        done = self.own("apply", "--dir", folder, "--words-file", self.words("Apply"), "--parts", "5:Results")
+        self.assertNotEqual(0, done.returncode)
+        self.assertIn("your paper changed since the difference was made; make it again", done.stderr)
+        self.assertEqual(after_edit, self.sha_of(path))
+        self.assertEqual({}, self.project_file()["own_manuscript"]["brought"])
+
+    def test_a_word_file_is_never_written_and_the_passages_are_recorded_only_when_pasted(self):
+        self.ready()
+        path = self.place(self.paper("paper/paper.docx", "PK-not-text"))
+        before = self.sha_of(path)
+        folder = os.path.join(self.dir, "since-word")
+        self.assertEqual(0, self.own("since", "--issue", "5", "--section", "Results", "--out", folder).returncode)
+        new = os.path.join(self.dir, "new.docx")
+        open(new, "w").write("PK-other")
+        done = self.own("propose", "--file", new, "--out", folder)
+        self.assertNotEqual(0, done.returncode)
+        self.assertIn("recortex does not edit this kind of file", done.stderr)
+        applied = self.own("apply", "--dir", folder, "--words-file", self.words("Apply"), "--parts", "5:Results")
+        self.assertNotEqual(0, applied.returncode)   # no proposal.json: nothing was proposed
+        self.assertEqual(before, self.sha_of(path))
+        pasted = self.own("apply", "--dir", folder, "--words-file", self.words("I pasted them"), "--parts", "5:Results",
+                          "--pasted")
+        self.assertEqual(0, pasted.returncode, pasted.stdout + pasted.stderr)
+        self.assertIn("nothing is written to the file; the author pasted the passages themselves", pasted.stdout)
+        self.assertEqual(before, self.sha_of(path))
+        self.assertIn("5", self.project_file()["own_manuscript"]["brought"])
+
+    def test_a_file_that_became_a_symlink_is_never_written(self):
+        self.ready()
+        path = self.place()
+        folder = self.bring()
+        elsewhere = os.path.join(self.dir, "other.tex")
+        os.rename(path, elsewhere)
+        os.symlink(elsewhere, path)
+        done = self.own("apply", "--dir", folder, "--words-file", self.words("Apply"), "--parts", "5:Results")
+        self.assertNotEqual(0, done.returncode)
+        self.assertEqual(PAPER_TEX, open(elsewhere).read())
+
+    def test_since_gives_the_difference_when_this_machine_kept_what_the_file_received(self):
+        self.ready()
+        self.place()
+        folder = self.bring()
+        self.assertEqual(0, self.own("apply", "--dir", folder, "--words-file", self.words("Apply"),
+                                     "--parts", "5:Results").returncode)
+        data = self.repo()
+        data["issues"]["5"]["body"] = data["issues"]["5"]["body"].replace("not. Across", "not at all. Across")
+        data["issues"]["5"]["edits"] = [{"at": "2026-12-02T10:00:00Z", "by": "octocat"},
+                                        {"at": data["issues"]["5"]["created_at"], "by": "octocat"}]
+        data["issues"]["5"]["last_edited_at"] = data["issues"]["5"]["updated_at"] = "2026-12-02T10:00:00Z"
+        self.save(data)
+        self.ready()
+        again = os.path.join(self.dir, "since-again")
+        out = self.own("since", "--issue", "5", "--section", "Results", "--out", again).stdout
+        self.assertIn("Results of #5: changed since; difference-results.diff holds the difference", out)
+        diff = self.read(again, "difference-results.diff")
+        self.assertIn("not at all. Across", diff)
+
+    # ------------------------------------------------------------ never on its own
+
+    def test_a_full_run_of_planning_writing_and_versions_in_autonomous_mode_leaves_the_authors_file_as_it_was(self):
+        self.ready()
+        self.mode("autonomous")
+        path = self.place()
+        before = (self.sha_of(path), os.stat(path).st_mtime_ns)
+        for issue in (5, 6, 3):
+            done = self.cmd("write.py", "status")
+            folder = self.start(issue, "auto-%d" % issue)
+            base = self.base(folder)
+            if issue == 5:
+                self.draft(folder)
+            elif issue == 6:
+                self.draft(folder, base.replace("\n## Sources", "\n\nThe trial ran on one field of one soil type for two "
+                                                                "seasons, and no more is claimed.\n\n## Sources", 1),
+                           parts=(9308,), results=())
+            else:
+                self.draft(folder, base.replace("### Table: plots", "The four plots of the wet corner were left out of the "
+                                                                    "moisture analysis.\n\n### Table: plots", 1), parts=(),
+                           results=(), decisions=(9106,))
+            applied = self.cmd("write.py", "apply", "--dir", folder)
+            self.assertEqual(0, applied.returncode, applied.stdout + applied.stderr)
+        self.assertEqual(3, len(self.text_memories(5)) + len(self.text_memories(6)) + len(self.text_memories(3)))
+        self.assertEqual(before, (self.sha_of(path), os.stat(path).st_mtime_ns))
+        self.assertEqual([], [n for n in os.listdir(os.path.dirname(path)) if n != "paper.tex"])
+
+    def test_no_script_but_own_paper_apply_opens_the_file_for_writing(self):
+        import re as regex
+        scripts = [name for name in os.listdir(ts.SCRIPTS) if name.endswith((".py", ".sh"))]
+        writers = []
+        for name in scripts:
+            text = open(os.path.join(ts.SCRIPTS, name), encoding="utf-8").read()
+            if regex.search(r"own_manuscript|OWN_PAPER|own-paper", text) and name not in ("own_paper.py", "recortex.py",
+                                                                                          "brief.py", "hooks.py", "setup.py",
+                                                                                          "names.py", "write_rules.py"):
+                writers.append(name)
+        self.assertEqual([], writers)
+        hook_text = " ".join(open(os.path.join(ts.SCRIPTS, name)).read() for name in ("brief.py", "hooks.py"))
+        self.assertNotIn("os.path.join(root, found[\"path\"])", hook_text)
+        self.assertNotRegex(hook_text, r"open\([^)]*own")
+        self.assertNotIn("own_paper.resolve", hook_text)
+
+    # ------------------------------------------------------------ the drift line
+
+    def test_the_brief_counts_the_parts_that_changed_since_and_holds_integers_only(self):
+        self.ready()
+        self.mode("review")
+        path = self.place()
+        self.assertNotIn("Your own paper", self.tool("index.py", "query", "brief").stdout)   # never brought: not counted
+        folder = self.bring()
+        self.assertEqual(0, self.own("apply", "--dir", folder, "--words-file", self.words("Apply"),
+                                     "--parts", "5:Results").returncode)
+        self.assertNotIn("Your own paper", self.tool("index.py", "query", "brief").stdout)   # in step: not counted
+        data = self.repo()
+        data["issues"]["5"]["body"] = data["issues"]["5"]["body"].replace("not. Across", "not at all. Across")
+        data["issues"]["5"]["edits"] = [{"at": "2026-12-02T10:00:00Z", "by": "octocat"},
+                                        {"at": data["issues"]["5"]["created_at"], "by": "octocat"}]
+        data["issues"]["5"]["last_edited_at"] = data["issues"]["5"]["updated_at"] = "2026-12-02T10:00:00Z"
+        self.save(data)
+        self.ready()
+        text = self.tool("index.py", "query", "brief").stdout
+        line = "Your own paper: 1 part of the record's text changed since you last brought it into it. Mention it at a pause; change the file only when the user asks."
+        self.assertEqual(1, text.count(line))
+        self.assertIn(line, text.split("===== BEGIN PROJECT STATUS DATA")[0])
+        for word in ("paper.tex", "paper/", path, os.path.dirname(path), self.dir):
+            self.assertNotIn(word, text)
+        self.assertNotIn("paper.tex", self.cmd("hooks.py", "--doctor").stdout)
+
+    def test_an_edited_topic_body_is_never_counted(self):
+        self.ready()
+        self.place()
+        folder = self.bring()
+        self.assertEqual(0, self.own("apply", "--dir", folder, "--words-file", self.words("Apply"),
+                                     "--parts", "5:Results").returncode)
+        data = self.repo()
+        item = data["issues"]["5"]
+        item["body"] = item["body"].replace("not. Across", "not at all. Across")
+        item["edits"] = [{"at": "2026-12-02T10:00:00Z", "by": "hubot"}, {"at": item["created_at"], "by": "octocat"}]
+        item["last_edited_at"] = item["updated_at"] = "2026-12-02T10:00:00Z"
+        self.save(data)
+        self.ready()
+        self.assertNotIn("Your own paper", self.tool("index.py", "query", "brief").stdout)
+
+
+class TextPageTests(WritingBox):
+    """The History of a part and what the page says of the changes of the text (section 10.2, without the differences,
+    which tests/test_manuscript_versions.py draws)."""
+
+    def page(self):
+        self.ready()
+        built = self.tool("mind.py", gh="false")
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        with open(os.path.join(self.data, "private", self.slug(), "mind.html"), encoding="utf-8") as handle:
+            return handle.read()
+
+    def said(self, text):
+        return re.sub(r" ([.,;:])", r"\1", " ".join(" ".join(tp.ts.PageReader(text).texts).split()))
+
+    def write_results(self, mode="review"):
+        self.ready()
+        self.mode(mode)
+        folder = self.start(5)
+        self.draft(folder)
+        args = ["apply", "--dir", folder] + (["--words-file", self.words("Approve")] if mode == "review" else [])
+        done = self.cmd("write.py", *args)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        return folder
+
+    def test_a_part_that_was_written_says_when_how_and_why_and_keeps_its_history(self):
+        self.write_results("review")
+        text = self.page()
+        self.assertEqual([], tp.ts.page_problems(text))
+        said = self.said(text)
+        self.assertRegex(said, r"Last changed on [A-Z][a-z]+ [0-9]{1,2}(?:, 20[0-9]{2})?, by the plugin with your approval\. "
+                               r"See what changed\.")
+        self.assertIn("History (1 version)", said)
+        history = said.split("History (1 version)")[1]
+        self.assertIn("To go back to a version, ask in the chat, for example: restore the Results of ", history)
+        self.assertIn("This is the first version kept.", history)
+        self.assertIn(", by the plugin with your approval", history)
+        self.assertIn("in dry spells the cover plots stayed moist more often than the bare plots", history)
+        self.assertNotIn("You changed it by hand after that.", said)
+
+    def test_the_card_of_a_text_change_tells_it_without_a_hash_or_a_version(self):
+        self.write_results("review")
+        text = self.page()
+        said = self.said(text)
+        self.assertIn("we changed the text to say that in dry spells the cover plots stayed moist more often than the bare "
+                      "plots", said)
+        self.assertIn("How it was approved", said)
+        self.assertIn("What changed", said)
+        self.assertNotRegex(text, r"[0-9a-f]{40}")
+        self.assertNotIn("sha256", said)
+
+    def test_a_hand_edit_after_a_write_is_said_and_the_mode_off_leaves_only_days(self):
+        self.write_results("review")
+        data = self.repo()
+        item = data["issues"]["5"]
+        item["body"] = item["body"].replace("not measured per plot.", "not measured per plot, as I said.")
+        item["edits"] = [{"at": "2026-12-04T10:00:00Z", "by": "octocat"}, {"at": item["created_at"], "by": "octocat"}]
+        item["last_edited_at"] = item["updated_at"] = "2026-12-04T10:00:00Z"
+        self.save(data)
+        self.assertIn("You changed it by hand after that.", self.said(self.page()))
+        self.mode("off")
+        said = self.said(self.page())
+        self.assertIn("Versions with their differences are kept once you choose review or autonomous writing.", said)
+        self.assertIn("Only the day the text changed is known here.", said)
+        self.assertNotIn("This is the first version kept.", said)
+        self.assertNotIn("To go back to a version", said)
+        self.assertIn("History", said)
+        self.assertNotIn("History (", said)
+
+    def test_a_part_never_written_has_no_history_while_versions_are_kept(self):
+        self.ready()
+        self.mode("review")
+        said = self.said(self.page())
+        self.assertNotIn("History (", said)
+        self.assertNotIn("by the plugin with your approval", said)
+
+    def test_autonomous_text_is_told_as_written_without_asking(self):
+        self.write_results("autonomous")
+        said = self.said(self.page())
+        self.assertIn("by the plugin without asking", said)
+        self.assertIn("History (1 version)", said)
+
+
+    def test_a_text_change_of_another_account_is_not_told_and_a_body_someone_else_changed_is_not_judged_by_hand(self):
+        folder = self.write_results("review")
+        text_memory = self.text_memories()[0][1]
+        outsider = text_memory.replace("2026-12-0", "2026-12-0")
+        self.add_comment(9450, 5, outsider.replace("we changed the text to say that", "we changed the text to say that "
+                                                   "OUTSIDER", 1), tp.later(self), "hubot")
+        data = self.repo()
+        item = data["issues"]["5"]
+        item["body"] = item["body"].replace("not measured per plot.", "not measured per plot, by someone else.")
+        item["edits"] = [{"at": "2026-12-04T10:00:00Z", "by": "hubot"}, {"at": item["created_at"], "by": "octocat"}]
+        item["last_edited_at"] = item["updated_at"] = "2026-12-04T10:00:00Z"
+        self.save(data)
+        said = self.said(self.page())
+        self.assertNotIn("OUTSIDER", said)
+        self.assertNotIn("You changed it by hand after that.", said)   # the body is not told, so it is not judged
+        self.assertIn("The text of this thread is not shown here", said)
+        self.assertNotIn("History (", said)   # and a part whose text is not told has no history to tell
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -14,6 +14,9 @@ see deletions) and --no-sync uses the index as it is. Then it writes, under --ou
   deliverable/figures.tsv     every figure block: id, issue, title, caption, image at its ref, data, command
   deliverable/tables.tsv      every table block, the same columns
   deliverable/sources.tsv     every row of every "Sources" section, with its topic
+  deliverable/plan.md         the plan of the paper as it stands (only with a plan): each part with its state, the
+  deliverable/plan.tsv        memories behind it, and the gaps; one row per part. No planned statement enters the
+                              section files above
   history/timeline.tsv        every event comment of every issue in time order, with
   history/timeline.md         the issue events (opened, labeled, unlabeled, renamed,
                               closed, reopened, pinned) and body edits; a comment
@@ -39,10 +42,103 @@ import recortex  # noqa: E402
 import index  # noqa: E402
 import record_format  # noqa: E402
 import storage  # noqa: E402
+import write_rules  # noqa: E402
 
 TIMELINE_COLUMNS = ["at", "type", "issue", "issue_title", "labels", "title", "author", "url", "recorded", "reconstructed",
                     "comment", "plain", "links"]
 BLOCK_COLUMNS = ["id", "issue", "title", "section", "caption", "image", "ref", "path", "data", "command"]
+PLAN_COLUMNS = ["id", "part", "section", "topic", "block", "plain", "state", "agreed", "findings_for", "findings_against",
+                "section_has_text", "text_changed", "newest_text"]
+GAP_WORDS = {"unbacked": "claims nothing backs", "doubt": "parts with a finding against them",
+             "moved": "parts resting on something that changed", "display": "figures and tables not made yet",
+             "sections": "sections with no part and no text", "unused": "findings no part uses",
+             "limits": "stated limits that are not planned", "comparisons": "comparisons that name no paper"}
+GAP_LINES = {"unbacked": "Claims nothing backs", "doubt": "Parts with a finding against them",
+             "moved": "Parts resting on something that changed", "display": "Figures and tables not made yet",
+             "sections": "Sections with no part and no text", "unused": "Findings no part uses",
+             "limits": "Stated limits that are not planned", "comparisons": "Comparisons that name no paper"}
+
+
+def plan_files(db, config, repo, deliverable, dry_run):
+    """The files of the plan (deliverable/plan.md and plan.tsv) and its counts, or ([], None) for a project with no plan or
+    whose repository is not trusted. Only told memories and told bodies; the statements stay out of the section files."""
+    allowed = recortex.allowed_users(repo)
+    state = index.planned(db, config, allowed) if allowed else None
+    if state is None:
+        return [], None
+    import plan as plan_module
+    items, parts, profile = state["found"]["items"], state["parts"], state["plan"]
+    gaps = index.gaps(db, config, allowed, state)
+    told = index.told_bodies(db, allowed)
+    texts = write_rules.text_memories(db, items)
+    issues = {r["number"]: r for r in db.execute("SELECT number, title, url, last_edited_at, created_at FROM issues")}
+    urls = {r["comment"]: r["url"] or "" for r in db.execute("SELECT comment, url FROM events")}
+    order = ["All"] + list(profile["sections"])
+    shown = {"All": "Message"}
+
+    def link(cid):
+        return "[%d](%s)" % (cid, urls.get(cid, "")) if urls.get(cid) else "%d" % cid
+
+    def statement(cid):
+        return plan_module.one_line(index.event_field(db, cid, "Statement"), 400) or plan_module.one_line(items[cid]["plain"] or "")
+
+    def state_words(found):
+        words = plan_module.STATE_WORDS[found["state"]]
+        if found["state"] == "backed":
+            words = "backed by %d finding%s" % (len(found["backs"]), "" if len(found["backs"]) == 1 else "s")
+        return words
+
+    rows, lines = [], ["# The plan of the %s" % profile["noun"], "",
+                       "Compiled from %s: plan issue #%d. Each part with its state (computed from the links), whether the "
+                       "author agreed it or the session added it, and the memories behind it. The text of the section "
+                       "files holds none of this." % (repo, state["issue"]), ""]
+    for heading in order:
+        section = [(cid, found) for cid, found in sorted(parts.items(), key=lambda row: (items[row[0]]["time"], row[0]))
+                   if found["standing"] and (found["section"] or "All") == heading]
+        if not section:
+            continue
+        lines += ["## %s" % shown.get(heading, heading), ""]
+        for cid, found in section:
+            behind = [("plan comment", [cid]), ("findings for it", found["backs"]), ("findings against it", found["against"]),
+                      ("decisions", found["decisions"]), ("rests on", [c for c in found["rests"] if c not in found["backs"]]),
+                      ("in the text", [found["text"]] if found["text"] else [])]
+            memories = "; ".join("%s: %s" % (name, ", ".join(link(c) for c in ids)) for name, ids in behind if ids)
+            lines.append("- **%s** (topic %s): %s. %s%s. %s" % (
+                found["part"], "#%d" % found["topic"] if found["topic"] else "none yet", statement(cid).rstrip("."),
+                state_words(found).capitalize(), "" if found["agreed"] else "; added by the session", memories))
+        lines.append("")
+    dropped = [(cid, found) for cid, found in sorted(parts.items()) if not found["standing"]]
+    if dropped:
+        lines += ["## Dropped and revised parts", ""]
+        lines += ["- %s %s: %s" % (found["part"], link(cid), "dropped" if found["dropped_by"] else "revised")
+                  for cid, found in dropped] + [""]
+    lines += ["## Gaps", ""]
+    anything = False
+    for name, words in GAP_WORDS.items():
+        value = gaps[name]
+        if value:
+            anything = True
+            lines.append("- %s: %d" % (GAP_LINES[name], len(value)))
+    lines += ["" if anything else "None.", ""]
+    for cid, found in sorted(parts.items(), key=lambda row: (items[row[0]]["time"], row[0])):
+        topic = issues.get(found["topic"]) if found["topic"] else None
+        has_text = bool(topic and found["topic"] in told and found["section"] and
+                        (record_format.section_text(db.execute("SELECT body FROM issues WHERE number = ?",
+                                                               (found["topic"],)).fetchone()["body"] or "", found["section"]) or "").strip())
+        newest = write_rules.newest_text(texts, found["topic"]) if found["topic"] else None
+        rows.append({"id": cid, "part": found["part"], "section": found["section"], "topic": found["topic"] or "",
+                     "block": found["block"], "plain": items[cid]["plain"] or "", "state": found["state"],
+                     "agreed": "yes" if found["agreed"] else "no", "findings_for": len(found["backs"]),
+                     "findings_against": len(found["against"]), "section_has_text": "yes" if has_text else "no",
+                     "text_changed": (topic["last_edited_at"] or topic["created_at"]) if has_text and topic else "",
+                     "newest_text": newest["id"] if newest else ""})
+    files = [os.path.join(deliverable, "plan.md"), os.path.join(deliverable, "plan.tsv")]
+    if not dry_run:
+        with open(files[0], "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines).rstrip("\n") + "\n")
+        write_tsv(files[1], PLAN_COLUMNS, rows)
+    counts = index.plan_counts(db, config, allowed, state)
+    return files, dict(counts, gap_classes={name: len(gaps[name]) for name in GAP_WORDS if gaps[name]})
 
 
 def cell(value):
@@ -100,6 +196,8 @@ def build(db, config, repo, hub, out, ref=None, dry_run=False):
     if not dry_run:
         write_tsv(files[-1], ["issue", "issue_title", "statement", "source"], sources)
 
+    plan_made, plan_counts = plan_files(db, config, repo, deliverable, dry_run)
+    files += plan_made
     rows = [dict(r, reconstructed="yes" if r["reconstructed"] else "no") for r in index.timeline(db)]
     counts["timeline_rows"] = len(rows)
     counts["events"] = sum(1 for r in rows if r["type"] in record_format.EVENT_TYPES)
@@ -123,11 +221,14 @@ def build(db, config, repo, hub, out, ref=None, dry_run=False):
                 "compiled_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "index_synced_at": index.get_meta(db, "synced_at"), "counts": counts,
                 "files": [os.path.relpath(f, out) for f in files]}
+    if plan_counts is not None:
+        manifest["plan"] = plan_counts
     files.append(os.path.join(out, "MANIFEST.json"))
     if not dry_run:
         with open(files[-1], "w", encoding="utf-8") as handle:
             json.dump(manifest, handle, indent=2)
             handle.write("\n")
+    counts["plan"] = plan_counts
     return files, counts
 
 
@@ -174,6 +275,8 @@ def main(argv=None):
         print("wrote: %s" % name)
     print("sections %(sections)d (texts %(section_texts)d), figures %(figures)d, tables %(tables)d, sources %(sources)d, "
           "typed events %(events)d, other comments %(other_comments)d, timeline rows %(timeline_rows)d" % counts)
+    for name, count in ((counts.get("plan") or {}).get("gap_classes") or {}).items():
+        print("plan gap %s: %d (%s)" % (name, count, GAP_WORDS[name]))
     return 0
 
 

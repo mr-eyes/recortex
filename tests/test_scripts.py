@@ -601,7 +601,7 @@ class LabelTests(Sandbox):
         self.assertIn("would run: gh label create topic:reader", result.stdout)
         self.assertIn("differs, left alone: active", result.stdout)
         self.assertNotIn("label create hub", result.stdout)
-        self.assertIn("would create 20, would update 0, already correct 1, different and left alone 1", result.stdout)
+        self.assertIn("would create 21, would update 0, already correct 1, different and left alone 1", result.stdout)
 
     def test_a_record_made_with_the_old_manuscript_profile_gains_two_labels_and_loses_none(self):
         old = [("ms:background", "introduction and background"), ("ms:methods", "methods"),
@@ -623,11 +623,11 @@ class LabelTests(Sandbox):
     def test_create_is_idempotent_and_never_deletes(self):
         first = self.run_script("setup_labels.py", "--repo", REPO, "--profile", "research,manuscript")
         self.assertEqual(0, first.returncode, first.stderr)
-        self.assertEqual(27, len(self.calls("label create")))  # core 15, research 5 + 1 type, manuscript 7 + 1 type
+        self.assertEqual(28, len(self.calls("label create")))  # core 16, research 5 + 1 type, manuscript 7 + 1 type
         names = {l["name"] for l in self.repo()["labels"]}
         self.assertTrue({"bug", "final-record", "ms:methods", "rd:results"} <= names)
         second = self.run_script("setup_labels.py", "--repo", REPO, "--profile", "research,manuscript")
-        self.assertEqual(27, len(self.calls("label create")))
+        self.assertEqual(28, len(self.calls("label create")))
         self.assertIn("created 0", second.stdout)
         third = self.run_script("setup_labels.py", "--repo", REPO, "--profile", "research", "--update")
         self.assertEqual(1, len(self.calls("label edit")), third.stdout)
@@ -8740,11 +8740,11 @@ class MindModelTests(MindSandbox):
 
     def test_a_comment_of_a_kind_the_page_does_not_know_is_left_out_and_counted(self):
         self.manuscript_record()
-        plan = ("<!-- ghim:event type=plan at=2026-11-14T10:00-05:00 -->\n### Plan: 2026-11-14 10:00 EST - a planned "
-                "claim\n\nA planned claim that this version does not know.\n")
+        plan = ("<!-- ghim:event type=forecast at=2026-11-14T10:00-05:00 -->\n### Forecast: 2026-11-14 10:00 EST - a "
+                "forecast\n\nA planned claim that this version does not know.\n")  # a kind no version knows
         data = self.repo()
         data["comments"]["9300"] = {"issue": 5, "body": plan, "created_at": "2026-11-14T15:00:00Z"}
-        data["comments"]["9301"] = {"issue": 5, "body": plan.replace("type=plan", "type=plan"), "user": "ghost",
+        data["comments"]["9301"] = {"issue": 5, "body": plan, "user": "ghost",
                                     "created_at": "2026-11-14T15:01:00Z"}
         data["issues"]["5"]["updated_at"] = "2026-11-14T15:01:00Z"
         self.save(data)

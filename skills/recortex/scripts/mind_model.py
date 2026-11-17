@@ -25,6 +25,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import index  # noqa: E402
+import mind_plan  # noqa: E402
 import mind_text  # noqa: E402
 import recortex  # noqa: E402
 import record_format  # noqa: E402
@@ -41,7 +42,8 @@ CAP_TABLE_COLUMNS = 12
 CAP_FIRST_LINES = 600     # characters of a cited issue's first lines
 CAP_LINE = 300            # characters of a name, a title, a plain line or a pause line
 
-KINDS = ("result", "decision", "failure", "idea", "question", "correction", "checkpoint")  # the kinds the page knows
+KINDS = ("result", "decision", "failure", "idea", "question", "correction", "checkpoint", "text")  # the kinds the page knows
+# A plan comment is not one of them: the plan is told in its own part of the model (mind_plan.py), not as a card.
 THREAD_KINDS = ("decision", "result", "correction", "failure")   # what can make a part's text out of date
 
 PHRASES = {
@@ -111,6 +113,8 @@ PHRASES = {
     "day.unknown": "an unknown day",
 }
 
+PHRASES.update(mind_plan.PHRASES)
+
 FIELD_NAMES = {
     "Exact words": "In their exact words",
     "Decided by": "Who decided",
@@ -124,6 +128,9 @@ FIELD_NAMES = {
     "Why": "How the mistake happened",
     "Numbers": "The numbers",
 }
+KIND_FIELD_NAMES = {"text": {"Why": "Why we changed it", "Approved": "How it was approved", "Section": "Which part",
+                             "What changed": "What changed", "Kept from the author": "What we left as you wrote it"}}
+HIDDEN_FIELDS = {"text": ("Body", "Version")}   # hashes and commits are never drawn on the page
 WHERE_FIELDS = ("Corrects", "Where recorded")          # shown under "Where this was said"
 PEOPLE_FIELDS = ("Decided by",)
 OLD_FIELD = {"decision": "Decision", "failure": "What failed", "correction": "Is", "checkpoint": "State"}
@@ -140,6 +147,7 @@ SEPARATOR = re.compile(r":?-{3,}:?")
 BLOCK_HEADING = re.compile(r"^### (Figure|Table): ([A-Za-z0-9][A-Za-z0-9_.-]*) - ")
 HEADING = re.compile(r"^#{1,3} ")
 GOAL = "goal"
+PLAN_LABEL = "plan:paper"   # the label the plan issue's thread goes by on the page (not a label of GitHub)
 
 
 def clean(value):
@@ -278,26 +286,28 @@ class Words:
 
 # ---------------------------------------------------------------- the build
 
-def build(db, repo, allowed, today, profiles=()):
+def build(db, repo, allowed, today, profiles=(), config=None):
     """The model of the mind of `repo` (a dict that json.dumps can print), read from the open index `db` in one
     transaction that is rolled back. `allowed` is recortex.allowed_users(repo) and must not be empty; `today` is the
     day of the build (a datetime.date), from which ages are counted; `profiles` is recortex.shipped_profiles of the
-    project file's profiles, which give the deliverable's sections."""
+    project file's profiles, which give the deliverable's sections. `config` is the project file as the hooks parse it:
+    with it a project that has a plan gets the plan in the model (mind_plan.py); without it the model is what it was."""
     if not allowed:
         raise ValueError("the mind is built only for a repository in the user's trusted list")
     began = not db.in_transaction
     if began:
         db.execute("BEGIN")
     try:
-        return Build(db, repo, {name.lower() for name in allowed}, today, list(profiles)).model()
+        return Build(db, repo, {name.lower() for name in allowed}, today, list(profiles), config).model()
     finally:
         if began and db.in_transaction:
             db.execute("ROLLBACK")
 
 
-class Build:
-    def __init__(self, db, repo, allowed, today, profiles=()):
+class Build(mind_plan.PlanMixin):
+    def __init__(self, db, repo, allowed, today, profiles=(), config=None):
         self.db, self.repo, self.allowed, self.today, self.profiles = db, repo, allowed, today, list(profiles)
+        self.config = config
         self.cited, self.first_lines = {}, []
 
     def ok(self, author):
@@ -351,7 +361,8 @@ class Build:
     def read_memories(self):
         found = index.memories(self.db, self.allowed)
         every = sorted((m for m in found["items"].values() if m["kind"] in KINDS), key=lambda m: (m["time"], m["id"]))
-        self.unknown_kinds = len(found["items"]) - len(every)  # a kind this version does not know: left out, counted
+        # a kind this version does not know: left out, counted. A plan comment is known: the plan part of the model tells it.
+        self.unknown_kinds = len([m for m in found["items"].values() if m["kind"] not in KINDS and m["kind"] != "plan"])
         self.older = max(0, len(every) - CAP_MEMORIES)
         kept = every[self.older:]
         self.found = found
@@ -366,13 +377,17 @@ class Build:
             if row["comment"] in found["items"]:
                 self.evidence.setdefault(row["comment"], []).append(row)
         self.m = {}
+        strange = {cid for cid, m in found["items"].items() if m["kind"] not in KINDS}  # the plan comments
+        self.plan_links = {item["id"]: [(key, target) for key, target in item["links"] if target in strange]
+                           for item in kept if any(target in strange for _, target in item["links"])}
         for item in kept:
             self.m[item["id"]] = {
                 "id": item["id"], "issue": item["issue"], "kind": item["kind"], "at": clean(item["at"]),
                 "time": item["time"], "wall": wall_key(item["at"]), "day": day_words(item["at"], self.years),
                 "plain": short(item["plain"]).rstrip(".").strip() or None if item["plain"] is not None else None,
                 "title": short(item["title"]), "state": item["state"], "author": login(item["author"]),
-                "changed": bool(item.get("changed")), "links": [(key, target) for key, target in item["links"]],
+                "changed": bool(item.get("changed")),
+                "links": [(key, target) for key, target in item["links"] if key in LINK_ORDER and target not in strange],
             }
         self.order = [self.m[item["id"]] for item in kept]
         self.incoming = {}
@@ -442,6 +457,8 @@ class Build:
         state, kind = memory["state"], memory["kind"]
         if kind == "checkpoint":
             return "pause", ""
+        if kind == "text":
+            return "plain", ""
         if state == "replaced":
             return "replaced", PHRASES["chip.replaced"] % first("replaces")
         if state == "set aside":
@@ -626,6 +643,8 @@ class Build:
                     also.setdefault(label, set()).update(mine[1:])
             if label is not None:
                 belongs[number] = label
+        if self.plan_issue in self.issues:
+            belongs[self.plan_issue] = PLAN_LABEL  # the plan issue is the thread of the plan of the paper
         self.belongs = belongs
         labels = sorted(set(belongs.values()))
         threads, taken = [], set()
@@ -642,7 +661,7 @@ class Build:
         loose = [m for m in self.order if m["thread_label"] is None]
         for thread in threads:
             thread["memories"] = [m for m in self.order if m["thread_label"] == thread["label"]]
-        threads = [t for t in threads if t["memories"] or t["topic"] is not None]
+        threads = [t for t in threads if t["memories"] or t["topic"] is not None or t["label"] == PLAN_LABEL]
         if loose:
             threads.append({"label": None, "issues": sorted({m["issue"] for m in loose}), "topic": None,
                             "closed_topic": None, "own": [], "memories": loose, "also_labels": []})
@@ -671,7 +690,9 @@ class Build:
             if name is None and label is not None and thread["topic"] is None and closed is not None \
                     and self.title_shown(closed) and self.issues[closed]["title"].strip():
                 name, source = short(self.issues[closed]["title"]), "title"
-            if name is None and label is None:
+            if label == PLAN_LABEL:
+                name, source = PHRASES["thread.plan"], "fixed"
+            elif name is None and label is None:
                 name, source = PHRASES["thread.loose"], "fixed"
             elif name is None:
                 rest = label.split(":", 1)[1]
@@ -679,8 +700,8 @@ class Build:
                     name = rest
                 else:
                     name, source = PHRASES["thread.unnamed"], "fixed"
-            thread.update(name=name, name_from=source, shown=shown, set_aside=label is not None and
-                          thread["topic"] is None, loose=label is None)
+            thread.update(name=name, name_from=source, shown=shown, set_aside=label is not None and label != PLAN_LABEL
+                          and thread["topic"] is None, loose=label is None)
             if thread["topic"] is not None and thread["topic"] not in self.topic_thread:
                 self.topic_thread[thread["topic"]] = thread
             for memory in thread["memories"]:
@@ -719,8 +740,9 @@ class Build:
         sentence = memory["sentence"]
         sentence["marks"] = [list(span) for span in self.words.find(sentence["words"], seen)]
         fields, where = [], []
+        names = KIND_FIELD_NAMES.get(memory["kind"], {})
         for label, text in self.fields.get(cid, []):
-            if label == "plain" or (label == "Decision" and memory["plain"]):
+            if label == "plain" or (label == "Decision" and memory["plain"]) or label in HIDDEN_FIELDS.get(memory["kind"], ()):
                 continue
             if label in PEOPLE_FIELDS:
                 entry = {"label": label, "name": FIELD_NAMES.get(label, label), "type": "people",
@@ -731,7 +753,7 @@ class Build:
                          "doc": self.doc(text, seen)}
                 entry["type"] = "numbers" if table else "text"
             else:
-                entry = {"label": label, "name": FIELD_NAMES.get(label, label),
+                entry = {"label": label, "name": names.get(label) or FIELD_NAMES.get(label, label),
                          "type": "quote" if label == "Exact words" else "text", "doc": self.doc(text, seen)}
             (where if label in WHERE_FIELDS else fields).append(entry)
         out = []
@@ -753,7 +775,16 @@ class Build:
             "author": memory["author"],
             "written": {"time": "%02d:%02d" % parts[3:5] if parts else None, "day": full_day(memory["at"])},
             "side": memory["side"], "remind": self.remind(memory),
+            "plan_note": self.plan_note(cid),
         }
+
+    def plan_note(self, cid):
+        """"bore" when this memory carries checks= to a planned part, "against" when it carries against=, else None (the
+        page says it in one fixed sentence on the card)."""
+        found = self.plan_links.get(cid, []) if self.plan_state is not None and self.m[cid]["kind"] == "result" else []
+        if any(key == "against" for key, _ in found):
+            return "against"
+        return "bore" if any(key == "checks" for key, _ in found) else None
 
     def block_parts(self, number):
         """{(kind, id): block} of the figure and table blocks of a topic body, from the index, with the table cells
@@ -902,6 +933,7 @@ class Build:
     def model(self):
         self.read_issues()
         self.read_memories()
+        self.read_plan(self.found)
         for memory in self.order:
             memory["old"] = memory["plain"] is None
         self.read_threads()
@@ -930,6 +962,7 @@ class Build:
                         key == "replaces" for key, _ in memory["links"]) else ""
         self.read_pauses()
         self.read_outline(self.profiles)
+        self.plan = self.plan_model()
         memories = [self.memory_model(memory) for memory in self.order]
         threads = [self.thread_model(thread) for thread in self.threads]
         outline = self.outline_model(threads)
@@ -952,7 +985,7 @@ class Build:
             "since": [m["id"] for m in self.order if self.last and self.last["wall"] and m["wall"] > self.last["wall"]],
             "latest_of": self.latest_of(),
             "cited": [self.cited[n] for n in sorted(self.cited)],
-            "open": opened, "map": self.map_model(),
+            "open": opened, "map": self.map_model(), "plan": self.plan,
             "counts": {"memories": len(self.order), "threads": len(self.threads), "words": len(words),
                        "open": sum(1 for m in self.order if m["css"] == "open")},
             "not_told": not_told,
@@ -979,8 +1012,11 @@ class Build:
             for section in group["sections"]:
                 topics = [entry(p["thread"]) for p in section["parts"] if p["first"]]
                 if topics:
-                    sections.append({"n": section["n"], "key": section["key"], "label": section["label"],
-                                     "topics": topics})
+                    entry_of_section = {"n": section["n"], "key": section["key"], "label": section["label"],
+                                        "topics": topics}
+                    if self.plan_state is not None:
+                        entry_of_section["plan"] = self.plan_branch(section["label"])
+                    sections.append(entry_of_section)
         if outline["unplaced"]:
             sections.append({"n": None, "key": "topics", "label": "Topics",
                              "topics": [entry(n) for n in outline["unplaced"]]})
@@ -1048,6 +1084,8 @@ class Build:
 
         def rank(thread):
             began = position[thread["memories"][0]["id"]] if thread["memories"] else len(self.order)
+            if thread["label"] == PLAN_LABEL:
+                return (-1, 0, 0)   # the plan of the paper comes first
             if thread["loose"]:
                 return (3, 0, 0)
             if thread["set_aside"]:
@@ -1058,7 +1096,7 @@ class Build:
 
         self.threads.sort(key=rank)
 
-    def part_status(self, model):
+    def part_status(self, model, heading=None):
         """The status line of a part of the text: a list of sentences, each {"key", "segs"}, so that a later round can
         append one. A seg is {"t": words}, {"thread": n}, {"m": memory id, "t": words} or {"open": a group of
         "What is still open?", "t": words}."""
@@ -1092,6 +1130,8 @@ class Build:
             total = len(text["questions"]) + len(text["failures"]) + text["tasks"]
             segs.append({"t": " bears on it." if total == 1 else " bear on it."})
             sentences.append({"key": "open", "segs": [s for s in segs if s["t"] != "" or "open" in s]})
+        if heading is not None and self.plan_state is not None:
+            sentences += self.part_plan_sentences(model["topic"], heading)
         return sentences
 
     def thread_text(self, thread):
@@ -1123,7 +1163,14 @@ class Build:
                                None)
                 if model["shown"] and ordinal is None:
                     continue  # the body carries the label and has no such section
-                parts.append({"thread": n, "ordinal": ordinal, "first": n not in first, "status": self.part_status(model)})
+                part = {"thread": n, "ordinal": ordinal, "first": n not in first,
+                        "status": self.part_status(model, row["heading"])}
+                if self.plan_state is not None and ordinal is not None:
+                    part.update(planned=self.planned_for_part(model["topic"], row["heading"]),
+                                by_hand=bool(self.newest_text(model["topic"], row["heading"]) and self.by_hand(
+                                    model["topic"], self.newest_text(model["topic"], row["heading"]))),
+                                history=self.history_model(model["topic"], row["heading"]))
+                parts.append(part)
                 if ordinal is not None:
                     used.setdefault(n, set()).add(ordinal)
             if not parts:
@@ -1139,8 +1186,8 @@ class Build:
                 group = {"profile": name, "noun": noun, "title": (noun or name).capitalize() if noun or name else "",
                          "sections": []}
                 deliverables.append(group)
-            group["sections"].append({"key": row["key"], "label": row["heading"], "n": count, "before": None,
-                                      "parts": parts})
+            group["sections"].append({"key": row["key"], "label": row["heading"], "n": count,
+                                      "before": self.plan_before(row["heading"]), "parts": parts})
         names = [p if isinstance(p, str) else p.get("name") for p in self.profiles]
         if len(names) == 1 and names[0] in self.NOUNS:
             aux, noun = self.NOUNS[names[0]]
@@ -1368,6 +1415,7 @@ class Build:
             "unknown": unknown,
             "holds": self.last["holds"] if self.last else None,
             "tasks": [task for task in self.tasks() if task["open"]],
+            "plan": self.plan_open(),
         }
 
     def not_told_model(self):
