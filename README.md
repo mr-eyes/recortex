@@ -21,7 +21,8 @@ The optional observer, experimental in 1.1.0, can queue and post reviewed memori
 
 - A session that starts from the last recorded state. A short brief of the record opens every session and every subagent.
 - A record you can read on GitHub. One pinned hub, one issue per topic, and a dated memory for each result, decision, failure, idea and question.
-- The mind page. One private local page that tells the memory in sentences: where things stand, how each thread got there, what went wrong, what is settled, what is open, and the text itself.
+- A start-up line showing recortex is on.
+- The mind page. One private local page that tells the memory in sentences: where things stand, how each thread got there, what went wrong, what is settled, what is open.
 - The finished work, compiled. Topic bodies hold the deliverable's current text, so the paper or the release notes are assembled from the issues.
 - Helpers that know your field. A short field sheet tells every subagent what counts as proof in your work and what must never be written down.
 - A board that keeps itself current. Sub-issues and a private GitHub Projects board follow the record; you do not drag a card to keep it honest.

@@ -118,6 +118,18 @@ def config_top():
     return choose_top(_env_dir("XDG_CONFIG_HOME", os.path.join(os.path.expanduser("~"), ".config")))
 
 
+def status_path(root):
+    """The file where the hooks write whether the record is on for the project folder `root`, for the status line:
+    <state top>/private/status/<first 32 hex digits of the SHA-256 of the folder's path>.json. The top is always the
+    current name's state folder (no earlier name), so that the status line, which imports nothing, finds the same file;
+    statusline.py repeats this rule and a test holds the two equal. The folder is made, private, by the caller."""
+    import hashlib
+    top = test_home() or os.path.join(_env_dir("XDG_STATE_HOME", os.path.join(os.path.expanduser("~"), ".local",
+                                                                              "state")), names.NAME)
+    folder_path = folder(top, "status")
+    return os.path.join(folder_path, hashlib.sha256(root.encode("utf-8")).hexdigest()[:32] + ".json")
+
+
 def repo_folder(repo):
     name = repo.replace("/", "__")
     if not name or name.startswith(".") or "/" in name or "\\" in name:

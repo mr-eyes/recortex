@@ -40,6 +40,10 @@ PROTOCOL = ("recortex: follow the session protocol of the recortex skill before 
 # data frame, in the session-start and subagent payloads only; it says nothing about what this machine has.
 ALIAS = ("%s was named %s before version 0.5.0; where a project file names the %s skill, use the %s skill."
          % (names.NAME, names.OLD_NAME, names.OLD_NAME, names.NAME))
+# One fixed sentence, in the head of the session-start payload only and outside the data frame: it asks the session to
+# say when an answer draws on the record. About 40 tokens once per session start; the marker costs about 4 per answer.
+SAY = ('When an answer uses what this record holds (this brief, an issue or a comment of it), start that part with '
+       '"From the record:". Do not write it when the record was not used.')
 
 
 def defuse(text):
@@ -204,7 +208,7 @@ def session_payload(record, fresh):
     field = field_sheet.session_line(record.field)  # fixed wording; FIELD_ON holds only the checked day
     board = record.board_note()  # fixed wording, outside the data frame; empty for a project without a board
     head = ["recortex record brief for %s (%s)." % (record.repo, record.freshness(fresh)),
-            "Rules: " + RULES % record.repo, ALIAS] + ([field] if field else []) + ([board] if board else []) + \
+            "Rules: " + RULES % record.repo, ALIAS, SAY] + ([field] if field else []) + ([board] if board else []) + \
         ["", BEGIN, DATA_NOTE, ""]
     resume = index.get_meta(record.db, "resume") or ""
     note = index.get_meta(record.db, "resume_note") or "not read"

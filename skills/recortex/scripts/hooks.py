@@ -64,6 +64,22 @@ import board_api  # noqa: E402
 import board_rules  # noqa: E402
 
 EVENTS = ("session-start", "subagent-start", "prompt-submit", "pre-compact")
+# Why recortex is not working for a project folder, as the fixed words of the line at session start. The status line
+# (statusline.py) has its own short words for the same codes; a test holds the two sets of codes equal.
+STATUS_REASONS = {
+    "not-trusted": "this repository is not in your trusted list",
+    "no-hub": "the project file names no hub or cannot be read",
+    "storage": "the local storage was refused",
+    "no-index": "the record has not been read yet",
+    "error": "an unexpected error",
+}
+NOTICE_REPO = r"[A-Za-z0-9][A-Za-z0-9_-]{0,38}/[A-Za-z0-9._-]{1,100}"
+NOTICE_READ = r"read (?:just now|[0-9]{1,6} (?:minutes?|hours|days) ago|at an unknown time)(?:; GitHub could not be read now)?"
+NOTICE_FORM = re.compile(
+    r"recortex: (?:on\. (?:Record %s, %s\.|The record was %s\.|The record(?: of %s)? is being read for the first time; "
+    r"the brief follows with your next message\.)|off in this session: (?:%s)\. Run hooks\.py --doctor\.)"
+    % (NOTICE_REPO, NOTICE_READ, NOTICE_READ, NOTICE_REPO, "|".join(re.escape(words) for words in STATUS_REASONS.values())))
+START_SOURCES = ("startup", "resume", "clear")   # a start after a compaction or a fork repeats inside one sitting
 HOOK_NAMES = {"session-start": "SessionStart", "subagent-start": "SubagentStart",
               "prompt-submit": "UserPromptSubmit", "pre-compact": "PreCompact"}
 
@@ -128,6 +144,87 @@ def alarm(seconds):
         signal.signal(signal.SIGALRM, previous)
 
 
+LAST = {}   # what the last run learned, for the status file and the line at session start: state, reason, fresh, synced_at
+
+
+def notice_off():
+    """True when the user switched the line at session start off: "notice": false in the settings file that holds
+    "discovery", or RECORTEX_NOTICE set to 0, off, no or false."""
+    if names.env("NOTICE", "").strip().lower() in ("0", "off", "no", "false"):
+        return True
+    try:
+        with open(recortex.settings_file(), encoding="utf-8") as handle:
+            return json.load(handle).get("notice") is False
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def when(synced, fresh):
+    """The words after "read": just now for a sync made at this start, else the age of the last one, only from a stamp
+    of the UTC form."""
+    if fresh is True:
+        return "just now"
+    age = index.age_text(synced) if isinstance(synced, str) and index.ISO_UTC.fullmatch(synced) else ""
+    return age[:-4] + " ago" if age.endswith(" old") else "at an unknown time"
+
+
+def notice(status):
+    """The one fixed line shown at session start: words of this module, a repository name that passes valid_repo and
+    comes from a trusted project file, and an age worked out from a stamp of the UTC form. Nothing else."""
+    repo = status.get("repo") if recortex.valid_repo(status.get("repo")) else ""
+    if status.get("state") == "off":
+        words = STATUS_REASONS.get(status.get("reason"), STATUS_REASONS["error"])
+        return "recortex: off in this session: %s. Run hooks.py --doctor." % words
+    if status.get("state") == "building":
+        named = "recortex: on. The record of %s is being read for the first time; the brief follows with your next "                 "message." % repo
+        bare = "recortex: on. The record is being read for the first time; the brief follows with your next message."
+    else:
+        read = "read %s%s" % (when(status.get("synced_at"), status.get("fresh")),
+                              "; GitHub could not be read now" if status.get("fresh") is False else "")
+        named, bare = "recortex: on. Record %s, %s." % (repo, read), "recortex: on. The record was %s." % read
+    return named if repo and len(named) <= 200 else bare
+
+
+def refresh_statusline():
+    """Keep the copy of statusline.py that setup.py made current when the plugin's file differs. A hook never creates a
+    copy, and never touches settings.json."""
+    try:
+        copy = os.path.join(recortex.config_home(), names.NAME, "statusline.py")
+        if os.path.islink(copy) or not os.path.isfile(copy):
+            return
+        text = recortex.read_text(os.path.join(os.path.dirname(os.path.abspath(__file__)), "statusline.py"))
+        if recortex.read_text(copy) != text:
+            storage.write_file(copy, text)
+    except (OSError, ValueError, storage.StorageError):
+        pass
+
+
+def write_status(state, reason="", repo="", synced=""):
+    """The state of the record for this project folder, for the status line: {"v", "state", "reason", "repo",
+    "synced_at"} and nothing else, written through storage.write_file. A hook never fails over it."""
+    try:
+        path = storage.status_path(recortex.project_root())
+        storage.write_file(path, json.dumps({"v": 1, "state": state, "reason": reason, "repo": repo,
+                                             "synced_at": synced}))
+    except (OSError, ValueError, storage.StorageError):
+        pass
+
+
+def why_not_configured():
+    """None when the folder has no project file; else why recortex is not working here: no-hub for a file that cannot
+    be read or names no hub, not-trusted for a repository that is not in the trusted list."""
+    try:
+        if not recortex.find_config():
+            return None
+        config = recortex.load_config()
+    except Exception:  # noqa: BLE001
+        return "no-hub"
+    repo, hub = config.get("repo"), config.get("hub")
+    if not recortex.valid_repo(repo) or isinstance(hub, bool) or not isinstance(hub, int) or hub < 1:
+        return "no-hub"
+    return "not-trusted"
+
+
 def configured():
     """(config, repo, hub) when the project is set up and trusted, else None."""
     config = recortex.load_config()
@@ -149,19 +246,39 @@ class Unavailable(Exception):
 
 def run(event, data, budget):
     """The text a hook prints. Silent when the project is not set up or not trusted; one line when the brief fails."""
-    found = configured()
+    LAST.clear()
+    try:
+        found = configured()
+    except Exception:  # noqa: BLE001 - a project file that cannot be read
+        found = None
     if found is None:
+        code = why_not_configured() if event == "session-start" else None
+        if code:
+            LAST.update(state="off", reason=code)
+            if event == "session-start":
+                write_status("off", code)
         return discovery() if event == "session-start" else ""
     config, repo, hub = found
+    LAST.update(state="on", reason="", repo=repo)
+    code = "error"
     try:
-        return produce(event, data, budget, config, repo, hub)
+        text = produce(event, data, budget, config, repo, hub)
+        if event in ("session-start", "prompt-submit"):
+            building = LAST.get("building") is True
+            write_status("building" if building else "on", "", repo, LAST.get("synced_at") or "")
+            LAST["state"] = "building" if building else "on"
+        return text
     except Unavailable as error:
-        reason = str(error)
+        reason, code = str(error), "no-index"
     except storage.StorageError as error:
+        code = "storage"
         reason = "the local storage was refused (%s)" % STORAGE_REASONS.get(getattr(error, "kind", ""),
                                                                             "a storage folder or file is not safe to use")
     except Exception as error:  # noqa: BLE001 - a hook never fails a session
         reason = "an unexpected %s" % type(error).__name__
+    LAST.update(state="off", reason=code)
+    if event in ("session-start", "prompt-submit"):
+        write_status("off", code, repo)
     line = NOT_SHOWN % reason
     if event == "session-start":
         return line
@@ -329,6 +446,7 @@ def produce(event, data, budget, config, repo, hub):
             building = index.running(repo)  # a file being written by a running build is not a refused index
             start_background(repo, config)
             remember(repo, session, None, brief=False)
+            LAST["building"] = True
             return REBUILDING if refused and not building else BUILDING
         db.close()
         if index.running(repo):
@@ -366,6 +484,7 @@ def produce(event, data, budget, config, repo, hub):
             building = index.running(repo)
             start_background(repo, config)
             remember(repo, session, None, brief=False)
+            LAST["building"] = True
             return REBUILDING if refused and not building else BUILDING
     elif db is None:
         if event == "subagent-start" and index.running(repo):
@@ -373,6 +492,7 @@ def produce(event, data, budget, config, repo, hub):
         if event == "prompt-submit":
             if not index.running(repo):
                 start_background(repo, config)  # a build that was stopped or killed goes on; starting it is quick
+            LAST["building"] = True
             return ""
         raise Unavailable("there is no local index yet; the next session start builds it")
     try:
@@ -380,6 +500,7 @@ def produce(event, data, budget, config, repo, hub):
             index.set_meta(db, "last_sync_error", "%s at %s" % (failure, index.now_utc()))
             db.commit()
         record = brief.Record(db, config, repo)
+        LAST.update(synced_at=record.synced or "", fresh=fresh)
         if event == "session-start":
             text = brief.session_payload(record, fresh)
             remember(repo, session, digest(record.key()), brief=True)
@@ -739,11 +860,19 @@ def main(argv=None):
         budget = int(names.env("HOOK_TIMEOUT", "10"))
     except ValueError:
         budget = 10
+    data = read_input()
+    if args.event == "session-start":
+        refresh_statusline()
     try:
-        text = run(args.event, read_input(), budget)
+        text = run(args.event, data, budget)
+        line = notice(LAST) if args.event == "session-start" and LAST.get("state") else ""
     except Exception:  # noqa: BLE001 - hooks are silent on any failure
         return 0
-    if text:
+    if line and data.get("source") in START_SOURCES and not notice_off():
+        # one JSON object: the line for the user, and exactly the text a plain start prints for the model
+        print(json.dumps({"systemMessage": line, "hookSpecificOutput": {"hookEventName": "SessionStart",
+                                                                         "additionalContext": text}}))
+    elif text:
         print(text)
     return 0
 

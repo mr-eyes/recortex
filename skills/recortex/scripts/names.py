@@ -26,7 +26,7 @@ OLD_WORKFLOW = "ghim-triage.yml"
 # LINK_PAUSE is the seconds create_issues.py waits after each sub-issue link it writes (default 1, at most 10);
 # the tests set it to 0.
 VARIABLES = ("GH", "CONFIG", "TRUSTED_FILE", "TRUSTED_REPOS", "HOOK_TIMEOUT", "DISCOVERY", "SYNC_PAGE",
-             "DATA_HOME", "TESTING", "TEST_KEEP", "LINK_PAUSE")
+             "DATA_HOME", "TESTING", "TEST_KEEP", "LINK_PAUSE", "NOTICE")
 
 
 def env(name, default=None):

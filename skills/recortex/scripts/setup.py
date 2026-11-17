@@ -39,6 +39,7 @@ Answers file (JSON):
    "triage_workflow": false, "claude_md": false,
    "prompt_hook": {"enabled": true, "every": 10},
    "trust": true,                          true: the user agreed to add the repository to their trusted list
+   "status_line": false,                   true: the user agreed to show recortex in the status line; see references/setup.md
    "observer": {"mode": "automatic", "model": "sonnet"},   optional: "automatic", "shadow" or "off" (the default),
                                            and the Claude model of its background calls; see references/observer.md
    "fields": {"names": [...], "sensitive": [...], "brief": {...}, "checks": [...], "words": "...",
@@ -408,6 +409,10 @@ def check_answers(answers):
     if observer["mode"] != "off" and not (isinstance(model, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", model)):
         raise AnswerError("observer.model must be a Claude alias or model ID, such as sonnet")
     out["observer"] = None if observer["mode"] == "off" else {"mode": observer["mode"], "model": model}
+    status_line = answers.get("status_line", False)
+    if not isinstance(status_line, bool):
+        raise AnswerError("status_line must be true or false")
+    out["status_line"] = status_line
     out["fields"], out["restricted"] = None, []
     if "fields" in answers:
         out["fields"], out["restricted"] = check_field_answers(answers["fields"])
@@ -1192,6 +1197,88 @@ OBSERVER_REASONS = {"runtime-unavailable": "claude was not found", "runtime-fail
                     "the holds of another repository apply here", "budget": "the day's call budget is used"}
 
 
+STATUS_SNIPPET = ("To show recortex in a status line you already have, read the JSON once in your own command "
+                  "(input=$(cat)) and add:\n  printf '%%s' \"$input\" | python3 %s\nIt prints one short line, and "
+                  "nothing in a folder without a project file.")
+
+
+def claude_settings_file():
+    """The user's Claude Code settings: $CLAUDE_CONFIG_DIR/settings.json (when absolute), else ~/.claude/settings.json."""
+    folder = os.environ.get("CLAUDE_CONFIG_DIR")
+    if not (folder and os.path.isabs(folder)):
+        folder = os.path.join(os.path.expanduser("~"), ".claude")
+    return os.path.join(folder, "settings.json")
+
+
+def status_line_step(answers, dry):
+    """With the user's yes: copy statusline.py to <config home>/recortex/statusline.py, so that the command survives
+    plugin updates, and add {"statusLine": {"type": "command", "command": "python3 <that path>"}} to the user's
+    settings.json when that file parses (or is not there) and has no statusLine. In every other case (a status line is
+    already set, the file does not parse or is a symlink, the answer is false) nothing is written to that file and the
+    snippet to combine with an existing status line is printed. Nothing else in the plugin writes settings.json."""
+    if not answers["status_line"]:
+        return
+    folder = os.path.join(recortex.config_home(), names.NAME)
+    target = os.path.join(folder, "statusline.py")
+    source = os.path.join(os.path.dirname(os.path.abspath(__file__)), "statusline.py")
+    command = "python3 %s" % target
+    if os.path.islink(folder) or os.path.islink(target) or (os.path.lexists(target) and not os.path.isfile(target)):
+        print("not written: %s is a symlink or not a file; %s" % (target, STATUS_SNIPPET % source))
+        return
+    text = recortex.read_text(source)
+    if dry:
+        print("would write: %s   # the status line segment, %d characters" % (target, len(text)))
+    else:
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(dir=folder, prefix=".part-")
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            os.chmod(temporary, 0o644)
+            os.replace(temporary, target)
+        except BaseException:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+            raise
+        print("wrote: %s   # the status line segment" % target)
+    settings = claude_settings_file()
+    if os.path.islink(settings):
+        print("not written: %s is a symlink. %s" % (settings, STATUS_SNIPPET % target))
+        return
+    current = {}
+    if os.path.lexists(settings):
+        try:
+            current = json.loads(recortex.read_text(settings))
+        except (OSError, ValueError):
+            current = None
+        if not isinstance(current, dict):
+            print("not written: %s does not hold a JSON object. %s" % (settings, STATUS_SNIPPET % target))
+            return
+    if "statusLine" in current:
+        print("kept: %s already has a status line. %s" % (settings, STATUS_SNIPPET % target))
+        return
+    current = dict(current, statusLine={"type": "command", "command": command})
+    body = json.dumps(current, indent=2) + "\n"
+    if dry:
+        print("would write: %s   # adds the statusLine entry %s; every other key stays" % (settings, command))
+        return
+    os.makedirs(os.path.dirname(settings), exist_ok=True)
+    mode = stat.S_IMODE(os.stat(settings).st_mode) if os.path.exists(settings) else new_file_mode()
+    descriptor, temporary = tempfile.mkstemp(dir=os.path.dirname(settings), prefix=".part-")
+    try:
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(body)
+        if os.path.islink(settings):
+            raise OSError("settings.json became a symlink; nothing was written")
+        os.replace(temporary, settings)
+    except BaseException:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+        raise
+    print("wrote: %s   # adds the statusLine entry %s" % (settings, command))
+
+
 def observer_reason(code):
     """The plain reason a step of the observer's setup did not pass, from its code."""
     return OBSERVER_REASONS.get(code, "the check failed" if code == "failed" else "the check failed: %s" % code)
@@ -1400,6 +1487,7 @@ def apply(answers, root, dry, drafts):
         board_step(answers["board"], root, python, dry)
     if answers["observer"]:
         observer_step(answers, root, python, dry)
+    status_line_step(answers, dry)
     present = [item["kind"] for item in detect(root)]
     if dry:
         print("would record as known: %s   # the hooks suggest only deliverables that appear later" %
