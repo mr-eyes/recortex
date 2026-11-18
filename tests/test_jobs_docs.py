@@ -63,7 +63,7 @@ class CommandTests(unittest.TestCase):
     def test_the_readme_stays_under_its_cap_and_has_the_new_words_once(self):
         text = read("README.md")
         self.assertLess(len(text.split()), 1000)
-        self.assertIn("It sees the session. It keeps the record. It briefs the next one.", text)
+        self.assertIn("Claude Code that knows what your project already learned, and acts on it.", text)
         self.assertEqual(1, text.count("record + cortex"))
         self.assertNotIn("**", re.sub(r"```.*?```", "", text, flags=re.S))
 

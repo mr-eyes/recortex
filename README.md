@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-<p align="center">It sees the session. It keeps the record. It briefs the next one.</p>
+<p align="center">Claude Code that knows what your project already learned, and acts on it.</p>
 
 recortex is record + cortex: a record of your project, and a brain that works from it. It is a Claude Code plugin that
 keeps findings, decisions, failures and deliverable text in GitHub issues.

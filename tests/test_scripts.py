@@ -12608,7 +12608,7 @@ class DocsTests(unittest.TestCase):
     def test_the_readme_is_short(self):
         text = self.text("README.md")
         self.assertLess(len(text.split()), 1000)
-        self.assertIn("It sees the session. It keeps the record. It briefs the next one.", text)
+        self.assertIn("Claude Code that knows what your project already learned, and acts on it.", text)
         self.assertEqual(1, text.count("record + cortex"))
         self.assertNotIn("**", re.sub(r"```.*?```", "", text, flags=re.S))  # no bold in the README's prose
         for name in ("how-it-works.md", "reference.md"):
