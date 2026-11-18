@@ -12129,7 +12129,9 @@ class FieldTests(RecordSandbox):
         start, agent, prompt, compact = self.payloads(env)
         lines = start.split("\n")
         self.assertEqual(SAY_LINE, lines[lines.index(ALIAS_LINE) + 1])
-        after = lines[lines.index(ALIAS_LINE) + 2]
+        rest = [l for l in lines[lines.index(ALIAS_LINE) + 2:]
+                if not re.match(r"^(Tasks: |[0-9]+ tasks? had no memory|[0-9]+ topic bod(y is|ies are) older)", l)]   # 1.5.0's lines
+        after = rest[0]
         self.assertEqual(line or "", after, label)
         self.assertEqual(bool(frame), "===== BEGIN FIELD GUIDANCE (recortex) =====" in agent, label)
         self.assertEqual(bool(frame), "===== END FIELD GUIDANCE =====" in agent, label)
