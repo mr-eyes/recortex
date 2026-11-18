@@ -2948,7 +2948,7 @@ class Page:
             labels["paper"] = mind_model.PHRASES["sheet.nav"] % (text_of(self.sheet.get("noun")) or "the paper")
         side = E("nav", {"class": "side fold", "aria-label": "Ways into the mind"}, logo,
                  E("p", {"class": "mindname"}, text_of(self.model.get("name"))),
-                 E("p", {"class": "mindsub"}, "the memory of one project"),
+                 E("p", {"class": "mindsub"}, "the cortex of one project"),
                  E("button", {"type": "button", "class": "foldbtn waysbtn", "data-fold": "ways",
                               "aria-expanded": "true"}, "Ways in"),
                  E("ul", {"class": "foldbody"}, *[E("li", None, E("a", {"href": anchor(key), "data-nav": key}, labels[key]),

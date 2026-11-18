@@ -1,6 +1,6 @@
 {
   "name": "recortex",
-  "description": "The recortex plugin: project memory that survives every session.",
+  "description": "The recortex plugin. An observer that follows each Claude Code session, a record of the project in GitHub issues, and a cortex that briefs every new session from it.",
   "owner": {
     "name": "recortex",
     "url": "https://github.com/recortex"
@@ -9,7 +9,7 @@
     {
       "name": "recortex",
       "source": "./",
-      "description": "Keep a project's full record in GitHub issues, organized so a new or compacted session can resume from GitHub alone."
+      "description": "An observer that follows each Claude Code session, a record of the project in GitHub issues, and a cortex that briefs every new session from it."
     }
   ],
   "renames": {

@@ -5,27 +5,26 @@
   </picture>
 </p>
 
-<p align="center">Project memory that survives every session.</p>
+<p align="center">It sees the session. It keeps the record. It briefs the next one.</p>
 
-recortex is a Claude Code plugin. It keeps findings, decisions, failures and deliverable text in GitHub issues.
-New and compacted sessions start from that record.
+recortex is record + cortex: a record of your project, and a brain that works from it. It is a Claude Code plugin that
+keeps findings, decisions, failures and deliverable text in GitHub issues.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works-dark.svg">
-  <img src="assets/how-it-works-light.svg" alt="A session writes memories to GitHub issues. The record gives back a brief at every session start, the mind page, the finished text and a board; an optional observer, off unless enabled, can also queue and post reviewed memories.">
+  <img src="assets/how-it-works-light.svg" alt="A session writes to GitHub issues. The record gives back a brief at every session start, the mind page, the finished text and a board; an optional observer can also post reviewed memories.">
 </picture>
 
 ## What you get
 
 - A session that starts from the last recorded state. A short brief of the record opens each session and subagent.
 - A record you can read on GitHub. One pinned hub, one issue per topic, and a dated memory for each result, decision, failure, idea and question.
-- A start-up line shows recortex is on.
 - The mind page. One private local page that tells the memory in sentences: where things stand, how each thread got there, what went wrong, what is settled, what is open.
-- The finished work, compiled. Topic bodies hold the deliverable's current text, so the paper or the release notes are assembled from the issues.
+- The finished work, compiled. Topic bodies hold the deliverable's current text, so the paper or release notes are assembled from the issues.
 - The paper's plan, its text and its versions. The session writes the text in the mode you choose, never changes a paragraph you wrote, and keeps every version; `mind.py --paper` prints it.
-- Helpers that know your field. A short field sheet tells every subagent what counts as proof in your work and what must never be written down.
+- Helpers that know your field. A short field sheet tells every subagent what counts as proof and what must stay out of the record.
 - A board that keeps itself current. Sub-issues and a private GitHub Projects board follow the record; you do not drag a card to keep it honest.
-- Optional observation. Context follows recorded decisions and failures; independent checks select events, and explicit holds stop supported actions. [Controls and limits](skills/recortex/references/observer.md).
+- Optional observation. Context follows recorded decisions and failures; independent checks select what to record, and explicit holds stop supported actions. [Controls and limits](skills/recortex/references/observer.md).
 
 ## Quick start
 
@@ -71,7 +70,7 @@ An invented project sorts a box of scanned letters by the date written on each p
 >
 > On March 10 we asked whether asking still works when a box has a hundred undated pages and not twelve. Still open.
 
-Each sentence is one comment on a GitHub issue. The words between them are links the session recorded: this failure tested that idea, this decision came from that failure. Three weeks later a new session opens, and its first lines are, abridged:
+Each sentence is one comment on a GitHub issue. The words between them are links the session recorded: this failure tested that idea, this decision came from that failure. Three weeks later a new session opens with, abridged:
 
 ```text
 recortex record brief for octo-org/sample-project (from the local index synced 2026-03-31T16:02:11Z (UTC), 2 minutes old).
@@ -90,7 +89,7 @@ Before it writes about the undated pages, it reads that thread and does not try 
   <img src="assets/board-light.svg" alt="A board with the columns Todo, In Progress, Waiting for a yes and Done. A task's card names its thread, and the memory that put it in its column when there is one.">
 </picture>
 
-Optional, private, and off unless chosen at setup. The record determines each card's column; each pause updates the board. A manual move prompts the session to ask what changed before updating anything. Setup and the required `project` scope are in [How the record works](docs/how-it-works.md#sub-issues-and-the-board).
+Optional, private, off unless chosen at setup. The record determines each card's column; each pause updates the board. A manual move prompts the session to ask what changed before updating anything. Setup and the required `project` scope are in [How the record works](docs/how-it-works.md#sub-issues-and-the-board).
 
 ## Read more
 

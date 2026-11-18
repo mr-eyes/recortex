@@ -28,7 +28,7 @@ import record_format  # noqa: E402
 import recortex  # noqa: E402
 
 PAGE = os.path.join(ROOT, "skills", "recortex", "page")
-EXAMPLE_PAGE_SHA = "9af373d3f540b3d261230e093a2536cd5890e8420bb74e91d4e0f9bdf03a605e"   # the example's page at 71bf8cf plus the 1.5.0 to-do and usage views
+EXAMPLE_PAGE_SHA = "95fec449cbc8f7742dc60817ce28ab570ba3948b5dc0dcfe205e5ed9548a0d85"   # the example's page at 71bf8cf plus the 1.5.0 to-do and usage views and the "cortex of one project" subtitle
 
 FORMS = {"autonomous": "Written without asking, under the autonomous mode.",
          "chat": "By the author in the chat, 2026-11-21 09:38 EST:\n\n> Approve",
