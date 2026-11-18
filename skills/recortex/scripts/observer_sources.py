@@ -615,9 +615,9 @@ DIALOG_SHAPES = {
 }
 # The plugin's own questions: the held memory, the task, the draft and the setup questions' templates, and any question
 # that holds the word recortex. The observer must not record the user's answers about the observer.
-OWN_DIALOG = re.compile(r"(?i:recortex)|\A\s*Memory [0-9a-f]{8} \([a-z]+\) on #[0-9]+: |"
-                        r"\A\s*Task [0-9a-f]{8}: (?:open a task |every step of #[0-9]+ is done)|"
-                        r"\A\s*Draft [0-9a-f]{8}: update the ")
+OWN_DIALOG = re.compile(r"(?i:recortex)|\A[ \t\r\n]*Memory [0-9a-f]{8} \([a-z]+\) on #[0-9]+: |"
+                        r"\A[ \t\r\n]*Task [0-9a-f]{8}: (?:open a task |every step of #[0-9]+ is done)|"
+                        r"\A[ \t\r\n]*Draft [0-9a-f]{8}: update the ")
 CALL_ID = re.compile(r"([A-Za-z0-9_-]{1,128})(?:\.([0-3]))?")
 QUESTIONS_MAX, OPTIONS_MAX, QUESTION_CHARS, LABEL_CHARS = 4, 4, 2000, 300
 FIND_BYTES = 2 * 1024 * 1024  # how far back in the transcript the call of a result is looked for when it is not known
