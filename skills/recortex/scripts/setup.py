@@ -1799,6 +1799,18 @@ def stored_observer(repo, root):
     return observer_runtime.complete(entry["settings"])
 
 
+def observer_question_command(args):
+    """setup.py observer-question [--strong]: the plugin's own question about the observer's level (or, with --strong, about
+    paper proposals) word for word, then its options. The session asks exactly this, so that the user's answer is the grant a
+    session's `setup.py observer --yes` goes on (observer_grants). Read-only; needs no project."""
+    import observer_grants
+    text, labels = observer_grants.canonical("strong" if args.strong else "level")
+    print(text)
+    for label in labels:
+        print("- " + label)
+    return 0
+
+
 def observer_command(args):
     """setup.py observer --level L [--mode M] [--model M] [--sort-model M] --dry-run|--yes: the observer's level question.
     setup.py observer --strong M --dry-run|--yes: the paper-proposals question. Both are the wizard's observer step, run
@@ -1842,6 +1854,9 @@ def main(argv=None):
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true", help="print every change; write nothing")
     mode.add_argument("--yes", action="store_true", help="the user agreed")
+    p = sub.add_parser("observer-question", help="print the question about the observer's level, or with --strong about the "
+                       "stronger model, word for word with its options: the session asks exactly this")
+    p.add_argument("--strong", action="store_true", help="the paper-proposals question")
     p = sub.add_parser("observer", help="turn on the observer at a level, or add the stronger model for paper proposals "
                        "(the wizard's step, for the setup questions)")
     p.add_argument("--level", choices=observer_runtime.LEVELS, help="what the observer may do: notes, assistant or everything")
@@ -1891,7 +1906,8 @@ def main(argv=None):
     if args.command == "writing":
         return writing_command(args)
     for name, command in (("questions", questions_command), ("answer", answer_command),
-                          ("status-line", status_line_command), ("observer", observer_command)):
+                          ("status-line", status_line_command), ("observer", observer_command),
+                          ("observer-question", observer_question_command)):
         if args.command == name:
             return command(args)
     root = os.path.abspath(args.root or recortex.project_root())

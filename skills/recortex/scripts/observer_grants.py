@@ -192,6 +192,16 @@ def question_line(kind):
     return text.split("?", 1)[0] + "?"
 
 
+def canonical(kind):
+    """(the whole text, the option labels in order) of the plugin's own question about `kind`, as setup.py questions prints
+    them: a recorded answer counts only to a question that is this one and no other."""
+    import types
+    import setup_questions
+    question = _question(LEVEL_QUESTION if kind == "level" else STRONG_QUESTION)
+    text = setup_questions.question_text(types.SimpleNamespace(question=question, detail=None), "")
+    return " ".join(text.split()), [option.label for option in question.options]
+
+
 def label_for(kind, value):
     """The label of the option that chooses `value`: the level's own option, or "Yes (Recommended)" for the stronger model
     (opus only: another model is named in the "Other" box, which no recorded label can show). None when no option does."""
@@ -263,6 +273,7 @@ def record_from_hook(data):
         label = label_for(kind, value) if isinstance(value, str) else None
         if label is None:
             continue
-        answer = observer_sources.answered(data, root, None, question_line(kind), label=label)
+        text, labels = canonical(kind)
+        answer = observer_sources.answered(data, root, None, question_line(kind), label=label, text_is=text, labels_are=labels)
         if answer:
             put(folder, kind, value, answer)

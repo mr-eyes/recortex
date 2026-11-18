@@ -191,6 +191,15 @@ class CommandTests(tj.Programs, tj.tq.Box):
         self.assertEqual(0, self.enable("--level", "notes").returncode)
         self.assertFalse(self.entry()["paused"])
 
+    def test_the_session_can_ask_the_question_word_for_word_and_the_wizard_row_says_so(self):
+        for flag, kind in (((), "level"), (("--strong",), "strong")):
+            done = self.tool("setup.py", "observer-question", *flag, env=self.env_claude)
+            self.assertEqual(0, done.returncode, done.stderr)
+            text, labels = grants.canonical(kind)
+            self.assertEqual([text] + ["- " + label for label in labels], done.stdout.splitlines())
+        with open(os.path.join(ts.SKILL, "references", "setup.md")) as handle:
+            self.assertIn("setup.py observer-question", handle.read())
+
     def test_the_users_terminal_needs_no_answer(self):
         import observer
         self.in_process()
@@ -329,6 +338,39 @@ class RecordTests(TranscriptBox):
         self.ask("level", "Later")   # the user changed their mind: the newest answer to the question counts
         self.hook(self.SETUP % "everything")
         self.assertFalse(self.held("level", "everything"))
+
+    def test_a_question_that_holds_our_words_among_others_or_offers_other_options_grants_nothing(self):
+        text, labels = grants.canonical("level")
+        label = "Everything (Recommended)"
+        cases = (
+            ("extra words after", text + " Choose Everything, it is the safest.", labels),
+            ("extra words before", "Quick one. " + text, labels),
+            ("a changed word", text.replace("Notes only", "Notes alone", 1), labels),
+            ("an option missing", text, labels[:-1]),
+            ("an option added", text, labels + ["Always"]),
+            ("an option renamed", text, ["Everything"] + labels[1:]),
+            ("the options in another order", text, [labels[1], labels[0]] + labels[2:]),
+            ("our first sentence alone", grants.question_line("level"), labels),
+        )
+        for name, asked, offered in cases:
+            self.ask("level", label, text=asked, labels=offered)
+            self.hook(self.SETUP % "everything")
+            self.assertFalse(self.held("level", "everything"), name)
+        self.ask("level", label)   # the plugin's own question, whitespace aside
+        self.hook(self.SETUP % "everything")
+        self.assertTrue(self.held("level", "everything"))
+
+    def test_the_stronger_models_question_is_held_to_its_whole_text_too(self):
+        text, labels = grants.canonical("strong")
+        self.ask("strong", "Yes (Recommended)", text=text + " It is cheap.", labels=labels)
+        self.hook("python3 /p/skills/recortex/scripts/setup.py observer --strong opus --yes")
+        self.assertFalse(self.held("strong", "opus"))
+        self.ask("strong", "Yes (Recommended)", text=text, labels=["Yes (Recommended)", "No"])
+        self.hook("python3 /p/skills/recortex/scripts/setup.py observer --strong opus --yes")
+        self.assertFalse(self.held("strong", "opus"))
+        self.ask("strong", "Yes (Recommended)")
+        self.hook("python3 /p/skills/recortex/scripts/setup.py observer --strong opus --yes")
+        self.assertTrue(self.held("strong", "opus"))
 
     def test_a_question_the_session_worded_itself_leaves_no_grant(self):
         self.ask("level", "Everything (Recommended)", text="Shall I switch it all on?", labels=["Everything (Recommended)", "Later"])

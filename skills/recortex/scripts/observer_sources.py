@@ -496,7 +496,8 @@ def _main_record(record, role):
             and isinstance(message.get("content"), list))
 
 
-def answered(data, project_root, short, line, label="Post", max_bytes=ANSWER_BYTES, seconds=TAIL_SECONDS):
+def answered(data, project_root, short, line, label="Post", max_bytes=ANSWER_BYTES, seconds=TAIL_SECONDS, text_is=None,
+             labels_are=None):
     """The id of the user's answer `label` to the newest question about `short` in the main transcript, or None.
 
     The question is an AskUserQuestion call in a main-session assistant record, one of whose questions names `short`
@@ -507,7 +508,9 @@ def answered(data, project_root, short, line, label="Post", max_bytes=ANSWER_BYT
     later answer of another label to a question about `short` undoes it. A tool result, a page or a subagent cannot
     make such a record; a session that writes the transcript itself can (the documented limit, as for holds). Read as
     capture reads: this project's main transcript only, through checked descriptors, within `max_bytes` and
-    `seconds`."""
+    `seconds`. With `text_is` (and `labels_are`) the question must be the plugin's own whole question: its text, once
+    whitespace is normalized, equal to `text_is`, and its options' labels equal to `labels_are`, in that order: a question
+    that holds the same words among others of the session's, or offers other options, is not it."""
     line = " ".join(line.split()) if isinstance(line, str) else ""
     if not line:
         return None
@@ -552,8 +555,10 @@ def answered(data, project_root, short, line, label="Post", max_bytes=ANSWER_BYT
                         text = question.get("question")
                         options = question.get("options") if isinstance(question.get("options"), list) else []
                         labels = [o.get("label") for o in options if isinstance(o, dict)]
+                        whole = " ".join(text.split()) if isinstance(text, str) else ""
                         if (isinstance(text, str) and (short is None or set(SHORT_ID.findall(text)) == {short})
-                                and line in " ".join(text.split())):
+                                and (line in whole if text_is is None else whole == " ".join(text_is.split()))
+                                and (labels_are is None or labels == list(labels_are))):
                             asked[block["id"]] = (text, label in labels, len(questions))
             elif asked and b'"tool_result"' in row and any(key.encode() in row for key in asked):
                 try:
