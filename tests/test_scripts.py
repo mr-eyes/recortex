@@ -2177,6 +2177,41 @@ class HookTests(RecordSandbox):
         self.assertEqual(recortex.read_text(os.path.join(SCRIPTS, "statusline.py")), recortex.read_text(copy))
         self.assertFalse(os.path.exists(os.path.join(self.dir, "xdg-config", "claude")))  # and never settings.json
 
+    def test_an_observer_approved_before_1_5_0_is_said_to_be_paused_in_the_status_file_and_the_doctor(self):
+        # The approvals file 1.4.0 wrote has no level. The observer does nothing until the user chooses one, and the
+        # status line and --doctor say so, in fixed words.
+        self.tool("index.py", "sync")
+        sys.path.insert(0, SCRIPTS)
+        self.in_process()
+        import observer_runtime as runtime_module
+        import storage as storage_module
+        root = runtime_module.folder_key(os.path.abspath(self.project))
+        old = {"enabled": True, "mode": "automatic", "publisher_id": runtime_module.publisher_id(create=True),
+               "model": "sonnet", "max_invocations": 60, "window_hours": 24, "max_input_chars": 48000,
+               "timeout_seconds": 90, "max_candidates": 4, "max_pending_bytes": 134217728,
+               "max_pending_observations": 10000, "retention_days": 7, "sync_interval_seconds": 300, "max_posts": 25}
+        entry = {"repo": REPO, "settings": old, "publisher_id": old["publisher_id"], "root": root,
+                 "approved_at": 1794900000.0, "given": "terminal"}
+        private = runtime_module.approvals_folder(create=True)
+        storage_module.write_file(os.path.join(private, runtime_module.APPROVALS),
+                                  json.dumps({"form": 1, "folders": {root: entry}}))
+        self.assertEqual(0, self.hook("session-start", source="startup").returncode)
+        path = storage_module.status_path(os.path.abspath(self.project))
+        self.assertEqual("paused", json.loads(recortex.read_text(path))["observer"])
+        import statusline
+        line = statusline.line(json.dumps({"workspace": {"project_dir": os.path.abspath(self.project)}}),
+                               {"XDG_STATE_HOME": os.environ["XDG_STATE_HOME"], "RECORTEX_TESTING": "1",
+                                "RECORTEX_DATA_HOME": self.data_home, "HOME": self.dir},
+                               statusline.epoch("2026-03-04T12:00:00Z"))
+        self.assertTrue(line.endswith(" \u00b7 observer paused until you choose a level"), line)
+        doctor = self.tool("hooks.py", "--doctor").stdout
+        self.assertIn(runtime_module.PAUSED + "\n", doctor)
+        # the user's answer ends it: an approval with a level, written as form 2
+        runtime_module.approve(REPO, {"observer": dict(old, level="notes")}, root)
+        self.assertEqual(0, self.hook("prompt-submit").returncode)
+        self.assertEqual("", json.loads(recortex.read_text(path))["observer"])
+        self.assertNotIn(runtime_module.PAUSED, self.tool("hooks.py", "--doctor").stdout)
+
     def test_the_hooks_write_one_small_state_file_for_the_status_line(self):
         self.tool("index.py", "sync")
         self.assertEqual(0, self.hook("session-start", source="startup").returncode)
@@ -2188,7 +2223,8 @@ class HookTests(RecordSandbox):
         found = json.loads(recortex.read_text(path))
         self.assertEqual({"v": 1, "state": "on", "reason": "", "repo": REPO}, {k: found[k] for k in ("v", "state", "reason", "repo")})
         self.assertRegex(found["synced_at"], r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
-        self.assertEqual(["reason", "repo", "state", "synced_at", "v"], sorted(found))
+        self.assertEqual(["observer", "reason", "repo", "state", "synced_at", "v"], sorted(found))
+        self.assertEqual("", found["observer"])   # no observer approval here: nothing is paused
         self.assertEqual((0o600, 0o700), (os.stat(path).st_mode & 0o777, os.stat(os.path.dirname(path)).st_mode & 0o777))
         with open(self.trusted, "w") as handle:
             handle.write("octo-org/other octocat\n")
@@ -11177,6 +11213,26 @@ class StatusLineTests(RecordSandbox):
         self.put()
         self.assertEqual(self.LINES["on"], self.sl.line("not json", dict(self.environ, CLAUDE_PROJECT_DIR=self.root),
                                                         self.sl.epoch("2026-03-04T12:00:00Z")))  # then the variable
+
+    def test_a_paused_observer_is_said_after_the_age_and_an_older_file_without_the_flag_still_reads(self):
+        import observer_runtime
+        self.put(observer="paused")
+        self.assertEqual(self.LINES["on"] + " \u00b7 observer paused until you choose a level", self.line())
+        self.put(state="building", synced_at="", observer="paused")
+        self.assertEqual(self.LINES["building"] + " \u00b7 observer paused until you choose a level", self.line())
+        self.put(state="off", reason="not-trusted", repo="", observer="paused")
+        self.assertEqual("recortex off \u00b7 not trusted", self.line())   # off says why it is off, and no more
+        self.put(observer="")
+        self.assertEqual(self.LINES["on"], self.line())
+        self.put()   # the file of an earlier hook has no such key
+        self.assertEqual(self.LINES["on"], self.line())
+        for hostile in ("PAUSED", "paused\nHOSTILE", 1, None, ["paused"]):
+            self.put(observer=hostile)
+            self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.line(), repr(hostile))
+        self.put(extra="x")
+        self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.line())   # no other key is read
+        # one wording: the doctor's sentence and the line's words are the same
+        self.assertEqual(observer_runtime.PAUSED.replace("recortex observer: ", "observer ").rstrip("."), self.sl.PAUSED)
 
     def test_a_folder_without_a_project_file_and_a_missing_state_file_give_their_lines(self):
         self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.line())  # a project file, no state file, no sign of a start

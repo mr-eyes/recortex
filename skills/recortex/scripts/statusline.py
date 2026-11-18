@@ -41,6 +41,8 @@ FALLBACK = "recortex off · run hooks.py --doctor"
 STARTING = "recortex · starting"   # no state file yet, and no request answered yet in this session
 MISSING = {}   # what read_state returns for no file at all, as against None for a file that fails its checks
 KEYS = ("v", "state", "reason", "repo", "synced_at")
+OPTIONAL = ("observer",)   # written since 1.5.0: "paused" while an observer approved before 1.5.0 waits for a level, else ""
+PAUSED = "observer paused until you choose a level"   # observer_runtime.PAUSED without its prefix, held equal by a test
 MAX_BYTES = 2048
 
 
@@ -146,7 +148,10 @@ def read_state(path):
         data = json.loads(raw.decode("utf-8")) if len(raw) <= MAX_BYTES else None
     except (ValueError, UnicodeDecodeError):
         return None
-    if not isinstance(data, dict) or set(data) != set(KEYS) or data["v"] != 1 or type(data["v"]) is not int:
+    if (not isinstance(data, dict) or not set(KEYS) <= set(data) <= set(KEYS + OPTIONAL) or data["v"] != 1
+            or type(data["v"]) is not int):
+        return None
+    if data.get("observer", "") not in ("", "paused"):
         return None
     if data["state"] not in ("on", "building", "off"):
         return None
@@ -189,9 +194,10 @@ def line(stdin_text="", environ=None, now=None):
         return FALLBACK
     if data["state"] == "off":
         return "recortex off · %s" % SHORT[data["reason"]]
+    note = " · " + PAUSED if data.get("observer") == "paused" else ""
     if data["state"] == "building":
-        return "recortex on · reading"
-    return "recortex on · read %s" % ago(data["synced_at"], time.time() if now is None else now)
+        return "recortex on · reading" + note
+    return "recortex on · read %s" % ago(data["synced_at"], time.time() if now is None else now) + note
 
 
 def main():
