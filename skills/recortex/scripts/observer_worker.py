@@ -1103,9 +1103,34 @@ def summary_material(repo, config):
             plan = {k: v for k, v in json.loads(index.get_meta(db, "plan_counts") or "{}").items() if type(v) is int}
         except (ValueError, AttributeError):
             plan = {}
-        return {"block": block[:4000], "posted": posted, "memories": memories, "plan": plan}
+        return {"block": block[:4000], "posted": posted, "memories": memories, "plan": plan,
+                "fields": code_fields(db, allowed, told)}
     finally:
         db.close()
+
+
+STATUS_TASKS, STATUS_DECISIONS = 5, 3
+
+
+def code_fields(db, allowed, told):
+    """What the block's Active issues, Next actions and Last decisions say, built by code from the told memories and the
+    index, never by a model: the open `active` issues with their step counts, the next open step of up to
+    STATUS_TASKS open tasks, and the STATUS_DECISIONS newest standing decisions (day, plain line, address)."""
+    active, upcoming = [], []
+    for task in index.tasks(db, allowed)["tasks"]:
+        if task["state"] != "open":
+            continue
+        counts = task["counts"]
+        active.append({"issue": task["issue"], "done": counts["done"], "steps": counts["steps"]})
+        step = next((row for row in task["steps"] if row["state"] in ("open", "blocked")), None)
+        if step is not None and len(upcoming) < STATUS_TASKS:
+            upcoming.append({"issue": task["issue"], "n": step["n"], "text": _line(step["text"], 120)})
+    urls = {row["comment"]: row["url"] for row in db.execute("SELECT comment, url FROM events")}
+    decisions = sorted((item for item in told.values() if item["kind"] == "decision" and item["state"] == "stands"),
+                       key=lambda item: (item["time"], item["id"]), reverse=True)[:STATUS_DECISIONS]
+    return {"active": active, "next": upcoming,
+            "decisions": [{"day": (item["at"] or "")[:10], "plain": _line(item["plain"] or item["title"], 120),
+                           "address": urls.get(item["id"]) or ""} for item in decisions]}
 
 
 def summary_problem(paragraphs, config):
@@ -1120,22 +1145,67 @@ def summary_problem(paragraphs, config):
     return "privacy" if privacy_problem(text, config) else ""
 
 
+RESUME_FIELD = re.compile(r"^\*\*(In short|Last updated|Current focus|Active issues|Last decisions|Next actions|Holds):\*\*")
+
+
+def resume_fields(block):
+    """{label: text as written} of the fields of a resume block; a field runs to the next label."""
+    fields, label, lines = {}, None, []
+    for line in block.replace("\r\n", "\n").split("\n"):
+        match = RESUME_FIELD.match(line)
+        if match:
+            if label:
+                fields[label] = "\n".join(lines).strip("\n")
+            label, lines = match.group(1), [line[match.end():].strip()]
+        elif label:
+            lines.append(line)
+    if label:
+        fields[label] = "\n".join(lines).strip("\n")
+    return fields
+
+
+def _cell(text):
+    return text.replace("|", "/")
+
+
+def code_text(fields):
+    """The three fields code writes, as text: ("Active issues", "Last decisions", the rows of "Next actions")."""
+    active = "; ".join("#%d, %d of %d steps" % (task["issue"], task["done"], task["steps"]) if task["steps"]
+                       else "#%d" % task["issue"] for task in fields["active"]) or "none"
+    decisions = "; ".join("%s, %s, %s" % (row["day"] or "no date", row["plain"], row["address"] or "no address")
+                          for row in fields["decisions"]) or "none"
+    rows = "\n".join("| Step %d: %s | not stated | #%d |" % (row["n"], _cell(row["text"]), row["issue"])
+                     for row in fields["next"]) or "| none | not stated | none |"
+    return active, decisions, rows
+
+
 def summary_block(material, paragraphs, moment):
-    """The text of the new resume block: the newest block as written, with its In short replaced and its time stamp
-    renewed ("by the observer"). Every other field is the main session's, and stays as it was."""
-    keep, inside = [], False
-    for line in material["block"].replace("\r\n", "\n").split("\n"):
-        if line.startswith(record_format.RESUME_LABELS[0]):
-            inside = True
-            continue
-        if inside and line.startswith(record_format.RESUME_LABELS[1:]):
-            inside = False
-        if inside:
-            continue
-        if line.startswith("**Last updated:**"):
-            line = "**Last updated:** %s by the observer" % moment
-        keep.append(line)
-    return "**In short:** %s\n\n%s\n" % ("\n\n".join(p.strip() for p in paragraphs), "\n".join(keep).strip("\n"))
+    """The text of the new resume block: the model's In short, the time stamp renewed ("by the observer"), "Current focus"
+    and "Holds" copied from the newest block word for word, and "Active issues", "Last decisions" and "Next actions" built
+    by code from the index (material["fields"]). A material with no code fields (an index that cannot be read) keeps the
+    newest block's fields as they were."""
+    code = material.get("fields")
+    if code is None:
+        keep, inside = [], False
+        for line in material["block"].replace("\r\n", "\n").split("\n"):
+            if line.startswith(record_format.RESUME_LABELS[0]):
+                inside = True
+                continue
+            if inside and line.startswith(record_format.RESUME_LABELS[1:]):
+                inside = False
+            if inside:
+                continue
+            if line.startswith("**Last updated:**"):
+                line = "**Last updated:** %s by the observer" % moment
+            keep.append(line)
+        return "**In short:** %s\n\n%s\n" % ("\n\n".join(p.strip() for p in paragraphs), "\n".join(keep).strip("\n"))
+    written = resume_fields(material["block"])
+    active, decisions, rows = code_text(code)
+    return ("**In short:** %s\n\n**Last updated:** %s by the observer\n**Current focus:** %s\n**Active issues:** %s\n"
+            "**Last decisions:** %s\n**Next actions:**\n\n| Action | Owner | Where |\n|---|---|---|\n%s\n\n"
+            "**Holds:** %s\n" % ("\n\n".join(p.strip() for p in paragraphs), moment,
+                                  written.get("Current focus") or "not stated", active, decisions, rows,
+                                  written.get("Holds") or "none"))
 
 
 def post_summary(repo, config, text):
@@ -1180,9 +1250,15 @@ def recent_views(store, repo, root, config):
 def refresh_summary(repo, config, store, options, invoke, root):
     """One refresh of the project's status summary, by the observer: when it is stale, one call that writes it from the
     index's told memories and the conversation the worker holds, one fresh call that reviews it, and the post of a new resume
-    block. Both calls are counted in the daily cap. Returns a code; nothing is posted unless every step passed."""
+    block (its other fields built by code, see summary_block). Both calls are middle-tier calls of the job "status", counted
+    in the daily cap and token budget of that tier, and at most max_summaries blocks are posted a day. Returns a code;
+    nothing is posted unless every step passed."""
     if not summary_wanted(repo, config):
         return "current"
+    options = runtime.with_gates(options, store)
+    posts = [at for at in store.get_control("summary_posts", []) if type(at) in (int, float) and time.time() - at < 86400]
+    if len(posts) >= options["max_summaries"]:
+        return "cap"
     last = store.get_control("summary_last", None)   # a refresh that did not post costs no further call for a while
     if isinstance(last, dict) and last.get("code") != "posted" and type(last.get("at")) in (int, float) \
             and 0 <= time.time() - last["at"] < SUMMARY_RETRY:
@@ -1195,32 +1271,36 @@ def refresh_summary(repo, config, store, options, invoke, root):
     if source_privacy_problem(payload, config):
         return "privacy"
     window = options["window_hours"] * 3600
-    reservation = store.reserve_invocation("summary", options["max_invocations"], window)
+    reservation = store.reserve_invocation("summary", options["max_invocations"], window, tokens=options["middle_tokens"])
     if reservation is None:
         return "budget"
     result = invoke(payload, SUMMARY, "summary", options)
     valid = result.get("ok") is True and runtime.validate(result.get("structured"), SUMMARY)
-    store.complete_invocation(reservation, valid, runtime.candidate_hash(result["structured"]) if valid else "")
+    store.complete_invocation(reservation, valid, runtime.candidate_hash(result["structured"]) if valid else "",
+                              usage=result.get("usage"), model=result.get("model"))
     if not valid:
         return "summary-failed"
     paragraphs = [p.strip() for p in result["structured"]["paragraphs"]]
     problem = summary_problem(paragraphs, config)
     if problem:
         return "summary-" + problem
-    review_id = store.reserve_invocation("summary_review", options["max_invocations"], window)
+    review_id = store.reserve_invocation("summary_review", options["max_invocations"], window,
+                                         tokens=options["middle_tokens"])
     if review_id is None:
         return "budget"
     digest = runtime.candidate_hash({"paragraphs": paragraphs})
     reviewed = invoke(dict(payload, summary=paragraphs, summary_hash=digest), SUMMARY_REVIEW, "summary_review", options)
     answer = reviewed.get("structured")
     valid = reviewed.get("ok") is True and runtime.validate(answer, SUMMARY_REVIEW) and answer["summary_hash"] == digest
-    store.complete_invocation(review_id, valid, digest if valid else "")
+    store.complete_invocation(review_id, valid, digest if valid else "", usage=reviewed.get("usage"),
+                              model=reviewed.get("model"))
     if not valid or not answer["accepted"] or answer["reason"] != "supported":
         return "summary-rejected"
     moment = recortex.stamp(datetime.datetime.now(datetime.timezone.utc), config)
     if not post_summary(repo, config, summary_block(material, paragraphs, moment)):
         return "post-failed"
     store.set_control("sync_needed", True)   # the next refresh reads the new block, which makes the summary current
+    store.set_control("summary_posts", posts + [time.time()])
     return "posted"
 
 

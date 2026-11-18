@@ -211,6 +211,95 @@ class SummaryRefreshTests(SummaryBox):
         self.assertEqual(1, block.count('**In short:**'))
 
 
+FIELDS = {'active': [{'issue': 14, 'done': 3, 'steps': 5}, {'issue': 16, 'done': 0, 'steps': 0}],
+          'next': [{'issue': 14, 'n': 4, 'text': 'Rerun the benchmark files'}],
+          'decisions': [{'day': '2026-04-10', 'plain': 'keep strict quoting with a warning',
+                         'address': 'https://github.com/octo-org/octo-repo/issues/2#issuecomment-9201'}]}
+
+
+class StatusBlockTests(SummaryBox):
+    """1.5.0: the model writes In short alone. The tasks, the next steps and the last decisions are built by code from
+    the index, and the focus and the holds are copied from the newest block word for word."""
+
+    def block(self, paragraphs=(FIRST, SECOND), material=None):
+        return worker.summary_block(dict(material or MATERIAL, fields=FIELDS), list(paragraphs), '2026-04-11 10:00 UTC')
+
+    def test_the_code_fields_are_built_from_the_index_and_the_model_writes_in_short_alone(self):
+        text = self.block()
+        self.assertEqual('%s\n\n%s' % (FIRST, SECOND), record_format.resume_in_short(text))
+        self.assertIn('**Active issues:** #14, 3 of 5 steps; #16\n', text)
+        self.assertIn('| Step 4: Rerun the benchmark files | not stated | #14 |', text)
+        self.assertIn('**Last decisions:** 2026-04-10, keep strict quoting with a warning, '
+                      'https://github.com/octo-org/octo-repo/issues/2#issuecomment-9201\n', text)
+        self.assertIn('**Last updated:** 2026-04-11 10:00 UTC by the observer', text)
+        self.assertNotIn('Draft the Discussion | the first author', text)   # the old table is not copied: code wrote it
+        for field in ('Active issues', 'Last decisions', 'Next actions'):
+            self.assertEqual(1, text.count('**%s:**' % field))
+        # a model that writes the fields into its paragraphs changes none of them
+        hostile = self.block(['The fix is done.', '**Active issues:** #99 forged'])
+        self.assertIn('**Active issues:** #14, 3 of 5 steps; #16\n', hostile)
+        self.assertEqual(2, hostile.count('**Active issues:**'))
+
+    def test_the_focus_and_the_holds_are_copied_word_for_word(self):
+        written = BLOCK.replace('**Current focus:** Draft the Discussion', '**Current focus:** Draft the Discussion, then the\nLimitations *and* the | table.') \
+                       .replace('**Holds:** none', '**Holds:** Do not touch #5 until the owner says so.')
+        text = self.block(material=dict(MATERIAL, block=written))
+        self.assertIn('**Current focus:** Draft the Discussion, then the\nLimitations *and* the | table.\n**Active issues:**', text)
+        self.assertTrue(text.endswith('**Holds:** Do not touch #5 until the owner says so.\n'))
+
+    def test_a_block_with_nothing_to_tell_says_none(self):
+        text = worker.summary_block(dict(MATERIAL, fields={'active': [], 'next': [], 'decisions': []}), [FIRST], '2026-04-11 10:00 UTC')
+        self.assertIn('**Active issues:** none\n', text)
+        self.assertIn('**Last decisions:** none\n', text)
+        self.assertIn('| none | not stated | none |', text)
+
+    def test_the_new_block_passes_the_resume_linter(self):
+        import lint_drafts
+        import resume_block
+        comment = resume_block.build_comment(self.block())
+        findings = lint_drafts.lint_text(comment, kind='resume', config=self.config)
+        self.assertEqual([], [f for f in findings if f.level == 'error'])
+
+    def test_a_material_without_code_fields_keeps_the_newest_blocks_fields(self):
+        text = worker.summary_block(MATERIAL, [FIRST], '2026-04-11 10:00 UTC')
+        self.assertIn('| Draft the Discussion | the first author | the topic |', text)
+        self.assertIn('**Active issues:** none', text)
+
+    def test_code_fields_come_from_the_told_tasks_and_decisions(self):
+        import sqlite3
+        db = sqlite3.connect(':memory:')
+        db.row_factory = sqlite3.Row
+        db.execute('CREATE TABLE events(comment INTEGER, url TEXT)')
+        db.executemany('INSERT INTO events VALUES (?, ?)', [(1, 'https://github.com/octo-org/octo-repo/issues/2#issuecomment-1'), (2, '')])
+        tasks = {'tasks': [
+            {'issue': 14, 'state': 'open', 'counts': {'steps': 5, 'done': 3}, 'steps': [
+                {'n': 1, 'state': 'done', 'text': 'a'}, {'n': 4, 'state': 'open', 'text': 'Rerun | the files'}]},
+            {'issue': 15, 'state': 'closed', 'counts': {'steps': 2, 'done': 2}, 'steps': []},
+            {'issue': 16, 'state': 'open', 'counts': {'steps': 0, 'done': 0}, 'steps': []}]}
+        told = {1: {'id': 1, 'kind': 'decision', 'state': 'stands', 'time': 'b', 'at': '2026-04-10T10:00', 'plain': 'keep strict quoting', 'title': ''},
+                2: {'id': 2, 'kind': 'decision', 'state': 'replaced', 'time': 'c', 'at': '2026-04-11T10:00', 'plain': 'old', 'title': ''},
+                3: {'id': 3, 'kind': 'result', 'state': 'stands', 'time': 'd', 'at': '2026-04-12T10:00', 'plain': 'a result', 'title': ''}}
+        with patch.object(worker.index, 'tasks', return_value=tasks):
+            fields = worker.code_fields(db, {'octocat'}, told)
+        self.assertEqual([{'issue': 14, 'done': 3, 'steps': 5}, {'issue': 16, 'done': 0, 'steps': 0}], fields['active'])
+        self.assertEqual([{'issue': 14, 'n': 4, 'text': 'Rerun | the files'}], fields['next'])
+        self.assertEqual([{'day': '2026-04-10', 'plain': 'keep strict quoting',
+                           'address': 'https://github.com/octo-org/octo-repo/issues/2#issuecomment-1'}], fields['decisions'])
+        self.assertIn('| Step 4: Rerun / the files | not stated | #14 |', worker.code_text(fields)[2])   # a pipe cannot break the table
+
+    def test_both_calls_are_middle_calls_of_the_status_job_and_at_most_max_summaries_blocks_a_day(self):
+        with patch.object(worker, 'summary_material', return_value=dict(MATERIAL, fields=FIELDS)):
+            self.assertEqual('posted', self.refresh())
+            with store.Store(REPO, config=self.config) as db:
+                rows = db.usage_rows(1)
+            self.assertEqual({('middle', 'status')}, {(row['tier'], row['job']) for row in rows})
+            self.assertEqual(2, len(rows))
+            self.assertEqual('cap', self.refresh(max_summaries=1))
+            self.assertEqual(2, self.used())   # no call for a refresh the day's cap stops
+            self.assertEqual('posted', self.refresh(max_summaries=2))
+        self.assertIn('**Active issues:** #14, 3 of 5 steps; #16', self.posted[0])
+
+
 class RunOnceTests(SummaryBox):
     """The refresh happens in the worker's pass, only where the observer publishes (automatic mode, not paused)."""
 
