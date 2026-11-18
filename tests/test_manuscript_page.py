@@ -1499,7 +1499,7 @@ class ModeTests(Steps):
         self.assertIn("@media (max-width:1180px){", style)
         self.assertIn(".row:not(.r-removed){display:block}", style.split("@media (max-width:1180px){", 1)[1])
         self.assertIn(".mn{border-left:0;padding:0;margin:0 0 18px;display:flex;flex-wrap:wrap;gap:6px 14px}.mn .lab,.meter{display:none}", style)
-        self.assertIn("@media (max-width:420px){main{padding:0}.sheet{border-radius:0;box-shadow:none;padding:18px 16px}", style)
+        self.assertIn("@media (max-width:420px){.js[data-view=paper] main{padding:0}.sheet{border-radius:0;box-shadow:none;padding:18px 16px}", style)
         self.assertIn(".st-against::before{background:none;border:2px solid var(--c);border-radius:1px}", style)
         self.assertIn(".hole{border:1.5px dashed var(--asked);border-radius:10px;padding:8px 14px;font:14.5px/1.5 var(--sans);color:var(--ink)}", style)
         self.assertIn(".hole .kind{display:block;font:600 11.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--asked)}", style)
@@ -1574,6 +1574,11 @@ class ModeTests(Steps):
         self.assertIn("#paper[data-mode=changes] .rw.r-added .mn .c-added{display:none}", small)   # S21: "Added since" once on a phone
         self.assertIn("@media (min-width:561px) and (max-width:860px){.barline{flex:1 1 0;order:0}.sbar .grow{display:none}}", style)   # S9
         self.assertIn("#paper .sbar{padding-left:16px;padding-right:16px}", self.block(style, "@media (max-width:420px){"))   # S10
+        # 1.5.0: at phone width only the paper sheet is flush; every other view keeps the gutter of main (16px at 860px)
+        phone = self.block(style, "@media (max-width:420px){")
+        self.assertNotRegex(phone, r"(?:^|[{}])main\{padding:0\}")
+        self.assertIn(".js[data-view=paper] main{padding:0}", phone)
+        self.assertIn("main{padding:16px 12px 100px}", self.block(style, "@media (max-width:860px){#paper.view"))
         self.assertIn(".legend summary{display:list-item;", style)   # S11
         self.assertIn(".mn .stw{display:inline-block;padding:3px 0}", style)   # S12
         self.assertRegex(style, r"\.pick\{[^}]*max-width:24em")   # S13

@@ -576,7 +576,7 @@ a.stw{color:var(--quiet)}
 #paper[data-mode=changes] .rw.r-added>.ptx::before,#paper[data-mode=changes] .rw.r-reworded>.ptx::before,#paper[data-mode=changes] .rw.r-changed>.ptx::before{left:-11px}}
 #paper .part-empty .partrow{margin-bottom:0}
 @media (min-width:561px) and (max-width:860px){.barline{flex:1 1 0;order:0}.sbar .grow{display:none}}
-@media (max-width:420px){main{padding:0}.sheet{border-radius:0;box-shadow:none;padding:18px 16px}#paper .sbar{padding-left:16px;padding-right:16px}}
+@media (max-width:420px){.js[data-view=paper] main{padding:0}.sheet{border-radius:0;box-shadow:none;padding:18px 16px}#paper .sbar{padding-left:16px;padding-right:16px}}
 .subnav{display:none;margin:2px 0 6px 12px}
 .side .subnav a{font-size:13.5px;padding:4px 10px 4px 24px;color:var(--quiet)}
 .js[data-view=paper] .subnav{display:block}
