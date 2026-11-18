@@ -6,7 +6,9 @@ The build runs it. It fails on:
     site.json (the plugin is read from a local checkout, a local clone, or a shallow fetch from GitHub);
   - a banned word, an emoji, or a British spelling of a short list of words;
   - a project or account name that is not on the list of invented names;
-  - a broken internal link or anchor, a page with no title, and a page over its word limit;
+  - a broken internal link or anchor, a root-absolute link that does not start with the site's base path, a link that
+    leaves the base, a search entry, canonical or social address outside the site, a page with no title, and a page
+    over its word limit;
   - anything a page loads from another server, an inline script or style, or a missing strict policy.
 
 Python 3 standard library only, and it runs on Python 3.8.
@@ -272,6 +274,7 @@ def check_loads(rep, where, page):
 
 def check_links(rep, site, where, page, pages, plugin, config):
     base = where
+    prefix = config["base"]
 
     def ids_of(file):
         if file not in pages:
@@ -297,22 +300,30 @@ def check_links(rep, site, where, page, pages, plugin, config):
             if host == "github.com":
                 check_github_url(rep, base, path, plugin, config)
         elif value.startswith("/") and not value.startswith("//"):
-            target, _, frag = value.partition("#")
-            target = target.split("?")[0]
-            rel = target.lstrip("/")
-            file = os.path.join(site, rel, "index.html") if (target.endswith("/") or not rel) else os.path.join(site, rel)
-            if os.path.isdir(file):
-                file = os.path.join(file, "index.html")
+            if not value.startswith(prefix):
+                rep.fail("links", base, "root-absolute link outside the base %s: %s" % (prefix, value))
+                continue
+            file, frag = resolve(site, prefix, value)
             if not os.path.isfile(file):
                 rep.fail("links", base, "broken link: %s" % value)
             elif frag and file.endswith(".html") and frag not in ids_of(file):
-                rep.fail("links", base, "no anchor #%s at %s" % (frag, target))
+                rep.fail("links", base, "no anchor #%s at %s" % (frag, value))
             else:
                 rep.ok("links")
         elif value.lower().startswith(("mailto:", "tel:")):
             rep.fail("links", base, "contact link not expected: %s" % value)
         else:
             rep.fail("links", base, "link is not root-absolute: %s" % value)
+
+
+def resolve(site, prefix, value):
+    """The file in the built site that a link below the base points at, and the anchor it asks for."""
+    target, _, frag = value.partition("#")
+    rel = target.split("?")[0][len(prefix):]
+    file = os.path.join(site, rel, "index.html") if (rel == "" or rel.endswith("/")) else os.path.join(site, rel)
+    if os.path.isdir(file):
+        file = os.path.join(file, "index.html")
+    return file, frag
 
 
 def check_github_url(rep, where, path, plugin, config):
@@ -335,6 +346,22 @@ def check_github_url(rep, where, path, plugin, config):
             rep.fail("plugin", where, "linked file is not in the plugin at the pinned ref: %s" % rel)
         else:
             rep.ok("plugin")
+
+
+def check_addresses(rep, site, where, page, config):
+    """The canonical link and the social tags use the full address, and the social image is a file of the site."""
+    url = config["url"]
+    for label, value in (("canonical", page.canonical), ("og:url", page.meta.get("og:url", "")),
+                         ("og:image", page.meta.get("og:image", ""))):
+        if label == "canonical" and not value:
+            continue
+        if not value.startswith(url + "/"):
+            rep.fail("links", where, "%s is not a full address under %s: %s" % (label, url, value or "(missing)"))
+    image = page.meta.get("og:image", "")
+    if image.startswith(url + "/"):
+        if not os.path.isfile(os.path.join(site, image[len(url) + 1:])):
+            rep.fail("links", where, "the social image is not in the built site: %s" % image)
+    rep.ok("links")
 
 
 def check_names(rep, where, page):
@@ -429,7 +456,7 @@ def check_plugin_facts(rep, where, page, plugin, config):
             rep.fail("plugin", where, "no such variable in the plugin: %s" % code)
 
 
-def check_static(rep, site):
+def check_static(rep, site, config):
     css = os.path.join(site, "site.css")
     if os.path.isfile(css):
         with open(css, encoding="utf-8") as handle:
@@ -446,14 +473,41 @@ def check_static(rep, site):
         if re.search(r"\bfetch\(|XMLHttpRequest|WebSocket|sendBeacon|\bimport\(|importScripts|document\.cookie|https?://", text):
             rep.fail("loads", name, "makes a request, sets a cookie or names another server")
         keys = re.findall(r"localStorage\.\w+Item\(\s*'([^']+)'", text)
-        if any(k != "theme" for k in keys):
+        if any(k != "recortex-theme" for k in keys):
             rep.fail("loads", name, "stores something besides the theme choice")
         if "localStorage" in text and "try" not in text:
             rep.fail("loads", name, "localStorage is used outside try/catch")
-    for must in (".nojekyll", "robots.txt", "sitemap.xml", "favicon.ico", "404.html", "assets/social-preview.png"):
+    check_search_index(rep, site, config)
+    for must in (".nojekyll", "sitemap.xml", "favicon.ico", "404.html", "assets/social-preview.png"):
         if not os.path.isfile(os.path.join(site, must)):
             rep.fail("loads", must, "missing from the built site")
     rep.ok("loads")
+
+
+def check_search_index(rep, site, config):
+    prefix = config["base"]
+    try:
+        with open(os.path.join(site, "search-index.js"), encoding="utf-8") as handle:
+            raw = handle.read().strip()
+        entries = json.loads(re.sub(r"^window\.SITE_INDEX=|;$", "", raw))
+    except (OSError, ValueError):
+        rep.fail("links", "search-index.js", "the search index is missing or is not valid")
+        return
+    cache = {}
+    for entry in entries:
+        value = entry.get("u", "")
+        if not value.startswith(prefix):
+            rep.fail("links", "search-index.js", "an entry leaves the base %s: %s" % (prefix, value))
+            continue
+        file, frag = resolve(site, prefix, value)
+        if not os.path.isfile(file):
+            rep.fail("links", "search-index.js", "an entry points at nothing: %s" % value)
+        elif frag:
+            if file not in cache:
+                cache[file] = parse(file).ids
+            if frag not in cache[file]:
+                rep.fail("links", "search-index.js", "an entry points at a missing anchor: %s" % value)
+    rep.ok("links", len(entries))
 
 
 def check_version(rep, config, plugin):
@@ -487,6 +541,7 @@ def run(site, config, pages_cfg, counts, plugin_args):
             check_structure(rep, where, page)
             check_words(rep, where, page)
             check_loads(rep, where, page)
+            check_addresses(rep, site, where, page, config)
             check_names(rep, where, page)
             check_plugin_facts(rep, where, page, plugin, config)
             n, limit = (counts or {}).get(entry["id"]), entry.get("max_words")
@@ -496,7 +551,7 @@ def run(site, config, pages_cfg, counts, plugin_args):
                 rep.ok("length")
         for page in list(parsed.values()):
             check_links(rep, site, page.path, page, parsed, plugin, config)
-        check_static(rep, site)
+        check_static(rep, site, config)
         check_version(rep, config, plugin)
         return report(rep, plugin_dir)
     finally:

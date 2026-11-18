@@ -15,11 +15,15 @@ PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:">
 <title>%(title)s</title><meta name="description" content="A page.">
-<link rel="icon" href="/favicon.ico">
+<link rel="canonical" href="https://recortex.github.io/recortex/">
+<meta property="og:url" content="https://recortex.github.io/recortex/">
+<meta property="og:image" content="https://recortex.github.io/recortex/assets/social-preview.png">
+<link rel="icon" href="/recortex/favicon.ico">
 %(head)s
 </head><body><h1 id="top">%(h1)s</h1>%(body)s</body></html>
 """
-CONFIG = {"plugin_repo": "recortex/recortex", "plugin_ref": "v1.5.1", "version": "1.5.1", "url": "https://recortex.github.io"}
+CONFIG = {"plugin_repo": "recortex/recortex", "plugin_ref": "v1.5.1", "version": "1.5.1",
+          "url": "https://recortex.github.io/recortex", "base": "/recortex/"}
 PAGES = [{"id": "home", "path": "/", "max_words": 100}, {"id": "404", "path": "/404.html", "max_words": 100}]
 
 
@@ -41,12 +45,13 @@ def make_plugin(root):
     write(root, "docs/security.md", "trusted-repos and RECORTEX_HOOK_TIMEOUT")
 
 
-def make_site(root, body="<p>Fine.</p>", title="Home", h1="Home", head="", js=None):
+def make_site(root, body="<p>Fine.</p>", title="Home", h1="Home", head="", js=None, index=None):
     write(root, "index.html", PAGE % {"title": title, "h1": h1, "body": body, "head": head})
     write(root, "404.html", PAGE % {"title": "Gone", "h1": "Gone", "body": "", "head": ""})
-    write(root, "site.js", js or "try { localStorage.setItem('theme', 'dark'); } catch (e) {}\n")
-    write(root, "theme.js", "try { localStorage.getItem('theme'); } catch (e) {}\n")
-    for name in ("search-index.js", "site.css", ".nojekyll", "robots.txt", "sitemap.xml", "favicon.ico"):
+    write(root, "site.js", js or "try { localStorage.setItem('recortex-theme', 'dark'); } catch (e) {}\n")
+    write(root, "theme.js", "try { localStorage.getItem('recortex-theme'); } catch (e) {}\n")
+    write(root, "search-index.js", index or 'window.SITE_INDEX=[{"p":"Home","h":"","u":"/recortex/","x":"x","d":"x"}];\n')
+    for name in ("site.css", ".nojekyll", "sitemap.xml", "favicon.ico"):
         write(root, name, "x")
     write(root, "assets/social-preview.png", b"x", binary=True)
 
@@ -74,7 +79,7 @@ class CheckTests(unittest.TestCase):
     def test_a_clean_site_passes(self):
         code, out = self.run_check(body='<p>Use <code>/recortex:ask</code> and <code>observer.py enable --level x</code>.</p>'
                                         '<p><code>.recortex.json</code> <code>RECORTEX_HOOK_TIMEOUT</code> <code>trusted-repos</code></p>'
-                                        '<a href="#top">top</a> <a href="/404.html">x</a> octo-org/billing-service')
+                                        '<a href="#top">top</a> <a href="/recortex/404.html">x</a> <a href="/recortex/">home</a> octo-org/billing-service')
         self.assertEqual(code, 0, out)
 
     def test_the_plugin_facts_must_exist(self):
@@ -114,9 +119,14 @@ class CheckTests(unittest.TestCase):
 
     def test_links_and_loads(self):
         for text, expect in (
-            ('<a href="/nothing/">x</a>', "broken link"),
+            ('<a href="/recortex/nothing/">x</a>', "broken link"),
             ('<a href="#nope">x</a>', "no anchor"),
-            ('<a href="/#nope">x</a>', "no anchor"),
+            ('<a href="/recortex/#nope">x</a>', "no anchor"),
+            ('<a href="/404.html">x</a>', "outside the base"),
+            ('<a href="/">x</a>', "outside the base"),
+            ('<a href="/recortex">x</a>', "outside the base"),
+            ('<a href="/elsewhere/page/">x</a>', "outside the base"),
+            ('<img src="/assets/x.png">', "outside the base"),
             ('<a href="relative.html">x</a>', "not root-absolute"),
             ('<script src="https://cdn.example.com/x.js"></script>', "loads from outside"),
             ('<img src="//cdn.example.com/x.png">', "loads from outside"),
@@ -127,6 +137,35 @@ class CheckTests(unittest.TestCase):
         ):
             with self.subTest(text=text):
                 self.assert_fails(text, expect)
+
+    def test_the_addresses_and_the_search_index_stay_under_the_base(self):
+        good = 'window.SITE_INDEX=[{"p":"Home","h":"","u":"/recortex/","x":"x","d":"x"}];\n'
+        for index, expect in (
+            ('window.SITE_INDEX=[{"p":"A","h":"B","u":"/index.html","x":"x","d":""}];', "leaves the base"),
+            ('window.SITE_INDEX=[{"p":"A","h":"B","u":"/recortex/nothing/","x":"x","d":""}];', "points at nothing"),
+            ('window.SITE_INDEX=[{"p":"A","h":"B","u":"/recortex/#nope","x":"x","d":""}];', "missing anchor"),
+            ("not json", "not valid"),
+        ):
+            with self.subTest(index=index):
+                code, out = self.run_check(index=index)
+                self.assertEqual(code, 1)
+                self.assertIn(expect, out)
+        for head, expect in (
+            ('<meta property="og:image" content="https://recortex.github.io/assets/social-preview.png">', "og:image is not a full address"),
+            ('<link rel="canonical" href="https://example.org/">', "canonical is not a full address"),
+            ('<meta property="og:url" content="/recortex/">', "og:url is not a full address"),
+        ):
+            with self.subTest(head=head):
+                make_site(self.site)
+                with open(os.path.join(self.site, "index.html"), encoding="utf-8") as handle:
+                    text = handle.read().replace("</head>", head + "</head>", 1)
+                write(self.site, "index.html", text)
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    check.run(self.site, CONFIG, PAGES, None, {"plugin": self.plugin})
+                self.assertIn(expect, out.getvalue())
+        code, out = self.run_check(index=good)
+        self.assertEqual(code, 0, out)
 
     def test_structure_length_and_policy(self):
         code, out = self.run_check(title="  ")
@@ -148,6 +187,7 @@ class CheckTests(unittest.TestCase):
     def test_the_script_may_store_only_the_theme_and_load_nothing(self):
         for js, expect in (
             ("try { localStorage.setItem('visits', '1'); } catch (e) {}", "besides the theme"),
+            ("try { localStorage.setItem('theme', '1'); } catch (e) {}", "besides the theme"),
             ("fetch('/x');", "makes a request"),
             ("document.cookie = 'a=b';", "makes a request"),
         ):

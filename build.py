@@ -76,6 +76,11 @@ def label_tables(body):
     return re.sub(r'<table class="plain">.*?</table>', one, body, flags=re.S)
 
 
+def based(text, base):
+    """Puts the site's base path in front of every root-absolute link, asset and form address."""
+    return re.sub(r'\b(href|src|action)="/(?!/)', lambda m: '%s="%s' % (m.group(1), base), text)
+
+
 def command_block(lines, prompt):
     rows = "\n".join('<span class="prompt">%s</span><span class="line">%s</span>' % (prompt, html.escape(line))
                      for line in lines)
@@ -133,6 +138,9 @@ def words(fragment):
 
 def build(out, plugin_args, run_checks):
     config = json.loads(read(os.path.join(HERE, "site.json")))
+    base = config["base"]
+    if not (base.startswith("/") and base.endswith("/")) or config["url"].endswith("/"):
+        sys.exit("site.json: base must start and end with a slash, and url must not end with one")
     pages = json.loads(read(os.path.join(SRC, "pages.json")))
     shell = read(os.path.join(SRC, "shell.html"))
     logo = read(os.path.join(SRC, "logo.svg.txt")).strip()
@@ -163,7 +171,7 @@ def build(out, plugin_args, run_checks):
                 text = re.sub(r"\s+", " ", "".join(section["text"])).strip()
                 heading = re.sub(r"\s+", " ", section["heading"]).strip()
                 if section["id"] or not heading:
-                    index.append({"p": page["nav"], "h": heading, "u": page["path"] + ("#" + section["id"] if section["id"] else ""),
+                    index.append({"p": page["nav"], "h": heading, "u": base + page["path"].lstrip("/") + ("#" + section["id"] if section["id"] else ""),
                                   "x": text, "d": page["description"] if not heading else ""})
 
         def link(p, current=page):
@@ -207,6 +215,7 @@ def build(out, plugin_args, run_checks):
         left = re.findall(r"\{\{[^}]*\}\}", text)
         if left:
             sys.exit("shell: not filled: %s" % left[:3])
+        text = based(text, base)
         target = "404.html" if page["path"].endswith(".html") else os.path.join(page["path"].strip("/"), "index.html")
         write(os.path.join(out, target), text)
 
@@ -219,7 +228,6 @@ def build(out, plugin_args, run_checks):
             shutil.copyfile(os.path.join(folder, name), os.path.join(out, rel))
     write(os.path.join(out, "search-index.js"), "window.SITE_INDEX=" + json.dumps(index, separators=(",", ":"), ensure_ascii=False) + ";\n")
     write(os.path.join(out, ".nojekyll"), "")
-    write(os.path.join(out, "robots.txt"), "User-agent: *\nAllow: /\nSitemap: %s/sitemap.xml\n" % config["url"])
     urls = "".join("<url><loc>%s%s</loc></url>\n" % (config["url"], p["path"]) for p in listed)
     write(os.path.join(out, "sitemap.xml"),
           '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n%s</urlset>\n' % urls)

@@ -14,7 +14,7 @@
         (!root.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
       var next = dark ? 'light' : 'dark';
       root.setAttribute('data-theme', next);
-      try { localStorage.setItem('theme', next); } catch (e) { /* the choice then lasts for this page only */ }
+      try { localStorage.setItem('recortex-theme', next); } catch (e) { /* the choice then lasts for this page only */ }
     });
   }
 

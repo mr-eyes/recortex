@@ -1,6 +1,7 @@
 {
   "name": "recortex",
-  "url": "https://recortex.github.io",
+  "url": "https://recortex.github.io/recortex",
+  "base": "/recortex/",
   "version": "1.5.1",
   "plugin_repo": "recortex/recortex",
   "plugin_ref": "main",
