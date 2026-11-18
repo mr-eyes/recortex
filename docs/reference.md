@@ -4,7 +4,7 @@ The agents, the hooks and the scripts, one table each, and the commands for the 
 
 ## The agents
 
-The plugin adds three agents for bulk and audit work, one tier below the main session: `record-drafter` drafts topic bodies in batches to files only; `record-reviewer` reviews drafts, per batch and across all bodies; `record-auditor` checks the record for drift, untriaged issues and new deliverable signals. These agents never publish. The drafter has no shell and no GitHub access. The reviewer and the auditor are read-only by instruction: they need Bash for read commands such as `gh issue view` and `git log`, so their tool list does not enforce it, and the main session checks what they did. Each preloads the skill and uses your default model; to choose another, copy its file into the project's `.claude/agents/` and set `model:`. A separately approved observer publisher can append reviewed event comments; mutable record state remains the main session's responsibility.
+The plugin adds three agents for bulk and audit work, one tier below the main session: `record-drafter` drafts topic bodies in batches to files only; `record-reviewer` reviews drafts, per batch and across all bodies; `record-auditor` checks the record for drift, untriaged issues and new deliverable signals. These agents never publish. A fourth agent, `ask`, answers one question about the project's history from the local index; it has Bash for the `index.py query` commands only, posts nothing and is read-only by instruction. The drafter has no shell and no GitHub access. The reviewer and the auditor are read-only by instruction: they need Bash for read commands such as `gh issue view` and `git log`, so their tool list does not enforce it, and the main session checks what they did. Each preloads the skill and uses your default model; to choose another, copy its file into the project's `.claude/agents/` and set `model:`. A separately approved observer publisher can append reviewed event comments; mutable record state remains the main session's responsibility.
 
 ## The hooks and the CLAUDE.md snippet
 
@@ -17,7 +17,7 @@ Four brief hooks keep every session and subagent aware of the record, built from
 | UserPromptSubmit | One line with the hub and the active issues, only when it changed or every tenth prompt (`"prompt_hook": {"enabled": false}` in `.recortex.json` turns it off) |
 | PreCompact | Instructions for the compaction summary: keep the issue numbers in play and every result, decision or failure that is not yet posted |
 
-Observer handlers, experimental and off by default, also run on these four events and on PreToolUse (Bash calls only) and Stop. Without this machine's approval for the folder they start no Python and cost about 3 ms. When on, they collect bounded pointers to the conversation locally (your typed prompts and the agent's messages to you, never tool output), return framed task context, and report pending or degraded work once per session. PreToolUse may deny only a supported action matching an established explicit user hold, or, when the holds cannot be read, every Bash command but `pwd`, `ls` and `cat`. The handlers make no model or network calls themselves; at the edges of a turn they can start a detached finite worker, which performs independent checks and optional append-only publication. Its private pending state cannot be rebuilt from GitHub. See [observer controls and limits](../skills/recortex/references/observer.md).
+A fifth hook, SubagentStop, prints nothing: when one of the plugin's own subagents stops, it adds that run's token counts to a small local file, so that the usage view can show them. Observer handlers, experimental and off by default, also run on these four events and on PreToolUse (Bash calls only) and Stop. Without this machine's approval for the folder they start no Python and cost about 3 ms. When on, they collect bounded pointers to the conversation locally (your typed prompts and the agent's messages to you, never tool output), return framed task context, and report pending or degraded work once per session. PreToolUse may deny only a supported action matching an established explicit user hold, or, when the holds cannot be read, every Bash command but `pwd`, `ls` and `cat`. The handlers make no model or network calls themselves; at the edges of a turn they can start a detached finite worker, which performs independent checks and optional append-only publication. Its private pending state cannot be rebuilt from GitHub. See [observer controls and limits](../skills/recortex/references/observer.md).
 
 They print nothing when the project has no configuration file or the repository is not in your trusted list, and never write to GitHub. Set-up builds the index once (`index.py sync`); otherwise the first session builds it in the background and the brief arrives with its next prompt. In a project that is set up and trusted, a brief that cannot be produced is replaced by one line naming the reason. `python3 scripts/hooks.py --print` shows each payload and its size; `python3 scripts/hooks.py --doctor` shows why a brief is or is not shown: configuration, trust, whether `gh` is found and signed in, storage folders with owner and mode, the index and the last sync failure. The plugin installs them. For a plain skill install, merge [`templates/settings-hook-snippet.json`](../skills/recortex/templates/settings-hook-snippet.json) into `.claude/settings.json` or `~/.claude/settings.json` and adjust the paths.
 
@@ -42,13 +42,30 @@ All are in `skills/recortex/scripts/`, use only the Python standard library and 
 | `statusline.py` | An optional status line segment: whether recortex is on for the project folder, and the age of the record; `setup.py apply` offers it | no |
 | `mind.py` | Builds the mind page: one private local file that tells the project's memory in sentences, from the index; `--sync` or `--figures` also embeds the pictures of its figures; `--paper [--version NAME]` writes the paper alone as a page to print or save as PDF; with a plan, the page has "Read the manuscript", the paper as a paper with its changes since an earlier version | no |
 | `hooks.py`, `run_hook.sh`, `session_start_hook.sh` | The four hooks; `hooks.py --print` shows their payloads | no |
-| `observer.py`, `observer_hooks.py`, `run_observer_hook.sh` | Experimental, off by default: local capture, independent checks, task context, explicit holds and pending receipts | approved worker event comments only |
+| `observer.py`, `observer_hooks.py`, `run_observer_hook.sh` | Experimental, off by default: sorting, drafting and review of the conversation, tasks and checkmarks, drafts of the paper's text for you to accept, task context, explicit holds and pending receipts; `enable --level`, `pending --waiting`, `log`, `undo`, `limits` | approved worker event comments, tasks and rendered copies only |
 | `setup.py`, `setup_questions.py` | `preflight` checks `gh` and Python before the first question; `detect` suggests deliverables and fields from file names; `apply` makes the setup from answers you confirmed; `fields` shows, sets and approves the field sheet; `questions` lists what an update added that you have not answered yet, and `answer` keeps your answer on this machine | `apply` |
+| `tasks.py` | Tasks and steps: `status`, `render` (the task list under `## Plan`), `close`, `reopen`, `open`, `add` (a to-do item), `mark` and `drop` (steps checked or dropped by your words) | yes |
+| `status.py` | Where the project stands from the local index alone: In short, open tasks, what is due in the text and what waits for a yes | no |
+| `usage.py` | `show`: what recortex used, in tokens and calls, never money | no |
 | `catchup.py` | Lists earlier work and work done since the newest recorded event; drafts reconstructed event comments | no |
 | `compile.py` | Writes the deliverable section by section in the hub's order, the figure, table and source lists, the full dated timeline of the project and a manifest; `--version NAME` compiles a named version of the paper | no |
 | `plan.py`, `write.py`, `own_paper.py`, `versions.py` | For a manuscript: the plan of the paper, the writing of its text in the mode you chose, your own paper (never changed without your words), and the versions of the text on a branch of the repository | yes, each under your mode |
 
 Every script that writes has `--dry-run`, which prints the exact `gh` commands and changes nothing.
+
+## The commands
+
+Five commands for you to type, in the plugin's own namespace. Each tells the session to load the recortex skill first and to run a named script.
+
+| Command | What it does |
+|---|---|
+| `/recortex:record [what]` | Records what just happened in this conversation, or what you name. A plan you approved becomes a task |
+| `/recortex:ask <question>` | Answers from the record only, starting "From the record:", and posts nothing |
+| `/recortex:todo [add <text> \| done <n>]` | Shows the to-do list with its checkmarks, adds an item or checks one off |
+| `/recortex:status` | Where the project stands, the open tasks and their next steps, what is due in the text and what waits for your yes |
+| `/recortex:usage` | What recortex used, in tokens and calls |
+
+`@agent-recortex:ask` starts the `ask` agent for a longer question. There is no bare `/record`: plugin commands carry the plugin's name.
 
 ## The mind page and the field sheet
 

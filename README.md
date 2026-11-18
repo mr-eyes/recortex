@@ -17,14 +17,15 @@ keeps findings, decisions, failures and deliverable text in GitHub issues.
 
 ## What you get
 
-- A session that starts from the last recorded state. A short brief of the record opens each session and subagent.
+- A session that starts from the last recorded state: a short brief opens each session and subagent.
 - A record you can read on GitHub. One pinned hub, one issue per topic, and a dated memory for each result, decision, failure, idea and question.
-- The mind page. One private local page that tells the memory in sentences: where things stand, how each thread got there, what went wrong, what is settled, what is open.
+- The mind page. One private local page that tells the project in sentences: where things stand, how each thread got there, what went wrong, what is open.
 - The finished work, compiled. Topic bodies hold the deliverable's current text, so the paper or release notes are assembled from the issues.
-- The paper's plan, its text and its versions. The session writes the text in the mode you choose, never changes a paragraph you wrote, and keeps every version; `mind.py --paper` prints it.
+- The paper's plan, text and versions. The session writes text in the mode you choose, never changes a paragraph you wrote, and keeps every version.
 - Helpers that know your field. A short field sheet tells every subagent what counts as proof and what must stay out of the record.
-- A board that keeps itself current. Sub-issues and a private GitHub Projects board follow the record; you do not drag a card to keep it honest.
-- Optional observation. Context follows recorded decisions and failures; independent checks select what to record, and explicit holds stop supported actions. [Controls and limits](skills/recortex/references/observer.md).
+- A board that keeps itself current. Sub-issues and a private Projects board follow the record.
+- Tasks with checkmarks. A plan you approve becomes a task with numbered steps, checked off as the agent reports them done.
+- An optional observer. It follows the session in the background, keeps the record and the task list, and drafts the paper's text only for your yes. You choose what it may do on its own. [Controls and limits](skills/recortex/references/observer.md).
 
 ## Quick start
 
@@ -39,13 +40,15 @@ You need Claude Code, the GitHub CLI `gh` (signed in) and Python 3.8 or newer.
 
 2. Open Claude Code in your project and say: "Set up the record for this project." Setup checks `gh` first and says what to run if it is missing or signed out. You answer a few multiple-choice questions, including whether to trust the repository (the plugin shows a session nothing from GitHub until you do), and confirm a summary. Nothing is written before that.
 
-3. Work. Memories are posted as things happen. Say "pause here" when you stop, and "show me the mind of this project" when you want to read it back.
+3. Work. Memories are posted as things happen. Say "pause here" when you stop and "show me the mind of this project" to read it back.
 
-Already months into a project? Say "catch up the record". Coming from another tracker? Say "migrate the issues of owner/old-tracker". Both are in [Starting from existing work](docs/existing-work.md).
+Months into a project, or coming from another tracker? See [Starting from existing work](docs/existing-work.md).
+
+Five commands: `/recortex:record`, `/recortex:ask`, `/recortex:todo`, `/recortex:status` and `/recortex:usage`. `@agent-recortex:ask` answers a longer question about the project's history, from the record only.
 
 ## A short story
 
-An invented project sorts a box of scanned letters by the date written on each page. This is one of its threads, the way the mind page tells it.
+An invented project sorts scanned letters by the date written on each page. This is one of its threads, as the mind page tells it.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/mind-story-dark.png">
@@ -70,7 +73,7 @@ An invented project sorts a box of scanned letters by the date written on each p
 >
 > On March 10 we asked whether asking still works when a box has a hundred undated pages and not twelve. Still open.
 
-Each sentence is one comment on a GitHub issue. The words between them are links the session recorded: this failure tested that idea, this decision came from that failure. Three weeks later a new session opens with, abridged:
+Each sentence is one comment on a GitHub issue; the words between them are links the session recorded. Three weeks later a new session opens with, abridged:
 
 ```text
 recortex record brief for octo-org/sample-project (from the local index synced 2026-03-31T16:02:11Z (UTC), 2 minutes old).
@@ -89,7 +92,7 @@ Before it writes about the undated pages, it reads that thread and does not try 
   <img src="assets/board-light.svg" alt="A board with the columns Todo, In Progress, Waiting for a yes and Done. A task's card names its thread, and the memory that put it in its column when there is one.">
 </picture>
 
-Optional, private, off unless chosen at setup. The record determines each card's column; each pause updates the board. A manual move prompts the session to ask what changed before updating anything. Setup and the required `project` scope are in [How the record works](docs/how-it-works.md#sub-issues-and-the-board).
+Optional, private, off unless chosen at setup. The record determines each card's column; each pause updates the board. A manual move prompts the session to ask what changed before updating anything. Setup is in [How the record works](docs/how-it-works.md#sub-issues-and-the-board).
 
 ## Read more
 
@@ -97,7 +100,7 @@ Optional, private, off unless chosen at setup. The record determines each card's
 |---|---|
 | See how the issues are laid out | [How the record works](docs/how-it-works.md) |
 | Test recovery and measure a fresh Claude session | [Continuity demo](examples/continuity/README.md) |
-| Install as a plain skill, trust a shared repository, upgrade from before 0.5.0 | [Install and upgrade](docs/install.md) |
+| Install as a plain skill, trust a shared repository, upgrade | [Install and upgrade](docs/install.md) |
 | Start from months of work or an older tracker | [Starting from existing work](docs/existing-work.md) |
 | Know what the plugin will and will not do with untrusted text | [Safety and security](docs/security.md) |
 | Look up a script, a hook or an agent | [Reference](docs/reference.md) |
