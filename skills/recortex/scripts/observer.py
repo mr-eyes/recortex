@@ -506,7 +506,7 @@ def main(argv=None):
             emit({"code": "approval", "note": "Run observer.py enable --model MODEL --level LEVEL --yes first; the check is "
                                               "bound to the models chosen there."}); return 1
         readonly = (args.command in ("status", "pending", "holds") or getattr(args, "dry_run", False)
-                    or (args.command == "drafts" and args.action is None))
+                    or (args.command == "drafts" and args.action is None and not args.show))
         try:
             opened = observer_store.Store(repo, create=not readonly, readonly=readonly,
                          max_bytes=options["max_pending_bytes"], max_pending=options["max_pending_observations"], config=config)

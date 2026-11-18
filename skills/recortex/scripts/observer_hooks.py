@@ -290,17 +290,21 @@ def _applied_draft(data):
 def _grant_draft(store, data, project_root):
     """Before observer.py drafts apply ID: when the draft waits and the user answered "Approve" to the session's question
     naming its short id and quoting its fixed line (keeper_rules.question_line; observer_sources.answered), a one-time
-    grant, which drafts apply consumes. Without it the command is refused (draft_unanswered)."""
+    grant bound to the hash of the bytes the keeper recorded for it, which drafts apply consumes. Without it the command
+    is refused (draft_unanswered)."""
     short = _applied_draft(data)
     if short is None:
         return
     draft = store.draft(short)
     if draft is None or draft["state"] not in ("waiting", "later"):
         return
+    content = keeper_rules.recorded(store.get_control(keeper_rules.CONTENTS, []), short)
+    if content is None:
+        return   # no recorded bytes: nothing the user could approve
     answer = observer_sources.answered(data, project_root, short,
                                        keeper_rules.question_line(draft["headings"], draft["topic"]), label="Approve")
     if answer:
-        store.grant_answer(keeper_rules.grant_key(short), answer)
+        store.grant_answer(keeper_rules.grant_key(short, content), answer)
 
 
 def _entry_repo():

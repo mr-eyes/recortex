@@ -215,7 +215,14 @@ def run_draft(repo, config, store, options, invoke, entry, state, now, project_r
     if code != 0:
         found = CHECK_LINE.search(output)
         return refuse("check_" + found.group(1) if found else "check_failed")
+    # The bytes the user will be asked about are the ones written above, from the model's answer: their hash is kept, and
+    # observer.py drafts shows and writes only a copy whose files still have it (observer_drafts.approved_copy).
+    content = keeper_rules.content_hash({"draft.md": draft["draft"].encode("utf-8"),
+                                         "used.json": json.dumps(draft["used"]).encode("utf-8"),
+                                         "memory.json": json.dumps(draft["memory"]).encode("utf-8")})
     ident = store.add_draft(topic, headings, folder, base_hash, due_hash=entry["key"], state="waiting")
+    store.set_control(keeper_rules.CONTENTS,
+                      keeper_rules.remember(store.get_control(keeper_rules.CONTENTS, []), ident, content))
     try:
         store.add_act("draft_proposed", issue=topic)
     except observer_store.StoreError:

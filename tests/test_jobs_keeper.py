@@ -206,11 +206,34 @@ class FixedWordsTests(unittest.TestCase):
         self.assertEqual("", keeper_rules.draft_line(0, 5))
         self.assertEqual("", keeper_rules.draft_line(1, ["5; rm"]))
 
-    def test_the_grant_key_is_a_hash_that_cannot_be_an_event_key_of_a_memory(self):
-        key = keeper_rules.grant_key("abcd1234")
+    def test_the_grant_key_is_a_hash_of_the_draft_and_its_bytes_that_cannot_be_an_event_key(self):
+        key = keeper_rules.grant_key("abcd1234", "a" * 64)
         self.assertRegex(key, r"^[0-9a-f]{32}$")
-        self.assertNotEqual(key, keeper_rules.grant_key("abcd1235"))
+        self.assertNotEqual(key, keeper_rules.grant_key("abcd1235", "a" * 64))
+        self.assertNotEqual(key, keeper_rules.grant_key("abcd1234", "b" * 64))   # other bytes, another grant
         self.assertNotEqual("abcd1234" + "0" * 24, key)
+
+    def test_the_content_hash_covers_the_three_approved_files(self):
+        files = {"draft.md": b"text\n", "used.json": b'{"parts": [1]}', "memory.json": b'{"plain": "x"}', "base.md": b"b"}
+        digest = keeper_rules.content_hash(files)
+        self.assertRegex(digest, r"^[0-9a-f]{64}$")
+        for name in keeper_rules.APPROVED_FILES:
+            self.assertNotEqual(digest, keeper_rules.content_hash(dict(files, **{name: files[name] + b" "})), name)
+            self.assertIsNone(keeper_rules.content_hash({k: v for k, v in files.items() if k != name}), name)
+        self.assertEqual(digest, keeper_rules.content_hash(dict(files, **{"base.md": b"other"})))   # bound elsewhere
+        self.assertIsNone(keeper_rules.content_hash(dict(files, **{"draft.md": "text"})))   # bytes only
+
+    def test_recorded_and_remember_keep_one_hash_per_draft_and_drop_the_oldest(self):
+        rows = keeper_rules.remember([], "abcd1234", "a" * 64)
+        rows = keeper_rules.remember(rows, "abcd1234", "b" * 64)
+        self.assertEqual("b" * 64, keeper_rules.recorded(rows, "abcd1234"))
+        self.assertIsNone(keeper_rules.recorded(rows, "deadbeef"))
+        self.assertIsNone(keeper_rules.recorded([["deadbeef", "not hex"]], "deadbeef"))
+        many = []
+        for n in range(keeper_rules.CONTENTS_KEPT + 5):
+            many = keeper_rules.remember(many, "%08x" % n, "c" * 64)
+        self.assertEqual(keeper_rules.CONTENTS_KEPT, len(many))
+        self.assertIsNone(keeper_rules.recorded(many, "%08x" % 0))
 
 
 # ---------------------------------------------------------------- the keeper on the paper record
@@ -540,9 +563,11 @@ class DraftsCommandTests(KeeperBox):
     def drafts_cli(self, *args):
         return self.cmd("observer.py", "drafts", *args)
 
-    def grant(self, ident, answer="toolu_01approve"):
+    def grant(self, ident, answer="toolu_01approve", content=None):
+        """The one-time grant the hook records from the user's Approve, bound to the bytes the keeper recorded."""
         with self.open_store() as store:
-            return store.grant_answer(keeper_rules.grant_key(ident), answer)
+            content = content or keeper_rules.recorded(store.get_control(keeper_rules.CONTENTS, []), ident)
+            return store.grant_answer(keeper_rules.grant_key(ident, content), answer)
 
     def test_the_list_gives_each_draft_its_fixed_question_and_the_three_options(self):
         ident = self.make_draft()
@@ -591,12 +616,69 @@ class DraftsCommandTests(KeeperBox):
         with self.open_store() as store:
             self.assertEqual(["draft_proposed", "draft_applied"], [a["kind"] for a in reversed(store.acts(days=1))])
 
-    def test_a_grant_for_another_draft_does_not_write_this_one(self):
+    def test_a_grant_for_another_draft_or_other_bytes_does_not_write_this_one(self):
         ident = self.make_draft()
-        self.assertTrue(self.grant("deadbeef"))   # a grant is kept under the hash of a short id; this is another one
+        self.assertTrue(self.grant("deadbeef", content="a" * 64))   # another short id
+        self.assertTrue(self.grant(ident, answer="toolu_01other", content="b" * 64))   # this id, other bytes
         done = self.drafts_cli("apply", ident)
         self.assertEqual("draft_unanswered", json.loads(done.stdout)["code"])
         self.assertEqual([], self.text_memories())
+
+    def tamper_after_the_question(self, name, change):
+        """The keeper's file `name` changes after the user approved (the grant is there) and before the apply: the
+        apply is refused as stale, before write.py runs, and nothing reaches GitHub."""
+        ident = self.make_draft()
+        (found,) = self.kept()
+        self.assertTrue(self.grant(ident))
+        path = os.path.join(found["folder"], name)
+        with open(path, encoding="utf-8") as handle:
+            before = handle.read()
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(change(before))
+        body, log = self.body(5), len(self.repo().get("log", []))
+        done = self.drafts_cli("apply", ident)
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        result = json.loads(done.stdout)
+        self.assertEqual(("draft_stale", keeper_rules.STALE_LINE), (result["code"], result["note"]))
+        self.assertEqual(body, self.body(5))
+        self.assertEqual([], self.text_memories())
+        self.assertEqual(log, len(self.repo().get("log", [])))   # no call to GitHub at all
+        self.assertEqual("stale", self.kept()[0]["state"])
+
+    def test_a_draft_md_changed_after_the_question_is_not_written(self):
+        self.tamper_after_the_question("draft.md", lambda text: text.replace(
+            DRAFT_TEXT, DRAFT_TEXT + " The cover plots were also cooler.", 1))
+
+    def test_a_used_json_changed_after_the_question_is_not_written(self):
+        self.tamper_after_the_question("used.json", lambda text: json.dumps(
+            dict(json.loads(text), decisions=[9201])))
+
+    def test_a_memory_json_changed_after_the_question_is_not_written(self):
+        self.tamper_after_the_question("memory.json", lambda text: json.dumps(
+            dict(json.loads(text), plain="the cover plots were cooler too")))
+
+    def test_show_refuses_a_draft_whose_files_changed(self):
+        ident = self.make_draft()
+        (found,) = self.kept()
+        with open(os.path.join(found["folder"], "draft.md"), "a", encoding="utf-8") as handle:
+            handle.write("\nA paragraph nobody reviewed.\n")
+        done = self.drafts_cli("--show", ident)
+        self.assertEqual(1, done.returncode)
+        self.assertEqual("draft_stale", json.loads(done.stdout)["code"])
+        self.assertNotIn("A paragraph nobody reviewed", done.stdout)
+        self.assertEqual("stale", self.kept()[0]["state"])
+
+    def test_the_apply_writes_from_a_checked_copy_of_the_approved_bytes(self):
+        ident = self.make_draft()
+        self.assertTrue(self.grant(ident))
+        done = self.drafts_cli("apply", ident)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        import storage
+        copy = storage.cache_folder(self.repo_name, "keeper", ident + "-approved", create=False)
+        (found,) = self.kept()
+        self.assertNotEqual(found["folder"], copy)
+        self.assertEqual(slurp(os.path.join(found["folder"], "draft.md")), slurp(os.path.join(copy, "draft.md")))
+        self.assertIn(DRAFT_TEXT, self.body(5))
 
     def test_a_body_changed_on_github_while_the_draft_waited_makes_it_stale_and_writes_nothing(self):
         ident = self.make_draft()
@@ -694,9 +776,12 @@ class DraftGrantTests(unittest.TestCase):
         started = mock.patch("observer_hooks.launch_worker")
         started.start()
         self.addCleanup(started.stop)
+        self.content = "e" * 64   # the content hash the keeper recorded for each draft's bytes
         with self.store_module.Store(self.REPO) as store:
             self.draft = store.add_draft(5, ["Results"], str(self.base / "folder"), "a" * 64, "b" * 64)
             self.other = store.add_draft(6, ["Limitations"], str(self.base / "other"), "c" * 64, "d" * 64)
+            rows = keeper_rules.remember([], self.draft, self.content)
+            store.set_control(keeper_rules.CONTENTS, keeper_rules.remember(rows, self.other, self.content))
         self.question = keeper_rules.question(self.draft, ["Results"], 5)
 
     def ask(self, question, answer, ident="toolu_01ask", labels=("Approve", "Not now", "Drop it"), structured=True,
@@ -721,7 +806,7 @@ class DraftGrantTests(unittest.TestCase):
         data = dict(self.data, tool_name="Bash", tool_input={"command": command})
         self.hooks.handle("pre-tool", data, self.config, self.REPO)
         with self.store_module.Store(self.REPO) as store:
-            return store.has_grant(keeper_rules.grant_key(ident))
+            return store.has_grant(keeper_rules.grant_key(ident, self.content))
 
     def test_only_the_users_approve_to_the_question_about_that_draft_grants_it(self):
         self.assertFalse(self.granted())   # no answer
@@ -749,8 +834,8 @@ class DraftGrantTests(unittest.TestCase):
         self.ask(self.question, "Approve", ident="toolu_01approve")
         self.assertTrue(self.granted())
         with self.store_module.Store(self.REPO) as store:
-            self.assertTrue(store.take_grant(keeper_rules.grant_key(self.draft)))
-            self.assertFalse(store.take_grant(keeper_rules.grant_key(self.draft)))   # one answer, one write
+            self.assertTrue(store.take_grant(keeper_rules.grant_key(self.draft, self.content)))
+            self.assertFalse(store.take_grant(keeper_rules.grant_key(self.draft, self.content)))   # one answer, one write
         self.assertFalse(self.granted())   # the same answer never grants again
         self.ask(self.question, "Approve", ident="toolu_01again", structured=False)   # a new answer, in the fixed sentence
         self.assertTrue(self.granted())
@@ -783,8 +868,18 @@ class DraftGrantTests(unittest.TestCase):
             store.set_draft(self.draft, "later", until=time.time() + 86400)
         self.assertTrue(self.granted())    # one put off with "Not now" may still be approved when it is asked again
 
+    def test_the_grant_covers_only_the_bytes_the_keeper_recorded(self):
+        self.ask(self.question, "Approve", ident="toolu_01approve")
+        self.assertTrue(self.granted())
+        with self.store_module.Store(self.REPO) as store:
+            self.assertFalse(store.has_grant(keeper_rules.grant_key(self.draft, "f" * 64)))   # other bytes
+            self.assertTrue(store.take_grant(keeper_rules.grant_key(self.draft, self.content)))
+            store.set_control(keeper_rules.CONTENTS, [])   # a draft with no recorded bytes is granted nothing
+        self.ask(self.question, "Approve", ident="toolu_01again")
+        self.assertFalse(self.granted())
+
     def test_a_held_memorys_grant_and_a_drafts_do_not_cross(self):
-        key = keeper_rules.grant_key(self.draft)
+        key = keeper_rules.grant_key(self.draft, self.content)
         self.assertNotRegex(key, r"^%s0{24}$" % self.draft)
         self.ask(self.question, "Approve", ident="toolu_01approve")
         self.assertTrue(self.granted())

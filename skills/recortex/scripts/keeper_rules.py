@@ -29,6 +29,7 @@ writing in the last FOREIGN_START_HOURS hours.
 
 import hashlib
 import json
+import re
 
 import recortex
 
@@ -185,10 +186,44 @@ STALE_LINE = ("The paper's text or what it rests on changed while the draft wait
               "will draft it again when something is notable.")
 
 
-def grant_key(short):
-    """The 32 hex digits the store's one-time grants are kept under for a draft: a hash of its short id, so that no
+# The bytes the user approves: the keeper records the hash of these three files as it wrote them, and `drafts --show` and
+# `drafts apply` work only on a fresh copy whose bytes have that hash. The grant is bound to it too.
+APPROVED_FILES = ("draft.md", "used.json", "memory.json")
+CONTENTS = "keeper_contents"   # store control: [[short id, content hash], ...], newest last
+CONTENTS_KEPT = 200
+HEX64 = re.compile(r"[0-9a-f]{64}")
+
+
+def content_hash(files):
+    """The hash of a draft's approved bytes: SHA-256 over the names and SHA-256 values of APPROVED_FILES, from `files`
+    ({name: bytes}). None when one of them is missing or not bytes."""
+    if not all(isinstance(files.get(name), bytes) for name in APPROVED_FILES):
+        return None
+    parts = [[name, hashlib.sha256(files[name]).hexdigest()] for name in APPROVED_FILES]
+    return hashlib.sha256(json.dumps(parts).encode("ascii")).hexdigest()
+
+
+def recorded(contents, short):
+    """The content hash the keeper recorded for the draft `short`, or None."""
+    found = None
+    for row in contents if isinstance(contents, list) else []:
+        if (isinstance(row, list) and len(row) == 2 and row[0] == short and isinstance(row[1], str)
+                and HEX64.fullmatch(row[1])):
+            found = row[1]
+    return found
+
+
+def remember(contents, short, digest):
+    """`contents` with the draft's content hash added, the oldest dropped past CONTENTS_KEPT."""
+    rows = [row for row in (contents if isinstance(contents, list) else []) if isinstance(row, list) and row[:1] != [short]]
+    return (rows + [[short, digest]])[-CONTENTS_KEPT:]
+
+
+def grant_key(short, content):
+    """The 32 hex digits the store's one-time grants are kept under for a draft: a hash of its short id and of the content
+    hash of the bytes the user was asked about, so that a grant given for one set of bytes cannot cover another, and no
     draft's grant can be taken for a held memory's, whose key is an event key."""
-    return hashlib.sha256(("draft:" + short).encode("ascii")).hexdigest()[:32]
+    return hashlib.sha256(("draft:%s:%s" % (short, content)).encode("ascii")).hexdigest()[:32]
 
 
 def question_line(headings, topic):
