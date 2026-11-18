@@ -192,7 +192,7 @@ class ShardListTests(unittest.TestCase):
         shards are the same commands."""
         held = collections.Counter(identity(args) for _, commands in ci_shards.SHARDS for args in commands)
         lines = collections.Counter(identity(args) for args in contributing_commands())
-        self.assertEqual(18, sum(lines.values()))
+        self.assertEqual(19, sum(lines.values()))
         self.assertEqual(lines, held)
         self.assertEqual(set(), {key for key, count in held.items() if count != 1})
 
@@ -215,9 +215,9 @@ class ShardListTests(unittest.TestCase):
             self.assertRegex(name, r"^[a-z][a-z0-9-]*$")
             self.assertGreaterEqual(len(commands), 1, name)
 
-    def test_the_jobs_shard_holds_the_three_lines_of_the_sixteenth_command(self):
+    def test_the_jobs_shard_holds_the_four_lines_of_the_sixteenth_command(self):
         jobs = dict(ci_shards.SHARDS)["jobs"]
-        self.assertEqual([ci_shards.files("test_jobs_%s*.py" % part) for part in ("[a-j]", "[k-r]", "[s-z]")], jobs)
+        self.assertEqual([ci_shards.files("test_jobs_%s*.py" % part) for part in ("[a-j]", "[l]", "[km-r]", "[s-z]")], jobs)
 
 
 class WorkflowTests(unittest.TestCase):

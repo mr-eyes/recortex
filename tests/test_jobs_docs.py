@@ -124,20 +124,21 @@ class NumbersTests(unittest.TestCase):
 class ContributingTests(unittest.TestCase):
     def test_the_sixteenth_command_and_the_layout(self):
         text = read("CONTRIBUTING.md")
-        for part in ("[a-j]", "[k-r]", "[s-z]"):   # the sixteenth command runs as three lines: together they pass five minutes
+        for part in ("[a-j]", "[l]", "[km-r]", "[s-z]"):   # the sixteenth command runs as four lines: together they pass five minutes
             self.assertIn("python3 -m unittest discover -s tests -p 'test_jobs_%s*.py'" % part, text)
         self.assertIn("The sixteen commands", text)
         self.assertNotIn("fifteen commands", text)
-        self.assertEqual(18, len(re.findall(r"^python3 -m unittest ", text.split("```bash", 1)[1].split("```", 1)[0], re.M)))
+        self.assertEqual(19, len(re.findall(r"^python3 -m unittest ", text.split("```bash", 1)[1].split("```", 1)[0], re.M)))
         self.assertIn("commands/", text)
         self.assertIn("SubagentStop", text)
 
-    def test_the_plugin_is_version_1_5_0_and_the_upgrade_entry_is_for_it(self):
+    def test_the_plugin_is_version_1_5_1_and_the_upgrade_entry_is_for_it(self):
         import json
-        self.assertEqual("1.5.0", json.loads(read(".claude-plugin", "plugin.json"))["version"])
+        self.assertEqual("1.5.1", json.loads(read(".claude-plugin", "plugin.json"))["version"])
         text = read("skills", "recortex", "references", "upgrading.md")
+        self.assertLess(text.index("## Version 1.5.1"), text.index("## Version 1.5.0"))
         self.assertLess(text.index("## Version 1.5.0"), text.index("## Version 1.4.0"))
-        self.assertNotIn("## Version 1.5.0", text.split("## Version 1.4.0", 1)[1])
+        self.assertNotIn("## Version 1.5.1", text.split("## Version 1.5.0", 1)[1])
 
     def test_each_new_boundary_has_its_rule(self):
         text = read("CONTRIBUTING.md")

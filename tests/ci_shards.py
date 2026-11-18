@@ -83,7 +83,8 @@ SHARDS = [
     ]),
     ("jobs", [
         files("test_jobs_[a-j]*.py"),                                                                 # 165
-        files("test_jobs_[k-r]*.py"),                                                                 # 165
+        files("test_jobs_[l]*.py"),                                                                   # 205
+        files("test_jobs_[km-r]*.py"),                                                                # 145
         files("test_jobs_[s-z]*.py"),                                                                 # 125
     ]),
 ]
