@@ -237,6 +237,21 @@ class SortPass(Scripted):
             self.assertEqual({'level': 1}, db.get_control('worker_last')['dropped'])
         self.assertEqual(('deferred', 'uncertain'), self.state(sid))
 
+    def test_status_tells_the_labels_code_dropped_and_the_dialogs_it_could_not_read(self):
+        import contextlib
+        import io
+        import observer
+        self.level('notes')
+        self.capture('Remind me to rerun with the other seed.')
+        self.run_worker(self.scripted([label('to_do', sources=[1]), label('memory', 'result', [9])], []))
+        out = io.StringIO()
+        with patch.object(observer.recortex, 'load_config', return_value=self.config), contextlib.redirect_stdout(out):
+            self.assertEqual(0, observer.main(['status']))
+        report = json.loads(out.getvalue())
+        self.assertEqual({'level': 1, 'ordinal': 1}, report['worker_last']['dropped'])
+        self.assertEqual(0, report['worker_last']['labels'])
+        self.assertEqual(0, report['dialogs_unread'])
+
     def test_an_ordinal_out_of_range_drops_that_label_and_nothing_else(self):
         first = self.capture(QUOTE)
         second = self.capture('The parser tests pass: 12 of 12 files.', role='assistant')
