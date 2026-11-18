@@ -366,6 +366,7 @@ class ObserverHookTests(unittest.TestCase):
         denied = ("python3 skills/recortex/scripts/observer.py resume all", "python3 observer.py resume publication",
                   "python3 'observer.py' 're''sume' all", 'python3 obs"erver".py "resume"',
                   "python3 observer.py release 0123456789abcdef01234567", "python3 observer.py disable",
+                  "python3 observer.py undo 3", 'python3 skills/recortex/scripts/observer.py "un""do" 12',
                   "python3 observer.py 'resume all")  # does not split: read as written
         for with_hold in (False, True):
             if with_hold:

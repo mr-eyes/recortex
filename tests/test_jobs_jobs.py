@@ -373,6 +373,63 @@ class UndoTests(JobsBox):
         self.assertIn("correction", jobs.CORRECTED["memory"])
 
 
+class UndoIsTheUsersTests(JobsBox):
+    """undo changes GitHub, so it is the user's own command on their terminal, as release is."""
+
+    def act_to_undo(self):
+        self.finish_task()
+        self.jobs()
+        return self.acts(["task_closed"])[0]["id"]
+
+    def test_a_session_has_no_terminal_and_undo_changes_nothing(self):
+        act = self.act_to_undo()
+        writes = len(self.writes())
+        code, text = self.cli("undo", str(act))
+        self.assertEqual((1, "terminal-required"), (code, json.loads(text)["code"]))
+        self.assertIn("separate terminal", json.loads(text)["note"])
+        self.assertEqual(writes, len(self.writes()))
+        self.assertEqual("closed", self.issue_state(7))
+
+    def test_on_the_users_terminal_it_asks_for_the_word_undo(self):
+        act = self.act_to_undo()
+        with mock.patch.object(observer, "confirmed", return_value="not-confirmed"):
+            code, text = self.cli("undo", str(act))
+        self.assertEqual((1, "not-confirmed"), (code, json.loads(text)["code"]))
+        self.assertEqual("closed", self.issue_state(7))
+        asked = []
+        with mock.patch.object(observer, "confirmed", side_effect=lambda word, question: asked.append((word, question))):
+            code, text = self.cli("undo", str(act))
+        self.assertEqual((0, "reopened"), (code, json.loads(text)["code"]), text)
+        self.assertEqual("undo", asked[0][0])
+        self.assertEqual("open", self.issue_state(7))
+
+
+class CommandTableTests(unittest.TestCase):
+    """Every subcommand of observer.py is in the table the hook's pattern is made from; each is safe, grant or terminal."""
+
+    def test_the_table_has_a_row_for_each_subcommand_and_no_other(self):
+        names = set(observer.parser()._subparsers._group_actions[0].choices)
+        self.assertEqual(names, set(hooks.COMMANDS))
+        self.assertEqual({"safe", "grant", "terminal"}, set(hooks.COMMANDS.values()))
+
+    def test_the_hooks_refusal_names_exactly_the_terminal_rows(self):
+        terminal = {name for name, how in hooks.COMMANDS.items() if how == "terminal"}
+        self.assertEqual({"release", "disable", "resume", "undo"}, terminal)
+        for name in hooks.COMMANDS:
+            data = {"tool_name": "Bash", "tool_input": {"command": "python3 skills/recortex/scripts/observer.py %s 1" % name}}
+            self.assertEqual(name in terminal, hooks._undo(data), name)
+
+    def test_each_row_is_explained_where_the_command_is_defined(self):
+        with open(os.path.join(ts.SCRIPTS, "observer.py"), encoding="utf-8") as handle:
+            source = handle.read()
+        parser_source = source[source.index("def parser():"):source.index("REASONS = ")]
+        for name, how in hooks.COMMANDS.items():
+            if name == "hook":
+                continue
+            self.assertRegex(parser_source, r"# [^\n]*\b%s\b[^\n]*: (?:%s)\b" % (re.escape(name), how if how != "grant" else "grant"),
+                             name)
+
+
 # ---------------------------------------------------------------- what waits, and its grants
 
 class WaitingTests(JobsBox):
@@ -473,15 +530,58 @@ class WaitingTests(JobsBox):
         self.assertEqual((1, "approval"), (code, json.loads(text)["code"]))
         self.assertEqual([], self.titled("Task: write the benchmark note"))
 
-    def test_not_now_puts_a_task_item_off_for_a_day_and_a_held_memory_cannot_be_put_off(self):
+    def grant(self, key, answer):
+        """The one-time grant the hook records from the user's recorded "Not now" ("later") or "Drop"/"Drop it" ("no")."""
+        with store_module.Store(REPO, config=self.pcfg) as db:
+            item = waiting.find_any(db, key)
+            return db.grant_answer(waiting.answer_key(item, answer), "toolu_01" + answer)
+
+    def test_not_now_puts_a_task_item_off_for_a_day_on_the_users_not_now_only(self):
         key = self.held_task()
+        code, text = self.cli("later", key[:8])   # a session's own call: refused, the item still waits
+        self.assertEqual((1, "later_unanswered"), (code, json.loads(text)["code"]))
+        with store_module.Store(REPO, config=self.pcfg) as db:
+            self.assertEqual(1, len([item for item in db.waiting() if item["kind"] == "task_open"]))
+        self.grant(key, "no")   # a "Drop it" is not a "Not now"
+        self.assertEqual(1, self.cli("later", key[:8])[0])
+        self.grant(key, "later")
         code, text = self.cli("later", key[:8])
         self.assertEqual((0, "later"), (code, json.loads(text)["code"]))
+        self.assertEqual(1, self.cli("later", key[:8])[0])   # the grant was used once
         with store_module.Store(REPO, config=self.pcfg) as db:
             self.assertEqual([], [item for item in db.waiting() if item["kind"] == "task_open"])
             db.set_control(store_module.LATER, {key[:8]: time.time() - 5})   # its time has passed
             self.assertEqual(1, len([item for item in db.waiting() if item["kind"] == "task_open"]))
-            self.assertEqual("not_waiting", waiting.later(db, "0" * 8, time.time())["code"])
+            self.assertEqual("not_waiting", waiting.later(db, "0" * 8, time.time(), answered=True)["code"])
+
+    def test_the_users_own_terminal_may_put_an_item_off_without_a_grant(self):
+        key = self.held_task()
+        with mock.patch.object(observer, "on_terminal", return_value=True):
+            code, text = self.cli("later", key[:8])
+        self.assertEqual((0, "later"), (code, json.loads(text)["code"]))
+
+    def test_discard_needs_the_users_drop_and_changes_nothing_without_it(self):
+        key = self.held_task()
+        code, text = self.cli("discard", key)
+        self.assertEqual((1, "answer_unanswered"), (code, json.loads(text)["code"]))
+        self.assertEqual("deferred", self.event(key)["state"])
+        self.grant(key, "later")   # "Not now" is not "Drop it"
+        self.assertEqual(1, self.cli("discard", key)[0])
+        self.assertEqual("deferred", self.event(key)["state"])
+        self.grant(key, "no")
+        self.assertEqual(0, self.cli("discard", key)[0])
+        self.assertEqual("rejected", self.event(key)["state"])
+        self.assertEqual(1, self.cli("discard", key)[0])   # nothing left to discard
+
+    def test_an_event_nobody_asked_about_is_dropped_from_the_users_terminal_only(self):
+        self.use(level="everything")
+        key, _ = self.task_event()   # ready in the queue, not a question to the user
+        code, text = self.cli("discard", key)
+        self.assertEqual((1, "answer_unanswered"), (code, json.loads(text)["code"]))
+        self.assertEqual("ready", self.event(key)["state"])
+        with mock.patch.object(observer, "on_terminal", return_value=True):
+            self.assertEqual(0, self.cli("discard", key)[0])
+        self.assertEqual("rejected", self.event(key)["state"])
 
     def test_dropping_the_task_to_open_discards_what_waited_for_it(self):
         self.use(level="assistant")
@@ -490,6 +590,8 @@ class WaitingTests(JobsBox):
         with store_module.Store(REPO, config=self.pcfg) as db:
             db.transition(opener, "deferred", reason="level_ask")
         self.assertEqual("depends", self.pub(marked)["waiting"])
+        self.assertEqual(1, self.cli("discard", opener)[0])   # no answer yet
+        self.grant(opener, "no")
         code, text = self.cli("discard", opener)
         self.assertEqual(0, code, text)
         self.assertEqual("rejected", self.event(opener)["state"])
@@ -822,6 +924,76 @@ class GrantTests(HookBox):
                         "python3 observer.py act %s extra; ls" % ("0" * 8)):
             self.assertFalse(self.granted(self.open_item["short"], self.task_key, command), command)
         self.assertTrue(self.granted(self.open_item["short"], self.task_key))
+
+    # -- declining: "Not now" and "Drop it" are the user's answers too
+    def draft_item(self):
+        with self.store() as db:
+            self.draft = db.add_draft(5, ["Results"], str(self.base / "folder"), "a" * 64, "b" * 64)
+            return waiting.find_any(db, self.draft)
+
+    def ask_draft(self, answer, ident):
+        self.ask(keeper_rules.question(self.draft, ["Results"], 5), answer, ident, keeper_rules.DRAFT_OPTIONS)
+
+    def decline_granted(self, item, answer, command):
+        self.handle("pre-tool", tool_name="Bash", tool_input={"command": command})
+        with self.store() as db:
+            return db.has_grant(waiting.answer_key(item, answer))
+
+    def test_not_now_and_drop_it_grant_only_their_own_command_and_item(self):
+        later = "python3 skills/recortex/scripts/observer.py later %s" % self.open_item["short"]
+        discard = "python3 skills/recortex/scripts/observer.py discard %s" % self.task_key
+        self.assertFalse(self.decline_granted(self.open_item, "later", later))   # no answer
+        self.ask_open("Open it", "toolu_01yes")   # a yes is not a Not now, and not a Drop it
+        self.assertFalse(self.decline_granted(self.open_item, "later", later))
+        self.assertFalse(self.decline_granted(self.open_item, "no", discard))
+        self.ask_open("Not now", "toolu_01later")
+        self.assertTrue(self.decline_granted(self.open_item, "later", later))
+        self.assertFalse(self.decline_granted(self.open_item, "no", discard))   # Not now does not drop
+        self.ask_open("Drop it", "toolu_01drop")
+        self.assertTrue(self.decline_granted(self.open_item, "no", discard))
+
+    def test_not_now_for_the_task_to_close_and_nothing_to_drop(self):
+        later = "python3 observer.py later %s" % self.close_item["short"]
+        self.ask_close("Not now", "toolu_01closelater")
+        self.assertTrue(self.decline_granted(self.close_item, "later", later))
+        # a task to close has no "Drop it": no label, no grant, whatever was answered
+        self.assertFalse(self.decline_granted(self.close_item, "no", "python3 observer.py discard %s" % self.close_key))
+
+    def test_a_drafts_not_now_and_drop_it_need_their_own_answers(self):
+        item = self.draft_item()
+        later = "python3 observer.py drafts later %s" % self.draft
+        drop = "python3 observer.py drafts drop %s" % self.draft
+        self.assertFalse(self.decline_granted(item, "later", later))
+        self.ask_draft("Approve", "toolu_01approve")
+        self.assertFalse(self.decline_granted(item, "later", later))
+        self.assertFalse(self.decline_granted(item, "no", drop))
+        self.ask_draft("Not now", "toolu_01notnow")
+        self.assertTrue(self.decline_granted(item, "later", later))
+        self.assertFalse(self.decline_granted(item, "no", drop))
+        self.ask_draft("Drop it", "toolu_01dropit")
+        self.assertTrue(self.decline_granted(item, "no", drop))
+
+    def test_a_held_memory_is_dropped_on_the_users_drop_only(self):
+        key = self.hold_memory(2)
+        with self.store() as db:
+            item = waiting.find_any(db, key)
+        question = waiting.entry(item)["question"]
+        discard = "python3 observer.py discard %s" % key
+        self.assertFalse(self.decline_granted(item, "no", discard))
+        self.ask(question, "Post", "toolu_01post", waiting.HELD_OPTIONS)
+        self.assertFalse(self.decline_granted(item, "no", discard))
+        self.ask(question, "Drop", "toolu_01drop", waiting.HELD_OPTIONS)
+        self.assertTrue(self.decline_granted(item, "no", discard))
+
+    def test_the_decline_grants_are_read_from_the_command_as_the_shell_splits_it(self):
+        short, key = self.open_item["short"], self.task_key
+        self.assertEqual(("later", short), hooks._declined({"tool_name": "Bash", "tool_input": {"command": "python3 /x/observer.py later " + short}}))
+        self.assertEqual(("no", key), hooks._declined({"tool_name": "Bash", "tool_input": {"command": "observer.py --repo a/b discard " + key}}))
+        self.assertEqual(("later", short), hooks._declined({"tool_name": "Bash", "tool_input": {"command": "observer.py drafts later " + short}}))
+        self.assertEqual(("no", short), hooks._declined({"tool_name": "Bash", "tool_input": {"command": "observer.py drafts drop " + short}}))
+        for command in ("observer.py drafts show " + short, "observer.py discard " + short, "observer.py later 'x", "ls later " + short,
+                        "observer.py drafts apply " + short, "observer.py later"):
+            self.assertIsNone(hooks._declined({"tool_name": "Bash", "tool_input": {"command": command}}), command)
 
     def test_the_command_is_read_as_the_shell_splits_it(self):
         self.assertIsNone(hooks._acted({"tool_name": "Bash", "tool_input": {"command": "ls"}}))

@@ -514,6 +514,65 @@ def _grant_act(store, data, project_root):
             return
 
 
+def _verb(data):
+    """(subcommand, its first two words after it) of a Bash call to observer.py, read as the shell splits it, or None."""
+    command = (data.get("tool_input") or {}).get("command") if isinstance(data.get("tool_input"), dict) else None
+    if data.get("tool_name") not in ("Bash", "bash") or not isinstance(command, str) or "observer" not in command:
+        return None
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    for n, word in enumerate(words):
+        if os.path.basename(word) == "observer.py":
+            rest, skip = [], False
+            for w in words[n + 1:]:
+                if skip:
+                    skip = False
+                elif w == "--repo":   # the only option before the subcommand: it takes a value
+                    skip = True
+                elif not w.startswith("--"):
+                    rest.append(w)
+            return (rest[0], rest[1:3]) if rest else None
+    return None
+
+
+def _declined(data):
+    """(answer, item id) of a Bash call that declines something that waits, or None: `observer.py later SHORT` ("later"),
+    `observer.py discard KEY` ("no") and `observer.py drafts later|drop ID` ("later", "no")."""
+    found = _verb(data)
+    if found is None:
+        return None
+    verb, rest = found
+    if verb == "later" and rest and observer_store.DRAFT_ID.fullmatch(rest[0]):
+        return "later", rest[0]
+    if verb == "discard" and rest and observer_store.EVENT_KEY.fullmatch(rest[0]):
+        return "no", rest[0]
+    if verb == "drafts" and len(rest) == 2 and rest[0] in ("later", "drop") and observer_store.DRAFT_ID.fullmatch(rest[1]):
+        return ("later" if rest[0] == "later" else "no"), rest[1]
+    return None
+
+
+def _grant_decline(store, data, project_root):
+    """Before observer.py later SHORT, discard KEY, or drafts later|drop ID: when that item waits and the user answered the
+    label of that answer ("Not now", "Drop" or "Drop it") to the session's question naming its short id and quoting its
+    line (observer_waiting.line; observer_sources.answered), a one-time grant under the answer's own key
+    (observer_waiting.answer_key), which the command consumes. Without it the command is refused: a session cannot
+    postpone or drop what waits for the user on its own."""
+    found = _declined(data)
+    if found is None:
+        return
+    import observer_waiting
+    answer, ident = found
+    item = observer_waiting.find_any(store, ident)
+    label = observer_waiting.ANSWERS.get(item["kind"], {}).get(answer) if item is not None else None
+    if label is None:
+        return
+    given = observer_sources.answered(data, project_root, item["short"], observer_waiting.line(item), label=label)
+    if given:
+        store.grant_answer(observer_waiting.answer_key(item, answer), given)
+
+
 def _entry_repo():
     """The repository whose holds apply here: the one this folder's private entry names, never the project file's,
     which a single edit could change. None without an entry; False when the approvals cannot be read or the entry
@@ -540,14 +599,26 @@ def _unchecked(data, denial=UNCHECKED):
     return None if observer_holds.read_only(tool_name, tool_input) else denial
 
 
-SELF_RELEASE = {"reason": "recortex observer: only the user releases a hold, switches the observer off or resumes it, "
-                          "in a separate terminal outside Claude Code."}
-UNDO = re.compile(r"observer(?:\.py)?\b.*\b(?:release|disable|resume)\b")
+SELF_RELEASE = {"reason": "recortex observer: only the user releases a hold, switches the observer off, resumes it or "
+                          "undoes an act, in a separate terminal outside Claude Code."}
+# One row for each subcommand of observer.py: how a session's own call to it is kept in check. "safe": it only reads, or
+# only does what the settings and the caps already allow, or only does less. "grant": it changes what waits for the user
+# or GitHub, and the command refuses without the one-time grant the hook records from the user's own recorded answer to
+# that exact item's question (or without the user's own terminal). "terminal": it is the user's own command, asked on
+# their terminal, and the hook refuses a session's own Bash call to it (UNDO below is made from these rows). A test holds
+# this table, the parser of observer.py and the pattern together; observer.py states each row's reason at its definition.
+COMMANDS = {"status": "safe", "holds": "safe", "pending": "safe", "log": "safe", "context": "safe", "hook": "safe",
+            "runtime-check": "safe", "run-worker": "safe", "record": "safe", "reconcile": "safe", "limits": "safe",
+            "enable": "safe", "pause": "safe",
+            "act": "grant", "later": "grant", "discard": "grant", "drafts": "grant",
+            "release": "terminal", "disable": "terminal", "resume": "terminal", "undo": "terminal"}
+TERMINAL_ONLY = tuple(sorted(name for name, how in COMMANDS.items() if how == "terminal"))
+UNDO = re.compile(r"observer(?:\.py)?\b.*\b(?:%s)\b" % "|".join(TERMINAL_ONLY))
 
 
 def _undo(data):
-    """True for a Bash call that names observer.py together with release, disable or resume: the user's own
-    commands, which a session never needs. Automatic mode is not among them: the setup wizard's session turns it on,
+    """True for a Bash call that names observer.py together with release, disable, resume or undo (COMMANDS' terminal rows):
+    the user's own commands, which a session never needs. Automatic mode is not among them: the setup wizard's session turns it on,
     on the user's answer. The command is read as the shell splits it (quotes taken out),
     and as written when it does not split. A guard against mistakes: a session with shell access can get round it."""
     command = (data.get("tool_input") or {}).get("command") if isinstance(data.get("tool_input"), dict) else None
@@ -784,6 +855,7 @@ def _handle(event, data, config, repo, decision):
                         _grant(store, data, project_root)
                         _grant_draft(store, data, project_root)
                         _grant_act(store, data, project_root)
+                        _grant_decline(store, data, project_root)
                         if _ran_waiting(data):
                             _note_ran(store, data)
                     except TimeoutError:

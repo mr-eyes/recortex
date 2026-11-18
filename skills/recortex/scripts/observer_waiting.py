@@ -9,15 +9,25 @@ A "yes" needs the one-time grant that the hook records from the user's own answe
 (observer_hooks._grant_act and its siblings): found by the short id and the quoted line, with the label of the item's
 kind. `act` consumes it. "Not now" and "Drop it" give none.
 """
+import json
+
 import keeper_rules
 import observer_publisher
 import observer_store
 import record_format
 
-LABELS = {"held": "Post", "task_open": "Open it", "task_close": "Close it", "draft": "Approve"}
+# The options of each kind and the answer each gives: "yes" carries the item out, "later" is Not now, "no" drops it. Every
+# answer that changes something needs the one-time grant of the user's own recorded answer, with exactly that label.
+ANSWERS = {"held": {"yes": "Post", "no": "Drop"},
+           "task_open": {"yes": "Open it", "later": "Not now", "no": "Drop it"},
+           "task_close": {"yes": "Close it", "later": "Not now"},
+           "draft": {"yes": "Approve", "later": "Not now", "no": "Drop it"}}
+LABELS = {kind: answers["yes"] for kind, answers in ANSWERS.items()}
 HELD_QUESTION = 'Memory %s (%s) on #%d: "%s". It would change: %s. Post it, or drop it?'
 HELD_OPTIONS = ("Post", "Drop")
 LATER_SECONDS = 86400   # "Not now" puts a task item off for a day (a draft keeps the keeper's own 7 days)
+UNANSWERED = ("No answer of the user's counts for this item: ask the question listed by observer.py pending --waiting "
+              "and run this command right after the user answers with that option.")
 NOTE = ("Ask the user about each item with the multiple-choice question tool, one question per item, from its "
         "template (the line quoted exactly as listed, the short id as listed) and with exactly its options. After each "
         "answer, run the command listed for it, alone in its command: yes, later or no. Run nothing for an answer that is "
@@ -84,6 +94,28 @@ def listing(store):
     return [entry(item) for item in store.waiting()]
 
 
+def answer_key(item, answer):
+    """The 32 hex digits a grant for `answer` ("later" or "no") to `item` is kept under: not the item's own key, which is
+    the "yes" grant's, so that an answer of one kind never grants another."""
+    import hashlib
+    text = json.dumps(["answer", item["kind"], item["key"], answer], separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+
+
+def find_any(store, ident):
+    """The item named by a short id or an event key: in the list that waits, or, for a draft put off with "Not now", the
+    draft itself (it can still be dropped), or None."""
+    if not isinstance(ident, str):
+        return None
+    for item in store.waiting():
+        if ident in (item["short"], item["key"]):
+            return item
+    draft = store.draft(ident) if len(ident) == 8 else None
+    if draft is not None and draft["state"] in ("waiting", "later"):
+        return {"kind": "draft", "key": draft["id"], "short": draft["id"], "created": draft["created"], "draft": draft}
+    return None
+
+
 def find(store, short):
     """The waiting item with this short id, or None."""
     for item in store.waiting():
@@ -146,13 +178,17 @@ def act(store, repo, config, short, close):
                     "drafts apply ID."}
 
 
-def later(store, short, now):
-    """"Not now" for a task item: it waits again after a day. A held memory is posted or dropped; a draft has its own."""
+def later(store, short, now, answered=False):
+    """"Not now" for a task item: it waits again after a day. A held memory is posted or dropped; a draft has its own.
+    `answered` is True on the user's own terminal; otherwise the user's recorded "Not now" to that item's question gives
+    a one-time grant, which is consumed here (a session cannot postpone an item on its own)."""
     item = find(store, short) if isinstance(short, str) else None
     if item is None:
         return {"code": "not_waiting"}
     if item["kind"] not in ("task_open", "task_close"):
         return {"code": "other_kind", "kind": item["kind"]}
+    if not (answered or store.take_grant(answer_key(item, "later"))):
+        return {"code": "later_unanswered", "note": UNANSWERED}
     store.put_off(short, now + LATER_SECONDS)
     return {"code": "later", "until": int(now + LATER_SECONDS)}
 

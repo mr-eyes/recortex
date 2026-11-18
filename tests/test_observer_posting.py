@@ -71,7 +71,9 @@ class ObserverPostingTests(unittest.TestCase):
     def discard(self, key):
         import observer
         out = io.StringIO()
-        with mock.patch.object(observer.recortex, "load_config", return_value=self.config), contextlib.redirect_stdout(out):
+        # on the user's own terminal: a session's own call is refused unless the user answered "Drop" to the question
+        with mock.patch.object(observer.recortex, "load_config", return_value=self.config), \
+                mock.patch.object(observer, "on_terminal", return_value=True), contextlib.redirect_stdout(out):
             self.assertEqual(0, observer.main(["--repo", fixtures.REPO, "discard", key]), out.getvalue())
         with store.Store(fixtures.REPO, config=self.config, readonly=True) as db:
             event = db.event(key)

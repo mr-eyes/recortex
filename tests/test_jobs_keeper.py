@@ -698,8 +698,21 @@ class DraftsCommandTests(KeeperBox):
         self.t0 += 2 * HOUR
         self.assertEqual("drafted", self.consider(now=self.t0 + 31 * 60)["code"])
 
-    def test_not_now_puts_the_draft_off_seven_days_and_needs_no_grant(self):
+    def allow(self, ident, answer):
+        """The one-time grant the hook records from the user's recorded "Not now" ("later") or "Drop it" ("no") to that
+        draft's question."""
+        import observer_waiting
+        with self.open_store() as store:
+            return store.grant_answer(observer_waiting.answer_key(observer_waiting.find_any(store, ident), answer),
+                                      "toolu_01" + answer)
+
+    def test_not_now_puts_the_draft_off_seven_days_on_the_users_not_now_and_not_before(self):
         ident = self.make_draft()
+        done = self.drafts_cli("later", ident)   # a session's own call: no answer, nothing changes
+        self.assertEqual(1, done.returncode, done.stdout)
+        self.assertEqual("answer_unanswered", json.loads(done.stdout)["code"])
+        self.assertEqual("waiting", self.kept()[0]["state"])
+        self.assertTrue(self.allow(ident, "later"))
         done = self.drafts_cli("later", ident)
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
         (found,) = self.kept()
@@ -715,8 +728,14 @@ class DraftsCommandTests(KeeperBox):
 
     def test_drop_it_holds_the_topic_until_its_due_row_changes(self):
         ident = self.make_draft()
+        refused = self.drafts_cli("drop", ident)   # no answer: refused, nothing changes
+        self.assertEqual((1, "waiting"), (refused.returncode, self.kept()[0]["state"]))
+        self.assertTrue(self.allow(ident, "later"))   # a "Not now" is not a "Drop it"
+        self.assertEqual(1, self.drafts_cli("drop", ident).returncode)
+        self.assertTrue(self.allow(ident, "no"))
         done = self.drafts_cli("drop", ident)
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(1, self.drafts_cli("drop", ident).returncode)   # the grant went with the drop; so did the draft
         self.assertEqual("dropped", self.kept()[0]["state"])
         self.assertEqual("dropped", self.consider(now=self.t0 + 40 * HOUR)["code"])
         self.assertEqual(2, len(self.calls))

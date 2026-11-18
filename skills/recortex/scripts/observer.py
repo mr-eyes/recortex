@@ -24,11 +24,17 @@ def parser():
     root = argparse.ArgumentParser(description=__doc__)
     root.add_argument("--repo")
     sub = root.add_subparsers(dest="command", required=True)
+    # How a session's own call to each subcommand is kept in check (observer_hooks.COMMANDS holds the same table, and a test
+    # holds the two together): safe, grant (the user's recorded answer to that item's question, or the user's terminal), or
+    # terminal (the user's own command; the hook refuses a session's own call).
+    # status: safe, it only reads.
     status = sub.add_parser("status")
     status.add_argument("--source-details", action="store_true",
                         help="show native directory paths, modes and ownership for capture diagnosis")
+    # holds: safe, it only reads. runtime-check: safe, at most one small call per model, counted in the day's caps.
     for name in ("holds", "runtime-check"):
         sub.add_parser(name)
+    # pending: safe, it only reads (--show-body prints a reviewed comment; --waiting lists what waits).
     pending = sub.add_parser("pending")
     pending.add_argument("--eventkey")
     pending.add_argument("--show-body", action="store_true", help="explicitly display the reviewed comment for this event key")
@@ -38,6 +44,8 @@ def parser():
                          help="everything that waits for the user's answer: held memories, tasks to open or close, "
                               "drafts of the paper's text, each with its question")
     pending.add_argument("--json", action="store_true", help="with --waiting: JSON instead of text")
+    # enable: safe by design, the setup wizard's own step on the user's answer to the level question; it cannot be run by a
+    # project file, and the user sees and removes it with status and disable.
     enable = sub.add_parser("enable", help="preview this machine's settings for this folder; --yes approves and saves them")
     enable.add_argument("--mode", choices=("shadow", "automatic"), default="shadow")
     enable.add_argument("--model", help="required: the Claude model alias or ID for the middle tier (drafts, reviews, summaries)")
@@ -48,14 +56,19 @@ def parser():
     enable.add_argument("--strong-model", help="the model that drafts the paper's text for the user to accept (default: none, "
                                                "the manuscript keeper stays off)")
     enable.add_argument("--yes", action="store_true")
+    # limits: safe, it only lowers the day's caps (a higher number is refused): a session can make the observer do less, never more.
     limits = sub.add_parser("limits", help="lower this folder's daily call caps (a new approval of the same settings); "
                                            "a higher number is refused")
     for tier in runtime.TIERS:
         limits.add_argument("--" + tier, type=int, metavar="N", help="calls a day on the %s tier" % tier)
+    # disable: terminal, it removes the folder's approval and ends its holds, so it is the user's own command.
     sub.add_parser("disable", help="remove this machine's settings and approval for this folder")
+    # pause: safe, it only stops capture or publication; resume: terminal, it ends a pause the user made.
     for name in ("pause", "resume"):
         command = sub.add_parser(name)
         command.add_argument("scope", choices=("capture", "publication", "all"), default="all", nargs="?")
+    # run-worker, record, reconcile: safe, the worker's own steps (the hooks start it), under its lock, the caps and the
+    # level; reconcile only reads GitHub to settle an event that was being sent.
     for name in ("run-worker", "record", "reconcile"):
         command = sub.add_parser(name)
         command.add_argument("--dry-run", action="store_true")
@@ -63,24 +76,33 @@ def parser():
             command.add_argument("--source", required=True, help="retry a known deferred source through independent review")
         if name == "reconcile":
             command.add_argument("eventkey")
+    # release: terminal, it ends a hold the user made.
     release = sub.add_parser("release", help="release a hold; run it yourself in a separate terminal, which asks you "
                                              "to confirm there")
     release.add_argument("hold_id")
+    # act, later: grant, the user's recorded "Open it" or "Close it" (act) or "Not now" (later) to that item's question.
     for name, text in (("act", "carry out the user's yes to a task that waits: open it, or close the finished one"),
                        ("later", "put a task that waits off for a day (the user's Not now)")):
         command = sub.add_parser(name, help=text)
         command.add_argument("short", metavar="SHORT", help="the item's short id, as pending --waiting lists it")
+    # log: safe, it only reads.
     log = sub.add_parser("log", help="what the observer did on its own, with the address of each act")
     log.add_argument("--days", type=int, default=7, help="how many days back (1 to 35, default 7)")
-    undo = sub.add_parser("undo", help="reverse an act where it can be reversed (see observer.py log for the numbers)")
+    # undo: terminal, it changes GitHub (reopens a task, restores a body, closes a task).
+    undo = sub.add_parser("undo", help="reverse an act where it can be reversed (see observer.py log for the numbers); "
+                                       "run it yourself in a separate terminal, which asks you to confirm there")
     undo.add_argument("act", type=int, metavar="ACT")
+    # discard: grant, the user's recorded "Drop" or "Drop it" to that item's question (or the user's terminal).
     discard = sub.add_parser("discard", help="drop a reviewed event that will not be posted; its excerpts then expire")
     discard.add_argument("eventkey")
+    # drafts: grant, apply needs the user's recorded "Approve", later and drop their "Not now" and "Drop it" (listing and
+    # --show only read).
     drafts = sub.add_parser("drafts", help="the drafts of the paper's text that wait for the user's answer: list them, "
                                           "--show ID what would change, or apply, later, drop ID")
     drafts.add_argument("action", nargs="?", choices=("apply", "later", "drop"))
     drafts.add_argument("draft", nargs="?", metavar="ID")
     drafts.add_argument("--show", metavar="ID")
+    # context: safe, it only reads. hook: safe, the hook's own entry point (no model or network call).
     context = sub.add_parser("context")
     context.add_argument("--query", default="")
     context.add_argument("--issue", type=int)
@@ -249,6 +271,31 @@ def terminal():
         return Terminal(os.open("/dev/tty", os.O_RDWR | getattr(os, "O_NOCTTY", 0)))
     except OSError:
         return None
+
+
+def on_terminal():
+    """True when this command runs on the user's own terminal: a controlling terminal and a tty for stdin and stdout, which a
+    command run by Claude Code's Bash tool does not have."""
+    tty = terminal()
+    if tty is None:
+        return False
+    with tty:
+        return True
+
+
+def declined(store, ident, answer):
+    """None when the user may decline item `ident` ("later" or "no") now: they run the command on their own terminal, or
+    their recorded answer to that item's question left the one-time grant, which is consumed here. Else the refusal that
+    is emitted. A session that was not answered, or answered another question, cannot postpone or drop what waits."""
+    import observer_waiting
+    item = observer_waiting.find_any(store, ident)
+    if item is None:
+        return {"code": "not_waiting"}
+    if answer not in observer_waiting.ANSWERS[item["kind"]]:
+        return {"code": "other_kind", "kind": item["kind"]}
+    if on_terminal() or store.take_grant(observer_waiting.answer_key(item, answer)):
+        return None
+    return {"code": "answer_unanswered", "note": observer_waiting.UNANSWERED}
 
 
 def entry_holds(keep=None):
@@ -450,20 +497,27 @@ def _acts(args, store, repo, config, options):
             print(text)
         return 0
     if args.command == "later":
-        result = observer_waiting.later(store, args.short, time.time())
+        result = observer_waiting.later(store, args.short, time.time(), answered=on_terminal())
         emit(result)
         return int(result["code"] != "later")
+    if args.command == "undo":
+        # Terminal-only, as release is: it changes GitHub (reopens a task, restores a body, closes a task), so it is the
+        # user's own command, and the hook refuses a session's own Bash call to it.
+        refused = confirmed("undo", "Undo act %d of %s?" % (args.act, repo))
+        if refused:
+            emit({"code": refused, "note": ("Run observer.py undo yourself in a separate terminal, outside Claude Code: "
+                                            "it asks you to confirm there.") if refused == "terminal-required" else ""})
+            return 1
+        result = observer_jobs.undo(store, repo, config, args.act)
+        emit(result)
+        return int(result["code"] not in ("restored", "reopened", "closed_not_planned"))
     if not runtime.approval_valid(repo, config) or options["mode"] != "automatic":
         emit({"code": "approval", "note": "Only an approved folder in automatic mode acts."}); return 1
-    if args.command == "act":
-        import tasks
-        close = lambda issue: observer_jobs.quiet(tasks.close_task, repo, config, issue)[0]   # its words are not the JSON
-        result = observer_waiting.act(store, repo, config, args.short, close)
-        emit(result)
-        return int(result["code"] not in ("opened", "closed"))
-    result = observer_jobs.undo(store, repo, config, args.act)
+    import tasks
+    close = lambda issue: observer_jobs.quiet(tasks.close_task, repo, config, issue)[0]   # its words are not the JSON
+    result = observer_waiting.act(store, repo, config, args.short, close)
     emit(result)
-    return int(result["code"] not in ("restored", "reopened", "closed_not_planned"))
+    return int(result["code"] not in ("opened", "closed"))
 
 
 def main(argv=None):
@@ -604,6 +658,16 @@ def main(argv=None):
                 event = store.event(args.eventkey)
                 if event is None or event["state"] not in ("ready", "deferred"):
                     emit({"code": "event-not-discardable"}); return 1
+                # Dropping changes what waits for the user: on their own terminal, or after their recorded "Drop" (a held
+                # memory) or "Drop it" (a task to open) to that item's question. A session cannot drop a memory on its own.
+                if not on_terminal():
+                    import observer_waiting
+                    item = next((row for row in store.waiting() if row["key"] == args.eventkey), None)
+                    if item is None:
+                        emit({"code": "answer_unanswered", "note": observer_waiting.UNANSWERED}); return 1
+                    refused = declined(store, args.eventkey, "no")
+                    if refused:
+                        emit(refused); return 1
                 # Dropping an event posts nothing; one that was held stays marked so, and its copies stay refused.
                 store.transition(args.eventkey, "rejected", reason="discarded",
                                  held=observer_publisher.kept(store, event, config))
@@ -624,6 +688,9 @@ def main(argv=None):
                     emit({"code": "draft_required"}); return 1
                 if args.action == "apply":
                     return observer_drafts.apply(store, args.draft, repo, recortex.project_root())
+                refused = declined(store, args.draft, "later" if args.action == "later" else "no")
+                if refused and not (refused["code"] == "not_waiting"):   # an unknown draft says so itself, below
+                    emit(refused); return 1
                 return {"later": observer_drafts.later, "drop": observer_drafts.drop}[args.action](store, args.draft)
             if args.command in ("pause", "resume"):
                 scopes = ("capture", "publication") if args.scope == "all" else (args.scope,)

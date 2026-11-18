@@ -55,6 +55,7 @@ class ObserverStoreTests(unittest.TestCase):
             key, _, _ = self.ready(db, excerpts=["raw transcript words"])
         with mock.patch.object(observer.recortex, "load_config", return_value={"repo": REPO}), \
                 mock.patch.object(observer.recortex, "allowed_users", return_value={"octocat"}), \
+                mock.patch.object(observer, "on_terminal", return_value=True), \
                 mock.patch.object(observer, "emit") as emitted:
             self.assertEqual(0, observer.main(["discard", key]))
             self.assertEqual(1, observer.main(["discard", key]))  # only a ready or deferred event
