@@ -9,6 +9,7 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
+import manuscript_record  # noqa: E402
 import test_manuscript_versions as tv  # noqa: E402
 import test_scripts as ts  # noqa: E402
 
@@ -165,6 +166,93 @@ class PaperExportTests(tv.VersionBox):
 
     def words_file(self, text):
         return tv.tw.WritingBox.words(self, text)
+
+    PART = re.compile(r'<h4 class="parth"[^>]*>([^<]*)</h4>')
+    SECTION = re.compile(r'<h3 class="sech"[^>]*>([^<]*)</h3>|<section class="sec papersec"><h3>([^<]*)</h3>')
+
+    def headings(self, html, level):
+        """The part titles (level 4) or the section headings (level 3: the view's `h3 sech`, paper.html's `h3`) of a page, in order."""
+        if level == 4:
+            return self.PART.findall(html)
+        return [view or paper for view, paper in self.SECTION.findall(html)]
+
+    def view_of(self, mind_html):
+        return mind_html[mind_html.index('<section class="view" id="paper"'):mind_html.index('<section class="view" id="threads"')]
+
+    def test_paper_html_has_the_views_title_and_the_titles_of_the_texts_not_the_hubs_or_the_issues(self):
+        self.written()
+        view = self.view_of(self.mind_page())
+        self.paper()
+        text = self.written_file("paper.html")
+        self.assertIn('<h2 class="papertitle">The manuscript</h2>', text)   # the view's rule: the noun of the profile, capitalized
+        self.assertIn('<p class="papername">sample-project</p>', text)       # and the project's name under it
+        self.assertNotIn("sample-project manuscript hub", text)             # never the hub's title
+        self.assertIn('<h2 id="paper-h" class="ptitle">The manuscript</h2>', view)
+        self.assertIn('<p class="psub">sample-project</p>', view)
+        # each part is titled by its text's own first heading, as the view titles it, not by the title of its issue
+        paper_parts = self.headings(text, 4)
+        view_parts = self.headings(view, 4)
+        self.assertIn("Cover crops keep the topsoil wetter in dry spells", paper_parts)
+        self.assertIn("What the trial shows and what it does not", paper_parts)
+        for title in ("Results: dry spells", "Discussion: limits and next work", "Methods: field design and sampling"):
+            self.assertNotIn(title, paper_parts)                            # the titles of the issues
+            self.assertNotIn(title, text)
+        for title in paper_parts:
+            self.assertIn(title, view_parts)                                  # the view's own part titles
+        self.assertEqual([t for t in view_parts if t in paper_parts], paper_parts)   # in the view's order
+        # the sections are those of the view, in its order, with the numbers the style counts
+        paper_sections = self.headings(text, 3)
+        view_sections = self.headings(view, 3)
+        self.assertTrue(paper_sections)
+        self.assertEqual([t for t in view_sections if t in paper_sections], paper_sections)
+
+    def test_a_project_with_two_profiles_gets_the_manuscripts_sections_only(self):
+        self.written()
+        data = self.repo()
+        data["issues"]["20"] = manuscript_record.issue(
+            "A pilot study", "# Pilot results of the first season\n\n## Results\n\nPILOT-ONLY-TEXT of a second deliverable.\n",
+            ["final-record", "rd:results"], "2026-12-10T10:00:00Z", parent=1)   # newer than the last sync, so the next one reads it
+        self.save(data)
+        self.write_config(dict(self.config, profiles=["research", "manuscript"]))
+        self.ready()
+        self.paper()
+        text = self.written_file("paper.html")
+        self.assertNotIn("PILOT-ONLY-TEXT", text)                            # a section of the research profile is not the manuscript's
+        self.assertNotIn("Pilot results of the first season", text)
+        self.assertIn('<h2 class="papertitle">The manuscript</h2>', text)
+        self.assertIn("dry spells", self.words(text))                       # the manuscript's own sections are all there
+        self.assertEqual(1, self.headings(text, 3).count("Results"))
+        self.assertEqual(0, self.tool("mind.py", "--paper").returncode)
+        self.assertEqual(text, self.written_file("paper.html"))             # a second run writes the same page
+
+    def test_a_project_with_no_plan_profile_keeps_its_old_title_and_every_section(self):
+        self.written()
+        self.write_config(dict(self.config, profiles=["research"]))
+        self.ready()
+        self.paper()
+        text = self.written_file("paper.html")
+        self.assertIn('<h2 class="papertitle">sample-project manuscript hub</h2>', text)
+        self.assertNotIn("papername", text.split("<style>")[1].split("</style>")[1])
+
+    def test_a_named_version_has_the_title_of_the_view_and_the_headings_of_its_own_text(self):
+        self.written()
+        self.assertEqual(0, self.cmd("versions.py", "name", "submitted", "--words-file", self.words_file("call it submitted")).returncode)
+        self.ready()
+        self.paper("--version", "submitted")
+        text = self.written_file("paper-submitted.html")
+        self.assertIn('<h2 class="papertitle">The manuscript</h2>', text)
+        self.assertIn('<p class="papername">sample-project</p>', text)
+        self.assertIn("Cover crops keep the topsoil wetter in dry spells", self.headings(text, 4))
+        self.assertNotIn("Results: dry spells", text)
+
+    def test_a_part_with_no_heading_of_its_own_falls_back_to_the_name_it_is_given(self):
+        import mind_paper
+        body = "## Results\n\nText of the part.\n"
+        paper = mind_paper.paper("octo-org/sample-project", "The manuscript", "A note.", [("ms:results", "Results", [5, 6])],
+                                 {5: "# The text's own title\n\n" + body, 6: body}, {5: "Issue title five", 6: "Issue title six"}, "sample-project")
+        self.assertEqual(["The text's own title", "Issue title six"], [part["name"] for part in paper["sections"][0]["parts"]])
+        self.assertEqual("sample-project", paper["name"])
+        self.assertEqual("", mind_paper.paper("octo-org/sample-project", "T", "N", [], {}, {})["name"])
 
     def test_a_version_the_record_does_not_vouch_for_writes_nothing(self):
         self.written()

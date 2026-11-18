@@ -2672,7 +2672,9 @@ class Page:
                  E("div", {"class": "papertop noprint"},
                    E("button", {"type": "button", "class": "primary", "data-print": "1"}, "Print or save as PDF"),
                    E("span", {"class": "quiet"}, "The browser's print dialog offers \"Save as PDF\".")),
-                 E("h2", {"class": "papertitle"}, title), E("p", {"class": "papernote"}, text_of(paper.get("note"))),
+                 E("h2", {"class": "papertitle"}, title),
+                 E("p", {"class": "papername"}, text_of(paper.get("name"))) if text_of(paper.get("name")) else "",
+                 E("p", {"class": "papernote"}, text_of(paper.get("note"))),
                  *sections, sourced,
                  E("p", {"class": "paperfoot"}, "Written from the record by recortex. Every word is the record's own text."))
         body = E("body", {"class": "paper"}, main, Safe("<script>%s</script>" % script))
@@ -2768,6 +2770,18 @@ def render(model, pictures=None):
 PAPER_UNVOUCHED = "mind: %s"
 
 
+def plan_labels(profiles, plan):
+    """The section labels (lowercase) of the profile whose plan the manuscript view tells, from the shipped profile of the
+    project's entry for it: what the view's own outline holds for that profile and nothing of another one."""
+    for entry in profiles if isinstance(profiles, list) else []:
+        if (entry if isinstance(entry, str) else entry.get("name") if isinstance(entry, dict) else None) == plan["profile"]:
+            try:
+                return {label.lower() for label, _ in recortex.section_labels([entry], shipped_only=True)}
+            except (ValueError, OSError):
+                return set()
+    return set()
+
+
 def write_paper(db, config, repo, args):
     """mind.py --paper [--version NAME]: the paper alone as paper.html (or paper-NAME.html for a named version), beside mind.html in
     the private folder. The current paper is the topics' text that the page tells; a named version is only what the record vouches
@@ -2779,10 +2793,15 @@ def write_paper(db, config, repo, args):
     probe = mind_model.Build(db, repo, {name.lower() for name in allowed}, None)
     probe.read_issues()
     names = {n: issue["title"] for n, issue in probe.issues.items() if probe.title_shown(n)}
-    title = names.get(hub) or repo.split("/")[-1]
+    plan = recortex.plan_profile(profiles)
+    if plan is not None:
+        # the view's rule (references/mind.md, "The manuscript"): "The manuscript" with the project's name under it, never the hub's
+        # title, and the sections of that profile only
+        title, subtitle = mind_model.Build.NOUNS.get(plan["profile"], (None, "the " + plan["noun"]))[1].capitalize(), repo.split("/")[-1]
+    else:
+        title, subtitle = names.get(hub) or repo.split("/")[-1], ""
     if args.version:
         import versions  # noqa: E402 - the versions the record vouches for (references/versions.md)
-        plan = recortex.plan_profile(profiles)
         if plan is None:
             print("mind: this project has no plan, so no version of its paper is named")
             return 1
@@ -2799,9 +2818,12 @@ def write_paper(db, config, repo, args):
         bodies = {row["number"]: row["body"] or "" for row in db.execute("SELECT number, body FROM issues")
                   if row["number"] in told}
         order = index.deliverable_order(db, hub, profiles)
+        if plan is not None:
+            ours = plan_labels(profiles, plan)
+            order = [row for row in order if row[0].lower() in ours]
         note = "As the record says on %s." % mind_model.full_day(datetime.date.today().isoformat() + "T00:00:00Z")
         target = "paper.html"
-    paper = mind_paper.paper(repo, title, note, order, bodies, names)
+    paper = mind_paper.paper(repo, title, note, order, bodies, names, subtitle)
     wanted = mind_figures.wanted({"repo": repo, "threads": paper["threads"]})
     pictures, reasons = mind_figures.load(wanted, repo, None, fetch=bool(args.sync or args.figures))
     text = render_paper(paper, pictures)

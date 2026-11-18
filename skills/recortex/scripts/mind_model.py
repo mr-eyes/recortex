@@ -170,6 +170,13 @@ def short(text, cap=CAP_LINE):
     return text if len(text) <= cap else text[:cap - 3].rstrip() + "..."
 
 
+def text_title(body):
+    """The title a topic's text gives itself: the first level-1 heading of its body, as the model keeps it, or None when it has
+    none. The view's name for a part and the part title of paper.html (mind.py --paper) are this one rule."""
+    title = next((line[2:] for line in clean(body).split("\n") if line.startswith("# ")), "")
+    return short(title) if title.strip() else None
+
+
 def login(value):
     """An account name as GitHub spells one, else None (the page says "an account")."""
     value = clean(value)
@@ -693,10 +700,9 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
             shown = thread["topic"] is not None and self.body_shown(thread["topic"])
             name, source = None, "label"
             if shown:
-                title = next((line[2:] for line in clean(self.issues[thread["topic"]]["body"]).split("\n")
-                              if line.startswith("# ")), "")
-                if title.strip():
-                    name, source = short(title), "body"
+                title = text_title(self.issues[thread["topic"]]["body"])
+                if title:
+                    name, source = title, "body"
             closed = thread["closed_topic"]
             if name is None and label is not None and thread["topic"] is None and closed is not None \
                     and self.title_shown(closed) and self.issues[closed]["title"].strip():
