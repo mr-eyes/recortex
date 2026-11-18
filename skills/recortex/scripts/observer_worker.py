@@ -19,6 +19,8 @@ import index
 import mind_model
 import observer_context
 import observer_holds
+import observer_jobs
+import observer_keeper
 import observer_publisher
 import lint_drafts
 import names
@@ -1402,7 +1404,12 @@ def run_once(repo, config, project_root=None, invoke_fn=None, settle_first=False
                 if store.get_control("call_environment", []) != billing:
                     store.set_control("call_environment", billing)  # names only, for status
                 if time.time() - store.get_control("retention_last", 0) > 86400:
-                    store.expire_handled(options["retention_days"])
+                    store.expire_handled(options["retention_days"])   # also zeroes the token counts past 35 days
+                    try:
+                        import usage
+                        usage.cleanup(repo)   # the estimates' file (agents, injected context): rows past 35 days
+                    except Exception:  # noqa: BLE001 - a file of estimates must never stop the worker
+                        pass
                     store.set_control("retention_last", time.time())
                 tiers = runtime.tier_state(options, store)
                 if not tiers["sort"]["gate"] or not tiers["middle"]["gate"]:
@@ -1442,8 +1449,19 @@ def run_once(repo, config, project_root=None, invoke_fn=None, settle_first=False
                                 store.transition(event["eventkey"], "deferred", reason=reason)
                                 continue
                             break
-                    # keeper: observer_keeper.consider(repo, config, store, options, invoke_fn or runtime.invoke)
-                    # The manuscript keeper (spec 7) is considered here, after the pass and the publisher.
+                    posted = bool(store.get_control("sync_needed", False))   # a verified post set it; the sync clears it
+                    # The manuscript keeper (spec 7) is considered here, after the pass and the publisher; it never raises
+                    # and never writes the paper's text, it only leaves a draft that waits for the user's answer.
+                    observer_keeper.consider(repo, config, store, options, invoke_fn or runtime.invoke,
+                                             session_started=settle_first,
+                                             project_root=project_root or recortex.project_root())
+                    # The housekeeping jobs (spec 8.2): after a pass that posted something, and once a day. No model call.
+                    try:
+                        observer_jobs.run(repo, config, store, options, posted=posted,
+                                          refresh=lambda: refresh_record(repo, config, store, options))
+                    except (OSError, ValueError, sqlite3.Error, recortex.GhError, observer_store.StoreError,
+                            subprocess.TimeoutExpired):
+                        store.set_control("jobs_last", {"at": time.time(), "steps": {"run": "failed"}})
                     if store.get_control("sync_needed", False) and not refresh_record(repo, config, store, options):
                         store.set_control("worker_degraded", "record_unavailable")
                 return report

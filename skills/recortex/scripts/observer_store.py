@@ -171,6 +171,10 @@ def _exclusive_lock(folder, name, wait=0):
 COMMAND_HOLDS = "command-holds.json"
 GRANTS = "answer-grants.json"  # one-time grants to post a held event, from the user's answer (observer_hooks)
 GRANT_SECONDS = 600
+CLOSE_ITEMS = "task_close_items"   # control: [{"issue", "created"}], the finished tasks the user is asked to close
+CLOSE_MAX = 50
+LATER = "waiting_later"          # control: {short id: time until which "Not now" puts the item off}
+LATER_MAX = 100
 ANSWER_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 USED = re.compile(r"[A-Za-z0-9_-]{1,128}:[0-9a-f]{32}")  # an answer and the held event it granted
 
@@ -1147,24 +1151,79 @@ class Store:
 
     # ------------------------------------------------------------------ everything that waits for the user's answer
 
+    # The question to close a finished task (level Assistant) and the items put off with "Not now" are kept in controls,
+    # whole numbers and times only.
+    def close_key(self, issue):
+        """The 32 hex digits that name the question "close #issue?": its grant is bound to them, and their first 8 are the
+        item's short id."""
+        if type(issue) is not int or not 1 <= issue <= COUNT_MAX:
+            raise StoreError("invalid_close")
+        return hashlib.sha256(canonical([self.repo, "close", issue]).encode("utf-8")).hexdigest()[:32]
+
+    def close_items(self):
+        """The finished tasks the observer asks the user to close: [{"issue", "created"}], oldest first."""
+        rows = self.get_control(CLOSE_ITEMS, [])
+        if not isinstance(rows, list):
+            return []
+        return [dict(issue=row["issue"], created=row["created"]) for row in rows
+                if isinstance(row, dict) and set(row) == {"issue", "created"} and type(row["issue"]) is int
+                and 1 <= row["issue"] <= COUNT_MAX and type(row["created"]) in (int, float)]
+
+    def set_close_items(self, issues, now=None):
+        """Keep the question for exactly the tasks in `issues` (a list of whole numbers): new ones are added with the
+        time `now`, those no longer in the list are dropped. At most 50."""
+        now = time.time() if now is None else now
+        known = {row["issue"]: row["created"] for row in self.close_items()}
+        rows = [{"issue": n, "created": known.get(n, now)} for n in sorted(set(issues))[:CLOSE_MAX]
+                if type(n) is int and 1 <= n <= COUNT_MAX]
+        if rows != self.close_items():
+            self.set_control(CLOSE_ITEMS, rows)
+        return rows
+
+    def put_off(self, short, until):
+        """Put the item `short` off until the time `until` ("Not now"); the entries past their time are forgotten."""
+        if not isinstance(short, str) or not DRAFT_ID.fullmatch(short) or type(until) not in (int, float) \
+                or not math.isfinite(until):
+            raise StoreError("invalid_later")
+        now = time.time()
+        later = self.get_control(LATER, {})
+        later = {k: v for k, v in (later if isinstance(later, dict) else {}).items()
+                 if isinstance(k, str) and type(v) in (int, float) and v > now}
+        later[short] = float(until)
+        self.set_control(LATER, dict(sorted(later.items(), key=lambda pair: pair[1])[-LATER_MAX:]))
+
+    def put_off_until(self, short):
+        """The time until which `short` is put off, or 0."""
+        later = self.get_control(LATER, {})
+        value = later.get(short) if isinstance(later, dict) else None
+        return float(value) if type(value) in (int, float) and math.isfinite(value) else 0.0
+
     def waiting(self):
         """The one list of what needs the user's answer, oldest first, each as {"kind", "key", "short", "created", ...}:
         a held memory (kind "held", key its event key) and a draft of the paper's text that waits (kind "draft", key its
-        short id; one put off with "later" waits again when its time has passed), and a task the level Assistant holds
-        for the user's answer (kind "task_open", key its event key, with its title and its number of steps). The kind
-        that asks to close a task joins this list with the jobs."""
+        short id; one put off with "later" waits again when its time has passed), a task the level Assistant holds
+        for the user's answer (kind "task_open", key its event key, with its title and its number of steps) and a
+        finished task the observer asks to close (kind "task_close", key close_key(issue), with its issue). A task item
+        put off with "Not now" (put_off) is left out until its time has passed."""
         out = []
+        now = time.time()
+        for row in self.close_items():
+            key = self.close_key(row["issue"])
+            if self.put_off_until(key[:8]) <= now:
+                out.append({"kind": "task_close", "key": key, "short": key[:8], "created": row["created"],
+                            "issue": row["issue"]})
         for event in self.waiting_for_answer():
             candidate = event["candidate"]
             if event.get("reason") == "level_ask" and candidate.get("kind") == "steps" and candidate.get("issue") == 0:
                 # A task to open, held at the level Assistant: "Task <short>: open a task ..." (observer_publisher).
+                if self.put_off_until(event["eventkey"][:8]) > now:
+                    continue
                 out.append({"kind": "task_open", "key": event["eventkey"], "short": event["eventkey"][:8],
                             "created": event["created"], "event": event, "title": candidate["task_title"],
                             "steps": len(record_format.steps_list(candidate["body"]))})
                 continue
             out.append({"kind": "held", "key": event["eventkey"], "short": event["eventkey"][:8],
                         "created": event["created"], "event": event})
-        now = time.time()
         for draft in self.drafts(states=("waiting", "later")):
             if draft["state"] == "waiting" or draft["until"] <= now:
                 out.append({"kind": "draft", "key": draft["id"], "short": draft["id"], "created": draft["created"],
