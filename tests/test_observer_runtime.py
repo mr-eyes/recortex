@@ -76,8 +76,8 @@ class RuntimeTests(unittest.TestCase):
         # A claude on PATH, so the gate and the guard are what stop the launch (CI machines have no claude).
         with patch.object(runtime.subprocess,'Popen') as launch, \
                 patch.object(runtime.shutil,'which',return_value=sys.executable):
-            self.assertEqual(runtime.invoke({},SCHEMA,'extract',{})['code'],'level')  # no model call before a level is chosen
-            self.assertEqual(runtime.invoke({},SCHEMA,'extract',{'level':'notes'})['code'],'runtime-gate')
+            self.assertEqual(runtime.invoke({},SCHEMA,'sort',{})['code'],'level')  # no model call before a level is chosen
+            self.assertEqual(runtime.invoke({},SCHEMA,'sort',{'level':'notes'})['code'],'runtime-gate')
             with patch.dict(os.environ,{'RECORTEX_OBSERVER':'1'}):
                 self.assertEqual(runtime.invoke({},SCHEMA,'smoke',{})['code'],'recursion')
             launch.assert_not_called()

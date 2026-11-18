@@ -268,6 +268,7 @@ class StatusBlockTests(SummaryBox):
     def test_code_fields_come_from_the_told_tasks_and_decisions(self):
         import sqlite3
         db = sqlite3.connect(':memory:')
+        self.addCleanup(db.close)
         db.row_factory = sqlite3.Row
         db.execute('CREATE TABLE events(comment INTEGER, url TEXT)')
         db.executemany('INSERT INTO events VALUES (?, ?)', [(1, 'https://github.com/octo-org/octo-repo/issues/2#issuecomment-1'), (2, '')])

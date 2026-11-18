@@ -1442,6 +1442,8 @@ def run_once(repo, config, project_root=None, invoke_fn=None, settle_first=False
                                 store.transition(event["eventkey"], "deferred", reason=reason)
                                 continue
                             break
+                    # keeper: observer_keeper.consider(repo, config, store, options, invoke_fn or runtime.invoke)
+                    # The manuscript keeper (spec 7) is considered here, after the pass and the publisher.
                     if store.get_control("sync_needed", False) and not refresh_record(repo, config, store, options):
                         store.set_control("worker_degraded", "record_unavailable")
                 return report

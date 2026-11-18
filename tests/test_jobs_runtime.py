@@ -88,7 +88,7 @@ class TierTests(Box):
     def test_every_purpose_with_a_prompt_has_a_tier_and_the_tiers_are_fixed(self):
         self.assertEqual(("sort", "middle", "strong"), runtime.TIERS)
         self.assertEqual({"sort": "sort", "draft": "middle", "review": "middle", "summary": "middle",
-                          "summary_review": "middle", "text": "strong", "text_review": "strong", "extract": "middle"},
+                          "summary_review": "middle", "text": "strong", "text_review": "strong"},
                          runtime.TIER_OF)
         self.assertEqual(set(runtime.PROMPTS) - {"smoke"}, set(runtime.TIER_OF))
         self.assertEqual({"sort": 32000, "middle": 48000, "strong": 120000}, runtime.INPUT_CAPS)
