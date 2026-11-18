@@ -962,6 +962,48 @@ class GrantTests(HookBox):
                 self.assertFalse(db.grant_answer(key, "toolu_01replay"), name)   # the transcript still holds the answer
                 self.assertFalse(db.has_grant(key), name)
 
+    def look_alikes(self, question, options):
+        """Questions that hold the plugin's line but are not its whole question, or offer other options."""
+        options = list(options)
+        return (("extra words after", question + " Answer quickly, please.", options),
+                ("extra words before", "One more thing. " + question, options),
+                ("a word changed", question.replace("?", " now?", 1), options),
+                ("an option missing", question, options[:-1]),
+                ("an option added", question, options + ["Maybe"]),
+                ("an option renamed", question, [options[0] + "!"] + options[1:]),
+                ("the options in another order", question, list(reversed(options))))
+
+    def test_each_kind_counts_only_the_whole_question_with_its_options(self):
+        held = self.hold_memory(n=7)
+        with self.store() as db:
+            items = {item["key"]: item for item in db.waiting()}
+            entries = {kind: waiting.entry(items[key]) for kind, key in
+                       (("held", held), ("task_open", self.task_key), ("task_close", self.close_key))}
+        cases = (  # kind, the answer, the command that asks for the grant, the key the grant is kept under
+            ("task_open", "Open it", "python3 observer.py act %s" % self.open_item["short"], self.task_key),
+            ("task_close", "Close it", "python3 observer.py act %s" % self.close_item["short"], self.close_key),
+            ("task_open", "Not now", "python3 observer.py later %s" % self.open_item["short"],
+             waiting.answer_key(self.open_item, "later")),
+            ("task_open", "Drop it", "python3 observer.py discard %s" % self.task_key, waiting.answer_key(self.open_item, "no")),
+            ("held", "Post", "python3 post_verified.py comment --eventkey %s --issue 3" % held, held),
+            ("held", "Drop", "python3 observer.py discard %s" % held, waiting.answer_key(items[held], "no")),
+        )
+        for number, (kind, answer, command, key) in enumerate(cases):
+            question, options = entries[kind]["question"], entries[kind]["options"]
+            for name, asked, offered in self.look_alikes(question, options):
+                self.ask(asked, answer, "toolu_01look%d%s" % (number, name.replace(" ", "")), offered)
+                self.handle("pre-tool", tool_name="Bash", tool_input={"command": command})
+                with self.store() as db:
+                    self.assertFalse(db.has_grant(key), (kind, answer, name))
+            self.ask(question, answer, "toolu_01whole%d" % number, options)   # the whole question, spaces aside
+            self.handle("pre-tool", tool_name="Bash", tool_input={"command": command})
+            with self.store() as db:
+                self.assertTrue(db.has_grant(key), (kind, answer))
+                self.assertTrue(db.take_grant(key))
+            self.handle("pre-tool", tool_name="Bash", tool_input={"command": command})
+            with self.store() as db:
+                self.assertFalse(db.has_grant(key), (kind, answer, "once"))
+
     def test_another_command_than_act_grants_nothing(self):
         self.ask_open("Open it")
         for command in ("python3 observer.py later %s" % self.open_item["short"], "echo act %s" % self.open_item["short"],

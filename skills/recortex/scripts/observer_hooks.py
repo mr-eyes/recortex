@@ -429,6 +429,15 @@ def _posted_key(data):
     return keys[0] if len(keys) == 1 and observer_store.EVENT_KEY.fullmatch(keys[0]) else None
 
 
+def _canonical(item):
+    """(the whole question, its options in order) the session asks about `item`, as `observer.py pending --waiting` lists
+    it (observer_waiting.entry): a recorded answer counts only to a question that is this one and no other, so that a
+    question of the session's own that holds the same line among other words, or offers other options, grants nothing."""
+    import observer_waiting
+    found = observer_waiting.entry(item)
+    return found["question"], found["options"]
+
+
 def _grant(store, data, project_root):
     """Before post_verified.py --eventkey K: when K waits for the user's answer and the user answered "Post" to the
     session's question naming K's short id and quoting its plain line (observer_sources.answered), a one-time grant for K, which the publisher
@@ -440,7 +449,12 @@ def _grant(store, data, project_root):
     if event is None or event["state"] not in ("ready", "deferred"):
         return
     line = observer_store.description(event["candidate"]["kind"], event["body"])
-    answer = observer_sources.answered(data, project_root, key[:8], line)
+    import observer_waiting
+    item = next((item for item in store.waiting() if item["key"] == key and item["kind"] == "held"), None)
+    if item is None:
+        return   # not a memory that waits for the user: no question about it can be the plugin's own
+    text_is, labels_are = _canonical(item)
+    answer = observer_sources.answered(data, project_root, key[:8], line, text_is=text_is, labels_are=labels_are)
     if answer:
         store.grant_answer(key, answer)
 
@@ -476,8 +490,11 @@ def _grant_draft(store, data, project_root):
     content = keeper_rules.recorded(store.get_control(keeper_rules.CONTENTS, []), short)
     if content is None:
         return   # no recorded bytes: nothing the user could approve
+    import observer_waiting
+    text_is, labels_are = _canonical({"kind": "draft", "key": draft["id"], "short": draft["id"], "draft": draft})
     answer = observer_sources.answered(data, project_root, short,
-                                       keeper_rules.question_line(draft["headings"], draft["topic"]), label="Approve")
+                                       keeper_rules.question_line(draft["headings"], draft["topic"]), label="Approve",
+                                       text_is=text_is, labels_are=labels_are)
     if answer:
         store.grant_answer(keeper_rules.grant_key(short, content), answer)
 
@@ -512,8 +529,10 @@ def _grant_act(store, data, project_root):
     import observer_waiting
     for item in store.waiting():
         if item["short"] == short and item["kind"] in ("task_open", "task_close"):
+            text_is, labels_are = _canonical(item)
             answer = observer_sources.answered(data, project_root, short, observer_waiting.line(item),
-                                               label=observer_waiting.LABELS[item["kind"]])
+                                               label=observer_waiting.LABELS[item["kind"]], text_is=text_is,
+                                               labels_are=labels_are)
             if answer:
                 store.grant_answer(item["key"], answer)
             return
@@ -573,7 +592,9 @@ def _grant_decline(store, data, project_root):
     label = observer_waiting.ANSWERS.get(item["kind"], {}).get(answer) if item is not None else None
     if label is None:
         return
-    given = observer_sources.answered(data, project_root, item["short"], observer_waiting.line(item), label=label)
+    text_is, labels_are = _canonical(item)
+    given = observer_sources.answered(data, project_root, item["short"], observer_waiting.line(item), label=label,
+                                      text_is=text_is, labels_are=labels_are)
     if given:
         store.grant_answer(observer_waiting.answer_key(item, answer), given)
 

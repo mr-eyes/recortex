@@ -859,6 +859,18 @@ class DraftGrantTests(unittest.TestCase):
         self.ask(self.question, "Approve", ident="toolu_01again", structured=False)   # a new answer, in the fixed sentence
         self.assertTrue(self.granted())
 
+    def test_only_the_whole_question_with_its_three_options_counts(self):
+        options = ["Approve", "Not now", "Drop it"]
+        cases = ((self.question + " It is a small change.", options), ("Quick check. " + self.question, options),
+                 (self.question.replace("update", "change", 1), options), (self.question, options[:2]),
+                 (self.question, options + ["Edit it"]), (self.question, ["Approve!", "Not now", "Drop it"]),
+                 (self.question, ["Not now", "Approve", "Drop it"]))
+        for number, (asked, offered) in enumerate(cases):
+            self.ask(asked, "Approve", ident="toolu_01look%d" % number, labels=offered)
+            self.assertFalse(self.granted(), (asked, offered))
+        self.ask("  " + self.question.replace(" ", "\n", 2), "Approve", ident="toolu_01whole")   # spaces aside
+        self.assertTrue(self.granted())
+
     def test_a_later_not_now_undoes_an_approve(self):
         self.ask(self.question, "Approve", ident="toolu_01a")
         self.ask(self.question, "Not now", ident="toolu_01b")

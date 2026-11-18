@@ -290,8 +290,11 @@ class ObserverHookTests(unittest.TestCase):
         with Store(REPO) as store:
             line = store_module.description("correction", store.event(key)["body"])
         self.assertEqual("correction: x", line)  # no plain line: the kind and the start of the first paragraph
+        import observer_waiting
+        with Store(REPO) as store:
+            would = observer_waiting.changes(store.event(key))   # the question is the one pending --waiting lists, whole
         ask = lambda ident, answer="Post", about=short, said=line, **extra: self.ask(
-            'Memory %s (correction) on #3: "%s". It would change: comment 9050. Post it, or drop it?' % (about, said),
+            'Memory %s (correction) on #3: "%s". It would change: %s. Post it, or drop it?' % (about, said, would),
             answer, ident=ident, **extra)
         self.assertFalse(self.granted(key))  # no answer
         ask("toolu_01drop", "Drop")

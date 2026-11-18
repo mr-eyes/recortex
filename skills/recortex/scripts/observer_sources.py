@@ -508,8 +508,8 @@ def answered(data, project_root, short, line, label="Post", max_bytes=ANSWER_BYT
     later answer of another label to a question about `short` undoes it. A tool result, a page or a subagent cannot
     make such a record; a session that writes the transcript itself can (the documented limit, as for holds). Read as
     capture reads: this project's main transcript only, through checked descriptors, within `max_bytes` and
-    `seconds`. With `text_is` (and `labels_are`) the question must be the plugin's own whole question: its text, once
-    whitespace is normalized, equal to `text_is`, and its options' labels equal to `labels_are`, in that order: a question
+    `seconds`. With `text_is` (and `labels_are`) the question must be the plugin's own whole question: its text, with every
+    space and line break taken out, equal to `text_is` taken the same way, and its options' labels equal to `labels_are`, in that order: a question
     that holds the same words among others of the session's, or offers other options, is not it."""
     line = " ".join(line.split()) if isinstance(line, str) else ""
     if not line:
@@ -557,7 +557,7 @@ def answered(data, project_root, short, line, label="Post", max_bytes=ANSWER_BYT
                         labels = [o.get("label") for o in options if isinstance(o, dict)]
                         whole = " ".join(text.split()) if isinstance(text, str) else ""
                         if (isinstance(text, str) and (short is None or set(SHORT_ID.findall(text)) == {short})
-                                and (line in whole if text_is is None else whole == " ".join(text_is.split()))
+                                and (line in whole if text_is is None else "".join(text.split()) == "".join(text_is.split()))
                                 and (labels_are is None or labels == list(labels_are))):
                             asked[block["id"]] = (text, label in labels, len(questions))
             elif asked and b'"tool_result"' in row and any(key.encode() in row for key in asked):
