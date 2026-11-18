@@ -36,6 +36,7 @@ import record_format  # noqa: E402
 REPO = ts.REPO
 FIXTURE = os.path.join(ROOT, "tests", "fixtures", "observer-stretches", "u01.json")
 PAIR = os.path.join(ROOT, "tests", "fixtures", "observer-stretches", "u02.json")
+RELEASED = os.path.join(ROOT, "tests", "fixtures", "observer-stretches", "u03.json")
 
 
 class LiveBox(tp.PublisherBox):
@@ -405,6 +406,140 @@ class PairTests(LiveBox):
         self.assertEqual([], self.comments())
 
 
+class ReleasedTests(LiveBox):
+    """A session the user kept off the record by a typed request, and then released in their own terminal
+    (tests/fixtures/observer-stretches/u03.json: the first message says "Don't post this" about a result, a failure follows).
+    Releasing the hold offers every source it withheld to the sort again, each marked hold_released in what the sorter, the
+    drafter and the reviewer are shown: the request typed in a source no longer applies, and the moment is judged on its own.
+    Without the mark the sorter set the result aside and the reviewer rejected it as withheld, as the recorded answers of the
+    fixture were made with it. A hold still active, and a request typed after the release, keep the session off the record."""
+
+    fixture, session = RELEASED, "sess-u03"
+
+    def setUp(self):
+        super().setUp()
+        self.ids = [s["id"] for s in self.data["sources"]]
+
+    def hold(self, text=None, sid=None):
+        """The hold the hook makes of a message that says it: the phrase, as the hook passes it, of this session."""
+        text = text or self.data["sources"][0]["text"]
+        return observer_holds.make_hold({"source_id": sid or self.ids[0], "role": "user", "direct_user": True,
+                                         "text": observer_holds.withheld(text)}, REPO, "publish",
+                                        {"session_id": self.session}, None)
+
+    def keep(self, *holds):
+        with store.Store(REPO, config=self.pcfg) as db:
+            db.save_holds(list(holds))
+
+    def release(self, hold):
+        with store.Store(REPO, config=self.pcfg) as db:
+            db.update_holds(lambda holds: observer_holds.release(holds, hold["id"]))
+            return db.offered_again
+
+    def marked(self):
+        with store.Store(REPO, config=self.pcfg) as db:
+            return db.released_sources()
+
+    def states(self, ids=None):
+        with store.Store(REPO, config=self.pcfg) as db:
+            return [(db.observation(sid)["state"], db.observation(sid)["reason"]) for sid in ids or self.ids]
+
+    def kinds(self):
+        return [self.marker(body)["type"] for _, body in self.posted()]
+
+    def marker(self, body):
+        return record_format.parse_marker(record_format.first_lines(body)[0])
+
+    def model_calls(self, calls):
+        return [(purpose, payload) for purpose, payload in calls if purpose in ("sort", "draft", "review")]
+
+    def test_a_released_session_is_offered_again_marked_sorted_and_posted_once(self):
+        hold = self.hold()
+        self.keep(hold)
+        report, purposes, calls = self.run_pass()
+        self.assertEqual(([], []), (self.model_calls(calls), report["ready"]))   # the active hold is checked before any call
+        self.assertEqual([("deferred", "withheld")] * 8, self.states())
+        self.assertEqual(set(), self.marked())                                   # nothing is marked while the hold stands
+        self.assertEqual(8, self.release(hold))
+        self.assertEqual([("observed", "")] * 8, self.states())
+        self.assertEqual(set(self.ids), self.marked())
+        report, purposes, calls = self.run_pass()
+        self.assertEqual(["sort", "draft", "review", "review"], [p for p in purposes if p != "summary"][:4])
+        self.assertEqual(["result", "failure"], self.kinds())
+        for purpose, payload in self.model_calls(calls):   # every source of every call carries the mark
+            views = payload["sources"] + payload.get("context", [])
+            self.assertTrue(views and all(view.get("hold_released") is True for view in views), purpose)
+        self.assertEqual(set(), self.marked())            # handled: the marks are gone
+        again, purposes, calls = self.run_pass()
+        self.assertEqual(([], ["result", "failure"]), ([p for p in purposes if p != "summary"], self.kinds()))
+
+    def test_a_hold_that_is_still_active_keeps_the_session_off_the_record_and_marks_nothing(self):
+        self.keep(self.hold())
+        for _ in range(2):
+            report, purposes, calls = self.run_pass()
+            self.assertEqual(([], []), (self.model_calls(calls), self.posted()))
+        self.assertEqual(([("deferred", "withheld")] * 8, set()), (self.states(), self.marked()))
+
+    def test_a_request_typed_after_the_release_keeps_the_session_off_the_record_again(self):
+        first = self.hold()
+        self.keep(first)
+        self.run_pass()
+        self.assertEqual(8, self.release(first))
+        text = "Keep this off the record from now on."
+        extra = {"at": "2026-11-18T15:54:00.000Z", "dialog_user": False, "direct_user": True, "id": "f" * 64, "role": "user",
+                 "session_id": self.session, "text": text, "via": None}
+        self.data["sources"].append(extra)
+        self.by_id[extra["id"]] = dict(extra, subagent=False, sidechain=False, control_user=False, message_id=None)
+        second = self.hold(text, extra["id"])   # the hook's hold for the new request, which is not marked
+        self.keep(second)
+        report, purposes, calls = self.run_pass()
+        self.assertEqual(([], [], []), (self.model_calls(calls), self.posted(), report["ready"]))
+        self.assertEqual([("deferred", "withheld")] * 9, self.states(self.ids + [extra["id"]]))
+
+    def test_the_mark_is_on_the_sources_a_release_offered_again_and_on_no_other(self):
+        hold = self.hold()
+        self.keep(hold)
+        self.run_pass()
+        self.release(hold)
+        extra = {"at": "2026-11-18T15:54:00.000Z", "dialog_user": False, "direct_user": True, "id": "e" * 64, "role": "user",
+                 "session_id": self.session, "text": "ok, thanks", "via": None}
+        self.data["sources"].append(extra)   # typed after the release: no hold ever covered it
+        self.by_id[extra["id"]] = dict(extra, subagent=False, sidechain=False, control_user=False, message_id=None)
+        report, purposes, calls = self.run_pass()
+        views = dict((view["n"], view) for view in next(p for purpose, p in calls if purpose == "sort")["sources"])
+        self.assertEqual([True] * 8, [views[n].get("hold_released") for n in range(1, 9)])
+        self.assertNotIn("hold_released", views[9])   # the key is absent, not false
+        self.assertEqual("ok, thanks", views[9]["text"])
+
+    def test_a_release_that_offers_nothing_marks_nothing(self):
+        other = observer_holds.make_hold({"source_id": self.ids[0], "role": "user", "direct_user": True, "text": "do not post"},
+                                         REPO, "publish", {"session_id": "sess-else"}, None)
+        self.keep(other)
+        self.assertEqual((0, set()), (self.release(other), self.marked()))
+
+    def test_a_marked_source_stays_marked_until_it_is_handled_and_a_hold_that_covers_it_again_keeps_it_withheld(self):
+        hold = self.hold()
+        self.keep(hold)
+        self.run_pass()
+        self.release(hold)
+        with store.Store(REPO, config=self.pcfg) as db:
+            db.defer(self.ids[0], "uncertain")        # tried again later: still waiting for its turn
+            db.mark_handled(self.ids[1])              # set aside
+            db.defer(self.ids[2], "withheld")         # covered by a hold again
+        self.assertEqual(set(self.ids) - {self.ids[1]}, self.marked())
+        with store.Store(REPO, config=self.pcfg) as db:
+            for sid in self.ids[3:]:
+                db.mark_handled(sid)
+        self.assertEqual({self.ids[0], self.ids[2]}, self.marked())
+
+    def test_only_a_true_mark_reaches_a_view(self):
+        source = {"role": "user", "text": "t", "direct_user": True, "via": None, "at": "x"}
+        self.assertNotIn("hold_released", worker._view(source, 1))
+        for odd in (False, "true", 1, None):
+            self.assertNotIn("hold_released", worker._view(dict(source, hold_released=odd), 1), repr(odd))
+        self.assertTrue(worker._view(dict(source, hold_released=True), 1)["hold_released"])
+
+
 class BecauseSchemaTests(tp.PublisherBox):
     """The store takes `because_with` in its strict form only, and the marker is composed from it by code."""
 
@@ -683,6 +818,15 @@ class PromptTests(unittest.TestCase):
         review = runtime.PROMPTS["review"]
         self.assertIn("A decision may carry because, the plain line of a failure of the same stretch that it is linked to", review)
         self.assertIn("reject with unsupported when they do not", review)
+
+    def test_the_three_wordings_say_what_a_source_marked_hold_released_is(self):
+        # Without it the sorter set the result aside after the user lifted the hold, and the reviewer rejected it as withheld.
+        for purpose in ("sort", "draft", "review"):
+            text = runtime.PROMPTS[purpose]
+            self.assertIn("a source with hold_released true was kept off the record by a hold that the user lifted themselves, in their terminal"
+                          if purpose != "review" else "A source with hold_released true was kept off the record by a hold that the user lifted themselves, in their terminal", text, purpose)
+            self.assertIn("a request not to post in it no longer applies", text, purpose)
+            self.assertIn("a request typed in a source without hold_released still", text, purpose)
 
     def test_the_sorter_leaves_a_moment_the_agent_says_it_just_recorded(self):
         self.assertIn("a moment that an agent message in the stretch says it has just recorded, with the address of its comment",

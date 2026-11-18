@@ -108,6 +108,8 @@ DRAFT_STATES = ("waiting", "refused", "stale", "applied", "dropped", "later")
 DRAFT_ID = re.compile(r"[0-9a-f]{8}")
 BATCH = re.compile(r"[0-9a-f]{32}")
 BACKUP = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")  # the name of a file in the private folder, never a path
+RELEASED = "hold_released"   # the control that lists the sources a released hold offered again, until each is handled
+RELEASED_MAX = 1000
 STATUS_KEYS = ("replaces", "instead", "checks")  # the links that change an earlier memory's status
 # Reasons an earlier queue kept an event for that are no longer given: back-filled as held.
 EARLIER_HELD = ("sensitive_project", "confidentiality", "sheet_not_approved")
@@ -1329,7 +1331,7 @@ class Store:
                  and hold.get("action") == "publish" and hold.get("id") not in alive]
         if not freed:
             return 0
-        offered = 0
+        offered = []
         for source_id, metadata in self.db.execute("SELECT source_id,metadata FROM observations WHERE state='deferred' "
                                                    "AND reason='withheld'").fetchall():
             session = json.loads(metadata).get("session_id")
@@ -1337,8 +1339,26 @@ class Store:
                     and not observer_holds.publication_withheld(changed, self.repo, {session})):
                 self.db.execute("UPDATE observations SET state='observed',reason='',updated=? WHERE source_id=?",
                                 (time.time(), source_id))
-                offered += 1
-        return offered
+                offered.append(source_id)
+        if offered:
+            # Marked, until each is handled: a request not to post that the user typed in such a source was lifted by
+            # the user themselves, and the models are told so (released_sources). A control, not a column: no schema change.
+            row = self.db.execute("SELECT value FROM controls WHERE key=?", (RELEASED,)).fetchone()
+            kept = json.loads(row[0]) if row else []
+            kept = [sid for sid in kept if isinstance(sid, str) and sid not in offered] if isinstance(kept, list) else []
+            self.db.execute("INSERT OR REPLACE INTO controls VALUES (?,?)", (RELEASED, canonical((kept + offered)[-RELEASED_MAX:])))
+        return len(offered)
+
+    def released_sources(self):
+        """The ids of the sources a hold the user released offered again that are still waiting to be sorted (observed, or
+        deferred for another try): what the models are told, as hold_released, of those sources. A source that is handled
+        (an event, set aside, rejected) leaves the list; this prunes it."""
+        found = self.get_control(RELEASED, [])
+        found = [sid for sid in found if isinstance(sid, str)] if isinstance(found, list) else []
+        pending = [sid for sid in found if (self.observation(sid) or {}).get("state") in ("observed", "deferred")]
+        if pending != found and not self.readonly:
+            self.set_control(RELEASED, pending)
+        return set(pending)
 
     def update_holds(self, transform):
         """Replace the holds by what `transform` makes of them. A hold of the record's publication that this releases
