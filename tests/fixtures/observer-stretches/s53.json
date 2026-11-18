@@ -1,0 +1,376 @@
+{
+ "about": "a correction and a figure; the mark of step 3 on the figure message is right",
+ "draft": [
+  {
+   "body": "<!-- ghim:event type=correction at=2026-11-23T03:06-05:00 -->\n### Correction: 2026-11-23 03:06 EST - Lag-1 autocorrelation of the plain model\n\n**In plain words, we corrected ourselves:** the lag-1 autocorrelation of the plain model's residuals is 0.58, not 0.62\n\n**Corrects:** the earlier result reporting the day-to-day correlation of the plain model's residuals (record memory 9122)\n\n**Was:** lag-1 autocorrelation 0.62\n\n**Is:** lag-1 autocorrelation 0.58; denominator and source path not stated\n\n**Why:** the earlier run used the wrong season labels; the agent recomputed the autocorrelation after the user asked for a double-check\n\n**Also updated:** Not stated",
+   "excerpts": [
+    "the lag-1 autocorrelation of the plain model is 0.58, not the 0.62 I reported earlier. The earlier run used the wrong season labels."
+   ],
+   "issue": 4,
+   "kind": "correction",
+   "links": [],
+   "marks": [],
+   "sources": [
+    4,
+    1
+   ],
+   "task_title": "",
+   "topic": 0
+  },
+  {
+   "body": "<!-- ghim:event type=result at=2026-11-23T03:10-05:00 -->\n### Result: 2026-11-23 03:10 EST - Longest dry spell figure\n\n**In plain words, we found that:** in the longest dry spell the cover plots stayed above the wilting point throughout\n\n**What ran:** the longest-spell figure was drawn from the rain gauge and the daily readings\n\n**Configuration:** Not stated\n\n**Numbers:**\n\n| Measure | Value | Denominator | Source path |\n|---|---|---|---|\n| Longest dry spell | 17 days | Not stated | results/figures/longest_spell.png |\n\n**Exclusions and failures:** None stated\n\n**Cost:** Not measured\n\n**Not established:** the figure has not yet been checked against the spell-length table\n\n**Next step:** check the figure against the table, owner the agent",
+   "excerpts": [
+    "The figure is done. The longest spell lasted 17 days, and the cover plots stayed above the wilting point throughout."
+   ],
+   "issue": 5,
+   "kind": "result",
+   "links": [
+    {
+     "key": "checks",
+     "part": 2
+    },
+    {
+     "key": "checks",
+     "part": 5
+    }
+   ],
+   "marks": [
+    {
+     "steps": [
+      3
+     ],
+     "task": 13
+    }
+   ],
+   "sources": [
+    8,
+    7,
+    10
+   ],
+   "task_title": "",
+   "topic": 0
+  }
+ ],
+ "record": {
+  "memories": [
+   {
+    "id": 9122,
+    "kind": "result",
+    "plain": "the residuals of the plain model are correlated from day to day, lag-1 autocorrelation 0.62"
+   },
+   {
+    "id": 9125,
+    "kind": "idea",
+    "plain": "try weekly means instead of daily readings"
+   },
+   {
+    "id": 9130,
+    "kind": "result",
+    "plain": "pooled over both seasons the cover raises the 5 cm moisture by 0.021 m3/m3 (0.006 to 0.036)"
+   },
+   {
+    "id": 9140,
+    "kind": "result",
+    "plain": "in dry spells the cover plots stayed above the wilting point on 14 of 19 spells, the bare plots on 9 of 19"
+   },
+   {
+    "id": 9141,
+    "kind": "question",
+    "plain": "whether soil texture explains the dry-spell effect"
+   },
+   {
+    "id": 9143,
+    "kind": "failure",
+    "plain": "texture was measured on only 12 of the 20 plots"
+   },
+   {
+    "id": 9150,
+    "kind": "idea",
+    "plain": "compare the effect with other cover-crop trials"
+   }
+  ],
+  "parts": [
+   {
+    "id": 9301,
+    "kind": "message",
+    "plain": "tell one story: a rye cover keeps the topsoil wetter in dry spells",
+    "state": "planned"
+   },
+   {
+    "id": 9302,
+    "kind": "claim",
+    "plain": "a rye cover keeps the topsoil wetter during dry spells",
+    "state": "backed"
+   },
+   {
+    "id": 9303,
+    "kind": "claim",
+    "plain": "pooled over both seasons, the cover raises topsoil moisture",
+    "state": "backed"
+   },
+   {
+    "id": 9304,
+    "kind": "claim",
+    "plain": "soil texture does not explain the dry-spell effect",
+    "state": "planned"
+   },
+   {
+    "id": 9305,
+    "kind": "figure",
+    "plain": "show the longest dry spell in one figure",
+    "state": "planned"
+   },
+   {
+    "id": 9306,
+    "kind": "table",
+    "plain": "tabulate the spells by length",
+    "state": "planned"
+   },
+   {
+    "id": 9307,
+    "kind": "interpretation",
+    "plain": "read the effect as shading by the residue",
+    "state": "planned"
+   },
+   {
+    "id": 9311,
+    "kind": "claim",
+    "plain": "weekly means give the same effect as daily readings",
+    "state": "planned"
+   },
+   {
+    "id": 9312,
+    "kind": "claim",
+    "plain": "the residuals are correlated from day to day, so the model needs a lag term",
+    "state": "backed"
+   }
+  ],
+  "tasks": [
+   {
+    "issue": 13,
+    "steps": [
+     {
+      "n": 1,
+      "text": "Extract the dry spells from the rain gauge"
+     },
+     {
+      "n": 2,
+      "text": "Make the spell-length table"
+     },
+     {
+      "n": 3,
+      "text": "Draw the longest-spell figure"
+     },
+     {
+      "n": 4,
+      "text": "Check the figure against the table"
+     }
+    ],
+    "title": "Dry-spell table and figure"
+   }
+  ],
+  "todo": 14,
+  "topics": [
+   {
+    "issue": 4,
+    "title": "A mixed model of daily soil moisture"
+   },
+   {
+    "issue": 5,
+    "title": "Dry spells"
+   },
+   {
+    "issue": 6,
+    "title": "Discussion and limits"
+   },
+   {
+    "issue": 7,
+    "title": "Field design and sampling"
+   }
+  ]
+ },
+ "reviews": [
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  }
+ ],
+ "run": 1,
+ "sort": {
+  "ignored": [
+   1,
+   2,
+   3,
+   5,
+   6,
+   7,
+   9,
+   10,
+   11
+  ],
+  "labels": [
+   {
+    "job": "memory",
+    "kind": "correction",
+    "parts": [],
+    "sources": [
+     4
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "memory",
+    "kind": "result",
+    "parts": [],
+    "sources": [
+     8
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "paper_part",
+    "kind": "none",
+    "parts": [
+     2,
+     5
+    ],
+    "sources": [
+     8
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "step_done",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     8
+    ],
+    "steps": [
+     3
+    ],
+    "task": 13
+   }
+  ]
+ },
+ "sources": [
+  {
+   "at": "2026-11-23T08:04:57.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "f9498f0220ba964364ead825395ca92a471e38b3e5a9941986a7989ac9184d75",
+   "role": "user",
+   "session_id": "sess-s53",
+   "text": "double-check the autocorrelation number we use for the lag term",
+   "via": null
+  },
+  {
+   "at": "2026-11-23T08:05:21.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "faaf786c14ab15a95dd68bc69b1cd032c13a31dfbb8bafc983ec2e742999b23f",
+   "role": "assistant",
+   "session_id": "sess-s53",
+   "text": "Recomputing the lag-1 autocorrelation of the plain model's residuals.",
+   "via": null
+  },
+  {
+   "at": "2026-11-23T08:06:22.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "09a321e87c5379de17a26c11c0e03921f1d6795d0939645ba2293793adc97a12",
+   "role": "assistant",
+   "session_id": "sess-s53",
+   "text": "Checking which season labels the earlier run used.",
+   "via": null
+  },
+  {
+   "at": "2026-11-23T08:06:50.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "b576baf685058b54af8caf25396adf92b917a33687134d25aa50d3b19afbc4f1",
+   "role": "assistant",
+   "session_id": "sess-s53",
+   "text": "Correction: the lag-1 autocorrelation of the plain model is 0.58, not the 0.62 I reported earlier. The earlier run used the wrong season labels.",
+   "via": null
+  },
+  {
+   "at": "2026-11-23T08:07:55.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "af7cafc74071527ad62eb2f07ec659d0fa4cda5b09193a67831012716106c3c7",
+   "role": "user",
+   "session_id": "sess-s53",
+   "text": "ok, good catch. now draw the longest dry spell",
+   "via": null
+  },
+  {
+   "at": "2026-11-23T08:08:27.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "2afc15dbf1349b1dd8c19392f653a1ac3ad2a84a0f47dfb2ad31be36fffc6064",
+   "role": "assistant",
+   "session_id": "sess-s53",
+   "text": "Drawing the figure from the rain gauge and the daily readings.",
+   "via": null
+  },
+  {
+   "at": "2026-11-23T08:09:36.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "89cb702d7c81afe93b5562cb09f10e8aa46ff2bfc056ea08e40606fd5355e77d",
+   "role": "assistant",
+   "session_id": "sess-s53",
+   "text": "Saving it to `results/figures/longest_spell.png`.",
+   "via": null
+  },
+  {
+   "at": "2026-11-23T08:10:12.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "f6e191d0ddfb75e522f531e43bdcfd4bc3e4d09e834f5df74c4573ea67330dec",
+   "role": "assistant",
+   "session_id": "sess-s53",
+   "text": "The figure is done. The longest spell lasted 17 days, and the cover plots stayed above the wilting point throughout.",
+   "via": null
+  },
+  {
+   "at": "2026-11-23T08:11:25.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "af03859be7118deb50d4a7f2135379f0df00cd160a2154dc29c8bf659dd11359",
+   "role": "user",
+   "session_id": "sess-s53",
+   "text": "great",
+   "via": null
+  },
+  {
+   "at": "2026-11-23T08:12:05.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "46eb9dde9e24b4cce18ad4a2a2241c613a895f964ad4335efe301ba51e873e00",
+   "role": "assistant",
+   "session_id": "sess-s53",
+   "text": "I haven't checked it against the table yet.",
+   "via": null
+  },
+  {
+   "at": "2026-11-23T08:13:22.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "60fb95b1c4dad5e1d3ccf608ee4e0061fd01195d5fdc83394bc69e56d81ff2df",
+   "role": "user",
+   "session_id": "sess-s53",
+   "text": "ok",
+   "via": null
+  }
+ ],
+ "stretch": "s53"
+}

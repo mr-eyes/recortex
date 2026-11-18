@@ -1,0 +1,341 @@
+{
+ "about": "a plan approved in the dialog; steps 1 and 2 plainly, step 3 in passing",
+ "draft": [
+  {
+   "body": "<!-- ghim:event type=steps at=2026-11-19T14:57-05:00 -->\n### Steps: 2026-11-19 14:57 EST - Add a strict flag to read()\n\n**In plain words, we agreed to:** add a strict flag to read() so strict quoting can be opted out of\n\n**Agreed:** Approved in the plan dialog, 2026-11-19 14:57 EST.\n\n**Steps:**\n1. Add a `strict` parameter (default True) to `read()`\n2. In non-strict mode, skip malformed rows and count them\n3. Write tests for both modes and document the flag\n\n**Done when:** Not stated",
+   "excerpts": [],
+   "issue": 0,
+   "kind": "steps",
+   "links": [],
+   "marks": [],
+   "sources": [
+    3,
+    4
+   ],
+   "task_title": "Add a strict flag to read()",
+   "topic": 2
+  },
+  {
+   "body": "<!-- ghim:event type=result at=2026-11-19T15:05-05:00 -->\n### Result: 2026-11-19 15:05 EST - Non-strict mode on the 40 sample files\n\n**In plain words, we found that:** non-strict mode reads the 40 sample files without a crash, skipping 5 malformed rows in 3 files\n\n**What ran:** The 40 sample files were read in non-strict mode.\n\n**Configuration:** `read()` with the new `strict` flag set to non-strict; other settings not stated.\n\n**Numbers:**\n\n| Measure | Value | Denominator | Source path |\n|---|---|---|---|\n| Files read cleanly | 37 | 40 sample files | Not stated |\n| Files with malformed rows | 3 | 40 sample files | Not stated |\n| Rows skipped | 5 | Not stated | Not stated |\n\n**Exclusions and failures:** None; no crash.\n\n**Cost:** Not measured\n\n**Not established:** Not stated\n\n**Next step:** Write tests for both modes and document the flag, owner the agent",
+   "excerpts": [
+    "I ran the 40 sample files in non-strict mode: 37 read cleanly and 3 had malformed rows, 5 rows skipped in all, with no crash."
+   ],
+   "issue": 2,
+   "kind": "result",
+   "links": [],
+   "marks": [
+    {
+     "steps": [
+      2
+     ],
+     "task": 0
+    }
+   ],
+   "sources": [
+    6
+   ],
+   "task_title": "",
+   "topic": 0
+  },
+  {
+   "body": "<!-- ghim:event type=checkpoint at=2026-11-19T15:11-05:00 -->\n### Checkpoint: 2026-11-19 15:11 EST - Strict flag work finished\n\n**In plain words, we paused here:** with all three steps of the strict flag plan reported done\n\n**State:** `read()` takes `strict=True` and the tokenizer is built with the same flag. Tests for both modes and the docs for the flag are written, which the agent called the last step.\n\n**Done since the last checkpoint:** Step 1 (add the `strict` parameter to `read()`) and step 3 (tests for both modes and docs for the flag); step 2 is recorded in its own result.\n\n**In progress:** Nothing stated\n\n**Next actions:** Not stated\n\n**Open questions:** None",
+   "excerpts": [],
+   "issue": 0,
+   "kind": "checkpoint",
+   "links": [],
+   "marks": [
+    {
+     "steps": [
+      1,
+      3
+     ],
+     "task": 0
+    }
+   ],
+   "sources": [
+    5,
+    9
+   ],
+   "task_title": "",
+   "topic": 0
+  }
+ ],
+ "record": {
+  "memories": [
+   {
+    "id": 9701,
+    "kind": "decision",
+    "plain": "make strict quoting the default in 0.3.0"
+   },
+   {
+    "id": 9702,
+    "kind": "result",
+    "plain": "reading the 100 MB file takes a median of 1.84 s, against 1.21 s for the standard library, over 5 runs"
+   },
+   {
+    "id": 9703,
+    "kind": "failure",
+    "plain": "the mixed line-ending test fails on files that use a lone carriage return"
+   },
+   {
+    "id": 9704,
+    "kind": "idea",
+    "plain": "try a C-level tokenizer for the hot loop"
+   },
+   {
+    "id": 9705,
+    "kind": "result",
+    "plain": "strict quoting rejects 3 of the 40 sample files that the old reader accepted"
+   },
+   {
+    "id": 9706,
+    "kind": "question",
+    "plain": "whether a lone carriage return should count as a line ending"
+   },
+   {
+    "id": 9707,
+    "kind": "correction",
+    "plain": "the 1 MB timing was a warm-cache read, so its median of 0.02 s is not comparable"
+   }
+  ],
+  "parts": [],
+  "tasks": [
+   {
+    "issue": 8,
+    "steps": [
+     {
+      "n": 2,
+      "text": "Change the tokenizer to carry quote state across lines"
+     },
+     {
+      "n": 3,
+      "text": "Handle CRLF inside quotes"
+     },
+     {
+      "n": 4,
+      "text": "Rerun the three benchmark files"
+     },
+     {
+      "n": 5,
+      "text": "Update the known-issues text"
+     }
+    ],
+    "title": "Newlines inside quoted fields"
+   }
+  ],
+  "todo": 10,
+  "topics": [
+   {
+    "issue": 2,
+    "title": "Reader: quoted fields and line endings"
+   },
+   {
+    "issue": 3,
+    "title": "Read speed against the standard library"
+   },
+   {
+    "issue": 4,
+    "title": "Command-line tool"
+   },
+   {
+    "issue": 5,
+    "title": "Docs and examples"
+   }
+  ]
+ },
+ "reviews": [
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  }
+ ],
+ "run": 1,
+ "sort": {
+  "ignored": [
+   2,
+   7,
+   8,
+   10
+  ],
+  "labels": [
+   {
+    "job": "memory",
+    "kind": "decision",
+    "parts": [],
+    "sources": [
+     1
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "plan_agreed",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     3,
+     4
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "step_done",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     5
+    ],
+    "steps": [
+     1
+    ],
+    "task": 0
+   },
+   {
+    "job": "memory",
+    "kind": "result",
+    "parts": [],
+    "sources": [
+     6
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "step_done",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     6
+    ],
+    "steps": [
+     2
+    ],
+    "task": 0
+   },
+   {
+    "job": "step_done",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     9
+    ],
+    "steps": [
+     3
+    ],
+    "task": 0
+   }
+  ]
+ },
+ "sources": [
+  {
+   "at": "2026-11-19T19:55:57.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "bbb60f0035df145a6405d13eef6492bddd3ea04efb00d3a8becca9eff128ec57",
+   "role": "user",
+   "session_id": "sess-s26",
+   "text": "add a strict flag to read() so people can opt out of strict quoting",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T19:56:21.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "66404592cf98b24899ef68bccc141eef0e56cb0cc5a9339d49aab77aaba9f33e",
+   "role": "assistant",
+   "session_id": "sess-s26",
+   "text": "I'll write a plan.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T19:57:22.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "29ec47206f184a569f78e6d6922d210a41e19ece5bad0ac30395bbec0ab381e6",
+   "role": "assistant",
+   "session_id": "sess-s26",
+   "text": "Plan: add a `strict` flag\n\n1. Add a `strict` parameter (default True) to `read()`\n2. In non-strict mode, skip malformed rows and count them\n3. Write tests for both modes and document the flag",
+   "via": "plan_dialog"
+  },
+  {
+   "at": "2026-11-19T19:57:50.000Z",
+   "dialog_user": true,
+   "direct_user": false,
+   "id": "c8373ccb30d5deb1390ecea08f575bc295eda875b0c295abfded20dea720062e",
+   "role": "user",
+   "session_id": "sess-s26",
+   "text": "Approved the plan in the plan dialog.",
+   "via": "plan_dialog"
+  },
+  {
+   "at": "2026-11-19T20:00:36.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "352a3d81a56fb96a22d6af3dee6d7700ec813d81bfa33c5af6dbe89527ace3f7",
+   "role": "assistant",
+   "session_id": "sess-s26",
+   "text": "Step 1 is done: `read()` now takes `strict=True`, and the tokenizer is built with the same flag.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T20:05:06.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "61f77cae06b3ba6fb5b3b0e011fd12ed011f9981df268398c679fbffc00872df",
+   "role": "assistant",
+   "session_id": "sess-s26",
+   "text": "Step 2 is done as well. I ran the 40 sample files in non-strict mode: 37 read cleanly and 3 had malformed rows, 5 rows skipped in all, with no crash.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T20:06:27.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "50a2e5559562ae064a564718113d5985ffc2c4cacdc70f92f0ecda54f638c90a",
+   "role": "user",
+   "session_id": "sess-s26",
+   "text": "good. does it count the skipped rows somewhere?",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T20:07:15.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "edafbbfd62a52eb5df6f72dc324a40d76c9e5263a79acd4030e1b31109fe9bf6",
+   "role": "assistant",
+   "session_id": "sess-s26",
+   "text": "Yes, the reader exposes them as `reader.skipped`, a plain integer.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T20:11:01.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "9b017370fe451559fbff6748738039ffb9f740964ed7a8ad37b1ef403e6c18f9",
+   "role": "assistant",
+   "session_id": "sess-s26",
+   "text": "The tests for both modes and the docs for the flag are written, so that was the last step.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T20:11:57.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "9ec87c16f8a9a641a026cc541e034dae7784057fdf8e776268fddaa27706c493",
+   "role": "user",
+   "session_id": "sess-s26",
+   "text": "nice",
+   "via": null
+  }
+ ],
+ "stretch": "s26"
+}

@@ -1,0 +1,448 @@
+{
+ "about": "a plan in the agent's message and a typed go ahead; a failure, a decision and four steps",
+ "draft": [
+  {
+   "body": "<!-- ghim:event type=steps at=2026-11-19T18:04-05:00 -->\n### Steps: 2026-11-19 18:04 EST - CLI summary line\n\n**In plain words, we agreed to:** add a summary line of rows read and rows skipped to the CLI\n\n**Agreed:** By the user in the chat, 2026-11-19 18:04 EST:\n> go ahead, but skip the colors\n\n**Steps:**\n1. Add a `--summary` flag to the CLI\n2. Print `rows read` and `rows skipped` to standard error after the last row\n3. Add tests for the summary line\n4. Document the flag in the README\n\n**Done when:** Not stated",
+   "excerpts": [
+    "go ahead, but skip the colors"
+   ],
+   "issue": 0,
+   "kind": "steps",
+   "links": [],
+   "marks": [],
+   "sources": [
+    2,
+    3
+   ],
+   "task_title": "Add a summary line to the CLI",
+   "topic": 4
+  },
+  {
+   "body": "<!-- ghim:event type=failure at=2026-11-19T18:08-05:00 -->\n### Failure: 2026-11-19 18:08 EST - Summary line prints mojibake for latin-1 file\n\n**In plain words, what went wrong:** the summary line printed garbled text for a latin-1 file\n\n**What failed:** `test_summary_encoding` fails. With a latin-1 file, the summary line prints mojibake instead of the file name.\n\n**What ran:** `test_summary_encoding`, while working on step 2 of the summary line task\n\n**Cause:** Not established\n\n**Impact:** Step 2 was held up at this point.\n\n**Not established:** The cause of the failure.\n\n**Next step:** Not stated, owner Not stated",
+   "excerpts": [
+    "`test_summary_encoding` fails. With a latin-1 file, the summary line prints mojibake instead of the file name."
+   ],
+   "issue": 4,
+   "kind": "failure",
+   "links": [],
+   "marks": [],
+   "sources": [
+    6
+   ],
+   "task_title": "",
+   "topic": 4
+  },
+  {
+   "body": "<!-- ghim:event type=decision at=2026-11-19T18:09-05:00 -->\n### Decision: 2026-11-19 18:09 EST - Decode with replacement characters\n\n**In plain words, we decided to:** decode the summary line with replacement characters for now\n\n**Decision:** Decode with replacement characters for now and look at encodings later.\n\n**Decided by:** octocat, 2026-11-19 18:09 EST\n\n**Exact words:**\n\n> decode with replacement characters for now, we can look at encodings later\n\n**Where recorded:** chat\n\n**Effect:** The summary line decodes with replacement characters; proper encoding handling is deferred.\n\n**Next step:** Look at encodings later, owner Not stated",
+   "excerpts": [
+    "decode with replacement characters for now, we can look at encodings later"
+   ],
+   "issue": 4,
+   "kind": "decision",
+   "links": [],
+   "marks": [],
+   "sources": [
+    7
+   ],
+   "task_title": "",
+   "topic": 4
+  },
+  {
+   "body": "<!-- ghim:event type=result at=2026-11-19T18:10-05:00 -->\n### Result: 2026-11-19 18:10 EST - Summary line printed after the last row\n\n**In plain words, we found that:** the summary line is printed after the last row and decodes with replacement characters\n\n**What ran:** Step 2 of the summary line task, as the agent described it\n\n**Configuration:** Not stated\n\n**Numbers:**\n\n| Measure | Value | Denominator | Source path |\n|---|---|---|---|\n| Not stated | Not stated | Not stated | Not stated |\n\n**Exclusions and failures:** None\n\n**Cost:** Not measured\n\n**Not established:** Encoding handling beyond replacement characters.\n\n**Next step:** Not stated, owner Not stated",
+   "excerpts": [
+    "Step 2 is complete: the summary line is printed after the last row and decodes with replacement characters."
+   ],
+   "issue": 4,
+   "kind": "result",
+   "links": [],
+   "marks": [
+    {
+     "steps": [
+      2
+     ],
+     "task": 0
+    }
+   ],
+   "sources": [
+    8
+   ],
+   "task_title": "",
+   "topic": 4
+  },
+  {
+   "body": "<!-- ghim:event type=checkpoint at=2026-11-19T18:13-05:00 -->\n### Checkpoint: 2026-11-19 18:13 EST - CLI summary line steps 1, 3 and 4 done\n\n**In plain words, we paused here:** with the CLI summary line flag, tests and README section reported done\n\n**State:** The CLI accepts `--summary`, the tests for the summary line are written, and the README section for `--summary` is in.\n\n**Done since the last checkpoint:** Step 1 (the CLI accepts `--summary`), step 3 (tests for the summary line written), step 4 (README section for `--summary`).\n\n**In progress:** Not stated\n\n**Next actions:** Not stated\n\n**Open questions:** None",
+   "excerpts": [
+    "Step 1 is done: the CLI accepts `--summary`.",
+    "The tests for the summary line are written, which finishes step 3.",
+    "The README section for `--summary` is in, so step 4 is done too."
+   ],
+   "issue": 0,
+   "kind": "checkpoint",
+   "links": [],
+   "marks": [
+    {
+     "steps": [
+      1,
+      3,
+      4
+     ],
+     "task": 0
+    }
+   ],
+   "sources": [
+    5,
+    9,
+    11
+   ],
+   "task_title": "",
+   "topic": 0
+  }
+ ],
+ "record": {
+  "memories": [
+   {
+    "id": 9701,
+    "kind": "decision",
+    "plain": "make strict quoting the default in 0.3.0"
+   },
+   {
+    "id": 9702,
+    "kind": "result",
+    "plain": "reading the 100 MB file takes a median of 1.84 s, against 1.21 s for the standard library, over 5 runs"
+   },
+   {
+    "id": 9703,
+    "kind": "failure",
+    "plain": "the mixed line-ending test fails on files that use a lone carriage return"
+   },
+   {
+    "id": 9704,
+    "kind": "idea",
+    "plain": "try a C-level tokenizer for the hot loop"
+   },
+   {
+    "id": 9705,
+    "kind": "result",
+    "plain": "strict quoting rejects 3 of the 40 sample files that the old reader accepted"
+   },
+   {
+    "id": 9706,
+    "kind": "question",
+    "plain": "whether a lone carriage return should count as a line ending"
+   },
+   {
+    "id": 9707,
+    "kind": "correction",
+    "plain": "the 1 MB timing was a warm-cache read, so its median of 0.02 s is not comparable"
+   }
+  ],
+  "parts": [],
+  "tasks": [
+   {
+    "issue": 9,
+    "steps": [
+     {
+      "n": 1,
+      "text": "Generate the 1 GB test file"
+     },
+     {
+      "n": 2,
+      "text": "Run five reads with each reader"
+     },
+     {
+      "n": 3,
+      "text": "Plot read time by file size"
+     },
+     {
+      "n": 4,
+      "text": "Write the results table"
+     }
+    ],
+    "title": "Benchmark the 1 GB file"
+   }
+  ],
+  "todo": 10,
+  "topics": [
+   {
+    "issue": 2,
+    "title": "Reader: quoted fields and line endings"
+   },
+   {
+    "issue": 3,
+    "title": "Read speed against the standard library"
+   },
+   {
+    "issue": 4,
+    "title": "Command-line tool"
+   },
+   {
+    "issue": 5,
+    "title": "Docs and examples"
+   }
+  ]
+ },
+ "reviews": [
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  }
+ ],
+ "run": 1,
+ "sort": {
+  "ignored": [
+   4,
+   10,
+   12
+  ],
+  "labels": [
+   {
+    "job": "memory",
+    "kind": "decision",
+    "parts": [],
+    "sources": [
+     1
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "plan_agreed",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     2,
+     3
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "memory",
+    "kind": "decision",
+    "parts": [],
+    "sources": [
+     3
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "step_done",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     5
+    ],
+    "steps": [
+     1
+    ],
+    "task": 0
+   },
+   {
+    "job": "memory",
+    "kind": "failure",
+    "parts": [],
+    "sources": [
+     6
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "memory",
+    "kind": "decision",
+    "parts": [],
+    "sources": [
+     7
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "memory",
+    "kind": "result",
+    "parts": [],
+    "sources": [
+     8
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "step_done",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     8
+    ],
+    "steps": [
+     2
+    ],
+    "task": 0
+   },
+   {
+    "job": "step_done",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     9
+    ],
+    "steps": [
+     3
+    ],
+    "task": 0
+   },
+   {
+    "job": "step_done",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     11
+    ],
+    "steps": [
+     4
+    ],
+    "task": 0
+   }
+  ]
+ },
+ "sources": [
+  {
+   "at": "2026-11-19T23:02:57.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "1a25a898c7a3cc9a6a2f077e01e081176c6240e0f6c830d92c26d96445f649b9",
+   "role": "user",
+   "session_id": "sess-s27",
+   "text": "the CLI should print a summary line at the end, rows read and rows skipped",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T23:03:21.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "5bdf999dc13b06247304dd81d62ab82b3708d00510cf72c43ccea11e6a69b693",
+   "role": "assistant",
+   "session_id": "sess-s27",
+   "text": "Here's the plan:\n1. Add a `--summary` flag to the CLI\n2. Print `rows read` and `rows skipped` to standard error after the last row\n3. Add tests for the summary line\n4. Document the flag in the README\nShall I go ahead?",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T23:04:22.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "8827ca8a23f6e894794779958393ef8e00c452a3b4bb31b79c2619a80ca09f5f",
+   "role": "user",
+   "session_id": "sess-s27",
+   "text": "go ahead, but skip the colors",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T23:04:50.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "ba2b9034513e7c41e321729d3b11ee5132e510661afb4d8a3447a95c4c68ab10",
+   "role": "assistant",
+   "session_id": "sess-s27",
+   "text": "Starting with step 1, without colors.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T23:05:55.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "f8f554e06a148b070c99b9f9cbd339e2990b23831439d79a8fdba07c54515cc7",
+   "role": "assistant",
+   "session_id": "sess-s27",
+   "text": "Step 1 is done: the CLI accepts `--summary`.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T23:08:12.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "c064c265f388a5bd3123fa403a84d8b91b763809acb475efd0110eb85a1c88ba",
+   "role": "assistant",
+   "session_id": "sess-s27",
+   "text": "Step 2 hit a problem: `test_summary_encoding` fails. With a latin-1 file, the summary line prints mojibake instead of the file name.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T23:09:25.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "23f9234c33166ec49b56096e6468245ebcd8f9385ab6b03ef56a1100a4aa2df9",
+   "role": "user",
+   "session_id": "sess-s27",
+   "text": "decode with replacement characters for now, we can look at encodings later",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T23:10:05.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "826cd8d4c7ff97e718a66c2e8c44f26d912655fe85daa21ea51ca2daa41de04e",
+   "role": "assistant",
+   "session_id": "sess-s27",
+   "text": "Step 2 is complete: the summary line is printed after the last row and decodes with replacement characters.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T23:11:22.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "1185aba3cff90d8cf24444c6298f571efe2d69b3d233cf2258405d0fe2f4e6f2",
+   "role": "assistant",
+   "session_id": "sess-s27",
+   "text": "The tests for the summary line are written, which finishes step 3.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T23:12:06.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "adc4b0ad2f7fc1eaa49acdbef29f11d2a9fb1252fc2bd1a76c144702d59f37c8",
+   "role": "user",
+   "session_id": "sess-s27",
+   "text": "good",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T23:13:27.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "8c20f7298866627887bb3e5c948bb83c8993d0cb2f6e9704589b669f1b38d9e9",
+   "role": "assistant",
+   "session_id": "sess-s27",
+   "text": "The README section for `--summary` is in, so step 4 is done too.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T23:14:15.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "02d2ba799dccf41aa62503433364351e7e736be47332762e07adb5be206c112b",
+   "role": "user",
+   "session_id": "sess-s27",
+   "text": "thanks",
+   "via": null
+  }
+ ],
+ "stretch": "s27"
+}

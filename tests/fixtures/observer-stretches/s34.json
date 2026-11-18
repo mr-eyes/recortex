@@ -1,0 +1,380 @@
+{
+ "about": "steps of an open task done in passing, plainly and with numbers; a decision",
+ "draft": [
+  {
+   "body": "<!-- ghim:event type=checkpoint at=2026-11-20T15:54-05:00 -->\n### Checkpoint: 2026-11-20 15:54 EST - Tokenizer carries quote state\n\n**In plain words, we paused here:** with the tokenizer now carrying quote state across lines\n\n**State:** The agent reported that the tokenizer now carries quote state across lines. It was moving on to carriage returns inside quotes.\n\n**Done since the last checkpoint:** Step 2, change the tokenizer to carry quote state across lines.\n\n**In progress:** Handling carriage returns inside quotes.\n\n**Next actions:** Handle CRLF inside quotes, owner agent.\n\n**Open questions:** None",
+   "excerpts": [
+    "The tokenizer now carries quote state across lines, so the change is in."
+   ],
+   "issue": 8,
+   "kind": "checkpoint",
+   "links": [],
+   "marks": [
+    {
+     "steps": [
+      2
+     ],
+     "task": 8
+    }
+   ],
+   "sources": [
+    3
+   ],
+   "task_title": "",
+   "topic": 0
+  },
+  {
+   "body": "<!-- ghim:event type=result at=2026-11-20T15:58-05:00 -->\n### Result: 2026-11-20 15:58 EST - CRLF inside quotes handled\n\n**In plain words, we found that:** the reader no longer splits a quoted field at a carriage return plus newline\n\n**What ran:** The agent changed the reader to handle CRLF inside quoted fields, as it reported.\n\n**Configuration:** Not stated\n\n**Numbers:**\n\n| Measure | Value | Denominator | Source path |\n|---|---|---|---|\n| Not stated | Not stated | Not stated | Not stated |\n\n**Exclusions and failures:** None\n\n**Cost:** Not measured\n\n**Not established:** Which tests or files were used to check this is not stated.\n\n**Next step:** Rerun the benchmark files, owner agent",
+   "excerpts": [
+    "CRLF inside quotes is handled: the reader no longer splits a quoted field at a carriage return plus newline. That is step 3 done."
+   ],
+   "issue": 2,
+   "kind": "result",
+   "links": [],
+   "marks": [
+    {
+     "steps": [
+      3
+     ],
+     "task": 8
+    }
+   ],
+   "sources": [
+    5
+   ],
+   "task_title": "",
+   "topic": 2
+  },
+  {
+   "body": "<!-- ghim:event type=result at=2026-11-20T16:02-05:00 -->\n### Result: 2026-11-20 16:02 EST - Benchmark files rerun with new tokenizer\n\n**In plain words, we found that:** the three benchmark files read in 0.021 s, 0.24 s and 1.97 s with the new tokenizer\n\n**What ran:** The agent reran the three benchmark files with the new tokenizer, medians of 5 reads each.\n\n**Configuration:** New tokenizer with quote state carried across lines and CRLF handled inside quotes.\n\n**Numbers:**\n\n| Measure | Value | Denominator | Source path |\n|---|---|---|---|\n| Median read time, 1 MB | 0.021 s | 5 reads | Not stated |\n| Median read time, 10 MB | 0.24 s | 5 reads | Not stated |\n| Median read time, 100 MB | 1.97 s | 5 reads | Not stated |\n\n**Exclusions and failures:** None\n\n**Cost:** Not measured\n\n**Not established:** Comparison with the standard library on these runs is not stated.\n\n**Next step:** Update the known-issues text, owner agent",
+   "excerpts": [
+    "1 MB in 0.021 s, 10 MB in 0.24 s and 100 MB in 1.97 s, medians of 5 reads each."
+   ],
+   "issue": 3,
+   "kind": "result",
+   "links": [],
+   "marks": [
+    {
+     "steps": [
+      4
+     ],
+     "task": 8
+    }
+   ],
+   "sources": [
+    7
+   ],
+   "task_title": "",
+   "topic": 3
+  },
+  {
+   "body": "<!-- ghim:event type=decision at=2026-11-20T16:04-05:00 -->\n### Decision: 2026-11-20 16:04 EST - Embedded newlines off by default in the CLI\n\n**In plain words, we decided to:** keep embedded newlines off by default in the command-line tool\n\n**Decision:** Embedded newlines stay off by default in the command-line tool, and users can switch them on.\n\n**Decided by:** octocat, 2026-11-20 16:04 EST\n\n**Exact words:**\n\n> keep embedded newlines off by default in the command-line tool, people can switch them on\n\n**Where recorded:** Chat of the working session\n\n**Effect:** The CLI default for embedded newlines is unchanged.\n\n**Next step:** Leave the CLI default as it is, owner agent",
+   "excerpts": [
+    "keep embedded newlines off by default in the command-line tool, people can switch them on"
+   ],
+   "issue": 4,
+   "kind": "decision",
+   "links": [],
+   "marks": [],
+   "sources": [
+    9
+   ],
+   "task_title": "",
+   "topic": 4
+  }
+ ],
+ "record": {
+  "memories": [
+   {
+    "id": 9701,
+    "kind": "decision",
+    "plain": "make strict quoting the default in 0.3.0"
+   },
+   {
+    "id": 9702,
+    "kind": "result",
+    "plain": "reading the 100 MB file takes a median of 1.84 s, against 1.21 s for the standard library, over 5 runs"
+   },
+   {
+    "id": 9703,
+    "kind": "failure",
+    "plain": "the mixed line-ending test fails on files that use a lone carriage return"
+   },
+   {
+    "id": 9704,
+    "kind": "idea",
+    "plain": "try a C-level tokenizer for the hot loop"
+   },
+   {
+    "id": 9705,
+    "kind": "result",
+    "plain": "strict quoting rejects 3 of the 40 sample files that the old reader accepted"
+   },
+   {
+    "id": 9706,
+    "kind": "question",
+    "plain": "whether a lone carriage return should count as a line ending"
+   },
+   {
+    "id": 9707,
+    "kind": "correction",
+    "plain": "the 1 MB timing was a warm-cache read, so its median of 0.02 s is not comparable"
+   }
+  ],
+  "parts": [],
+  "tasks": [
+   {
+    "issue": 8,
+    "steps": [
+     {
+      "n": 2,
+      "text": "Change the tokenizer to carry quote state across lines"
+     },
+     {
+      "n": 3,
+      "text": "Handle CRLF inside quotes"
+     },
+     {
+      "n": 4,
+      "text": "Rerun the three benchmark files"
+     },
+     {
+      "n": 5,
+      "text": "Update the known-issues text"
+     }
+    ],
+    "title": "Newlines inside quoted fields"
+   }
+  ],
+  "todo": 10,
+  "topics": [
+   {
+    "issue": 2,
+    "title": "Reader: quoted fields and line endings"
+   },
+   {
+    "issue": 3,
+    "title": "Read speed against the standard library"
+   },
+   {
+    "issue": 4,
+    "title": "Command-line tool"
+   },
+   {
+    "issue": 5,
+    "title": "Docs and examples"
+   }
+  ]
+ },
+ "reviews": [
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  }
+ ],
+ "run": 1,
+ "sort": {
+  "ignored": [
+   1,
+   2,
+   4,
+   6,
+   8,
+   10,
+   11
+  ],
+  "labels": [
+   {
+    "job": "step_done",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     3
+    ],
+    "steps": [
+     2
+    ],
+    "task": 8
+   },
+   {
+    "job": "step_done",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     5
+    ],
+    "steps": [
+     3
+    ],
+    "task": 8
+   },
+   {
+    "job": "memory",
+    "kind": "result",
+    "parts": [],
+    "sources": [
+     5
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "step_done",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     7
+    ],
+    "steps": [
+     4
+    ],
+    "task": 8
+   },
+   {
+    "job": "memory",
+    "kind": "result",
+    "parts": [],
+    "sources": [
+     7
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "memory",
+    "kind": "decision",
+    "parts": [],
+    "sources": [
+     9
+    ],
+    "steps": [],
+    "task": 0
+   }
+  ]
+ },
+ "sources": [
+  {
+   "at": "2026-11-20T20:51:57.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "032669b1b8ee384c03fb0c52c09ddb99297eadd50482dc5bc255b1f1e1f75489",
+   "role": "user",
+   "session_id": "sess-s34",
+   "text": "continue with the quoted newlines task",
+   "via": null
+  },
+  {
+   "at": "2026-11-20T20:52:21.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "054c6674818c61a0cf7534fd2490e7f02791593116624a4b8b933af68bc4822d",
+   "role": "assistant",
+   "session_id": "sess-s34",
+   "text": "Picking up at step 2, the tokenizer change.",
+   "via": null
+  },
+  {
+   "at": "2026-11-20T20:54:55.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "027031d9eea70f0088874cf4d684f318be32b9ecdf09da65bd5ac45cdb7a235c",
+   "role": "assistant",
+   "session_id": "sess-s34",
+   "text": "The tokenizer now carries quote state across lines, so the change is in. On to carriage returns inside quotes.",
+   "via": null
+  },
+  {
+   "at": "2026-11-20T20:57:12.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "9e69eb0830e51d87a9265112512419fca632fbea60a57224d682fc3414b50ceb",
+   "role": "assistant",
+   "session_id": "sess-s34",
+   "text": "Looking at how CRLF is split.",
+   "via": null
+  },
+  {
+   "at": "2026-11-20T20:58:25.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "bfcfbfdf6bc0fbdce26a00c6fd3c11362f69639e6be267c6f7877c65833401ad",
+   "role": "assistant",
+   "session_id": "sess-s34",
+   "text": "CRLF inside quotes is handled: the reader no longer splits a quoted field at a carriage return plus newline. That is step 3 done.",
+   "via": null
+  },
+  {
+   "at": "2026-11-20T20:59:05.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "904384cdea124ac4ff5aba9791514e7847b505df24d642cdb514aca3a3e29fdc",
+   "role": "user",
+   "session_id": "sess-s34",
+   "text": "good. now rerun the benchmark files",
+   "via": null
+  },
+  {
+   "at": "2026-11-20T21:02:27.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "fa9e9014d2e6da69b404f0425f35f9dc94b1f8a9dfbcf45679679ad75a91b8b2",
+   "role": "assistant",
+   "session_id": "sess-s34",
+   "text": "Step 4 is done. I reran the three benchmark files with the new tokenizer: 1 MB in 0.021 s, 10 MB in 0.24 s and 100 MB in 1.97 s, medians of 5 reads each.",
+   "via": null
+  },
+  {
+   "at": "2026-11-20T21:03:15.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "95597aeb3c6ec454749b3f9bc55df6f91db1418fc7f3260ac1680612bb78007e",
+   "role": "assistant",
+   "session_id": "sess-s34",
+   "text": "I haven't touched the known-issues text yet.",
+   "via": null
+  },
+  {
+   "at": "2026-11-20T21:04:40.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "48f23b6e1210528af96280aa4e4c2d427dd693c2dabd0caf507f4a7fcd071739",
+   "role": "user",
+   "session_id": "sess-s34",
+   "text": "keep embedded newlines off by default in the command-line tool, people can switch them on",
+   "via": null
+  },
+  {
+   "at": "2026-11-20T21:05:32.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "093bb883abd5b543d88f6d156aa313c868fb3b37776c2d2465f58e6287afc5f4",
+   "role": "assistant",
+   "session_id": "sess-s34",
+   "text": "Understood, I'll leave the CLI default as it is.",
+   "via": null
+  },
+  {
+   "at": "2026-11-20T21:07:01.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "2c80dd713ab11ce94cfe404ef08c5ba1c5f902de42b6eb348207bd03dbee8ca9",
+   "role": "user",
+   "session_id": "sess-s34",
+   "text": "ok",
+   "via": null
+  }
+ ],
+ "stretch": "s34"
+}

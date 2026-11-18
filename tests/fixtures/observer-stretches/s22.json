@@ -1,0 +1,245 @@
+{
+ "about": "a plan shown and not agreed: the user doubts it",
+ "draft": [],
+ "record": {
+  "memories": [
+   {
+    "id": 9501,
+    "kind": "decision",
+    "plain": "use a rolling median of 9 readings as the spike detector"
+   },
+   {
+    "id": 9502,
+    "kind": "result",
+    "plain": "the loop version cleans one station-year (8,760 readings) in 41 s"
+   },
+   {
+    "id": 9503,
+    "kind": "result",
+    "plain": "on station A the filter missed 11 of 240 hand-flagged spikes"
+   },
+   {
+    "id": 9504,
+    "kind": "failure",
+    "plain": "the filter removes the true peak of the 4 November storm surge"
+   },
+   {
+    "id": 9505,
+    "kind": "idea",
+    "plain": "use a longer window during storms"
+   },
+   {
+    "id": 9506,
+    "kind": "question",
+    "plain": "whether to interpolate gaps longer than 3 hours"
+   }
+  ],
+  "parts": [
+   {
+    "id": 9401,
+    "kind": "message",
+    "plain": "the filter removes spikes with a small, known error",
+    "state": "planned"
+   },
+   {
+    "id": 9402,
+    "kind": "claim",
+    "plain": "the filter misses fewer than 5 percent of hand-flagged spikes",
+    "state": "planned"
+   },
+   {
+    "id": 9403,
+    "kind": "claim",
+    "plain": "the filter wrongly removes fewer than 2 percent of good readings",
+    "state": "planned"
+   },
+   {
+    "id": 9404,
+    "kind": "table",
+    "plain": "error rates by station",
+    "state": "planned"
+   },
+   {
+    "id": 9405,
+    "kind": "figure",
+    "plain": "one storm record before and after cleaning",
+    "state": "planned"
+   },
+   {
+    "id": 9406,
+    "kind": "claim",
+    "plain": "the NumPy version is at least 10 times faster than the loop version",
+    "state": "planned"
+   },
+   {
+    "id": 9407,
+    "kind": "limitation",
+    "plain": "validated on two stations only",
+    "state": "backed"
+   }
+  ],
+  "tasks": [
+   {
+    "issue": 7,
+    "steps": [
+     {
+      "n": 1,
+      "text": "Get the hand-flagged records for station A"
+     },
+     {
+      "n": 2,
+      "text": "Get the hand-flagged records for station B"
+     },
+     {
+      "n": 3,
+      "text": "Score the filter on both stations"
+     },
+     {
+      "n": 4,
+      "text": "Write the error-rate table"
+     }
+    ],
+    "title": "Validation records"
+   }
+  ],
+  "todo": 8,
+  "topics": [
+   {
+    "issue": 2,
+    "title": "Spike filter"
+   },
+   {
+    "issue": 3,
+    "title": "Gaps and interpolation"
+   },
+   {
+    "issue": 4,
+    "title": "Methods note: error rates"
+   },
+   {
+    "issue": 5,
+    "title": "Command-line tool"
+   }
+  ]
+ },
+ "reviews": [],
+ "run": 1,
+ "sort": {
+  "ignored": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10
+  ],
+  "labels": []
+ },
+ "sources": [
+  {
+   "at": "2026-11-19T07:27:57.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "89abf4e92e5534eff47e891c5a064d27177cdc44cf2ad985eee29a12ddc8ed4a",
+   "role": "user",
+   "session_id": "sess-s22",
+   "text": "how could we deal with the gaps after cleaning?",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T07:28:21.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "834cd648c17516d9773526fa1e15bd245ceef65ced43367de76aed59f8c51d0b",
+   "role": "assistant",
+   "session_id": "sess-s22",
+   "text": "There are a few options, let me sketch one.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T07:29:22.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "19ad020ea650668e0b7a85264de6d362c3505c7614bc63359cf0a15ff3a2925e",
+   "role": "assistant",
+   "session_id": "sess-s22",
+   "text": "One approach: 1. mark every removed reading as missing; 2. interpolate linearly across gaps up to 3 hours; 3. leave longer gaps untouched and list them in a report. I haven't started anything.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T07:29:50.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "71543f9c92a05ab9293f1c4913e470bcb0e1acf27e3222dd6d8efb5fdf22cc6a",
+   "role": "user",
+   "session_id": "sess-s22",
+   "text": "hmm, I doubt that. linear interpolation could hide real surges. what else could we do?",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T07:30:55.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "eaa9181b158a562eebf4dc2cbf31ca74501810356ffaa9f6f6afa8ee34b4bd8c",
+   "role": "assistant",
+   "session_id": "sess-s22",
+   "text": "Another option is to leave all gaps open and let the analysis code decide how to handle them.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T07:31:27.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "eb736844a4fa0b758128fc3e44045022b0a2978ca7db3fba56c3f5d38a188809",
+   "role": "user",
+   "session_id": "sess-s22",
+   "text": "that seems cleaner but let me think",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T07:32:36.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "f431aab5e94dcd90700dc417fe0854f276b60374f90f4aece74b15314610be9e",
+   "role": "assistant",
+   "session_id": "sess-s22",
+   "text": "Take your time.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T07:33:12.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "6f0ae7cfe338ec8a0491a64e5c31ec5abd023824922abae5f68fe10d4c4275db",
+   "role": "assistant",
+   "session_id": "sess-s22",
+   "text": "I can sketch a third option, with a spline, if you like.",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T07:34:25.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "2de8d2c08d1c13b37ac6bdea8f522db0ec40dba1cb354e9cc373fa0bb357aa41",
+   "role": "user",
+   "session_id": "sess-s22",
+   "text": "not now",
+   "via": null
+  },
+  {
+   "at": "2026-11-19T07:35:05.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "4f229fd9167be06dc447a6bab82550b5c14e462f59a1e5e73ef9f004b27b4212",
+   "role": "assistant",
+   "session_id": "sess-s22",
+   "text": "Okay.",
+   "via": null
+  }
+ ],
+ "stretch": "s22"
+}

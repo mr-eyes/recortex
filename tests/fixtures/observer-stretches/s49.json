@@ -1,0 +1,353 @@
+{
+ "about": "four loose to-dos typed by the user, and an idea",
+ "draft": [
+  {
+   "body": "<!-- ghim:event type=steps at=2026-11-22T14:36-05:00 -->\n### Steps: 2026-11-22 14:36 EST - Test for the empty file\n\n**In plain words, we agreed to:** add a test for the empty file\n\n**Agreed:** By the user in the chat, 2026-11-22 14:36 EST:\n> remind me to add a test for the empty file\n\n**Steps:**\n1. Add a test for the empty file\n\n**Done when:** The test for the empty file is added",
+   "excerpts": [
+    "remind me to add a test for the empty file"
+   ],
+   "issue": 10,
+   "kind": "steps",
+   "links": [],
+   "marks": [],
+   "sources": [
+    1
+   ],
+   "task_title": "",
+   "topic": 0
+  },
+  {
+   "body": "<!-- ghim:event type=steps at=2026-11-22T14:38-05:00 -->\n### Steps: 2026-11-22 14:38 EST - Bump the version in pyproject\n\n**In plain words, we agreed to:** bump the version in pyproject before 0.3.0\n\n**Agreed:** By the user in the chat, 2026-11-22 14:38 EST:\n> we also need to bump the version in pyproject before 0.3.0\n\n**Steps:**\n1. Bump the version in pyproject before 0.3.0\n\n**Done when:** The version in pyproject is bumped",
+   "excerpts": [
+    "we also need to bump the version in pyproject before 0.3.0"
+   ],
+   "issue": 10,
+   "kind": "steps",
+   "links": [],
+   "marks": [],
+   "sources": [
+    3
+   ],
+   "task_title": "",
+   "topic": 0
+  },
+  {
+   "body": "<!-- ghim:event type=steps at=2026-11-22T14:40-05:00 -->\n### Steps: 2026-11-22 14:40 EST - Update the README install section\n\n**In plain words, we agreed to:** update the README install section\n\n**Agreed:** By the user in the chat, 2026-11-22 14:40 EST:\n> todo: update the README install section\n\n**Steps:**\n1. Update the README install section\n\n**Done when:** The README install section is updated",
+   "excerpts": [
+    "todo: update the README install section"
+   ],
+   "issue": 10,
+   "kind": "steps",
+   "links": [],
+   "marks": [],
+   "sources": [
+    6
+   ],
+   "task_title": "",
+   "topic": 0
+  },
+  {
+   "body": "<!-- ghim:event type=steps at=2026-11-22T14:42-05:00 -->\n### Steps: 2026-11-22 14:42 EST - Check Windows line endings\n\n**In plain words, we agreed to:** check Windows line endings\n\n**Agreed:** By the user in the chat, 2026-11-22 14:42 EST:\n> and don't let me forget to check Windows line endings\n\n**Steps:**\n1. Check Windows line endings\n\n**Done when:** Windows line endings are checked",
+   "excerpts": [
+    "and don't let me forget to check Windows line endings"
+   ],
+   "issue": 10,
+   "kind": "steps",
+   "links": [],
+   "marks": [],
+   "sources": [
+    8
+   ],
+   "task_title": "",
+   "topic": 0
+  }
+ ],
+ "record": {
+  "memories": [
+   {
+    "id": 9701,
+    "kind": "decision",
+    "plain": "make strict quoting the default in 0.3.0"
+   },
+   {
+    "id": 9702,
+    "kind": "result",
+    "plain": "reading the 100 MB file takes a median of 1.84 s, against 1.21 s for the standard library, over 5 runs"
+   },
+   {
+    "id": 9703,
+    "kind": "failure",
+    "plain": "the mixed line-ending test fails on files that use a lone carriage return"
+   },
+   {
+    "id": 9704,
+    "kind": "idea",
+    "plain": "try a C-level tokenizer for the hot loop"
+   },
+   {
+    "id": 9705,
+    "kind": "result",
+    "plain": "strict quoting rejects 3 of the 40 sample files that the old reader accepted"
+   },
+   {
+    "id": 9706,
+    "kind": "question",
+    "plain": "whether a lone carriage return should count as a line ending"
+   },
+   {
+    "id": 9707,
+    "kind": "correction",
+    "plain": "the 1 MB timing was a warm-cache read, so its median of 0.02 s is not comparable"
+   }
+  ],
+  "parts": [],
+  "tasks": [
+   {
+    "issue": 8,
+    "steps": [
+     {
+      "n": 2,
+      "text": "Change the tokenizer to carry quote state across lines"
+     },
+     {
+      "n": 3,
+      "text": "Handle CRLF inside quotes"
+     },
+     {
+      "n": 4,
+      "text": "Rerun the three benchmark files"
+     },
+     {
+      "n": 5,
+      "text": "Update the known-issues text"
+     }
+    ],
+    "title": "Newlines inside quoted fields"
+   }
+  ],
+  "todo": 10,
+  "topics": [
+   {
+    "issue": 2,
+    "title": "Reader: quoted fields and line endings"
+   },
+   {
+    "issue": 3,
+    "title": "Read speed against the standard library"
+   },
+   {
+    "issue": 4,
+    "title": "Command-line tool"
+   },
+   {
+    "issue": 5,
+    "title": "Docs and examples"
+   }
+  ]
+ },
+ "reviews": [
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  }
+ ],
+ "run": 1,
+ "sort": {
+  "ignored": [
+   2,
+   4,
+   5,
+   7,
+   9,
+   10,
+   12
+  ],
+  "labels": [
+   {
+    "job": "to_do",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     1
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "to_do",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     3
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "to_do",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     6
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "to_do",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     8
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "memory",
+    "kind": "idea",
+    "parts": [],
+    "sources": [
+     11
+    ],
+    "steps": [],
+    "task": 0
+   }
+  ]
+ },
+ "sources": [
+  {
+   "at": "2026-11-22T19:36:57.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "fa1a03f6c5f9c54a307c2ae13513d6c7203320771622bfd9ee5a60375b394de4",
+   "role": "user",
+   "session_id": "sess-s49",
+   "text": "remind me to add a test for the empty file",
+   "via": null
+  },
+  {
+   "at": "2026-11-22T19:37:21.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "8b7548f7da8617152dda14851e9f01027373e12904c7553e4e293cafde6eb22d",
+   "role": "assistant",
+   "session_id": "sess-s49",
+   "text": "Noted: add a test for the empty file.",
+   "via": null
+  },
+  {
+   "at": "2026-11-22T19:38:22.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "e266ac0c15fd184f23fc3b135a64c827f8d726bf1b7cb21b204baa623cb79a62",
+   "role": "user",
+   "session_id": "sess-s49",
+   "text": "we also need to bump the version in pyproject before 0.3.0",
+   "via": null
+  },
+  {
+   "at": "2026-11-22T19:38:50.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "6dcd2968d240625c6e6614b14a557c3f15a31594370e1443914dc7ce4fb7be47",
+   "role": "assistant",
+   "session_id": "sess-s49",
+   "text": "Added to the list.",
+   "via": null
+  },
+  {
+   "at": "2026-11-22T19:39:55.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "51ae60752811c52e160e60c9432276ed033fb300f3b8b409b7dcf858021987c5",
+   "role": "assistant",
+   "session_id": "sess-s49",
+   "text": "I'm opening the reader now for the next change you asked for.",
+   "via": null
+  },
+  {
+   "at": "2026-11-22T19:40:27.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "3ef84342457673602e2bdd49389b6a1a466f2ea571e5dda516d9b429d0006175",
+   "role": "user",
+   "session_id": "sess-s49",
+   "text": "todo: update the README install section",
+   "via": null
+  },
+  {
+   "at": "2026-11-22T19:41:36.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "176f83ca4cbde3d31324dddc724beab2694bbc1c40a2b0471d94f6947b9e26ac",
+   "role": "assistant",
+   "session_id": "sess-s49",
+   "text": "Added.",
+   "via": null
+  },
+  {
+   "at": "2026-11-22T19:42:12.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "3ff55a0884f89aa911e235afe35b84f689416a71bcda0dacca897746724211e6",
+   "role": "user",
+   "session_id": "sess-s49",
+   "text": "and don't let me forget to check Windows line endings",
+   "via": null
+  },
+  {
+   "at": "2026-11-22T19:43:25.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "87d519f07b58019bf04df55314ea7fca080944183df2689c666fb6a31b456795",
+   "role": "assistant",
+   "session_id": "sess-s49",
+   "text": "Noted.",
+   "via": null
+  },
+  {
+   "at": "2026-11-22T19:44:05.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "988220c7522d1452d86abb6ad285629b68775552099861fc9383532df7d39a02",
+   "role": "assistant",
+   "session_id": "sess-s49",
+   "text": "Anything else for the list?",
+   "via": null
+  },
+  {
+   "at": "2026-11-22T19:45:22.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "3b312bc5614d0bf41daed508ffc1a564ef5341eb662d9eeb0b647d156db4eb84",
+   "role": "user",
+   "session_id": "sess-s49",
+   "text": "what if we published a wheel for each Python version?",
+   "via": null
+  },
+  {
+   "at": "2026-11-22T19:46:06.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "793e8ee3306ff61adbc4990cffa881ea4dc92959a4555f789ece02277420d859",
+   "role": "assistant",
+   "session_id": "sess-s49",
+   "text": "We could build them in CI with a matrix over the supported versions; that is an option for later.",
+   "via": null
+  }
+ ],
+ "stretch": "s49"
+}

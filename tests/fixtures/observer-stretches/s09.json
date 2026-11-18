@@ -1,0 +1,196 @@
+{
+ "about": "a repeat: the agent restates what the record already holds",
+ "draft": [],
+ "record": {
+  "memories": [
+   {
+    "id": 9701,
+    "kind": "decision",
+    "plain": "make strict quoting the default in 0.3.0"
+   },
+   {
+    "id": 9702,
+    "kind": "result",
+    "plain": "reading the 100 MB file takes a median of 1.84 s, against 1.21 s for the standard library, over 5 runs"
+   },
+   {
+    "id": 9703,
+    "kind": "failure",
+    "plain": "the mixed line-ending test fails on files that use a lone carriage return"
+   },
+   {
+    "id": 9704,
+    "kind": "idea",
+    "plain": "try a C-level tokenizer for the hot loop"
+   },
+   {
+    "id": 9705,
+    "kind": "result",
+    "plain": "strict quoting rejects 3 of the 40 sample files that the old reader accepted"
+   },
+   {
+    "id": 9706,
+    "kind": "question",
+    "plain": "whether a lone carriage return should count as a line ending"
+   },
+   {
+    "id": 9707,
+    "kind": "correction",
+    "plain": "the 1 MB timing was a warm-cache read, so its median of 0.02 s is not comparable"
+   }
+  ],
+  "parts": [],
+  "tasks": [
+   {
+    "issue": 8,
+    "steps": [
+     {
+      "n": 2,
+      "text": "Change the tokenizer to carry quote state across lines"
+     },
+     {
+      "n": 3,
+      "text": "Handle CRLF inside quotes"
+     },
+     {
+      "n": 4,
+      "text": "Rerun the three benchmark files"
+     },
+     {
+      "n": 5,
+      "text": "Update the known-issues text"
+     }
+    ],
+    "title": "Newlines inside quoted fields"
+   }
+  ],
+  "todo": 10,
+  "topics": [
+   {
+    "issue": 2,
+    "title": "Reader: quoted fields and line endings"
+   },
+   {
+    "issue": 3,
+    "title": "Read speed against the standard library"
+   },
+   {
+    "issue": 4,
+    "title": "Command-line tool"
+   },
+   {
+    "issue": 5,
+    "title": "Docs and examples"
+   }
+  ]
+ },
+ "reviews": [],
+ "run": 1,
+ "sort": {
+  "ignored": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9
+  ],
+  "labels": []
+ },
+ "sources": [
+  {
+   "at": "2026-11-17T14:56:57.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "c6442d3c5699c512373a00c0e5295aaeb0b5d65d6de5b67c1301846f4c8143f6",
+   "role": "user",
+   "session_id": "sess-s09",
+   "text": "where do we stand on the speed work? I lost track",
+   "via": null
+  },
+  {
+   "at": "2026-11-17T14:57:21.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "4a388399c30038b104435660766d831c0546d247335be24c8e2d0bcac3bbf693",
+   "role": "assistant",
+   "session_id": "sess-s09",
+   "text": "From the record: reading the 100 MB file takes a median of 1.84 s against 1.21 s for the standard library over 5 runs, so we are slower by about half. Strict quoting is the default in 0.3.0, as you decided on the 10th. And the mixed line-ending test still fails on files that use a lone carriage return.",
+   "via": null
+  },
+  {
+   "at": "2026-11-17T14:58:22.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "d4c329b4755c160442429700ecc8a01b92671641e8f0992e90cc511ac2c93895",
+   "role": "user",
+   "session_id": "sess-s09",
+   "text": "right. and the C tokenizer idea?",
+   "via": null
+  },
+  {
+   "at": "2026-11-17T14:58:50.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "7d8df7f9eb4b287159bc32af2abff62d4e3dceca6dccd3ce69b06cd60dab1811",
+   "role": "assistant",
+   "session_id": "sess-s09",
+   "text": "Still only an idea, recorded on the 13th: try a C-level tokenizer for the hot loop. Nothing has been started on it and there are no numbers for it.",
+   "via": null
+  },
+  {
+   "at": "2026-11-17T14:59:55.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "ffb183898b7e6e406efb16fa10aff95eb5f707149b1e6397004a5e1f6697241c",
+   "role": "assistant",
+   "session_id": "sess-s09",
+   "text": "The other open item is whether a lone carriage return counts as a line ending; that question is recorded and unanswered.",
+   "via": null
+  },
+  {
+   "at": "2026-11-17T15:00:27.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "97df1c667e9952962efd167398be85259591fe7f0b64c620b2fb38e484e97941",
+   "role": "user",
+   "session_id": "sess-s09",
+   "text": "ok. what do you think we should do next?",
+   "via": null
+  },
+  {
+   "at": "2026-11-17T15:01:36.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "0ba31dca12342960cddcc24c77c61f4a9faf441b33183ba70e857e4853844eb3",
+   "role": "assistant",
+   "session_id": "sess-s09",
+   "text": "I could profile the hot loop first to see how much time the tokenizer takes before anyone writes C. That is only a suggestion.",
+   "via": null
+  },
+  {
+   "at": "2026-11-17T15:02:12.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "8930c9982f9c6364fc0f44b27046a86b1fb1f1d55671ba85f9236374a17180f9",
+   "role": "user",
+   "session_id": "sess-s09",
+   "text": "let's see, I'll think about it",
+   "via": null
+  },
+  {
+   "at": "2026-11-17T15:03:25.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "0e7a8158dcd9bd3cd5258159354ca0836d1643d809c51fd207e5899c0ea9ca69",
+   "role": "assistant",
+   "session_id": "sess-s09",
+   "text": "Okay.",
+   "via": null
+  }
+ ],
+ "stretch": "s09"
+}

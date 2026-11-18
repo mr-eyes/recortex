@@ -1,0 +1,288 @@
+{
+ "about": "the narration stretch: the agent tells what it reads and will do, with no outcome",
+ "draft": [
+  {
+   "body": "<!-- ghim:event type=failure at=2026-11-16T18:33-05:00 -->\n### Failure: 2026-11-16 18:33 EST - Help epilog wraps mid-line\n\n**In plain words, what went wrong:** the help text of the command-line tool rendered with the exit-code epilog wrapped in the middle of a line\n\n**What failed:** The help text renders, but the epilog wraps in the middle of a line.\n\n**What ran:** The help command, after an epilog listing the exit codes was added to the parser.\n\n**Cause:** Not established; the agent's plan was to switch the formatter to keep line breaks.\n\n**Impact:** The exit codes are not yet laid out cleanly in the help text. No counts stated.\n\n**Not established:** Not stated\n\n**Next step:** Switch the formatter to keep line breaks and run the help command again, owner the agent",
+   "excerpts": [
+    "The help text renders, but the epilog wraps in the middle of a line, so I'm switching the formatter to keep line breaks."
+   ],
+   "issue": 4,
+   "kind": "failure",
+   "links": [],
+   "marks": [],
+   "sources": [
+    8
+   ],
+   "task_title": "",
+   "topic": 0
+  },
+  {
+   "body": "<!-- ghim:event type=result at=2026-11-16T18:35-05:00 -->\n### Result: 2026-11-16 18:35 EST - Exit codes each on their own line in help\n\n**In plain words, we found that:** each exit code now sits on its own line in the help text of the command-line tool\n\n**What ran:** The help command was run again after the agent reported switching the formatter to keep line breaks.\n\n**Configuration:** Not stated\n\n**Numbers:**\n\n| Measure | Value | Denominator | Source path |\n|---|---|---|---|\n| Not stated | Not stated | Not stated | Not stated |\n\n**Exclusions and failures:** None\n\n**Cost:** Not measured\n\n**Not established:** Not stated\n\n**Next step:** None for now, owner the agent",
+   "excerpts": [
+    "Each exit code now sits on its own line."
+   ],
+   "issue": 4,
+   "kind": "result",
+   "links": [],
+   "marks": [],
+   "sources": [
+    10
+   ],
+   "task_title": "",
+   "topic": 0
+  }
+ ],
+ "record": {
+  "memories": [
+   {
+    "id": 9701,
+    "kind": "decision",
+    "plain": "make strict quoting the default in 0.3.0"
+   },
+   {
+    "id": 9702,
+    "kind": "result",
+    "plain": "reading the 100 MB file takes a median of 1.84 s, against 1.21 s for the standard library, over 5 runs"
+   },
+   {
+    "id": 9703,
+    "kind": "failure",
+    "plain": "the mixed line-ending test fails on files that use a lone carriage return"
+   },
+   {
+    "id": 9704,
+    "kind": "idea",
+    "plain": "try a C-level tokenizer for the hot loop"
+   },
+   {
+    "id": 9705,
+    "kind": "result",
+    "plain": "strict quoting rejects 3 of the 40 sample files that the old reader accepted"
+   },
+   {
+    "id": 9706,
+    "kind": "question",
+    "plain": "whether a lone carriage return should count as a line ending"
+   },
+   {
+    "id": 9707,
+    "kind": "correction",
+    "plain": "the 1 MB timing was a warm-cache read, so its median of 0.02 s is not comparable"
+   }
+  ],
+  "parts": [],
+  "tasks": [
+   {
+    "issue": 8,
+    "steps": [
+     {
+      "n": 2,
+      "text": "Change the tokenizer to carry quote state across lines"
+     },
+     {
+      "n": 3,
+      "text": "Handle CRLF inside quotes"
+     },
+     {
+      "n": 4,
+      "text": "Rerun the three benchmark files"
+     },
+     {
+      "n": 5,
+      "text": "Update the known-issues text"
+     }
+    ],
+    "title": "Newlines inside quoted fields"
+   }
+  ],
+  "todo": 10,
+  "topics": [
+   {
+    "issue": 2,
+    "title": "Reader: quoted fields and line endings"
+   },
+   {
+    "issue": 3,
+    "title": "Read speed against the standard library"
+   },
+   {
+    "issue": 4,
+    "title": "Command-line tool"
+   },
+   {
+    "issue": 5,
+    "title": "Docs and examples"
+   }
+  ]
+ },
+ "reviews": [
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  }
+ ],
+ "run": 1,
+ "sort": {
+  "ignored": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   9,
+   11,
+   12
+  ],
+  "labels": [
+   {
+    "job": "memory",
+    "kind": "failure",
+    "parts": [],
+    "sources": [
+     8
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "memory",
+    "kind": "result",
+    "parts": [],
+    "sources": [
+     10
+    ],
+    "steps": [],
+    "task": 0
+   }
+  ]
+ },
+ "sources": [
+  {
+   "at": "2026-11-16T23:21:57.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "c3e1374f94071fafe440303ec443eca7260450286149f43ae8b189ce69037497",
+   "role": "user",
+   "session_id": "sess-s04",
+   "text": "make the --help text of the CLI list the exit codes",
+   "via": null
+  },
+  {
+   "at": "2026-11-16T23:22:21.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "3d703c336ff9107b8b936d5c66d9e0774f68b1a753dd30ee2f682b9b0f11e176",
+   "role": "assistant",
+   "session_id": "sess-s04",
+   "text": "I'll open `cli.py` and find where the help text is built.",
+   "via": null
+  },
+  {
+   "at": "2026-11-16T23:24:55.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "c5c0b1fdf0acc8776d51b59a1f0c789f86de76b7c08e23a9eb853470dfcb30af",
+   "role": "assistant",
+   "session_id": "sess-s04",
+   "text": "Found it: the parser is built in `build_parser()`, and the epilog is empty.",
+   "via": null
+  },
+  {
+   "at": "2026-11-16T23:25:27.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "8d560d5071954353e2d154f194927b846e1d4168d9335d1f286f858d6ff00a96",
+   "role": "assistant",
+   "session_id": "sess-s04",
+   "text": "Next I will add an epilog that lists the exit codes, then run `python -m octo_repo --help` to see how it renders.",
+   "via": null
+  },
+  {
+   "at": "2026-11-16T23:26:36.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "a7034524a03694a7566aee3c676c06f432421fc45d9abd4ebede7ea70547b23a",
+   "role": "assistant",
+   "session_id": "sess-s04",
+   "text": "Editing `build_parser()` now.",
+   "via": null
+  },
+  {
+   "at": "2026-11-16T23:29:05.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "4b8dbd0d76b11429825e19835e7ab92598d0105e896b4c7ccc4ff440e8fa6698",
+   "role": "user",
+   "session_id": "sess-s04",
+   "text": "ok",
+   "via": null
+  },
+  {
+   "at": "2026-11-16T23:30:22.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "7994b69abd7d2daee2ee41f34665fd3bae56527e1586a5e6c88672426850f777",
+   "role": "assistant",
+   "session_id": "sess-s04",
+   "text": "The epilog is in. Running the help command to check the layout.",
+   "via": null
+  },
+  {
+   "at": "2026-11-16T23:33:15.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "f40978b19a02f9c3b70e0d30f1e2bbe5e979d3a4c9e99b5b4ecddeab8bfb0f5a",
+   "role": "assistant",
+   "session_id": "sess-s04",
+   "text": "The help text renders, but the epilog wraps in the middle of a line, so I'm switching the formatter to keep line breaks.",
+   "via": null
+  },
+  {
+   "at": "2026-11-16T23:34:40.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "c88dec6dffa181f33352599e03486c03cb4b292d260aa1e53bd83bdfff1d45cc",
+   "role": "assistant",
+   "session_id": "sess-s04",
+   "text": "Switching to `RawDescriptionHelpFormatter` and running it again.",
+   "via": null
+  },
+  {
+   "at": "2026-11-16T23:35:32.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "7bdce1fbcc7e4cab7b318f30697bb3d4a0976fdb44fd3fc115558b182e784f85",
+   "role": "assistant",
+   "session_id": "sess-s04",
+   "text": "Each exit code now sits on its own line.",
+   "via": null
+  },
+  {
+   "at": "2026-11-16T23:37:01.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "d1151fe71a585be00ec6c1c6e5ffe46e77d65def4d44df812902fd25e29408bf",
+   "role": "user",
+   "session_id": "sess-s04",
+   "text": "good",
+   "via": null
+  },
+  {
+   "at": "2026-11-16T23:37:57.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "8d8f25186adb5f1e3e91bacdbeeba3c436431b191dabb90c5d0b60c5cbbed877",
+   "role": "assistant",
+   "session_id": "sess-s04",
+   "text": "I'll leave it there unless you want more changes.",
+   "via": null
+  }
+ ],
+ "stretch": "s04"
+}

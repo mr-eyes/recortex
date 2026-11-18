@@ -1,0 +1,240 @@
+{
+ "about": "a rejected plan: shown in the plan dialog, rejected",
+ "draft": [],
+ "record": {
+  "memories": [
+   {
+    "id": 9122,
+    "kind": "result",
+    "plain": "the residuals of the plain model are correlated from day to day, lag-1 autocorrelation 0.62"
+   },
+   {
+    "id": 9125,
+    "kind": "idea",
+    "plain": "try weekly means instead of daily readings"
+   },
+   {
+    "id": 9130,
+    "kind": "result",
+    "plain": "pooled over both seasons the cover raises the 5 cm moisture by 0.021 m3/m3 (0.006 to 0.036)"
+   },
+   {
+    "id": 9140,
+    "kind": "result",
+    "plain": "in dry spells the cover plots stayed above the wilting point on 14 of 19 spells, the bare plots on 9 of 19"
+   },
+   {
+    "id": 9141,
+    "kind": "question",
+    "plain": "whether soil texture explains the dry-spell effect"
+   },
+   {
+    "id": 9143,
+    "kind": "failure",
+    "plain": "texture was measured on only 12 of the 20 plots"
+   },
+   {
+    "id": 9150,
+    "kind": "idea",
+    "plain": "compare the effect with other cover-crop trials"
+   }
+  ],
+  "parts": [
+   {
+    "id": 9301,
+    "kind": "message",
+    "plain": "tell one story: a rye cover keeps the topsoil wetter in dry spells",
+    "state": "planned"
+   },
+   {
+    "id": 9302,
+    "kind": "claim",
+    "plain": "a rye cover keeps the topsoil wetter during dry spells",
+    "state": "backed"
+   },
+   {
+    "id": 9303,
+    "kind": "claim",
+    "plain": "pooled over both seasons, the cover raises topsoil moisture",
+    "state": "backed"
+   },
+   {
+    "id": 9304,
+    "kind": "claim",
+    "plain": "soil texture does not explain the dry-spell effect",
+    "state": "planned"
+   },
+   {
+    "id": 9305,
+    "kind": "figure",
+    "plain": "show the longest dry spell in one figure",
+    "state": "planned"
+   },
+   {
+    "id": 9306,
+    "kind": "table",
+    "plain": "tabulate the spells by length",
+    "state": "planned"
+   },
+   {
+    "id": 9307,
+    "kind": "interpretation",
+    "plain": "read the effect as shading by the residue",
+    "state": "planned"
+   },
+   {
+    "id": 9311,
+    "kind": "claim",
+    "plain": "weekly means give the same effect as daily readings",
+    "state": "planned"
+   },
+   {
+    "id": 9312,
+    "kind": "claim",
+    "plain": "the residuals are correlated from day to day, so the model needs a lag term",
+    "state": "backed"
+   }
+  ],
+  "tasks": [
+   {
+    "issue": 12,
+    "steps": [
+     {
+      "n": 1,
+      "text": "Collect the texture data for the plots that have it"
+     },
+     {
+      "n": 2,
+      "text": "Fit the covariate model"
+     },
+     {
+      "n": 3,
+      "text": "Compare it with the plain model"
+     },
+     {
+      "n": 4,
+      "text": "Write the result"
+     }
+    ],
+    "title": "Refit with the texture covariate"
+   }
+  ],
+  "todo": 14,
+  "topics": [
+   {
+    "issue": 4,
+    "title": "A mixed model of daily soil moisture"
+   },
+   {
+    "issue": 5,
+    "title": "Dry spells"
+   },
+   {
+    "issue": 6,
+    "title": "Discussion and limits"
+   },
+   {
+    "issue": 7,
+    "title": "Field design and sampling"
+   }
+  ]
+ },
+ "reviews": [],
+ "run": 1,
+ "sort": {
+  "ignored": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8
+  ],
+  "labels": []
+ },
+ "sources": [
+  {
+   "at": "2026-11-18T06:31:57.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "4ff5ae92e4b8cf9063aa44d5f0995e784c6685b3b772f431312f2a49052b9764",
+   "role": "user",
+   "session_id": "sess-s14",
+   "text": "refit all the models with the corrected season labels and update every table",
+   "via": null
+  },
+  {
+   "at": "2026-11-18T06:32:21.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "83a06951e94e427a8823708909d7c41396ed2bcf50f6cb3abffbb44fd8b8b8e4",
+   "role": "assistant",
+   "session_id": "sess-s14",
+   "text": "That touches several files, so I'll show a plan first.",
+   "via": null
+  },
+  {
+   "at": "2026-11-18T06:33:22.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "cc1fe6749705b970386b3a3f35a0d4cfe512d8b102c3354dd969bb69750b6d58",
+   "role": "assistant",
+   "session_id": "sess-s14",
+   "text": "Plan: refit with corrected season labels\n\n1. Correct the season column in `data/daily.csv`\n2. Refit the pooled model and the two per-season models\n3. Regenerate the three tables\n4. Update the methods and results text",
+   "via": "plan_dialog"
+  },
+  {
+   "at": "2026-11-18T06:33:50.000Z",
+   "dialog_user": true,
+   "direct_user": false,
+   "id": "9a5b00a13b0ebf4fd81262fb0de905ea7f4793712c6906d4d00f980880682381",
+   "role": "user",
+   "session_id": "sess-s14",
+   "text": "Rejected the plan in the plan dialog.",
+   "via": "plan_dialog"
+  },
+  {
+   "at": "2026-11-18T06:34:55.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "62cca49473c5cbf203f69f6c129547ba1f2e2b42be77ff21f77438090efdf3e5",
+   "role": "user",
+   "session_id": "sess-s14",
+   "text": "no, I want to look at the data first. don't change anything yet",
+   "via": null
+  },
+  {
+   "at": "2026-11-18T06:35:27.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "2a49d51e5855fbeaeedaa467fd14e00bbd811a7a88f28d3c2b3336b3fa9751b1",
+   "role": "assistant",
+   "session_id": "sess-s14",
+   "text": "Understood. Nothing has been changed.",
+   "via": null
+  },
+  {
+   "at": "2026-11-18T06:36:36.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "2406cbb4bae682e761532d84ceb39e5304b153ade4514a26d56849f6812821a2",
+   "role": "user",
+   "session_id": "sess-s14",
+   "text": "thanks, I'll tell you when",
+   "via": null
+  },
+  {
+   "at": "2026-11-18T06:37:12.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "93a3ecc06080358d23df73dacd75e278b08a1e5d4518d86f9bae777fb9eedf8a",
+   "role": "assistant",
+   "session_id": "sess-s14",
+   "text": "Okay.",
+   "via": null
+  }
+ ],
+ "stretch": "s14"
+}

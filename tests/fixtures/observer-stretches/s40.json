@@ -1,0 +1,404 @@
+{
+ "about": "a paper stretch: a result backs one planned part and speaks against another",
+ "draft": [
+  {
+   "body": "<!-- ghim:event type=checkpoint at=2026-11-21T10:35-05:00 -->\n### Checkpoint: 2026-11-21 10:35 EST - Station B hand-flagged records in place\n\n**In plain words, we paused here:** with the hand-flagged records for station B collected\n\n**State:** The agent reported step 2 of the validation records task as done. The hand-flagged records for station B are in `data/flagged/`.\n\n**Done since the last checkpoint:** Step 2, get the hand-flagged records for station B.\n\n**In progress:** Not stated\n\n**Next actions:** Not stated\n\n**Open questions:** None",
+   "excerpts": [
+    "Step 2 is done: the hand-flagged records for station B are in `data/flagged/`."
+   ],
+   "issue": 7,
+   "kind": "checkpoint",
+   "links": [],
+   "marks": [
+    {
+     "steps": [
+      2
+     ],
+     "task": 7
+    }
+   ],
+   "sources": [
+    3
+   ],
+   "task_title": "",
+   "topic": 0
+  },
+  {
+   "body": "<!-- ghim:event type=result at=2026-11-21T10:37-05:00 -->\n### Result: 2026-11-21 10:37 EST - Filter scored on both stations\n\n**In plain words, we found that:** the filter missed 4.3 percent of hand-flagged spikes pooled over both stations, but wrongly removed 3.1 percent of sampled good readings on station B\n\n**What ran:** Scoring of the filter on both stations against the hand-flagged records.\n\n**Configuration:** Not stated\n\n**Numbers:**\n\n| Measure | Value | Denominator | Source path |\n|---|---|---|---|\n| Station B spikes missed | 7 | 180 hand-flagged spikes | Not stated |\n| Station B good readings wrongly removed | 62 (3.1 percent) | 2,000 sampled good readings | Not stated |\n| Pooled spikes missed, stations A and B | 18 (4.3 percent) | 420 spikes | Not stated |\n\n**Exclusions and failures:** None stated\n\n**Cost:** Not measured\n\n**Not established:** The wrongly removed rate for station A is not stated.\n\n**Next step:** Write the error-rate table, owner the agent",
+   "excerpts": [
+    "On station B the filter missed 7 of 180 hand-flagged spikes, and 62 of 2,000 sampled good readings were wrongly removed (3.1 percent). Pooled with station A that is 18 of 420 spikes missed, 4.3 percent."
+   ],
+   "issue": 4,
+   "kind": "result",
+   "links": [
+    {
+     "key": "checks",
+     "part": 2
+    },
+    {
+     "key": "against",
+     "part": 3
+    }
+   ],
+   "marks": [
+    {
+     "steps": [
+      3
+     ],
+     "task": 7
+    }
+   ],
+   "sources": [
+    6
+   ],
+   "task_title": "",
+   "topic": 4
+  },
+  {
+   "body": "<!-- ghim:event type=result at=2026-11-21T10:40-05:00 -->\n### Result: 2026-11-21 10:40 EST - Error-rate table written\n\n**In plain words, we found that:** the error-rate table lists 4.6 percent of spikes missed on station A and 3.9 percent on station B\n\n**What ran:** The agent wrote the error-rate table.\n\n**Configuration:** Not stated\n\n**Numbers:**\n\n| Measure | Value | Denominator | Source path |\n|---|---|---|---|\n| Station A spikes missed | 4.6 percent | Not stated | results/error_rates.csv |\n| Station B spikes missed | 3.9 percent | Not stated | results/error_rates.csv |\n\n**Exclusions and failures:** None stated\n\n**Cost:** Not measured\n\n**Not established:** Not stated\n\n**Next step:** Not stated, owner Not stated",
+   "excerpts": [
+    "Step 4 is done: the table is in `results/error_rates.csv`. It lists station A at 4.6 percent missed and station B at 3.9 percent missed."
+   ],
+   "issue": 4,
+   "kind": "result",
+   "links": [
+    {
+     "key": "checks",
+     "part": 4
+    }
+   ],
+   "marks": [
+    {
+     "steps": [
+      4
+     ],
+     "task": 7
+    }
+   ],
+   "sources": [
+    9
+   ],
+   "task_title": "",
+   "topic": 4
+  }
+ ],
+ "record": {
+  "memories": [
+   {
+    "id": 9501,
+    "kind": "decision",
+    "plain": "use a rolling median of 9 readings as the spike detector"
+   },
+   {
+    "id": 9502,
+    "kind": "result",
+    "plain": "the loop version cleans one station-year (8,760 readings) in 41 s"
+   },
+   {
+    "id": 9503,
+    "kind": "result",
+    "plain": "on station A the filter missed 11 of 240 hand-flagged spikes"
+   },
+   {
+    "id": 9504,
+    "kind": "failure",
+    "plain": "the filter removes the true peak of the 4 November storm surge"
+   },
+   {
+    "id": 9505,
+    "kind": "idea",
+    "plain": "use a longer window during storms"
+   },
+   {
+    "id": 9506,
+    "kind": "question",
+    "plain": "whether to interpolate gaps longer than 3 hours"
+   }
+  ],
+  "parts": [
+   {
+    "id": 9401,
+    "kind": "message",
+    "plain": "the filter removes spikes with a small, known error",
+    "state": "planned"
+   },
+   {
+    "id": 9402,
+    "kind": "claim",
+    "plain": "the filter misses fewer than 5 percent of hand-flagged spikes",
+    "state": "planned"
+   },
+   {
+    "id": 9403,
+    "kind": "claim",
+    "plain": "the filter wrongly removes fewer than 2 percent of good readings",
+    "state": "planned"
+   },
+   {
+    "id": 9404,
+    "kind": "table",
+    "plain": "error rates by station",
+    "state": "planned"
+   },
+   {
+    "id": 9405,
+    "kind": "figure",
+    "plain": "one storm record before and after cleaning",
+    "state": "planned"
+   },
+   {
+    "id": 9406,
+    "kind": "claim",
+    "plain": "the NumPy version is at least 10 times faster than the loop version",
+    "state": "planned"
+   },
+   {
+    "id": 9407,
+    "kind": "limitation",
+    "plain": "validated on two stations only",
+    "state": "backed"
+   }
+  ],
+  "tasks": [
+   {
+    "issue": 7,
+    "steps": [
+     {
+      "n": 2,
+      "text": "Get the hand-flagged records for station B"
+     },
+     {
+      "n": 3,
+      "text": "Score the filter on both stations"
+     },
+     {
+      "n": 4,
+      "text": "Write the error-rate table"
+     }
+    ],
+    "title": "Validation records"
+   }
+  ],
+  "todo": 8,
+  "topics": [
+   {
+    "issue": 2,
+    "title": "Spike filter"
+   },
+   {
+    "issue": 3,
+    "title": "Gaps and interpolation"
+   },
+   {
+    "issue": 4,
+    "title": "Methods note: error rates"
+   },
+   {
+    "issue": 5,
+    "title": "Command-line tool"
+   }
+  ]
+ },
+ "reviews": [
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  }
+ ],
+ "run": 1,
+ "sort": {
+  "ignored": [
+   1,
+   2,
+   4,
+   5,
+   7,
+   8,
+   10
+  ],
+  "labels": [
+   {
+    "job": "step_done",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     3
+    ],
+    "steps": [
+     2
+    ],
+    "task": 7
+   },
+   {
+    "job": "memory",
+    "kind": "result",
+    "parts": [],
+    "sources": [
+     6
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "step_done",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     6
+    ],
+    "steps": [
+     3
+    ],
+    "task": 7
+   },
+   {
+    "job": "paper_part",
+    "kind": "none",
+    "parts": [
+     2,
+     3
+    ],
+    "sources": [
+     6
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "step_done",
+    "kind": "none",
+    "parts": [],
+    "sources": [
+     9
+    ],
+    "steps": [
+     4
+    ],
+    "task": 7
+   },
+   {
+    "job": "paper_part",
+    "kind": "none",
+    "parts": [
+     4
+    ],
+    "sources": [
+     9
+    ],
+    "steps": [],
+    "task": 0
+   }
+  ]
+ },
+ "sources": [
+  {
+   "at": "2026-11-21T15:33:57.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "5c6a0a1d300b86d74484c3bcc386a776b31c04ea26439a152fbe1e133c4e3f4e",
+   "role": "user",
+   "session_id": "sess-s40",
+   "text": "continue with the validation task",
+   "via": null
+  },
+  {
+   "at": "2026-11-21T15:34:21.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "a55e0b59750d00f0ad3fc40b06ff8539fa65d17668f1341e10660576fa7585b2",
+   "role": "assistant",
+   "session_id": "sess-s40",
+   "text": "Starting with the station B records.",
+   "via": null
+  },
+  {
+   "at": "2026-11-21T15:35:22.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "fe1859cc8047df10e3eb032ad1e84ff99d057ae6f96f49fea1d89c79fc793aed",
+   "role": "assistant",
+   "session_id": "sess-s40",
+   "text": "Step 2 is done: the hand-flagged records for station B are in `data/flagged/`.",
+   "via": null
+  },
+  {
+   "at": "2026-11-21T15:35:50.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "a6942176d0276baf699db4a34a40ca39612ba26615cddfc5c3540d4b1e4b51a5",
+   "role": "user",
+   "session_id": "sess-s40",
+   "text": "ok, score the filter on both stations",
+   "via": null
+  },
+  {
+   "at": "2026-11-21T15:36:55.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "01d231cb6dfae35ea3d48d1a65d295d888c8280062962383477dd2e1d2e3ffcb",
+   "role": "assistant",
+   "session_id": "sess-s40",
+   "text": "Scoring now.",
+   "via": null
+  },
+  {
+   "at": "2026-11-21T15:37:27.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "71005e78f3e6423ea023d8affb0589f32d25d88cc4c6d618357851e27365d11b",
+   "role": "assistant",
+   "session_id": "sess-s40",
+   "text": "Step 3 is done. On station B the filter missed 7 of 180 hand-flagged spikes, and 62 of 2,000 sampled good readings were wrongly removed (3.1 percent). Pooled with station A that is 18 of 420 spikes missed, 4.3 percent.",
+   "via": null
+  },
+  {
+   "at": "2026-11-21T15:38:36.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "9e4c4e5cde466feab5083e034b2670ad0e4f6c7b513cfe62c4c8bb63791225c4",
+   "role": "user",
+   "session_id": "sess-s40",
+   "text": "ok, make the table",
+   "via": null
+  },
+  {
+   "at": "2026-11-21T15:39:12.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "88ab4a1d556b7c286852a960ad597d124ae3c1d4e90b7a8de10b724818c861a5",
+   "role": "assistant",
+   "session_id": "sess-s40",
+   "text": "Writing the error-rate table.",
+   "via": null
+  },
+  {
+   "at": "2026-11-21T15:40:25.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "730588a9bc551ef40e117f488f8c779e4ff4ac3ceae5026511ddf0b24ddee6b4",
+   "role": "assistant",
+   "session_id": "sess-s40",
+   "text": "Step 4 is done: the table is in `results/error_rates.csv`. It lists station A at 4.6 percent missed and station B at 3.9 percent missed.",
+   "via": null
+  },
+  {
+   "at": "2026-11-21T15:41:05.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "25bb751f0040d1d9a5eaf384de41b74ff2c60cb50f7f869c7fa30a67962210c9",
+   "role": "user",
+   "session_id": "sess-s40",
+   "text": "good",
+   "via": null
+  }
+ ],
+ "stretch": "s40"
+}

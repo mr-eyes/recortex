@@ -799,6 +799,189 @@ class Dialogs(Scripted):
         self.assertFalse(shown[1]['direct_user'])
 
 
+FIXTURES = ROOT / 'tests/fixtures/observer-stretches'
+
+
+class Replay(Scripted):
+    """Sixteen stretches of the 1.5.0 evaluation (invented projects, built by .tmp/build-150/make_stretch_fixtures.py), with
+    the sort of arm A and the draft and the reviews of arm C recorded in the first run, replayed through the whole pass.
+    The models are not run: this tests what the pass does with answers like theirs, and that the events are the ones the
+    evaluation's corrected key holds."""
+
+    def fixture(self, name):
+        return json.loads((FIXTURES / (name + '.json')).read_text())
+
+    def replay(self, name, sort=None, draft=None, review=None, level='everything'):
+        """Run the pass over a stretch with its recorded answers (or the ones given). Returns (calls, events, data)."""
+        import time
+        data = self.fixture(name)
+        self.level(level)
+        by_id = {s['id']: dict(s, subagent=False, sidechain=False, control_user=False, message_id=None)
+                 for s in data['sources']}
+        now = time.time()
+        rows = [{'source_id': s['id'], 'session_id': s['session_id'], 'role': s['role'], 'event_type': 'Stop',
+                 'path': str(self.path), 'offset': i * 1000, 'end': i * 1000 + 900, 'sha256': '0' * 64,
+                 'content_sha256': '1' * 64, 'observed_at': now + i} for i, s in enumerate(data['sources'])]
+        with store.Store(REPO, config=self.config) as db:
+            db.capture(rows)
+        record = data['record']
+        context = {'targets': [dict(t, body='Invented topic.') for t in record['topics']],
+                   'memories': [{'id': m['id']} for m in record['memories']], 'incomplete': False}
+        extra = {'tasks': record['tasks'], 'todo': record['todo'], 'parts': record['parts'],
+                 'memories': [{'kind': m['kind'], 'plain': m['plain']} for m in record['memories']]}
+        answers = {'sort': sort or data['sort'], 'draft': draft if draft is not None else data['draft']}
+        calls = []
+
+        def invoke(payload, schema, purpose, config):
+            calls.append((purpose, payload))
+            if purpose in answers:
+                key = 'candidates' if purpose == 'draft' else None
+                return {'ok': True, 'structured': {'candidates': answers['draft']} if key else answers['sort']}
+            if review is not None:
+                answer = review
+            else:
+                found = [i for i, c in enumerate(data['draft']) if c['body'] == payload['candidate']['body']]
+                answer = (data['reviews'][found[0]] if found else None) or {'accepted': True, 'reason': 'supported'}
+            return {'ok': True, 'structured': {'candidate_hash': payload['candidate_hash'], **answer}}
+        with patch.object(worker.sources, 'resolve', side_effect=lambda meta, root: by_id[meta['source_id']]), \
+                patch.object(worker, 'record_context', return_value=context), \
+                patch.object(worker, 'index_record', return_value=extra):
+            report = worker.run_once(REPO, self.config, self.project, invoke)
+        self.calls = calls
+        events = self.events(report)
+        return [purpose for purpose, _ in calls], [e['candidate'] for e in events], data
+
+    def ids(self, data, *numbers):
+        return [data['sources'][n - 1]['id'] for n in numbers]
+
+    def test_an_empty_stretch_and_a_stretch_of_narration_spend_no_middle_call_when_nothing_is_labeled(self):
+        calls, events, _ = self.replay('s01')
+        self.assertEqual((['sort'], []), (calls, events))
+        with store.Store(REPO, config=self.config) as db:
+            used = db.usage_today()
+        self.assertEqual(0, used['middle']['calls'])
+
+    def test_the_narration_stretch_with_the_recorded_old_labels_reaches_only_the_messages_it_labeled(self):
+        # The evaluation's sorter (the wording before the one in observer_runtime) gave s04 two false labels: a failure
+        # and a result the agent narrated. That is the known false label, which the new wording targets and which a
+        # reviewer did not stop either; code binds the events to the labeled messages and nothing else.
+        calls, events, data = self.replay('s04')
+        self.assertEqual(['sort', 'draft', 'review', 'review'], calls)
+        self.assertEqual({tuple(self.ids(data, 8)), tuple(self.ids(data, 10))}, {tuple(e['sources']) for e in events})
+        self.assertIn('the agent telling what it is editing or about to do', runtime.PROMPTS['sort'])
+        self.assertIn("the agent's own intentions", runtime.PROMPTS['sort'])
+
+    def test_the_narration_stretch_costs_the_sort_call_alone_when_the_sorter_follows_the_new_wording(self):
+        calls, events, _ = self.replay('s04', sort={'labels': [], 'ignored': list(range(1, 13))})
+        self.assertEqual((['sort'], []), (calls, events))
+
+    def nothing(self, name):
+        calls, events, _ = self.replay(name)
+        self.assertEqual((['sort'], []), (calls, events), name)
+
+    def test_a_relayed_page_produces_nothing(self):
+        self.nothing('s07')
+
+    def test_an_off_the_record_session_produces_nothing(self):
+        self.nothing('s08')
+
+    def test_a_repeat_of_what_the_record_holds_produces_nothing(self):
+        self.nothing('s09')
+
+    def test_a_rejected_plan_opens_no_task_even_when_the_models_err(self):
+        steps = next(c for c in self.fixture('s26')['draft'] if c['kind'] == 'steps')          # sources 3 and 4
+        agreed = {'labels': [label('plan_agreed', sources=[3, 4])], 'ignored': []}
+        calls, events, data = self.replay('s14', sort=agreed, draft=[steps], review={'accepted': True, 'reason': 'supported'})
+        self.assertEqual((['sort', 'draft'], []), (calls, events))   # the answer was a rejection: no reviewer, no event
+        self.assertEqual('Rejected the plan in the plan dialog.', data['sources'][3]['text'])
+
+    def test_a_plan_the_user_doubted_opens_no_task_even_when_the_sorter_says_it_was_agreed(self):
+        agreed = {'labels': [label('plan_agreed', sources=[2, 3])], 'ignored': []}   # both are the agent's: no word of approval
+        calls, events, data = self.replay('s22', sort=agreed)
+        self.assertEqual((['sort'], []), (calls, events))   # code drops the label: no draft is paid for
+        self.assertEqual({'plan_agreed': 1}, self.calls and worker.check_labels(
+            agreed['labels'], {n: dict(s, subagent=False, sidechain=False) for n, s in enumerate(data['sources'], 1)},
+            {'tasks': {}, 'parts': {}}, 'everything')[1])
+
+    def test_a_plan_approved_in_the_dialog_is_a_task_whose_marks_follow_it(self):
+        calls, events, data = self.replay('s26')
+        self.assertEqual(['sort', 'draft'] + ['review'] * 3, calls)
+        steps = next(e for e in events if e['kind'] == 'steps')
+        self.assertEqual((0, 'Add a strict flag to read()', 2), (steps['issue'], steps['task_title'], steps['topic']))
+        self.assertEqual(self.ids(data, 3, 4), sorted(steps['sources'], key=self.ids(data, 3, 4).index))
+        marked = {tuple(m['steps']) for e in events for m in e['marks'] if e['kind'] != 'steps'}
+        self.assertEqual({(2,), (1, 3)}, marked)   # steps 1 and 2 plainly, step 3 in passing
+        for e in events:
+            if e['marks']:
+                self.assertEqual({0}, {m['task'] for m in e['marks']})
+                self.assertEqual(steps['sources'][0], e['with'])   # the steps memory that opens the task
+
+    def test_a_typed_go_ahead_is_a_task_that_quotes_the_words(self):
+        calls, events, data = self.replay('s27')
+        steps = next(e for e in events if e['kind'] == 'steps')
+        self.assertIn('> ', steps['body'])
+        self.assertIn(data['sources'][2]['text'][:20], steps['body'])
+        self.assertEqual({'steps', 'failure', 'decision', 'result', 'checkpoint'}, {e['kind'] for e in events})
+
+    def test_all_tests_pass_except_two_marks_no_step_three(self):
+        calls, events, data = self.replay('s29')
+        marked = {n for e in events for m in e['marks'] for n in m['steps']}
+        self.assertEqual({1, 2}, marked)   # step 3 was only partly done
+        self.assertEqual(1, sum(e['kind'] == 'steps' for e in events))
+
+    def test_steps_done_in_passing_plainly_and_with_numbers_are_marked_on_the_open_task(self):
+        calls, events, data = self.replay('s34')
+        marks = [(m['task'], tuple(m['steps'])) for e in events for m in e['marks']]
+        self.assertEqual({(8, 2), (8, 3), (8, 4)}, {(t, n) for t, steps in marks for n in steps})
+        checkpoint = next(e for e in events if e['kind'] == 'checkpoint')
+        self.assertEqual(8, checkpoint['issue'])   # a checkpoint that marks goes on the task it marks, whatever the model said
+        self.assertEqual({'checkpoint', 'result', 'decision'}, {e['kind'] for e in events})
+
+    def test_an_embedded_relay_marks_the_real_steps_and_not_the_one_a_page_asked_for(self):
+        calls, events, data = self.replay('s36')
+        relay = self.ids(data, 6)[0]
+        self.assertTrue(all(relay not in e['sources'] for e in events))
+        self.assertEqual({1, 2, 3}, {n for e in events for m in e['marks'] for n in m['steps']})   # never step 4
+
+    def links(self, name):
+        calls, events, data = self.replay(name)
+        return [(l['key'], l['part']) for e in events for l in e['links']]
+
+    def test_a_result_that_backs_one_part_and_speaks_against_another_links_both_in_s40(self):
+        links = self.links('s40')
+        self.assertIn(('checks', 9402), links)
+        self.assertIn(('against', 9403), links)
+
+    def test_a_result_that_speaks_against_a_part_links_it_with_against_in_s52(self):
+        # In the first recorded run the corrected fit is a correction, not a result, so only the speaking-against link is
+        # asserted here; s40 holds both kinds of link.
+        self.assertEqual([('against', 9302)], self.links('s52'))
+
+    def test_loose_to_dos_go_on_the_to_do_task_one_item_each(self):
+        calls, events, data = self.replay('s49')
+        items = [e for e in events if e['kind'] == 'steps']
+        self.assertEqual(4, len(items))
+        for e in items:
+            self.assertEqual(10, e['issue'])   # the To do task of the record
+            self.assertNotIn('task_title', e)
+            self.assertNotIn('topic', e)
+
+    def test_a_result_and_a_mark_for_the_message_that_holds_both(self):
+        # s53, with its key corrected: "The figure is done" is exactly step 3 of task 13, so the mark was right.
+        calls, events, data = self.replay('s53')
+        result = next(e for e in events if e['kind'] == 'result')
+        self.assertEqual([{'task': 13, 'steps': [3]}], result['marks'])
+        self.assertIn(self.ids(data, 8)[0], result['sources'])
+        self.assertEqual([9302, 9305], [l['part'] for l in result['links']])
+        self.assertEqual({'correction', 'result'}, {e['kind'] for e in events})
+
+    def test_a_replay_at_the_level_notes_only_keeps_memories(self):
+        calls, events, data = self.replay('s26', level='notes')
+        # the recorded sorter's step and plan labels are dropped at this level, and the recorded draft's steps memory,
+        # its result that carries a mark and its checkpoint are refused: nothing is left to review
+        self.assertEqual((['sort', 'draft'], []), (calls, events))
+
+
 class Decisions(Scripted):
     def test_a_decision_may_rest_on_the_fixed_words_of_a_question_dialog_choice(self):
         words = 'Chose "strict" when asked "Which quoting?"'
