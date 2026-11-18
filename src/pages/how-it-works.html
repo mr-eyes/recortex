@@ -1,0 +1,92 @@
+<section>
+<h1>How it works</h1>
+<p class="lede">Three parts. The observer sees the session, the record keeps what matters, and the cortex works from the record. Record + cortex: recortex.</p>
+<ol class="path" aria-label="On this page">
+<li><a href="#the-observer">The observer</a></li>
+<li><a href="#the-record">The record</a></li>
+<li><a href="#the-cortex">The cortex</a></li>
+<li><a href="#yes">What waits for your yes</a></li>
+<li><a href="#tiers">Models and caps</a></li>
+</ol>
+
+<div class="parthead"><h2 id="the-observer">The observer</h2><span class="chip s-stands">the eyes</span></div>
+<div class="prose">
+<p>The observer follows the conversation in the background: what you type, what Claude tells you, a plan you approve in plan mode and the option you pick when Claude asks a question. It never reads tool output, files, web pages or command results. It sorts each stretch and does only the jobs that stretch calls for.</p>
+</div>
+<ul class="rules">
+<li><b>Notes</b><span>A result, a decision, a dead end, an idea or a question becomes a dated note, drafted and then checked by a second, independent pass.</span></li>
+<li><b>The to-do list</b><span>A plan you approve becomes a task with numbered steps. A step Claude reports done gets its checkmark. "Remind me to" becomes an item.</span></li>
+<li><b>Status and copies</b><span>The short status, the task lists, the hub's list of active work and the board are kept current.</span></li>
+<li><b>The paper's text</b><span>In a project with a paper, it drafts a change when something notable happens, and only proposes it. Your yes writes it.</span></li>
+</ul>
+
+<h3 id="levels">You choose its level</h3>
+<div class="prose"><p>One setting, for this machine and this project. A file in the project cannot set it or raise it. Nothing runs until you choose.</p></div>
+<div class="tbox"><table class="plain">
+<tr><th>Level</th><th>Does on its own</th><th>Asks you first</th></tr>
+<tr><td>Everything <span class="chip s-stands">Recommended</span></td><td>Notes, status, to-do items and checkmarks, opening and closing tasks, the board</td><td>Changes to a paper's text; notes it is unsure of</td></tr>
+<tr><td>Assistant</td><td>Notes, status, checkmarks, and items on a to-do list that exists</td><td>Opening or closing a task; changes to a paper's text; notes it is unsure of</td></tr>
+<tr><td>Notes only</td><td>Notes and status</td><td>Notes it is unsure of</td></tr>
+</table></div>
+<p class="fine">There is also a shadow mode: the observer reviews and keeps everything on your machine, and posts nothing. A wrong checkmark or task is one command to undo: <code>observer.py log</code> lists what it did, and <code>observer.py undo</code> reverses a task or a rendered list.</p>
+
+<div class="parthead"><h2 id="the-record">The record</h2><span class="chip s-stands">the "re"</span></div>
+<div class="prose"><p>The record is your project's GitHub issues. It is the one place the project's history and its current write-up live. Everything on your machine is a copy that can be rebuilt.</p></div>
+<ul class="rules">
+<li><b>One issue per topic</b><span>Its body is the current text for that part: release notes, documentation, a report.</span></li>
+<li><b>Dated notes under it</b><span>Each result with its evidence, each decision with its reason in the decider's words, each dead end with what it led to.</span></li>
+<li><b>Tasks with steps</b><span>GitHub shows each task's checklist and its count, such as 2 of 3.</span></li>
+<li><b>Readable without the plugin</b><span>Anyone with access to the repository can read it in a browser.</span></li>
+</ul>
+<ul class="kinds" aria-label="The kinds of note and their marks">
+<li><span class="mk k-result" aria-hidden="true"></span>Found</li>
+<li><span class="mk k-decision" aria-hidden="true"></span>Decided</li>
+<li><span class="mk k-failure" aria-hidden="true"></span>Went wrong</li>
+<li><span class="mk k-idea" aria-hidden="true"></span>Idea</li>
+<li><span class="mk k-question" aria-hidden="true"></span>Asked</li>
+<li><span class="mk k-correction" aria-hidden="true"></span>Corrected</li>
+<li><span class="mk k-checkpoint" aria-hidden="true"></span>Paused</li>
+</ul>
+<p class="fine">A posted note is never rewritten; a correction is a new note. Every post is read back from GitHub and compared with the draft. No script deletes an issue, a comment or a label.</p>
+
+<div class="parthead"><h2 id="the-cortex">The cortex</h2><span class="chip s-stands">the brain</span></div>
+<div class="prose"><p>The cortex is what works from the record, in the session you are in and in the next one. None of it is typed by you.</p></div>
+<ul class="rules">
+<li><b>Recall</b><span>The session reads a thread before it works on it, so it can say what was decided and what failed there. Ask directly with <code>/recortex:ask</code>; an answer starts with "From the record:" and names each note it used.</span></li>
+<li><b>The brief</b><span>A few lines that open every session and every helper agent: the focus, the open tasks and the next step, what waits for a yes.</span></li>
+<li><b>The to-do list</b><span>Tasks with checkmarks, in the brief, on GitHub, on the page and with <code>/recortex:todo</code>.</span></li>
+<li><b>The status and the page</b><span>Where the project stands in two short paragraphs, kept current. And one private page on your machine, with views from "Where are we?" to "What did recortex use?".</span></li>
+</ul>
+<p class="briefline">Tasks: 1 open, 2 of 3 steps done; next: step 3 of #14.</p>
+<p class="fine">A line of a brief. Text from GitHub is shown to a session only from a repository you trust, and only as data, never as instructions. The record is the authority: a checkmark is computed from notes, and a box ticked by hand on GitHub is not believed.</p>
+
+<h2 id="yes">What waits for your yes</h2>
+<div class="tbox"><table class="plain">
+<tr><th>What</th><th>When it asks</th></tr>
+<tr><td>Running at all</td><td>The observer does nothing until you choose a level. After an update from 1.4.0 it waits for the same choice.</td></tr>
+<tr><td>A repository</td><td>Nothing from GitHub is shown to a session until you add the repository to your own trusted list.</td></tr>
+<tr><td>A paper's text</td><td>Always, at every level. You get approve, not now, or drop it. Your yes writes it.</td></tr>
+<tr><td>Opening or closing a task</td><td>At the Assistant level.</td></tr>
+<tr><td>A note it is unsure of</td><td>Held until you answer: post it, or drop it.</td></tr>
+<tr><td>A box changed by hand</td><td>Record it, or put it back.</td></tr>
+<tr><td>The stronger model</td><td>Opus is turned on by its own question.</td></tr>
+</table></div>
+<div class="askcard" role="img" aria-label="An example of one question the session asks">
+<p class="lab">One of these questions, as the session asks it</p>
+<p class="q">Task a41: open a task "Retry failed payments safely" with 3 steps?</p>
+<p class="opts"><span>Open it</span><span>Not now</span><span>Drop it</span></p>
+</div>
+<p class="fine">The session asks each as a multiple-choice question. Only your recorded answer lets the command through, once and for ten minutes.</p>
+
+<h3 id="holds">Holds</h3>
+<div class="prose"><p>Say <code>/recortex hold git-push</code>, <code>/recortex hold git-tag</code> or <code>/recortex hold gh-release</code> and the hook refuses that command in this repository until you lift the hold in your own terminal with <code>observer.py release</code>. Say "off the record" and the observer posts nothing from that session. When you release the hold, what it kept back is offered again, and a held note goes to the list that waits for your yes. Holds guard against mistakes. They are not a security boundary.</p></div>
+
+<h2 id="tiers">Three tiers of model, each for its own job</h2>
+<div class="tbox"><table class="plain">
+<tr><th>Tier</th><th>Model</th><th>What it does</th><th>At most, a day</th></tr>
+<tr><td>Sorting</td><td>Haiku</td><td>Reads each stretch and says which jobs it calls for. Only those run.</td><td>80 calls, 800,000 tokens</td></tr>
+<tr><td>Notes</td><td>Sonnet</td><td>Drafts each note and reviews it with a fresh call.</td><td>70 calls, 700,000 tokens</td></tr>
+<tr><td>Paper text</td><td>Opus, off until you turn it on</td><td>Drafts a change to a paper's text, for you to accept. Only in a project with a paper.</td><td>8 calls, 320,000 tokens</td></tr>
+</table></div>
+<p class="fine">The caps are per project, in a rolling 24 hours, and you can lower each one with <code>observer.py limits</code>. Beyond them, at most 25 automatic notes, 3 opened tasks, 2 paper proposals and 4 status summaries a day. A typical day is about 36 calls. They run under your own Claude sign-in and count against your usage. <a href="/trust-and-privacy/#cost">What that means</a></p>
+</section>

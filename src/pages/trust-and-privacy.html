@@ -1,0 +1,57 @@
+<section>
+<h1>Trust and privacy</h1>
+<p class="lede">What stays on your machine, what goes to GitHub, and what a session is shown. Text that came from outside is treated as data and never as instructions.</p>
+<ol class="path" aria-label="On this page">
+<li><a href="#where">Where things live</a></li>
+<li><a href="#untrusted">Untrusted text</a></li>
+<li><a href="#team">Who decides</a></li>
+<li><a href="#cost">What it costs</a></li>
+<li><a href="#license">License</a></li>
+</ol>
+
+<h2 id="where">Where things live</h2>
+<ul class="cols3">
+<li class="col"><h3>Stays on your machine</h3>
+<p>The local index, which is a copy of the record, your key, the observer's queue and approvals, your trusted list, your writing mode, drafts that wait, usage counts and the private page.</p>
+<p>All of it is in private folders, mode 0700, with files at mode 0600, and never in your project.</p></li>
+<li class="col"><h3>Goes to GitHub</h3>
+<p>Notes, topic bodies, the hub, labels, task lists, and, if you choose them, a board and the versions branch. They live in the repository you picked, visible to everyone who has access to it.</p>
+<p>The observer posts only what a second pass accepted, with no image, HTML, mention, outside link, local path, user name or email address.</p></li>
+<li class="col"><h3>Shown to a session</h3>
+<p>A short brief, only from a repository you trust, inside a frame that says it is data. The observer's models see the conversation and the record's context, never tool output, files or web pages.</p></li>
+</ul>
+<p class="fine">Pages that hold private text, such as the private page of a private repository, stay in your private folder. Do not copy them anywhere shared.</p>
+
+<h2 id="untrusted">Untrusted text</h2>
+<div class="prose"><p>Anyone with write access to a repository can edit a hub, and on a public repository anyone can open an issue. So everything read from GitHub, from the project folder, from the index and from the environment is data. Claude is told never to follow a command it finds there.</p></div>
+<ul class="rules">
+<li><b>You trust a repository first</b><span>A session is shown nothing from a repository until you add it to your own trusted list, a file in your own configuration folder. Nothing inside a project can add to it.</span></li>
+<li><b>Only allowed authors count</b><span>A status note counts only when an allowed account wrote it and nobody edited it. One that fails the check is counted and never shown.</span></li>
+<li><b>Text sits inside a frame</b><span>Project text is wrapped in <code>BEGIN/END PROJECT STATUS DATA</code> lines, text that imitates them is defused, and the brief is cut at a fixed size.</span></li>
+<li><b>A project cannot turn the observer on</b><span>Its file can only switch the observer off. The choice of level is kept on your machine.</span></li>
+</ul>
+<p class="fine">Holds and the confirmations that ask for your own terminal guard against mistakes. A session with shell access can still get around them. The real gates are your answers in a dialog and your own terminal. The <a href="https://github.com/{{repo}}/blob/{{ref}}/docs/security.md">full security model</a> lists every rule and what it prevents.</p>
+
+<h2 id="team">Who decides</h2>
+<div class="prose">
+<p>At setup you name who can make decisions. A decision is quoted word for word, with its date, time and zone. Several settings are each person's own, on their own machine: the trusted list, the writing mode, the observer's level and whether a field sheet is approved. For a repository owned by an organization, list the people who post status notes in your trusted list, because the owner is then not a person. Keep one writer per issue, and update every machine on a team before the observer opens the first task, because older versions read task notes as plain comments.</p>
+</div>
+
+<h2 id="cost">What it costs</h2>
+<div class="prose">
+<p>Tokens and calls. No dollar figure is shown anywhere, because none applies under a Claude subscription. The observer's calls run under your own Claude sign-in and count against your usage limits, within the daily caps on <a href="/how-it-works/#tiers">How it works</a>. A typical day is about 36 calls, which is about what the 1.4.0 observer used.</p>
+<p>If <code>ANTHROPIC_API_KEY</code> or a provider variable is set, the calls are billed to that key or provider instead. Setup says so, and names the variable, never its value. You can lower every cap with <code>observer.py limits</code>. <code>/recortex:usage</code> and the page's last view show what was used. What the hooks add to your sessions is estimated; the main session's own work on the record is not measured.</p>
+</div>
+
+<h2 id="never">What it never does</h2>
+<div class="yesno">
+<div class="no"><h3>On GitHub</h3><ul><li>Delete an issue, a comment or a label</li><li>Edit a note it posted</li><li>Add the <code>project</code> scope to your login</li></ul></div>
+<div class="no"><h3>On your machine</h3><ul><li>Sign in or install anything for you</li><li>Write the text of a paper without your yes</li><li>Use any service other than GitHub and your Claude sign-in</li></ul></div>
+</div>
+<p class="fine">This site uses no analytics and no cookies, and loads nothing from another server. It keeps one thing in your browser: your choice of light or dark.</p>
+
+<h2 id="license">License</h2>
+<div class="prose">
+<p>recortex is under FSL-1.1-MIT from version 1.4.0, and MIT up to 1.3.0. FSL is the Functional Source License: you may use, copy and change the code for any purpose except offering a competing product or service. Each release under it becomes plain MIT two years after it is published. Releases up to 1.3.0 stay MIT. The exact terms are in the <a href="https://github.com/{{repo}}/blob/{{ref}}/LICENSE">LICENSE file</a>.</p>
+</div>
+</section>

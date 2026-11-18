@@ -1,0 +1,54 @@
+<section>
+<h1>Upgrading</h1>
+<p class="lede">Update the plugin the way you update any Claude Code plugin, then start a new session. Your record on GitHub and your project file keep working as they are.</p>
+<ol class="path" aria-label="On this page">
+<li><a href="#from-140">From 1.4.0</a></li>
+<li><a href="#old-marketplace">From the old marketplace</a></li>
+<li><a href="#old-name">From gh-issues-manager</a></li>
+<li><a href="#earlier">Earlier versions</a></li>
+</ol>
+
+<h2 id="from-140">From 1.4.0</h2>
+<div class="prose"><p>Version 1.5.0 added the observer's several jobs. Here is what the first session after the update asks of you.</p></div>
+<ul class="rules">
+<li><b>The level question</b><span>It comes in the batch of setup questions. An observer that was on with 1.4.0 stays paused until you answer: no hook captures, no worker runs and no model call is made. Your earlier choice of model is not carried over as consent to the new jobs.</span></li>
+<li><b>The stronger model</b><span>In a project with a plan, a writing mode other than off and the level Assistant or Everything, you are also asked whether Opus may draft the paper's text. "No" keeps it off.</span></li>
+<li><b>Every machine on a team</b><span>Update them all before the observer opens the first task. An older version reads a task's steps as an ordinary comment and shows no checkmarks.</span></li>
+<li><b>Nothing to rebuild by hand</b><span>The first sync derives the local index again from the stored comments, with no network and no change to the record.</span></li>
+</ul>
+<p class="fine">New on your machine, all private: <code>usage.db</code>, which holds integers only, the folders of drafts that wait, and backups of task bodies. The plugin registers one more hook event, <code>SubagentStop</code>, which prints nothing and only counts a plugin agent's tokens.</p>
+
+<h3 id="from-150">From 1.5.0 to 1.5.1</h3>
+<div class="prose"><p>Nothing to do. Three changes you may notice:</p>
+<ul>
+<li>When you release a hold, what was held under it is offered again, and the other notes the observer held back go to what waits for your yes.</li>
+<li>One message can be recorded as a failure and as the decision it led to.</li>
+<li>The paper keeper's old draft folders are cleaned from your machine, a day at a time.</li>
+</ul></div>
+
+<h2 id="old-marketplace">From the old marketplace</h2>
+<div class="prose"><p>Until version 1.3.0 the plugin was installed from the <code>mr-eyes-skills</code> marketplace. From 1.4.0 the repository is <code>{{repo}}</code> and the marketplace is <code>recortex</code>. Four commands move an installed copy, one after the other:</p></div>
+{{cmd
+claude plugin marketplace add {{repo}}
+claude plugin install recortex@recortex
+claude plugin uninstall recortex@mr-eyes-skills
+claude plugin marketplace remove mr-eyes-skills
+}}
+<ul class="notes">
+<li>Then start a new session, and run <code>claude plugin list</code>. It shows <code>recortex@recortex</code>, version 1.4.0 or later.</li>
+<li>If the list shows <code>gh-issues-manager@mr-eyes-skills</code>, uninstall that name in the third command.</li>
+<li>Add <code>--scope project</code> or <code>--scope local</code> if that is how you installed it.</li>
+<li>Do not run <code>claude plugin marketplace update mr-eyes-skills</code> instead: it points at the old name.</li>
+<li>Until the old copy is removed, every session shows two briefs. The same holds for any other copy, such as a folder install.</li>
+</ul>
+
+<h2 id="old-name">From gh-issues-manager</h2>
+<div class="prose"><p>The plugin was named gh-issues-manager before version 0.5.0. After the move above, nothing else is needed. The old configuration file, folders, trusted list, <code>GHIM_*</code> variables and everything on GitHub keep working, and the earlier names are read for at least twelve months. Rename the configuration file to <code>.recortex.json</code> only once everyone on the project has 0.5.0 or later. <code>hooks.py --doctor</code> lists the earlier names still in use.</p></div>
+
+<h2 id="earlier">What earlier versions asked</h2>
+<ul class="rules">
+<li><b>1.4.0</b><span>After an update, a session asks only the setup questions you have not answered yet. The manuscript page arrived. The license changed to FSL-1.1-MIT.</span></li>
+<li><b>1.3.0</b><span>The plan of the paper, its writing mode and its versions. You are asked once whether recortex may write the text.</span></li>
+</ul>
+<p class="fine">The <a href="https://github.com/{{repo}}/blob/{{ref}}/skills/recortex/references/upgrading.md">upgrading reference</a> lists every version.</p>
+</section>

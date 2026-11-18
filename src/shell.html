@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; manifest-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>{{title}}</title>
+<meta name="description" content="{{description}}">
+{{canonical}}
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="recortex">
+<meta property="og:title" content="{{title}}">
+<meta property="og:description" content="{{description}}">
+<meta property="og:url" content="{{og_url}}">
+<meta property="og:image" content="{{image}}">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" href="/assets/recortex-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon-180.png">
+<script src="/theme.js"></script>
+<link rel="stylesheet" href="/site.css">
+</head>
+<body class="{{bodyclass}}">
+<a class="skip" href="#main">Skip to the page</a>
+<header class="top"><div class="topin">
+<a class="brand" href="/" aria-label="recortex, home">{{logo}}<span class="brandname">recortex</span></a>
+<nav class="toplinks" aria-label="Main">{{toplinks}}</nav>
+<div class="toptools">
+<button type="button" id="searchopen" aria-label="Search the site">Search<kbd>/</kbd></button>
+<button type="button" id="theme" aria-label="Switch between light and dark">Light<span class="long"> and dark</span></button>
+<a class="gh" href="https://github.com/{{repo}}">GitHub</a>
+<button type="button" class="menubtn" id="menubtn" aria-expanded="false" aria-controls="pages">Menu</button>
+</div>
+</div></header>
+<nav class="pages" id="pages" aria-label="All pages"><ul>{{pagelinks}}</ul></nav>
+<main id="main" class="{{mainclass}}">
+{{body}}
+{{pager}}
+</main>
+<footer class="foot"><div class="footin">
+<ul class="footlinks">{{footlinks}}</ul>
+<p>recortex is a plugin for Claude Code. This site describes version {{version}}. The examples are invented; no real project is shown. License: FSL-1.1-MIT from 1.4.0, MIT up to 1.3.0. <a href="/trust-and-privacy/#license">What that means</a></p>
+<p>{{copyright}}</p>
+</div></footer>
+<dialog class="wordbox" id="searchbox" aria-label="Search the site">
+<div class="wordtop askbar"><input id="searchinput" type="search" placeholder="What do you want to find out?" aria-label="Search the site" autocomplete="off"></div>
+<div class="wordbody" id="searchhits"></div>
+<div class="wordbar"><button type="button" id="searchclose">Close</button></div>
+</dialog>
+<script src="/search-index.js" defer></script>
+<script src="/site.js" defer></script>
+</body></html>

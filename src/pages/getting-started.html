@@ -1,0 +1,62 @@
+<section>
+<h1>Getting started</h1>
+<p class="lede">Two commands to install, a few questions to set up, and one choice to make about the observer. Then you work as usual.</p>
+<ol class="path" aria-label="On this page">
+<li><a href="#install">Install</a></li>
+<li><a href="#setup">Set up</a></li>
+<li><a href="#level">Choose the level</a></li>
+<li><a href="#first">Your first session</a></li>
+<li><a href="#existing">Existing work</a></li>
+</ol>
+
+<h2 id="install">Install</h2>
+<div class="prose"><p>You need Claude Code, the GitHub CLI <code>gh</code> signed in to github.com, Python 3.8 or newer and bash. The plugin uses only the Python standard library, so nothing else is installed.</p></div>
+{{cmd
+claude plugin marketplace add {{repo}}
+claude plugin install recortex@recortex
+}}
+<p class="fine">Start a new Claude Code session afterward. Check with <code>claude plugin list</code>: it shows <code>recortex@recortex</code>. If you installed an earlier version, see <a href="/upgrading/">Upgrading</a>.</p>
+
+<h2 id="setup">Set up the record</h2>
+<div class="prose"><p>Open Claude Code in your project and say:</p></div>
+{{say
+Set up the record for this project.
+}}
+<div class="prose">
+<p>Claude checks first that <code>gh</code> runs and is signed in, and that Python is new enough. If something is missing it prints one line that says what to run, and stops. Then it asks multiple-choice questions, a few at a time, with its guesses pre-selected:</p>
+<ul>
+<li>What the project will produce: software, a report, documentation, a paper, or something else, and the sections of each.</li>
+<li>Where the record lives: this repository's issues, another repository, or a new private one.</li>
+<li>Who decides: the people whose words count as decisions.</li>
+<li>Whether to keep a board of the work on GitHub Projects. The default is no.</li>
+<li>Whether to trust this repository, so that the hooks may show its brief. Until you do, a session is shown nothing from GitHub.</li>
+<li>How much the observer does on its own, and which model takes the notes.</li>
+</ul>
+<p>It ends with a summary and one confirmation. Nothing is written before that. Then it creates the labels and the pinned hub issue, and builds the first local index, so that your first session already has a brief.</p>
+</div>
+
+<h2 id="level">Choose the observer's level</h2>
+<p class="lede">The setup asks this one exactly as printed, because your recorded answer is what lets it turn the observer on.</p>
+<ul class="modes">
+<li class="mode k-result"><h3>Everything <span class="chip s-stands">Recommended</span></h3><p>Notes, status, checkmarks, opening and closing tasks, and the board. It still asks before it changes a paper's text.</p></li>
+<li class="mode k-idea"><h3>Assistant</h3><p>Notes, status and checkmarks. It asks before it opens or closes a task.</p></li>
+<li class="mode k-checkpoint"><h3>Notes only</h3><p>Notes and the status summary. Nothing else.</p></li>
+</ul>
+<p class="fine">"Later" leaves it off, and the question comes back after seven days. Choose "Other" and say "shadow" to try it at Notes only without posting anything. It needs the repository in your trusted list. Its calls count against your Claude usage, at most 80 sorting, 70 note-taking and 8 paper-text calls a day for the project. <a href="/how-it-works/#the-observer">What each level does</a></p>
+
+<h2 id="first">Your first session</h2>
+<ol class="next">
+<li><span class="who">1</span><span>The session opens with a short brief: where the record is, the open tasks and the focus. Its first line says how old the local copy it was made from is.</span></li>
+<li><span class="who">2</span><span>Work as usual. The observer notes results, decisions and dead ends, and keeps the to-do list. Use <code>/recortex:status</code> whenever you want to see where things stand.</span></li>
+<li><span class="who">3</span><span>Say <span class="sayit">pause here</span> when you stop. It leaves a note of where things stand for the next session.</span></li>
+<li><span class="who">4</span><span>Say <span class="sayit">show me the mind of this project</span> to open the private page that tells the project in sentences.</span></li>
+</ol>
+<p class="fine">If a brief does not appear, ask Claude to run <code>hooks.py --doctor</code>. It says why: the configuration, the trust status, the index and its age. The script sits in the plugin's <code>skills/recortex/scripts</code> folder; from a terminal, run it from your project folder.</p>
+
+<h2 id="existing">If you already have work</h2>
+<ul class="rules">
+<li><b>A project that has a record</b><span>Install, add the repository to your trusted list, and open a session. The brief appears on its own.</span></li>
+<li><b>A codebase with months of history</b><span>Say <span class="sayit">catch up the record</span>. Claude takes a read-only inventory of the commits, issues and pull requests, proposes a topic map for your approval, and posts past events as reconstructed notes with their original dates.</span></li>
+<li><b>An older tracker</b><span>Say <span class="sayit">migrate the issues of octo-org/octo-repo</span>, with your own repository. Content is copied into the new structure. Nothing in the old tracker is edited or deleted.</span></li>
+</ul>
+</section>

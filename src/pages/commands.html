@@ -1,0 +1,73 @@
+<section>
+<h1>Commands</h1>
+<p class="lede">The observer works without being asked. These five commands, and one agent, are for when you want something now. Type them in Claude Code.</p>
+<p class="fine">Each one starts with <code>/recortex:</code>. A bare <code>/record</code> is not promised.</p>
+
+<div class="cmdcard">
+<h2 id="record">/recortex:record [what]</h2>
+<p>Records what just happened in this conversation, or what you name. A plan you approved becomes a task with steps. It shows what it would post, posts it, and tells you where it went.</p>
+{{say
+/recortex:record the decision on idempotency keys
+}}
+</div>
+
+<div class="cmdcard">
+<h2 id="ask">/recortex:ask &lt;question&gt;</h2>
+<p>Answers from the record only. The answer starts with "From the record:", gives the address of each note it used, and says what the record does not hold. It posts nothing.</p>
+{{say
+/recortex:ask why did we drop the queue-based retry?
+}}
+</div>
+
+<div class="cmdcard">
+<h2 id="todo">/recortex:todo [add &lt;text&gt; | done &lt;n&gt;]</h2>
+<p>With nothing after it, shows the to-do list with its checkmarks. <code>add</code> puts an item on the list in your words. <code>done</code> checks an item off, by its number in that list.</p>
+{{say
+/recortex:todo add Alert when a retry gives up
+}}
+</div>
+
+<div class="cmdcard">
+<h2 id="status">/recortex:status</h2>
+<p>Tells you, in this order: where the project stands in short, the open tasks and their next steps, what text is due, and what waits for your yes. Then it asks you about what waits, one multiple-choice question each.</p>
+{{say
+/recortex:status
+}}
+</div>
+
+<div class="cmdcard">
+<h2 id="usage">/recortex:usage</h2>
+<p>Gives what the plugin used on this machine, in tokens and calls against each daily limit, and offers the page with its usage view. It shows no money: under a Claude subscription these count against your usage limits.</p>
+{{say
+/recortex:usage
+}}
+</div>
+
+<div class="cmdcard">
+<h2 id="agent">@agent-recortex:ask</h2>
+<p>A read-only agent that answers a question about the project's history from the record, in its own context, on Haiku. It quotes each note with its address, does not guess, and posts nothing. It can run only the read commands of <code>index.py query</code>, and a hook stops anything else. Good for a long question. If the mention does not start it, <code>/recortex:ask</code> is the other way in.</p>
+{{say
+@agent-recortex:ask what did we try for retries, in order, and what stands now?
+}}
+</div>
+
+<div class="tbox"><table class="plain">
+<tr><th>Command</th><th>Writes to GitHub?</th><th>Use it to</th></tr>
+<tr><td>/recortex:record</td><td>Yes, after showing what it would post</td><td>Make sure something is recorded now</td></tr>
+<tr><td>/recortex:ask</td><td>No</td><td>Find out why, or what was tried</td></tr>
+<tr><td>/recortex:todo</td><td>Only for add and done</td><td>See or change the to-do list</td></tr>
+<tr><td>/recortex:status</td><td>Only the answers you give</td><td>See where things stand</td></tr>
+<tr><td>/recortex:usage</td><td>No</td><td>See what the plugin used</td></tr>
+<tr><td>@agent-recortex:ask</td><td>No</td><td>Ask a longer question</td></tr>
+</table></div>
+
+<h2 id="say">Things you can just say</h2>
+<p class="lede">No command is needed for these. Claude knows what they mean.</p>
+<ul class="says2">
+<li><span class="sayit">Set up the record for this project.</span><span class="then">Starts setup: a few questions, a summary, and nothing written before you confirm.</span></li>
+<li><span class="sayit">pause here</span><span class="then">Leaves a note of where things stand for the next session.</span></li>
+<li><span class="sayit">show me the mind of this project</span><span class="then">Builds and opens the private page.</span></li>
+<li><span class="sayit">catch up the record</span><span class="then">Builds the record from the history a project already has.</span></li>
+<li><span class="sayit">off the record</span><span class="then">Keeps that session's moments out of the record until you release the hold.</span></li>
+</ul>
+</section>

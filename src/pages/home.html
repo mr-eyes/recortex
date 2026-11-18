@@ -1,0 +1,145 @@
+<section class="hero">
+<p class="eyebrow">A plugin for Claude Code</p>
+<h1><span>See.</span> <span>Record.</span> <span>Recall.</span> <span class="l4">Act.</span></h1>
+<p class="sub">recortex sees what matters in your Claude Code sessions, records it in your project's GitHub issues with its evidence, recalls it the moment it's needed, and acts on it: answers with sources, a warning before a known dead end, a hold until your yes, and a brief for every new session.</p>
+<p class="nameline">recortex is <b>record + cortex</b>: a record of your project, and a brain that works from it.</p>
+<p class="acts"><a class="btn primary" href="#install">Install in two commands</a><a class="btn" href="/how-it-works/">How it works</a></p>
+
+<div class="flow" role="group" aria-label="The three parts: the observer sees the session, the record keeps what matters on GitHub, and the cortex recalls it and acts">
+<div class="step">
+<span class="part">The observer <span class="body">&middot; the eyes</span></span>
+<h3>It sees the session</h3>
+<div class="bubble me"><span class="lab">You</span>Retry failed charges with backoff.</div>
+<div class="bubble"><span class="lab">Claude</span>Done. In staging, failed charges fell from 2.1% to 0.4%.</div>
+<p class="quiet">Nobody said "record this". The observer noticed a result and sorted it.</p>
+</div>
+<div class="arrow" aria-hidden="true"></div>
+<p class="conn ph">then</p>
+<div class="step">
+<span class="part">The record <span class="body">&middot; the "re"</span></span>
+<h3>It records it</h3>
+<p class="issue">GitHub issues of octo-org/billing-service</p>
+<ul class="mini">
+<li><span class="mk k-result" aria-hidden="true"></span><span>Found: retries with backoff cut failed charges from 2.1% to 0.4% in staging<small>with the numbers and where they came from</small></span></li>
+<li><span class="mk k-failure" aria-hidden="true"></span><span>Went wrong: a queue-based retry lost its order on restart<small>so no one tries it again</small></span></li>
+<li><span class="mk k-decision" aria-hidden="true"></span><span>Decided: an idempotency key on every charge<small>with the reason, in the decider's words</small></span></li>
+</ul>
+</div>
+<div class="arrow" aria-hidden="true"></div>
+<p class="conn ph">then</p>
+<div class="step">
+<span class="part">The cortex <span class="body">&middot; the brain</span></span>
+<h3>It recalls and acts</h3>
+<p class="briefline">Tasks: 1 open, 2 of 3 steps done; next: step 3 of #14.</p>
+<ul class="todo">
+<li><span class="box done" aria-label="done"></span><span>Retry with backoff</span></li>
+<li><span class="box done" aria-label="done"></span><span>An idempotency key on every charge</span></li>
+<li><span class="box" aria-label="open"></span><span>Alert when a retry gives up</span></li>
+</ul>
+<p class="relnote">Release notes, Fixed: "Failed payments are retried safely."</p>
+</div>
+</div>
+<div class="again"><b>Now, in the same session.</b><span>You ask Claude to move the retries onto a queue. Before it starts, it tells you that a queue-based retry already lost its order on restart, and cites the note. Tomorrow's session opens with where things stand and what is next.</span></div>
+</section>
+
+<h2 class="center" id="acts">What it does with the record</h2>
+<p class="lede center">The record is used while you work, not only in the next session.</p>
+<ul class="does">
+<li><b><span class="mk k-question" aria-hidden="true"></span>Answers with sources</b><span class="t">Ask why something was decided or what was tried. The answer starts with "From the record:" and names each note it used.</span><a href="/how-it-works/#the-cortex">The cortex</a></li>
+<li><b><span class="mk k-failure" aria-hidden="true"></span>Warns before a dead end</b><span class="t">The session reads the thread before it works on it, and says what already failed there, with the reason.</span><a href="/how-it-works/#the-record">The record</a></li>
+<li><b><span class="mk k-decision" aria-hidden="true"></span>Holds until your yes</b><span class="t">A hold stops a push or a tag until you lift it. Anything the observer is unsure of waits for your answer.</span><a href="/how-it-works/#yes">What waits for your yes</a></li>
+<li><b><span class="mk k-checkpoint" aria-hidden="true"></span>Briefs every new session</b><span class="t">A short brief opens each session and each helper agent: the focus, the open tasks, the next step.</span><a href="/how-it-works/#the-cortex">The cortex</a></li>
+</ul>
+
+<h2 class="center" id="differs">How it differs from a memory tool</h2>
+<p class="lede center">A memory tool helps an assistant remember. recortex keeps a record of the project for the people on it, and puts that record to work.</p>
+<div class="versus" role="table" aria-label="A typical memory tool compared with recortex">
+<div class="h q" role="columnheader"></div><div class="h a" role="columnheader">A typical memory tool</div><div class="h b" role="columnheader">recortex</div>
+<div class="q" role="rowheader">Where it lives</div><div class="a" role="cell">A private store that only the assistant reads</div><div class="b" role="cell">Your project's GitHub issues, which your team can read with or without the plugin</div>
+<div class="q" role="rowheader">What it keeps</div><div class="a" role="cell">Notes and preferences</div><div class="b" role="cell">Results with their evidence, decisions with their reasons, and dead ends, linked to each other</div>
+<div class="q" role="rowheader">What comes out</div><div class="a" role="cell">Context for the next chat</div><div class="b" role="cell">That, and a to-do list that checks itself off, a status you can ask for, a dashboard, and release notes written from the record</div>
+<div class="q" role="rowheader">Who it is for</div><div class="a" role="cell">One person and their assistant</div><div class="b" role="cell">The whole team: you name who can make decisions, and an optional task board follows the record</div>
+</div>
+
+<h2 id="install">Start in two commands</h2>
+<div class="install">
+<div>
+{{cmd
+claude plugin marketplace add {{repo}}
+claude plugin install recortex@recortex
+}}
+<p class="fine">You need Claude Code, the GitHub CLI <code>gh</code> (signed in), Python 3.8 or newer and bash. The plugin installs nothing else.</p>
+</div>
+<ol class="next">
+<li><span class="who">1</span><span>Open Claude Code in your project and say <span class="sayit">Set up the record for this project.</span></span></li>
+<li><span class="who">2</span><span>Answer a few multiple-choice questions. Nothing is written before you confirm.</span></li>
+<li><span class="who">3</span><span>Choose how much the observer does on its own: Everything, Assistant or Notes only. It does not run until you choose.</span></li>
+<li><span class="who">4</span><span>Work as usual. The record fills in as you go.</span></li>
+</ol>
+</div>
+<p class="fine"><a href="/getting-started/">The full steps</a></p>
+
+<h2 id="ask">Ask it directly</h2>
+<p class="lede">The observer works without being asked. Five short commands, and an agent you can mention, are for when you want something now.</p>
+<ul class="cmds">
+<li><code>/recortex:record</code><span>Record what just happened, or what you name.</span></li>
+<li><code>/recortex:ask</code><span>Answer a question from the record, with its sources.</span></li>
+<li><code>/recortex:todo</code><span>Show the to-do list with its checkmarks, or add to it.</span></li>
+<li><code>/recortex:status</code><span>Where things stand, what is next, what waits for your yes.</span></li>
+<li><code>/recortex:usage</code><span>What the plugin used, in tokens and calls.</span></li>
+<li><code>@agent-recortex:ask</code><span>The same answers from a read-only agent, for a longer question.</span></li>
+</ul>
+<p class="fine"><a href="/commands/">Each command, with an example</a></p>
+
+<h2 id="page">The cortex, on one page</h2>
+<p class="lede">recortex builds a private page on your machine from the record. Three of its views:</p>
+<div class="window">
+<div class="windowbar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="grow">billing-service</span><span class="illnote">An illustration, with invented numbers</span></div>
+<div class="illus">
+<div class="iside">
+<p class="iname">billing-service</p>
+<p class="quiet">one project, in sentences</p>
+<ul>
+<li class="on">Where are we?</li>
+<li>How did we get here?</li>
+<li>What is there to do?</li>
+<li>What is still open?</li>
+<li>What did recortex use?</li>
+</ul>
+</div>
+<div class="imain">
+<div class="ipanel full">
+<h3>Where we are</h3>
+<p class="focus">Failed payments are retried with backoff, and every charge carries an idempotency key. What is left is an alert when a retry gives up.</p>
+</div>
+<div class="ipanel">
+<h3>What is there to do?</h3>
+<p class="quiet">Retry failed payments safely &middot; 2 of 3 steps</p>
+<ul class="todo">
+<li><span class="box done" aria-label="done"></span><span>1. Retry with backoff<small>Found: retries with backoff cut failed charges from 2.1% to 0.4% in staging</small></span></li>
+<li><span class="box done" aria-label="done"></span><span>2. An idempotency key on every charge<small>Decided, and merged</small></span></li>
+<li><span class="box" aria-label="open"></span><span>3. Alert when a retry gives up</span></li>
+</ul>
+</div>
+<div class="ipanel">
+<h3>What did recortex use?</h3>
+<p class="quiet">Today, on this machine. Tokens and calls, not money.</p>
+<div class="meter"><span>Sorting (Haiku)</span><span class="bar"><i class="w15"></i></span><span>12 of 80 calls</span></div>
+<div class="meter"><span>Notes (Sonnet)</span><span class="bar"><i class="w13"></i></span><span>9 of 70 calls</span></div>
+<div class="meter"><span>Paper text (Opus)</span><span class="bar"><i class="w0"></i></span><span>off</span></div>
+</div>
+</div>
+</div>
+</div>
+
+<h2 id="for">Who it is for</h2>
+<p class="forline">Software teams and solo developers who build with Claude Code and already live in GitHub. It also fits data and research work: a report or a paper is kept the same way, and its text is only ever proposed to you.</p>
+
+<h2 id="doors">Where are you starting from?</h2>
+<ul class="doors">
+<li><a class="door k-result" href="/getting-started/"><span class="dt">A new project</span><span class="dd">Set up a record, pick the observer's level, and work.</span></a></li>
+<li><a class="door k-idea" href="/getting-started/#existing"><span class="dt">A codebase with history</span><span class="dd">Build the record from the commits, issues and pull requests you have.</span></a></li>
+<li><a class="door k-question" href="/trust-and-privacy/#team"><span class="dt">A team</span><span class="dd">Who can make decisions, and whose notes a session may read.</span></a></li>
+<li><a class="door k-decision" href="/reports-and-papers/"><span class="dt">A report or a paper</span><span class="dd">A plan, text proposed to you, and every version kept.</span></a></li>
+</ul>
+</section>

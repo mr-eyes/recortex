@@ -1,0 +1,47 @@
+<section>
+<h1>Reports and papers</h1>
+<p class="lede">A report or a paper is one use of recortex among others. Its text is kept in the record like release notes are, and in a project with the manuscript profile it also gets a plan, a writing mode and every version.</p>
+<ol class="path" aria-label="On this page">
+<li><a href="#plan">Plan</a></li>
+<li><a href="#write">Write</a></li>
+<li><a href="#keeper">The paper keeper</a></li>
+<li><a href="#versions">Versions</a></li>
+<li><a href="#read">Read the manuscript</a></li>
+</ol>
+
+<h2 id="plan">Plan</h2>
+<div class="prose">
+<p>Say <span class="sayit">plan the paper</span>. The session reads what the record backs and drafts a plan: the one message the results can carry, the fewest claims that carry it and what backs each, the figure or table that would convince a skeptical reader, the discussion in outline, and what is missing.</p>
+<p>You are shown that plan once, on one page, and asked: adopt it, adopt it with changes, or not now. Nothing is posted before your yes. After that the session keeps it current. It may narrow or reword a claim on its own. Widening, reversing or dropping an agreed claim needs you.</p>
+</div>
+
+<h2 id="write">Write, in the mode you choose</h2>
+<ul class="modes">
+<li class="mode k-decision"><h3>Review <span class="chip s-stands">Recommended</span></h3><p>It drafts a part, shows what would change, and writes only after your yes.</p></li>
+<li class="mode k-idea"><h3>Autonomous</h3><p>It writes without asking, within the same rules.</p></li>
+<li class="mode k-checkpoint"><h3>Off</h3><p>It writes nothing. You write the paper.</p></li>
+</ul>
+<div class="prose"><p>The mode is yours, kept on your machine for each repository. A pulled project file cannot switch your machine to autonomous. In any mode it writes only Methods, Results, Discussion and Limitations. It never writes Introduction, Background or Supplement, never adds a figure or a table, and never changes a paragraph you wrote by hand: the change lands around it. If new material would change a number inside your paragraph, you choose: keep my wording, take the new text, or leave this part for now.</p></div>
+<div class="yesno">
+<div class="yes"><h3>Before a draft is accepted</h3><ul><li>Every number in a changed paragraph stands in a recorded result</li><li>Your own paragraphs are unchanged</li><li>No new figure or table</li></ul></div>
+<div class="no"><h3>What it never does</h3><ul><li>Write Introduction, Background or Supplement</li><li>Overwrite what you wrote</li><li>Cite a paper from memory</li></ul></div>
+</div>
+<p class="fine">Each change leaves a dated note that says what changed, why, and how it was approved.</p>
+
+<h2 id="keeper">The paper keeper only proposes</h2>
+<div class="prose">
+<p>With the observer on at Assistant or Everything, a writing mode other than off, and the stronger model allowed, a background pass drafts a change when something notable happens: a claim became backed, or a note the text rests on was corrected. A second call reviews the draft, and eight mechanical checks have the last word.</p>
+<p>The draft then waits for you. You get approve, not now, or drop it, and your yes is bound to the exact text you were shown. "Not now" asks again after seven days. At most two proposals a day, and it leaves a part alone for two hours after you started writing it yourself. It does this even in autonomous mode: the keeper never writes on its own.</p>
+</div>
+
+<h2 id="versions">Versions</h2>
+<div class="prose">
+<p>With review or autonomous writing, every version of the manuscript is kept on a branch of the record's repository, <code>recortex-manuscript</code>, one commit per change. It holds none of your code, and nothing is built or run there. You can name a version, see the difference between two, and ask for a part back: <span class="sayit">Restore the Results of November 17</span>. A paragraph edited on github.com is recorded as an edit by the account that made it.</p>
+</div>
+
+<h2 id="read">Read the manuscript</h2>
+<div class="prose">
+<p>The private page has a view that shows the paper as a paper: the text in order, the plan beside it, the changes since any earlier version, and who wrote each paragraph (the plugin without asking, with your approval, or you by hand). Each part has a button that copies a request such as "Draft the Discussion from what is backed." for you to paste into the chat. The page changes nothing itself. Print it or save it as a PDF.</p>
+<p>Open it with <code>mind.py --versions --open</code>, or write the paper alone as one clean page with <code>mind.py --paper</code>.</p>
+</div>
+</section>
