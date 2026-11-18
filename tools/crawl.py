@@ -21,6 +21,8 @@ class Links(HTMLParser):
         a = dict(attrs)
         if "id" in a:
             self.ids.add(a["id"])
+        if tag == "link" and a.get("rel") == "canonical":
+            return                      # the full address of the page itself, not something the page loads
         for key in ("href", "src", "action"):
             if a.get(key):
                 self.found.append((tag, a[key]))
