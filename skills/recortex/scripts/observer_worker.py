@@ -72,14 +72,16 @@ CANDIDATE = {"type": "object", "properties": {
     "task_title": {"type": "string", "maxLength": 120}, "topic": {"type": "integer", "minimum": 0},
     "body": STRING, "sources": {"type": "array", "items": ORDINAL, "minItems": 1, "maxItems": 8},
     "excerpts": EXCERPTS, "marks": {"type": "array", "items": MARK, "maxItems": 6},
-    "links": {"type": "array", "items": LINK, "maxItems": 4}},
+    "links": {"type": "array", "items": LINK, "maxItems": 4},
+    "because": {"type": "integer", "minimum": 0, "maximum": 6}},   # optional: a decision's failure, by its place in the list
     "required": ["kind", "issue", "task_title", "topic", "body", "sources", "excerpts", "marks", "links"],
     "additionalProperties": False}
 DRAFT = {"type": "object", "properties": {"candidates": {"type": "array", "items": CANDIDATE, "maxItems": 6}},
          "required": ["candidates"], "additionalProperties": False}
 # What the queue keeps: the real source ids, and a plan part by the comment id of its plan memory. task_title and topic
 # only for a steps memory that opens a task (issue 0); with, the first source of the steps memory that opens the task a
-# mark of task 0 is about.
+# mark of task 0 is about; because_with, the key of the event of the failure of the same pass that a decision was made
+# because of (the drafter says it by the failure's place in its list; code looks it up and writes the link).
 STORED = {"type": "object", "properties": {
     "kind": {"type": "string", "enum": list(KINDS)}, "issue": {"type": "integer", "minimum": 0},
     "task_title": {"type": "string", "maxLength": 120}, "topic": {"type": "integer", "minimum": 0},
@@ -88,7 +90,7 @@ STORED = {"type": "object", "properties": {
     "links": {"type": "array", "items": {"type": "object", "properties": {
         "key": {"type": "string", "enum": list(LINK_KEYS)}, "part": {"type": "integer", "minimum": 1}},
         "required": ["key", "part"], "additionalProperties": False}, "maxItems": 4},
-    "with": ID},
+    "with": ID, "because_with": {"type": "string", "pattern": "[0-9a-f]{32}"}},
     "required": ["kind", "issue", "body", "sources", "excerpts", "marks", "links"], "additionalProperties": False}
 REVIEW = {"type": "object", "properties": {
     "candidate_hash": ID, "accepted": {"type": "boolean"},
@@ -937,13 +939,16 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                                      for label in labels)), default=0)
             plan = {"level": level, "tasks": aux["tasks"], "todo": aux["todo"], "parts": set(aux["parts"].values()),
                     "new_steps": new_steps or None}
-            for raw in raws:
+            for place, raw in enumerate(raws, 1):
                 candidate, role = _bind(raw, sid_of, aux, labels, config)
                 # A candidate that cannot be bound carries its reason in place of a role, and the source it was drafted from.
-                candidates.append((candidate, role, dict(plan, role=role) if role else plan,
+                # "at" is its place in the draft, and "because" (a decision's) the place of the failure it rests on.
+                candidates.append((candidate, role, dict(plan, role=role, at=place,
+                                                         because=raw.get("because", 0) if raw["kind"] == "decision" else 0),
                                    next((sid_of[n] for n in raw["sources"] if n in sid_of), None)))
-            # The steps memories first: a mark of task 0 waits for the one that opens its task.
-            candidates.sort(key=lambda row: 0 if row[1] == "task" else 1)
+            # The steps memories first: a mark of task 0 waits for the one that opens its task. A decision that rests on a
+            # failure of the draft comes after all the others, so that the failure is queued before it.
+            candidates.sort(key=lambda row: 0 if row[1] == "task" else 2 if row[2]["because"] else 1)
         elif saved is not None:
             store.finish_labels(batch)
         report["selected"] = len(candidates)
@@ -959,6 +964,8 @@ def _process(repo, config, project_root=None, invoke_fn=None):
             recent = {}  # the reviewer judges without it; the record is read again next pass
         review_record = dict(context, tasks=record["tasks"], todo=record["todo"], plan=record["plan"])
         opener = None   # the first source of the steps memory of this pass that opens a task, once it is queued
+        failures = {}   # the key of the event of each failure of this pass, by its place in the draft
+        stood_on = {}   # the messages each failure of the draft rests on, queued or not, by its place in the draft
         for candidate, role, checks, first in candidates:
             if candidate is None:
                 reason = role.replace("-", "_")
@@ -971,10 +978,20 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 continue
             # One agent message often tells several moments (a result and the idea it raised). A source backs one
             # event: a candidate whose other sources remain drops the ones an event already holds.
-            taken = [sid for sid in candidate["sources"] if sid in used or store.db.execute(
-                "SELECT 1 FROM event_sources WHERE source_id=?", (sid,)).fetchone()]
+            # The one exception is a decision made because of a failure of this pass (the user's one message holds both):
+            # it may rest on the messages that failure rests on, whether the failure is queued or was refused, and on no
+            # other that an event holds. A refused failure leaves the decision to stand alone.
+            parent = failures.get(checks["because"]) if checks["because"] and candidate["kind"] == "decision" else None
+            shared = stood_on.get(checks["because"], set()) if candidate["kind"] == "decision" else set()
+            if parent and set(candidate["sources"]) == shared:   # the failure's own key: the decision keeps the typed words
+                candidate = dict(candidate, sources=[sid for sid in candidate["sources"] if _typed(supplied[sid])]
+                                 or candidate["sources"])
+            taken = [sid for sid in candidate["sources"] if sid not in shared and (sid in used or store.db.execute(
+                "SELECT 1 FROM event_sources WHERE source_id=?", (sid,)).fetchone())]
             if taken and len(taken) < len(candidate["sources"]):
                 candidate = dict(candidate, sources=[sid for sid in candidate["sources"] if sid not in taken])
+            if candidate["kind"] == "failure":
+                stood_on[checks["at"]] = set(candidate["sources"])
             primary = next((sid for sid in candidate["sources"] if sid in supplied), None)
             problem = candidate_problem(candidate, supplied, context, config, repo, checks)
             if not problem and any(mark["task"] == 0 for mark in candidate["marks"]):
@@ -984,7 +1001,9 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                     problem = "mark-binding"
                 else:
                     candidate = dict(candidate, **{"with": opener})
-            if problem or not primary or set(candidate["sources"]) & handled:
+            if parent and not problem:
+                candidate = dict(candidate, because_with=parent)   # code writes because=<the failure's comment> at the post
+            if problem or not primary or (set(candidate["sources"]) - shared) & handled:
                 if primary and primary not in handled:
                     reason = (problem or "source-overlap").replace("-", "_")
                     before = store.observation(primary)
@@ -1012,7 +1031,11 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 handled.add(primary)
                 continue
             digest = runtime.candidate_hash(candidate)
-            reviewed = invoke({"candidate": _shown(candidate, number, parts_n), "candidate_hash": digest,
+            shown = _shown(candidate, number, parts_n)
+            if parent:   # the reviewer is told the failure in words, never its key
+                shown.pop("because_with")
+                shown["because"] = {"kind": "failure", "plain": _line(record_format.plain(store.event(parent)["body"], "failure") or "")}
+            reviewed = invoke({"candidate": shown, "candidate_hash": digest,
                                "sources": [_view(supplied[sid], number[sid]) for sid in candidate["sources"]],
                                "context": _stretch(candidate, supplied, order, number), "record": review_record,
                                "recent_on_issue": recent.get(candidate["issue"], []), "account": account},
@@ -1056,6 +1079,8 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 continue
             if current["state"] == "observed" or _attempts(current["reason"])[0] in RETRY_SOON:
                 store.defer(item["source_id"], _again(leftover, current["reason"] if current["state"] == "deferred"
+            if candidate["kind"] == "failure":
+                failures[checks["at"]] = eventkey
                                                       else ""))
         store.set_control("worker_last", {"at": time.time(), "code": "ok", "selected": report["selected"],
                                           "reviewed": report["reviewed"], "ready": len(report["ready"]),

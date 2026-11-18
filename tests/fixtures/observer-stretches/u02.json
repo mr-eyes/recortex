@@ -1,0 +1,164 @@
+{
+ "about": "a message that holds a failure and the decision it led to: the user types that the C extension crashed on one build and that they therefore dropped it; the agent's reply takes in the drop and says nothing more of the crash. Invented text. Before 1.5.1 the sorter labeled such a message a decision only, and when it labeled both, the failure was lost (a source backed one event). The answers here were recorded from real Haiku (sort) and Sonnet (draft, review) calls with the 1.5.1 wording: both labeled, the failure and then the decision written, the decision with because set to the failure's place in the list.",
+ "draft": [
+  {
+   "body": "<!-- ghim:event type=failure at=2026-11-18T15:17+00:00 -->\n### Failure: 2026-11-18 15:17 UTC - C extension crashed on the Windows build\n\n**In plain words, what went wrong:** the optional C extension crashed on the Windows build\n\n**What failed:** The user reported that the C extension crashed on the Windows build. No error text was given.\n\n**What ran:** The user reported the run; the agent did not run it. Command, commit and configuration: Not stated.\n\n**Cause:** Not established\n\n**Impact:** The user dropped the extension and the work stays on the pure Python build. The agent noted that the 2.1x result may not hold if the benchmarked build included the extension.\n\n**Not established:** Whether the 2.1x was measured with or without the C extension. The cause of the crash.\n\n**Next step:** Check whether the 2.1x was measured with the C extension, owner the user",
+   "excerpts": [
+    "The C extension crashed on the Windows build, so I dropped it.",
+    "One thing to check: was the 2.1x measured with the C extension in the build or without it?"
+   ],
+   "issue": 6,
+   "kind": "failure",
+   "links": [],
+   "marks": [],
+   "sources": [
+    3,
+    4
+   ],
+   "task_title": "",
+   "topic": 6
+  },
+  {
+   "because": 1,
+   "body": "<!-- ghim:event type=decision at=2026-11-18T15:17+00:00 -->\n### Decision: 2026-11-18 15:17 UTC - Stay pure Python\n\n**In plain words, we decided to:** drop the C extension and stay pure Python\n\n**Decision:** The C extension is dropped and the parser stays pure Python.\n\n**Decided by:** the user of the working session, 2026-11-18 15:17 UTC\n\n**Exact words:**\n\n> The C extension crashed on the Windows build, so I dropped it. We stay pure Python.\n\n**Where recorded:** Chat with the agent on 2026-11-18.\n\n**Effect:** Not stated\n\n**Next step:** Not stated, owner Not stated",
+   "excerpts": [
+    "The C extension crashed on the Windows build, so I dropped it. We stay pure Python."
+   ],
+   "issue": 6,
+   "kind": "decision",
+   "links": [],
+   "marks": [],
+   "sources": [
+    3
+   ],
+   "task_title": "",
+   "topic": 6
+  }
+ ],
+ "reviews": [
+  {
+   "accepted": true,
+   "reason": "supported"
+  },
+  {
+   "accepted": true,
+   "reason": "supported"
+  }
+ ],
+ "run": 1,
+ "sort": {
+  "ignored": [
+   1,
+   2,
+   5,
+   6,
+   7,
+   8
+  ],
+  "labels": [
+   {
+    "job": "memory",
+    "kind": "failure",
+    "parts": [],
+    "sources": [
+     4,
+     3
+    ],
+    "steps": [],
+    "task": 0
+   },
+   {
+    "job": "memory",
+    "kind": "decision",
+    "parts": [],
+    "sources": [
+     3
+    ],
+    "steps": [],
+    "task": 0
+   }
+  ]
+ },
+ "sources": [
+  {
+   "at": "2026-11-18T15:16:20.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "527c2cbbccf5b898e3b73058223f93d74bace010818b1e48a9671491bb4ef534",
+   "role": "user",
+   "session_id": "sess-u02",
+   "text": "Before we go on: which build of the parser do the benchmarks use?",
+   "via": null
+  },
+  {
+   "at": "2026-11-18T15:16:40.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "aa1bd42fcdca4c889edafceb9ffccf7664dd276f624054223576a1087325b788",
+   "role": "assistant",
+   "session_id": "sess-u02",
+   "text": "The benchmarks use the pure Python build. The speedups folder holds an optional C extension that the benchmark script imports only when it is installed.",
+   "via": null
+  },
+  {
+   "at": "2026-11-18T15:17:00.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "8b6bca66f53c86013247fb1a6cfecc72b8a344197b1ad5c15bcadc7580bd7318",
+   "role": "user",
+   "session_id": "sess-u02",
+   "text": "The C extension crashed on the Windows build, so I dropped it. We stay pure Python.",
+   "via": null
+  },
+  {
+   "at": "2026-11-18T15:17:20.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "8c0d2d9bb99768aa1e1849955f752035445a7b036dd6c3885ee5b5b40f3e4ccb",
+   "role": "assistant",
+   "session_id": "sess-u02",
+   "text": "Noted: pure Python, no C extension.\n\nOne thing to check: was the 2.1x measured with the C extension in the build or without it? If the benchmarked build still included the extension, or the old-vs-new gap came partly from it, the number may not hold for the pure Python parser. If both runs were pure Python, the result stands as is.\n\nIf the paper or README mentions the extension, those mentions should come out too. I can grep the repo and paper.tex for them if you would like.",
+   "via": null
+  },
+  {
+   "at": "2026-11-18T15:17:40.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "33ebcc57bd37afc604f46bbe6abc5ef28e7b0b8246ab6095e6d0440cc04e385f",
+   "role": "user",
+   "session_id": "sess-u02",
+   "text": "Thanks, that is useful to know.",
+   "via": null
+  },
+  {
+   "at": "2026-11-18T15:18:00.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "bb23750ee75a8e382a519de31d9fae77e65a6b26fa173cbd4243584312db0afc",
+   "role": "assistant",
+   "session_id": "sess-u02",
+   "text": "Understood. I will leave the Results text as it is until then.",
+   "via": null
+  },
+  {
+   "at": "2026-11-18T15:18:20.000Z",
+   "dialog_user": false,
+   "direct_user": true,
+   "id": "b0c0fe3a3ceca6abb7134992e01627c6ab223aca5054f11de165c16e5ea55543",
+   "role": "user",
+   "session_id": "sess-u02",
+   "text": "ok",
+   "via": null
+  },
+  {
+   "at": "2026-11-18T15:18:40.000Z",
+   "dialog_user": false,
+   "direct_user": false,
+   "id": "1785b88d1a5d01fba403d6dadb25812fea2f281b9cfb1fd72739c22e5787e79e",
+   "role": "assistant",
+   "session_id": "sess-u02",
+   "text": "Nothing else is pending from me.",
+   "via": null
+  }
+ ]
+}
