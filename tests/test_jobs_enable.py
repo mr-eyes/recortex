@@ -91,13 +91,31 @@ class FileTests(tj.Programs, tj.tq.Box):
         grants.end_pass(self.folder, word)
         self.assertFalse(grants.in_pass(self.folder, [("level", "assistant")], word))
 
+    def test_a_spent_answer_grants_nothing_again(self):
+        self.assertTrue(grants.put(self.folder, "level", "everything", "toolu_replay"))
+        self.assertTrue(grants.put(self.folder, "level", "everything", "toolu_replay"))   # seen again before use: no change
+        self.assertTrue(grants.take(self.folder, [("level", "everything")]))
+        self.assertFalse(grants.put(self.folder, "level", "everything", "toolu_replay"))   # the transcript still holds it
+        self.assertFalse(grants.put(self.folder, "level", "notes", "toolu_replay"))
+        self.assertFalse(grants.held(self.folder, [("level", "everything")]))
+        self.assertTrue(grants.put(self.folder, "level", "everything", "toolu_new"))      # a new answer does
+
+    def test_the_spent_answers_are_kept_and_bounded(self):
+        for number in range(grants.SPENT + 5):
+            grants.put(self.folder, "level", "notes", "toolu_%d" % number)
+            grants.take(self.folder, [("level", "notes")])
+        with open(os.path.join(runtime.approvals_folder(), grants.FILE)) as handle:
+            spent = json.load(handle)["spent"]
+        self.assertEqual(grants.SPENT, len(spent))
+        self.assertEqual("toolu_%d" % (grants.SPENT + 4), spent[-1])
+
     def test_the_file_is_private_and_holds_no_text(self):
         grants.put(self.folder, "level", "notes", "toolu_1")
         path = os.path.join(runtime.approvals_folder(), grants.FILE)
         self.assertEqual(0o600, os.stat(path).st_mode & 0o777)
         with open(path) as handle:
             value = json.load(handle)
-        self.assertEqual({"form", "folders"}, set(value))
+        self.assertEqual({"form", "folders", "spent"}, set(value))
         self.assertEqual({"value", "answer", "until"}, set(value["folders"][self.folder]["level"]))
 
 
@@ -332,6 +350,27 @@ class RecordTests(TranscriptBox):
             json.dump({"observer": {"mode": "automatic", "model": "sonnet", "level": "notes"}}, handle)
         self.ask("level", "Notes only")
         self.hook("python3 /p/skills/recortex/scripts/setup.py apply --answers %s --yes" % handle.name)
+        self.assertTrue(self.held("level", "notes"))
+
+    def test_an_answer_cannot_be_used_twice_through_the_transcript(self):
+        self.ask("level", "Notes only")
+        self.hook(self.SETUP % "notes")
+        self.assertTrue(grants.take(self.folder, [("level", "notes")]))
+        self.hook(self.SETUP % "notes")   # the same answer is still in the transcript
+        self.assertFalse(self.held("level", "notes"))
+        self.ask("level", "Notes only")   # a new answer is a new grant
+        self.hook(self.SETUP % "notes")
+        self.assertTrue(self.held("level", "notes"))
+
+    def test_a_subagents_call_records_nothing_whatever_the_user_answered(self):
+        self.ask("level", "Notes only")
+        for extra in ({"agent_id": "a1b2c3"}, {"agent_type": "general-purpose"}, {"agent_id": "a1", "agent_type": "recortex:record-drafter"}):
+            data = {"hook_event_name": "PreToolUse", "session_id": "session1", "transcript_path": self.path, "cwd": self.project,
+                    "tool_name": "Bash", "tool_input": {"command": self.SETUP % "notes"}}
+            data.update(extra)
+            self.assertIsNone(pretool_guard.decide(json.dumps(data)))
+            self.assertFalse(self.held("level", "notes"), extra)
+        self.hook(self.SETUP % "notes")   # the main session's own call does
         self.assertTrue(self.held("level", "notes"))
 
     def test_other_commands_leave_nothing(self):

@@ -84,7 +84,10 @@ def decide(raw, scripts=HERE):
 
 
 def record_enable_grant(data):
-    """Job 2: never raises and never prints; without the user's answer nothing is recorded."""
+    """Job 2: never raises and never prints; without the user's answer nothing is recorded, and a call made by a subagent
+    (its input carries an agent_id or an agent_type) records nothing: only the main session's own call can."""
+    if data.get("agent_id") or data.get("agent_type"):
+        return
     command = (data.get("tool_input") or {}).get("command") if isinstance(data.get("tool_input"), dict) else None
     if data.get("tool_name") not in ("Bash", "bash") or not isinstance(command, str) or "observer" not in command:
         return

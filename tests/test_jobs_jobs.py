@@ -942,6 +942,26 @@ class GrantTests(HookBox):
             self.assertFalse(db.grant_answer(self.close_key, "toolu_01a"))   # the same answer grants it once
         self.assertFalse(self.granted(self.close_item["short"], self.close_key))
 
+    def test_no_kind_of_grant_is_made_by_a_subagents_call(self):
+        self.ask_open("Open it")
+        for extra in ({"agent_id": "a1b2c3"}, {"agent_type": "general-purpose"}):
+            command = "python3 skills/recortex/scripts/observer.py act %s" % self.open_item["short"]
+            self.handle("pre-tool", tool_name="Bash", tool_input={"command": command}, **extra)
+            with self.store() as db:
+                self.assertFalse(db.has_grant(self.task_key), extra)
+        self.assertTrue(self.granted(self.open_item["short"], self.task_key))   # the main session's own call does
+
+    def test_no_kind_of_grant_can_be_made_again_from_the_answer_that_was_used(self):
+        keys = {"open": self.task_key, "close": self.close_key, "post": self.key,
+                "draft": keeper_rules.grant_key("abcd1234", "0" * 64), "later": waiting.answer_key(self.open_item, "later"),
+                "drop": waiting.answer_key(self.open_item, "no")}
+        with self.store() as db:
+            for name, key in keys.items():
+                self.assertTrue(db.grant_answer(key, "toolu_01replay"), name)
+                self.assertTrue(db.take_grant(key), name)
+                self.assertFalse(db.grant_answer(key, "toolu_01replay"), name)   # the transcript still holds the answer
+                self.assertFalse(db.has_grant(key), name)
+
     def test_another_command_than_act_grants_nothing(self):
         self.ask_open("Open it")
         for command in ("python3 observer.py later %s" % self.open_item["short"], "echo act %s" % self.open_item["short"],

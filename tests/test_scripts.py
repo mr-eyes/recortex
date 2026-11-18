@@ -5642,7 +5642,7 @@ class SetupTests(Sandbox):
             if level:   # the user's recorded answer to the level question, which a session's enable goes on (test_jobs_enable)
                 import observer_grants
                 with mock.patch.dict(os.environ, {"XDG_STATE_HOME": env["XDG_STATE_HOME"]}):
-                    self.assertTrue(observer_grants.put(os.path.realpath(root), "level", level, "toolu_test"))
+                    self.assertTrue(observer_grants.put(os.path.realpath(root), "level", level, "toolu_test%d" % time.time_ns()))
             real = self.setup_script("apply", "--answers", answers, "--root", root, "--yes", gh=FAKE, env=env)
             self.assertEqual(0, real.returncode, real.stdout + real.stderr)
             self.assertIn("setup applied", real.stdout)

@@ -731,7 +731,7 @@ class ObserverCliTests(unittest.TestCase):
             import observer_grants
             with patch.dict(os.environ,{'XDG_STATE_HOME':str(self.base/'state')}):
                 for kind,option in (('level','--level'),('strong','--strong-model')):
-                    if option in args:observer_grants.put(os.path.realpath(self.project),kind,args[args.index(option)+1],'toolu_test')
+                    if option in args:observer_grants.put(os.path.realpath(self.project),kind,args[args.index(option)+1],'toolu_test%d'%time.time_ns())
         result=subprocess.run([sys.executable,str(ROOT/'skills/recortex/scripts/observer.py')]+list(args),
                               cwd=self.project,env=self.env,capture_output=True,text=True,timeout=10)
         self.assertEqual('',result.stderr)
@@ -785,7 +785,7 @@ class ObserverCliTests(unittest.TestCase):
                                     cwd=other,env=moved,capture_output=True,text=True,timeout=10).stdout)
         import observer_grants
         with patch.dict(os.environ,{'XDG_STATE_HOME':str(self.base/'state')}):
-            observer_grants.put(os.path.realpath(other),'level','everything','toolu_test')   # the user's answer for that folder
+            observer_grants.put(os.path.realpath(other),'level','everything','toolu_test%d'%time.time_ns())   # the user's answer for that folder
         self.assertTrue(run('enable','--model','sonnet','--level','everything','--yes')['approved'])
         result,value=self.cli('disable');self.assertEqual(0,result.returncode);self.assertTrue(value['was_enabled'])
         _,status=self.cli('status');self.assertFalse(status['approved'])

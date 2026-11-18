@@ -30,6 +30,7 @@ LOCK = "enable-grants.lock"
 SECONDS = 600
 CAP = 65536
 KEPT = 20            # entries of the file, the newest
+SPENT = 200          # answers already used for a grant, the newest: the same answer never grants twice
 STRONG_MODEL = "opus"  # the model the paper-proposals question names; another one is the user's own command
 RANK = {"notes": 1, "assistant": 2, "everything": 3}
 LEVEL_QUESTION, STRONG_QUESTION = "observer-level", "paper-proposals"
@@ -67,29 +68,40 @@ def _path(create=False):
     return None if folder is None else os.path.join(folder, FILE)
 
 
-def _read():
+def _state():
+    """{"folders": {...}, "spent": [answer ids]}: what the file holds, or nothing when it is missing or unreadable."""
+    empty = {"folders": {}, "spent": []}
     path = _path()
     if path is None:
-        return {}
+        return empty
     info = storage.check_path(path, "file")
     if not info or info.st_size > CAP:
-        return {}
+        return empty
     try:
         data = json.loads(storage.read_file(path) or "")
     except (ValueError, RecursionError):
-        return {}
-    return data.get("folders") if isinstance(data, dict) and isinstance(data.get("folders"), dict) else {}
+        return empty
+    if not isinstance(data, dict) or not isinstance(data.get("folders"), dict):
+        return empty
+    spent = [item for item in data.get("spent", []) if isinstance(item, str) and ANSWER.fullmatch(item)]
+    return {"folders": data["folders"], "spent": spent[-SPENT:]}
+
+
+def _read():
+    return _state()["folders"]
 
 
 @contextlib.contextmanager
 def _writer():
     top = storage.state_top(for_key=True)
     with field_sheet.approvals_lock(top, LOCK):
-        folders = _read()
-        yield folders
+        state = _state()
+        yield state
+        folders = state["folders"]
         trimmed = dict(sorted(folders.items(), key=lambda row: max([e.get("until", 0) for e in row[1].values()
                                                                     if isinstance(e, dict)] or [0]))[-KEPT:])
-        storage.write_file(_path(create=True), json.dumps({"form": 1, "folders": trimmed}, sort_keys=True) + "\n")
+        storage.write_file(_path(create=True), json.dumps({"form": 2, "folders": trimmed, "spent": state["spent"][-SPENT:]},
+                                                          sort_keys=True) + "\n")
 
 
 def _live(entry, now):
@@ -97,14 +109,20 @@ def _live(entry, now):
 
 
 def put(folder, kind, value, answer, now=None):
-    """Record the grant for this folder: the user's answer `answer` (a tool id) to the question about `kind`."""
+    """Record the grant for this folder: the user's answer `answer` (a tool id) to the question about `kind`. An answer that
+    was already used for a grant grants nothing again, whatever the transcript still holds."""
     if kind not in ("level", "strong") or not ANSWER.fullmatch(str(answer)):
         return False
     if kind == "level" and value not in runtime.LEVELS or kind == "strong" and value != STRONG_MODEL:
         return False
     now = time.time() if now is None else now
-    with _writer() as folders:
-        folders.setdefault(folder, {})[kind] = {"value": value, "answer": answer, "until": now + SECONDS}
+    with _writer() as state:
+        if answer in state["spent"]:
+            return False
+        entry = state["folders"].setdefault(folder, {}).get(kind)
+        if _live(entry, now) and entry.get("answer") == answer and entry.get("value") == value:
+            return True   # the same answer, seen again before it was used: nothing changes
+        state["folders"][folder][kind] = {"value": value, "answer": answer, "until": now + SECONDS}
     return True
 
 
@@ -117,16 +135,16 @@ def held(folder, wanted, now=None):
 
 
 def take(folder, wanted, now=None):
-    """Use the grants of `wanted` once: True when every one was live (they are then spent), else False and nothing is
-    spent."""
+    """Use the grants of `wanted` once: True when every one was live (they are then spent, and so are their answers), else
+    False and nothing is spent."""
     now = time.time() if now is None else now
-    with _writer() as folders:
-        entries = folders.get(folder)
+    with _writer() as state:
+        entries = state["folders"].get(folder)
         entries = entries if isinstance(entries, dict) else {}
         if not all(_live(entries.get(kind), now) and entries[kind].get("value") == value for kind, value in wanted):
             return False
         for kind, _ in wanted:
-            entries.pop(kind, None)
+            state["spent"].append(entries.pop(kind)["answer"])
     return True
 
 
@@ -136,8 +154,8 @@ def start_pass(folder, level, strong, now=None):
     pass covers the target, not each command's own need)."""
     now = time.time() if now is None else now
     word = secrets.token_hex(16)
-    with _writer() as folders:
-        folders.setdefault(folder, {})["pass"] = {"word": word, "until": now + SECONDS, "level": level or "",
+    with _writer() as state:
+        state["folders"].setdefault(folder, {})["pass"] = {"word": word, "until": now + SECONDS, "level": level or "",
                                                    "strong": strong or ""}
     return word
 
@@ -154,8 +172,8 @@ def in_pass(folder, wanted, word, now=None):
 
 
 def end_pass(folder, word):
-    with _writer() as folders:
-        entries = folders.get(folder)
+    with _writer() as state:
+        entries = state["folders"].get(folder)
         if isinstance(entries, dict) and isinstance(entries.get("pass"), dict) and entries["pass"].get("word") == word:
             entries.pop("pass", None)
 

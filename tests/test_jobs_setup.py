@@ -10,6 +10,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -59,7 +60,7 @@ class Programs:
         folder = observer_runtime.folder_key(self.project)
         for kind, value in (("level", level), ("strong", strong)):
             if value:
-                self.assertTrue(observer_grants.put(folder, kind, value, "toolu_test"))
+                self.assertTrue(observer_grants.put(folder, kind, value, "toolu_test%d" % time.time_ns()))
 
     def with_path(self, folder, **extra):
         env = dict(QUIET, PATH=folder + os.pathsep + os.environ["PATH"])

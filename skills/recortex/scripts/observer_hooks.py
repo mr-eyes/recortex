@@ -773,6 +773,12 @@ def fail_closed(data):
     return _output("PreToolUse", denial=_unchecked(data) if isinstance(data, dict) else UNCHECKED)
 
 
+def _from_subagent(data):
+    """True for a tool call made by a subagent: Claude Code puts agent_id (and agent_type) in its input and in no call of the
+    main session. No subagent mints a grant, whatever the transcript holds."""
+    return bool(data.get("agent_id") or data.get("agent_type"))
+
+
 def _handle(event, data, config, repo, decision):
     # A hold stays in force while this folder has an entry on this machine, whatever the project file says (its
     # repository, its trust, or "observer": false): one edit of a shared file must not lift what the user held. The
@@ -856,7 +862,7 @@ def _handle(event, data, config, repo, decision):
                 if not denial and stale:
                     denial = _unchecked(data, BEHIND)  # holds typed in the part not read may apply
                 decision["held"] = denial
-                if not denial:
+                if not denial and not _from_subagent(data):   # a grant is made by the main session's own call only
                     try:
                         _grant(store, data, project_root)
                         _grant_draft(store, data, project_root)
