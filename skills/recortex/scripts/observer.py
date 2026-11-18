@@ -500,7 +500,8 @@ def _status(repo, config, loaded, store, options, details):
                 runtime_last=last, capture_paused=store.get_control("capture_paused", False),
                 publication_paused=store.get_control("publication_paused", False),
                 worker_degraded=store.get_control("worker_degraded", ""), queue=store.status(),
-                worker_last=store.get_control("worker_last"), dialogs_unread=observer_sources.unread(store))
+                worker_last=store.get_control("worker_last"), dialogs_unread=observer_sources.unread(store),
+                jobs_last=store.get_control("jobs_last"))   # the housekeeping run: fixed words and integers (observer_jobs)
 
 
 def runtime_check(repo, options, store):

@@ -163,6 +163,14 @@ class JobsRunTests(JobsBox):
         self.assertEqual({"at", "steps", "cleaned"}, set(last))   # cleaned: the keeper's folders removed (1.5.1)
         self.assertTrue(all(word in jobs.CODES for word in last["steps"].values()), last)
 
+    def test_status_shows_the_last_run_so_that_a_failed_step_is_seen(self):
+        self.jobs()
+        code, text = self.cli("status")
+        shown = json.loads(text)["jobs_last"]
+        with store_module.Store(REPO, config=self.pcfg) as db:
+            self.assertEqual(db.get_control(jobs.JOBS_LAST), shown)
+        self.assertTrue(all(word in jobs.CODES for word in shown["steps"].values()), shown)
+
 
 class CloseStepTests(JobsBox):
     def test_everything_closes_a_finished_task_and_assistant_asks(self):
