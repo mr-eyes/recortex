@@ -157,9 +157,9 @@ a.said:hover,a.inl:hover{color:var(--thread)}
 
 .panel{grid-column:1/-1;padding:40px 56px;border-top:1px solid var(--rule)}
 .js .panel{position:fixed;top:0;right:0;bottom:0;width:min(470px,100vw);background:var(--sheet);border:0;border-left:1px solid var(--rule);
-padding:22px 28px 60px;overflow-y:auto;transform:translateX(102%);z-index:5;box-shadow:-18px 0 40px rgba(48,41,39,.14)}
+padding:22px 28px 60px;overflow-y:auto;transform:translateX(102%);z-index:5}
 .js.ready .panel{transition:transform .22s ease}
-.js .panel.on{transform:none}
+.js .panel.on{transform:none;box-shadow:-18px 0 40px rgba(48,41,39,.14)}
 .js .noscript-h{display:none}
 .close{float:right}
 .js .mem{display:none}.js .mem.on{display:block}
