@@ -249,7 +249,7 @@ class ObserverHoldTests(unittest.TestCase):
             "stdbuf -oL git push", "if git diff --quiet; then git push; fi",
             "for r in origin backup; do git push $r; done", "while true; do git push && break; done",
             "git diff --quiet || git push", "echo origin | xargs git push", "xargs -I{} git push {} < remotes.txt",
-            "find . -maxdepth 0 -exec git push \;", "eval git push", "eval \"git push\"", "git $'push'")
+            "find . -maxdepth 0 -exec git push \\;", "eval git push", "eval \"git push\"", "git $'push'")
     ORDINARY = ("git status", "git log --oneline -5", "git diff", "git commit -m 'fix the push button'",
                 "echo 'remember to git push'", "python3 -m pytest -q", "make test", "git push --dry-run", "ls; pwd",
                 "grep -rn push src/", "git fetch && git status", "npm test", "git tag -l", "gh release view v1")
@@ -289,7 +289,7 @@ class ObserverHoldTests(unittest.TestCase):
         # read-only form is exempt only as the part's own program, its flag an option before any --. Every find -exec
         # group is read, watch runs its arguments as a shell line, and xargs feeds git its arguments from stdin.
         for command in ("git $'pu\\x73h'", 'git $"push"', "env git push --dry-run", "timeout 5 git push --dry-run",
-                        "find . -exec true \; -exec git push \;", "watch -n 1 'git push'", "printf push | xargs git",
+                        "find . -exec true \\; -exec git push \\;", "watch -n 1 'git push'", "printf push | xargs git",
                         "git push -o -n origin main", "git push origin -- -n", "sudo git push -n"):
             self.assertEqual("deny", self.check(self.hold(), command)["decision"], command)
         for action, command in (("git-tag", "git $'tag' v1"), ("gh-release", "gh $'release' create v1"),
