@@ -891,7 +891,8 @@ class DraftGrantTests(unittest.TestCase):
         self.ask(self.question, "Approve", ident="toolu_01approve")
         self.assertFalse(self.granted(command="python3 skills/recortex/scripts/observer.py drafts later %s" % self.draft))
         self.assertFalse(self.granted(command="python3 skills/recortex/scripts/observer.py drafts --show %s" % self.draft))
-        self.assertFalse(self.granted(command="echo observer.py drafts apply %s" % self.draft.upper()))
+        if self.draft.upper() != self.draft:   # the id is hex from a hash: one in 40 has only digits, and has no other case
+            self.assertFalse(self.granted(command="echo observer.py drafts apply %s" % self.draft.upper()))
         with self.store_module.Store(self.REPO) as store:
             store.set_draft(self.draft, "dropped")
         self.assertFalse(self.granted())   # a dropped draft is not open
