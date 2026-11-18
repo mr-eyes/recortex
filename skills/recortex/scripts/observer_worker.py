@@ -909,7 +909,9 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                     "new_steps": new_steps or None}
             for raw in raws:
                 candidate, role = _bind(raw, sid_of, aux, labels, config)
-                candidates.append((candidate, role, dict(plan, role=role) if role else plan))
+                # A candidate that cannot be bound carries its reason in place of a role, and the source it was drafted from.
+                candidates.append((candidate, role, dict(plan, role=role) if role else plan,
+                                   next((sid_of[n] for n in raw["sources"] if n in sid_of), None)))
             # The steps memories first: a mark of task 0 waits for the one that opens its task.
             candidates.sort(key=lambda row: 0 if row[1] == "task" else 1)
         elif saved is not None:
@@ -917,18 +919,24 @@ def _process(repo, config, project_root=None, invoke_fn=None):
         report["selected"] = len(candidates)
         if labels:
             # What the sorter set aside is done with, unless the drafter found something in it after all.
-            handled = ignored_ids - {sid for candidate, _, _ in candidates if candidate for sid in candidate["sources"]}
+            handled = ignored_ids - {sid for candidate, _, _, _ in candidates if candidate for sid in candidate["sources"]}
             done_with(handled)
         used = set()  # the sources of this pass's events
         parts_n = {cid: n for n, cid in aux["parts"].items()}
         try:
-            recent = recent_on_issue(repo, {c["issue"] for c, _, _ in candidates if c and c["issue"] >= 1})
+            recent = recent_on_issue(repo, {c["issue"] for c, _, _, _ in candidates if c and c["issue"] >= 1})
         except (OSError, ValueError, KeyError, TypeError, AttributeError, sqlite3.Error):
             recent = {}  # the reviewer judges without it; the record is read again next pass
         review_record = dict(context, tasks=record["tasks"], todo=record["todo"], plan=record["plan"])
         opener = None   # the first source of the steps memory of this pass that opens a task, once it is queued
-        for candidate, role, checks in candidates:
+        for candidate, role, checks, first in candidates:
             if candidate is None:
+                reason = role.replace("-", "_")
+                if first and first not in handled and store.observation(first)["state"] in ("observed", "deferred"):
+                    before = store.observation(first)
+                    store.defer(first, _again(reason, before["reason"] if before["state"] == "deferred" else "")
+                                if reason in RETRY_SOON else reason)
+                    handled.add(first)
                 report["deferred"] += 1
                 continue
             # One agent message often tells several moments (a result and the idea it raised). A source backs one
