@@ -180,6 +180,10 @@ class ObserverPostingTests(unittest.TestCase):
         for statement in store.INDEXES:
             connection.execute("DROP INDEX %s" % statement.split()[5])
         connection.execute("DROP TABLE event_targets")
+        for table in ("acts", "drafts", "labels"):   # what format 4 added
+            connection.execute("DROP TABLE %s" % table)
+        for name, _ in reversed(store.INVOCATION_ADDED):
+            connection.execute("ALTER TABLE invocations DROP COLUMN %s" % name)
         for name, _ in reversed(store.ADDED):
             connection.execute("ALTER TABLE events DROP COLUMN %s" % name)
         connection.execute("UPDATE meta SET value='1' WHERE key='format'")
@@ -408,7 +412,13 @@ class ObserverPostingTests(unittest.TestCase):
                            store.copy_digests("idea", other)[0], 1))
         connection = sqlite3.connect(path)
         connection.execute("DROP INDEX event_targets_target")
+        connection.execute("DROP INDEX invocations_tier")
+        connection.execute("DROP INDEX drafts_state")
         connection.execute("DROP TABLE event_targets")
+        for table in ("acts", "drafts", "labels"):   # what format 4 added
+            connection.execute("DROP TABLE %s" % table)
+        for name, _ in reversed(store.INVOCATION_ADDED):
+            connection.execute("ALTER TABLE invocations DROP COLUMN %s" % name)
         connection.executemany("INSERT INTO events(eventkey,source_id,candidate,review,body,payload_hash,state,reason,"
                                "created,updated,body_hash,held) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", filler)
         connection.execute("UPDATE meta SET value='2' WHERE key='format'")

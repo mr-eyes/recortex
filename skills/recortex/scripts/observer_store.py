@@ -26,6 +26,9 @@ except ImportError:
     fcntl = None
 
 
+COUNT_MAX = 10 ** 9   # a token count the store keeps; anything else is stored as 0
+USAGE_DAYS = 35       # how long a call's token counts are kept
+MODEL = re.compile(r"[A-Za-z0-9_.:-]{1,100}")
 DEFAULT_BYTES = 128 * 1024 * 1024
 DEFAULT_PENDING = 10000
 TERMINAL = frozenset(("verified", "ignored", "rejected"))
@@ -41,7 +44,7 @@ SOURCE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}")
 KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
 HEX = re.compile(r"[0-9a-f]{64}")
 EVENT_KEY = re.compile(r"[0-9a-f]{32}")
-SCHEMA = """
+SCHEMA_3 = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS controls(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS cursors(stream TEXT PRIMARY KEY, position INTEGER NOT NULL);
@@ -59,18 +62,47 @@ CREATE TABLE IF NOT EXISTS transitions(eventkey TEXT NOT NULL, state TEXT NOT NU
 CREATE TABLE IF NOT EXISTS event_targets(eventkey TEXT NOT NULL, target TEXT NOT NULL, PRIMARY KEY(eventkey, target));
 """
 # Format 2 added to each event the digests its copies are looked up by and the held mark (copy_of, decision_of);
-# format 3, the memories each event changes the status of (event_targets, held_change_of).
-FORMAT = "3"
+# format 3, the memories each event changes the status of (event_targets, held_change_of); format 4 (1.5.0), the
+# tier, model, job and token counts of each call (the caps' ledger and the usage view) and the tables of the acts the
+# observer did, of the drafts of the paper's text that wait for the user's answer, and of sorted stretches.
+FORMAT = "4"
 ADDED = (("body_hash", "TEXT NOT NULL DEFAULT ''"), ("words_hash", "TEXT NOT NULL DEFAULT ''"),
          ("held", "INTEGER NOT NULL DEFAULT 0"))
 TARGETS = ("CREATE TABLE IF NOT EXISTS event_targets(eventkey TEXT NOT NULL, target TEXT NOT NULL, PRIMARY KEY(eventkey, "
            "target));\n")
-SCHEMA_2 = SCHEMA.replace(TARGETS, "")
+SCHEMA_2 = SCHEMA_3.replace(TARGETS, "")
 SCHEMA_1 = SCHEMA_2.replace(", body_hash TEXT NOT NULL DEFAULT '', words_hash TEXT NOT NULL DEFAULT '',\n held INTEGER "
                             "NOT NULL DEFAULT 0)", ")")
+INVOCATION_ADDED = (("tier", "TEXT NOT NULL DEFAULT ''"), ("model", "TEXT NOT NULL DEFAULT ''"),
+                    ("job", "TEXT NOT NULL DEFAULT ''"), ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+                    ("output_tokens", "INTEGER NOT NULL DEFAULT 0"), ("cache_read", "INTEGER NOT NULL DEFAULT 0"),
+                    ("cache_write", "INTEGER NOT NULL DEFAULT 0"))
+NEW_TABLES = """
+CREATE TABLE IF NOT EXISTS acts(id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, kind TEXT NOT NULL,
+ issue INTEGER NOT NULL DEFAULT 0, comment INTEGER NOT NULL DEFAULT 0, numbers TEXT NOT NULL DEFAULT '[]',
+ backup TEXT NOT NULL DEFAULT '', undone INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS drafts(id TEXT PRIMARY KEY, topic INTEGER NOT NULL, headings TEXT NOT NULL,
+ folder TEXT NOT NULL, base_hash TEXT NOT NULL, due_hash TEXT NOT NULL DEFAULT '', state TEXT NOT NULL,
+ reason TEXT NOT NULL DEFAULT '', until REAL NOT NULL DEFAULT 0, created REAL NOT NULL, updated REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS labels(batch TEXT PRIMARY KEY, sources TEXT NOT NULL, labels TEXT NOT NULL,
+ state TEXT NOT NULL DEFAULT 'waiting', created REAL NOT NULL, updated REAL NOT NULL);
+"""
+SCHEMA = (SCHEMA_3.replace("output_hash TEXT NOT NULL DEFAULT '');", "output_hash TEXT NOT NULL DEFAULT '', " +
+                           ", ".join("%s %s" % pair for pair in INVOCATION_ADDED) + ");") + NEW_TABLES)
+SCHEMAS = {"1": SCHEMA_1, "2": SCHEMA_2, "3": SCHEMA_3, "4": SCHEMA}
 INDEXES_2 = ("CREATE INDEX IF NOT EXISTS events_body ON events(body_hash)",
              "CREATE INDEX IF NOT EXISTS events_words ON events(words_hash)")
-INDEXES = INDEXES_2 + ("CREATE INDEX IF NOT EXISTS event_targets_target ON event_targets(target)",)
+INDEXES_3 = INDEXES_2 + ("CREATE INDEX IF NOT EXISTS event_targets_target ON event_targets(target)",)
+INDEXES = INDEXES_3 + ("CREATE INDEX IF NOT EXISTS invocations_tier ON invocations(tier, created)",
+                       "CREATE INDEX IF NOT EXISTS drafts_state ON drafts(state)")
+INDEX_SETS = {"2": INDEXES_2, "3": INDEXES_3, "4": INDEXES}
+LOOKUP_FORMATS = ("3", FORMAT)   # the formats that hold the tables the lookups read; a read-only older one cannot
+ACT_KINDS = ("memory", "task_opened", "steps_added", "step_marked", "task_rendered", "task_closed", "hub_rendered",
+             "summary", "board", "draft_proposed", "draft_applied")
+DRAFT_STATES = ("waiting", "refused", "stale", "applied", "dropped", "later")
+DRAFT_ID = re.compile(r"[0-9a-f]{8}")
+BATCH = re.compile(r"[0-9a-f]{32}")
+BACKUP = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")  # the name of a file in the private folder, never a path
 STATUS_KEYS = ("replaces", "instead", "checks")  # the links that change an earlier memory's status
 # Reasons an earlier queue kept an event for that are no longer given: back-filled as held.
 EARLIER_HELD = ("sensitive_project", "confidentiality", "sheet_not_approved")
@@ -88,6 +120,11 @@ def canonical(value):
 
 def candidate_hash(candidate):
     return hashlib.sha256(canonical(candidate).encode("utf-8")).hexdigest()
+
+
+def _count(value):
+    """A token count from a model call's usage: an integer from 0 to 10^9, else 0. A bool, a float or a text is no count."""
+    return value if type(value) is int and 0 <= value <= COUNT_MAX else 0
 
 
 def _id(value):
@@ -367,8 +404,8 @@ class Store:
         if "meta" not in actual:
             raise StoreError("corrupt")
         meta = dict(self.db.execute("SELECT key,value FROM meta"))
-        version = meta.get("format") if meta.get("format") in ("1", "2", FORMAT) else FORMAT
-        for statement in {"1": SCHEMA_1, "2": SCHEMA_2}.get(version, SCHEMA).split(";"):
+        version = meta.get("format") if meta.get("format") in SCHEMAS else FORMAT
+        for statement in SCHEMAS[version].split(";"):
             if not statement.strip():
                 continue
             expected = re.sub(r"\s+", " ", statement.replace(" IF NOT EXISTS", "")).strip()
@@ -377,7 +414,7 @@ class Store:
                 raise StoreError("corrupt")
         if version != "1":
             indexes = dict(self.db.execute("SELECT name,sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"))
-            for statement in INDEXES if version == FORMAT else INDEXES_2:
+            for statement in INDEX_SETS[version]:
                 expected = statement.replace(" IF NOT EXISTS", "")
                 if re.sub(r"\s+", " ", indexes.get(expected.split()[2]) or "").strip() != expected:
                     raise StoreError("corrupt")
@@ -389,24 +426,34 @@ class Store:
     def _migrate(self):
         """An earlier format to the current one in one transaction. From format 1, the columns and indexes are added
         and every event's digests and held mark are back-filled, so that a copy of an earlier event is found as a copy
-        of a new one is; from format 1 or 2, the table of the memories each event changes is made and back-filled."""
+        of a new one is; from format 1 or 2, the table of the memories each event changes is made and back-filled; from
+        any earlier one, the invocations gain their tier, model, job and token columns (a call recorded before has no
+        tier and counts as a middle call) and the tables of acts, drafts and labels are made."""
         with self.transaction():
             if self.format == "1":
                 for name, kind in ADDED:
                     self.db.execute("ALTER TABLE events ADD COLUMN %s %s" % (name, kind))
                 for statement in INDEXES_2:
                     self.db.execute(statement)
-            rows = self.db.execute("SELECT eventkey,candidate,reason FROM events").fetchall()
-            if self.format == "1":
+            if self.format in ("1", "2"):
+                rows = self.db.execute("SELECT eventkey,candidate,reason FROM events").fetchall()
+                if self.format == "1":
+                    for row in rows:
+                        candidate = json.loads(row["candidate"])
+                        body_hash, words_hash = copy_digests(candidate.get("kind"), candidate.get("body"))
+                        self.db.execute("UPDATE events SET body_hash=?,words_hash=?,held=? WHERE eventkey=?",
+                                        (body_hash, words_hash, int(_held_before(row["reason"])), row["eventkey"]))
+                self.db.execute(TARGETS)
+                self.db.execute(INDEXES_3[-1])
                 for row in rows:
-                    candidate = json.loads(row["candidate"])
-                    body_hash, words_hash = copy_digests(candidate.get("kind"), candidate.get("body"))
-                    self.db.execute("UPDATE events SET body_hash=?,words_hash=?,held=? WHERE eventkey=?",
-                                    (body_hash, words_hash, int(_held_before(row["reason"])), row["eventkey"]))
-            self.db.execute(TARGETS)
-            self.db.execute(INDEXES[-1])
-            for row in rows:
-                self._store_targets(row["eventkey"], json.loads(row["candidate"]).get("body"))
+                    self._store_targets(row["eventkey"], json.loads(row["candidate"]).get("body"))
+            for name, kind in INVOCATION_ADDED:
+                self.db.execute("ALTER TABLE invocations ADD COLUMN %s %s" % (name, kind))
+            for statement in NEW_TABLES.split(";"):
+                if statement.strip():
+                    self.db.execute(statement)
+            for statement in INDEXES[len(INDEXES_3):]:
+                self.db.execute(statement)
             self.db.execute("UPDATE meta SET value=? WHERE key='format'", (FORMAT,))
         self.format = FORMAT
 
@@ -540,25 +587,86 @@ class Store:
                                "ORDER BY created,source_id LIMIT ?", (max(1, min(10000, int(limit))),))
         return [self.observation(row[0]) for row in rows]
 
-    def reserve_invocation(self, purpose, limit=60, window_seconds=86400):
+    def _tier_of(self, purpose, tier=None):
+        import observer_runtime as runtime  # here: the hooks open the store on every Bash call
+        chosen = tier or runtime.TIER_OF.get(purpose) or runtime.OTHER_TIER.get(purpose, "middle")
+        if chosen not in runtime.TIERS:
+            raise StoreError("invalid_reason")
+        return chosen, runtime
+
+    def reserve_invocation(self, purpose, limit=None, window_seconds=86400, tier=None, tokens=None):
+        """Reserve one call of `purpose` on its tier (observer_runtime.TIER_OF, or `tier` for a purpose that has none) and
+        return its id, or None when the tier's calls in the window have reached `limit` (never above the tier's
+        default cap) or its recorded tokens have reached `tokens` (never above the tier's default budget). The budget
+        stops the next call; a call is never cut short."""
         _reason(purpose)
+        chosen, runtime = self._tier_of(purpose, tier)
+        ceiling = runtime.DEFAULTS[runtime.CALL_CAPS[chosen]]
+        budget_ceiling = runtime.DEFAULTS[runtime.TOKEN_BUDGETS[chosen]]
+        cap = ceiling if limit is None else min(ceiling, max(0, int(limit)))
+        budget = budget_ceiling if tokens is None else min(budget_ceiling, max(0, int(tokens)))
+        job = runtime.JOB_OF.get(purpose, "")
         now = time.time()
         with self.transaction():
             window = max(86400, min(168 * 3600, int(window_seconds)))
-            count = self.db.execute("SELECT COUNT(*) FROM invocations WHERE created>?", (now - window,)).fetchone()[0]
-            if count >= min(60, max(0, int(limit))):
+            # A call recorded before format 4 has no tier and counts as a middle call.
+            row = self.db.execute("SELECT COUNT(*), COALESCE(SUM(input_tokens + output_tokens), 0) FROM invocations "
+                                  "WHERE created>? AND (tier=? OR (tier='' AND ?='middle'))",
+                                  (now - window, chosen, chosen)).fetchone()
+            if row[0] >= cap or row[1] >= budget:
                 return None
-            return self.db.execute("INSERT INTO invocations(purpose,created) VALUES (?,?)", (purpose, now)).lastrowid
+            return self.db.execute("INSERT INTO invocations(purpose,created,tier,job) VALUES (?,?,?,?)",
+                                   (purpose, now, chosen, job)).lastrowid
 
-    def complete_invocation(self, ident, success, output_hash=""):
+    def complete_invocation(self, ident, success, output_hash="", usage=None, model=""):
+        """Close a reservation. `usage` is the call's usage as the runtime returned it: only the four token counts are
+        read, each kept as an integer from 0 to 10^9 and else as 0; the input tokens are the fresh, cache-write and
+        cache-read ones added, as the evaluation counts them. `model` is kept when it is a model name."""
         if output_hash and not HEX.fullmatch(output_hash):
             raise StoreError("invalid_review")
+        usage = usage if isinstance(usage, dict) else {}
+        fresh, written, read, out = (_count(usage.get(key)) for key in (
+            "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"))
+        name = model if isinstance(model, str) and MODEL.fullmatch(model) else ""
         with self.transaction():
             row = self.db.execute("SELECT completed FROM invocations WHERE id=?", (ident,)).fetchone()
             if row is None or row[0] is not None:
                 raise StoreError("invalid_review")
-            self.db.execute("UPDATE invocations SET completed=?,success=?,output_hash=? WHERE id=?",
-                            (time.time(), int(success is True), output_hash, ident))
+            self.db.execute("UPDATE invocations SET completed=?,success=?,output_hash=?,model=?,input_tokens=?,"
+                            "output_tokens=?,cache_read=?,cache_write=? WHERE id=?",
+                            (time.time(), int(success is True), output_hash, name, min(COUNT_MAX, fresh + written + read),
+                             out, read, written, ident))
+
+    def usage_today(self, window_seconds=86400):
+        """{tier: {"calls", "input_tokens", "output_tokens"}} for the window, every tier present: what the caps count.
+        Calls recorded before format 4 count as middle calls."""
+        import observer_runtime as runtime
+        since = time.time() - max(86400, min(168 * 3600, int(window_seconds)))
+        out = {tier: {"calls": 0, "input_tokens": 0, "output_tokens": 0} for tier in runtime.TIERS}
+        for row in self.db.execute("SELECT CASE WHEN tier='' THEN 'middle' ELSE tier END, COUNT(*), SUM(input_tokens), "
+                                   "SUM(output_tokens) FROM invocations WHERE created>? GROUP BY 1", (since,)):
+            if row[0] in out:
+                out[row[0]] = {"calls": row[1], "input_tokens": row[2] or 0, "output_tokens": row[3] or 0}
+        return out
+
+    def usage_rows(self, days=30):
+        """The calls of the last `days` days (1 to 35), newest first, as plain rows for the usage view: when, tier, job,
+        model, whether it succeeded and its token counts. Nothing but numbers, a tier, a job and a model name."""
+        since = time.time() - max(1, min(USAGE_DAYS, int(days))) * 86400
+        rows = self.db.execute("SELECT created, CASE WHEN tier='' THEN 'middle' ELSE tier END, job, model, success, "
+                               "input_tokens, output_tokens, cache_read, cache_write FROM invocations WHERE created>? "
+                               "ORDER BY created DESC, id DESC", (since,))
+        return [{"at": row[0], "tier": row[1], "job": row[2], "model": row[3], "success": row[4] == 1,
+                 "input_tokens": row[5], "output_tokens": row[6], "cache_read": row[7], "cache_write": row[8]}
+                for row in rows]
+
+    def expire_usage(self, days=USAGE_DAYS):
+        """Zero the token counts of calls older than `days` (35): their times stay, as the cap's ledger needs them."""
+        cutoff = time.time() - max(1, int(days)) * 86400
+        with self.transaction():
+            return self.db.execute("UPDATE invocations SET input_tokens=0,output_tokens=0,cache_read=0,cache_write=0 "
+                                   "WHERE created<? AND input_tokens+output_tokens+cache_read+cache_write>0",
+                                   (cutoff,)).rowcount
 
     def _observation_state(self, source_id, state, reason=""):
         if state not in STATES or self.observation(source_id) is None:
@@ -717,7 +825,7 @@ class Store:
         targets = status_targets(draft)
         if not targets:
             return None
-        if self.format != FORMAT:
+        if self.format not in LOOKUP_FORMATS:
             raise StoreError("lookup_unavailable")
         try:
             row = self.db.execute("SELECT e.eventkey FROM event_targets t JOIN events e ON e.eventkey=t.eventkey "
@@ -729,7 +837,7 @@ class Store:
             raise StoreError("lookup_unavailable") from error
 
     def _lookup(self, where, digest):
-        if self.format != FORMAT:
+        if self.format not in LOOKUP_FORMATS:
             raise StoreError("lookup_unavailable")  # a format 1 queue, read only: the next writable open migrates it
         try:
             row = self.db.execute("SELECT eventkey FROM events WHERE %s ORDER BY created DESC,eventkey LIMIT 1" % where,
@@ -797,7 +905,7 @@ class Store:
         """The events the automatic gate held back for the user's answer (observer_holds.ANSWER_REASONS), oldest
         first: deferred, and held."""
         reasons = observer_holds.ANSWER_REASONS
-        if self.format != FORMAT:
+        if self.format not in LOOKUP_FORMATS:
             raise StoreError("lookup_unavailable")  # a format 1 queue, read only: the next writable open migrates it
         try:
             rows = self.db.execute("SELECT eventkey FROM events WHERE state='deferred' AND held=1 AND reason IN (%s) "
@@ -832,6 +940,145 @@ class Store:
             self.db.execute("INSERT INTO transitions VALUES (?,?,?)", (key, state, time.time()))
             for row in self.db.execute("SELECT source_id FROM event_sources WHERE eventkey=?", (key,)):
                 self._observation_state(row[0], state, reason)
+
+    # ------------------------------------------------------------------ what the observer did (acts)
+
+    def add_act(self, kind, issue=0, comment=0, numbers=(), backup="", at=None):
+        """Record one act: its kind (ACT_KINDS), the issue and comment it is about (0 for none), up to 20 whole numbers
+        (counts, never text) and the name of the backup file it left, when there is one. Returns the act's id."""
+        if kind not in ACT_KINDS or backup is None or (backup and not BACKUP.fullmatch(backup)):
+            raise StoreError("invalid_act")
+        values = [issue, comment] + list(numbers)
+        if (len(numbers) > 20 or any(type(value) is not int or not 0 <= value <= COUNT_MAX for value in values)
+                or not isinstance(at if at is not None else 0.0, (int, float))):
+            raise StoreError("invalid_act")
+        with self.transaction():
+            return self.db.execute("INSERT INTO acts(at,kind,issue,comment,numbers,backup) VALUES (?,?,?,?,?,?)",
+                                   (time.time() if at is None else float(at), kind, issue, comment,
+                                    canonical(list(numbers)), backup)).lastrowid
+
+    def acts(self, days=7, kinds=None):
+        """The acts of the last `days` days (1 to 35), newest first, as dicts with their numbers as a list."""
+        since = time.time() - max(1, min(USAGE_DAYS, int(days))) * 86400
+        rows = self.db.execute("SELECT id,at,kind,issue,comment,numbers,backup,undone FROM acts WHERE at>? "
+                               "ORDER BY at DESC, id DESC", (since,)).fetchall()
+        return [{"id": row[0], "at": row[1], "kind": row[2], "issue": row[3], "comment": row[4],
+                 "numbers": json.loads(row[5]), "backup": row[6], "undone": row[7] == 1}
+                for row in rows if kinds is None or row[2] in kinds]
+
+    def act(self, ident):
+        """One act by its id, or None."""
+        if type(ident) is not int:
+            return None
+        row = self.db.execute("SELECT id,at,kind,issue,comment,numbers,backup,undone FROM acts WHERE id=?",
+                              (ident,)).fetchone()
+        return None if row is None else {"id": row[0], "at": row[1], "kind": row[2], "issue": row[3], "comment": row[4],
+                                         "numbers": json.loads(row[5]), "backup": row[6], "undone": row[7] == 1}
+
+    def mark_undone(self, ident):
+        """Mark an act as undone, once. False when there is no such act or it was undone before."""
+        if type(ident) is not int:
+            return False
+        with self.transaction():
+            return self.db.execute("UPDATE acts SET undone=1 WHERE id=? AND undone=0", (ident,)).rowcount == 1
+
+    # ------------------------------------------------------------------ drafts of the paper's text that wait
+
+    def add_draft(self, topic, headings, folder, base_hash, due_hash="", state="waiting", reason=""):
+        """Record a draft of the paper's text. Returns its short id (8 hex digits). `state` is "waiting" for a draft
+        that waits for the user and "refused" for one the checks refused; the folder is where the keeper kept it."""
+        if (type(topic) is not int or topic < 1 or topic > COUNT_MAX or not isinstance(headings, (list, tuple))
+                or not 1 <= len(headings) <= 12
+                or any(not isinstance(h, str) or not 1 <= len(h) <= 120 or any(ord(c) < 32 for c in h) for h in headings)
+                or not isinstance(folder, str) or not 1 <= len(folder) <= 1000 or "\x00" in folder
+                or not isinstance(base_hash, str) or not HEX.fullmatch(base_hash)
+                or not isinstance(due_hash, str) or (due_hash and not HEX.fullmatch(due_hash))
+                or state not in ("waiting", "refused") or (reason and not KEY.fullmatch(reason))):
+            raise StoreError("invalid_draft")
+        now = time.time()
+        ident = hashlib.sha256(canonical([self.repo, topic, base_hash, due_hash, now, folder]).encode("utf-8")).hexdigest()[:8]
+        with self.transaction():
+            self.db.execute("INSERT INTO drafts(id,topic,headings,folder,base_hash,due_hash,state,reason,created,updated) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?)", (ident, topic, canonical(list(headings)), folder, base_hash,
+                                                              due_hash, state, reason, now, now))
+        return ident
+
+    def draft(self, ident):
+        if not isinstance(ident, str) or not DRAFT_ID.fullmatch(ident):
+            return None
+        row = self.db.execute("SELECT id,topic,headings,folder,base_hash,due_hash,state,reason,until,created,updated "
+                              "FROM drafts WHERE id=?", (ident,)).fetchone()
+        if row is None:
+            return None
+        return {"id": row[0], "topic": row[1], "headings": json.loads(row[2]), "folder": row[3], "base_hash": row[4],
+                "due_hash": row[5], "state": row[6], "reason": row[7], "until": row[8], "created": row[9],
+                "updated": row[10]}
+
+    def drafts(self, states=None):
+        """The drafts in `states` (default: all), oldest first."""
+        states = tuple(states or DRAFT_STATES)
+        if any(state not in DRAFT_STATES for state in states):
+            raise StoreError("invalid_draft")
+        rows = self.db.execute("SELECT id FROM drafts WHERE state IN (%s) ORDER BY created,id" % ",".join("?" * len(states)),
+                               states).fetchall()
+        return [self.draft(row[0]) for row in rows]
+
+    def set_draft(self, ident, state, reason="", until=0):
+        """Move a draft to `state`: "later" with the time until which it is not asked about again, "dropped", "stale",
+        "applied" or "refused" with a fixed reason. False when there is no such draft."""
+        if state not in DRAFT_STATES or (reason and not KEY.fullmatch(reason)) or not isinstance(until, (int, float)) \
+                or not math.isfinite(until) or until < 0 or not isinstance(ident, str) or not DRAFT_ID.fullmatch(ident):
+            raise StoreError("invalid_draft")
+        with self.transaction():
+            return self.db.execute("UPDATE drafts SET state=?,reason=?,until=?,updated=? WHERE id=?",
+                                   (state, reason, float(until), time.time(), ident)).rowcount == 1
+
+    # ------------------------------------------------------------------ sorted stretches that wait for a draft
+
+    def save_labels(self, batch, sources, labels):
+        """Keep the labels the sorter gave a stretch (checked by code first), so that a draft the budget or a failure
+        postponed does not need a second sort. `batch` is 32 hex digits, `sources` the stretch's source ids."""
+        if not isinstance(batch, str) or not BATCH.fullmatch(batch) or not isinstance(sources, list) \
+                or not 1 <= len(sources) <= 64 or not isinstance(labels, list) or len(labels) > 24:
+            raise StoreError("invalid_labels")
+        sources = [_id(source) for source in sources]
+        payload = canonical(labels)
+        if len(payload) > 65536:
+            raise StoreError("invalid_labels")
+        now = time.time()
+        with self.transaction():
+            self.db.execute("INSERT OR REPLACE INTO labels(batch,sources,labels,state,created,updated) VALUES "
+                            "(?,?,?,'waiting',?,?)", (batch, canonical(sources), payload, now, now))
+
+    def waiting_labels(self):
+        rows = self.db.execute("SELECT batch,sources,labels FROM labels WHERE state='waiting' ORDER BY created,batch")
+        return [{"batch": row[0], "sources": json.loads(row[1]), "labels": json.loads(row[2])} for row in rows.fetchall()]
+
+    def finish_labels(self, batch):
+        """The stretch's labels are drafted (or dropped for good); they no longer wait."""
+        if not isinstance(batch, str) or not BATCH.fullmatch(batch):
+            raise StoreError("invalid_labels")
+        with self.transaction():
+            return self.db.execute("UPDATE labels SET state='done',updated=? WHERE batch=? AND state='waiting'",
+                                   (time.time(), batch)).rowcount == 1
+
+    # ------------------------------------------------------------------ everything that waits for the user's answer
+
+    def waiting(self):
+        """The one list of what needs the user's answer, oldest first, each as {"kind", "key", "short", "created", ...}:
+        a held memory (kind "held", key its event key) and a draft of the paper's text that waits (kind "draft", key its
+        short id; one put off with "later" waits again when its time has passed). The kinds that open or close a task
+        join this list with the publisher's level gate."""
+        out = []
+        for event in self.waiting_for_answer():
+            out.append({"kind": "held", "key": event["eventkey"], "short": event["eventkey"][:8],
+                        "created": event["created"], "event": event})
+        now = time.time()
+        for draft in self.drafts(states=("waiting", "later")):
+            if draft["state"] == "waiting" or draft["until"] <= now:
+                out.append({"kind": "draft", "key": draft["id"], "short": draft["id"], "created": draft["created"],
+                            "draft": draft})
+        return sorted(out, key=lambda item: (item["created"], item["key"]))
 
     def holds(self):
         return self.get_control("holds", [])
@@ -869,6 +1116,7 @@ class Store:
         return {"observations": dict(self.db.execute("SELECT state,COUNT(*) FROM observations GROUP BY state")),
                 "events": dict(self.db.execute("SELECT state,COUNT(*) FROM events GROUP BY state")),
                 "invocations_24h": self.db.execute("SELECT COUNT(*) FROM invocations WHERE created>?", (time.time() - 86400,)).fetchone()[0],
+                "tiers_24h": self.usage_today() if self.format == FORMAT else {},
                 "bytes": os.path.getsize(self.path), "max_bytes": self.max_bytes, "max_pending": self.max_pending}
 
     def expire_handled(self, days=7):
@@ -880,6 +1128,8 @@ class Store:
                 if candidate.pop("excerpts", None) is not None:
                     # Keep the original reviewed hash in review; verified receipts remain immutable.
                     self.db.execute("UPDATE events SET candidate=? WHERE eventkey=?", (canonical(candidate), row["eventkey"]))
+        if self.format == FORMAT:
+            self.expire_usage()
         return len(rows)
 
     @contextlib.contextmanager
