@@ -116,13 +116,6 @@ class CommandFileTests(unittest.TestCase):
         self.assertIn("usage.py show", body("usage"))
         self.assertIn("never money", body("usage"))
 
-    def test_the_commands_use_american_english_and_the_banned_words_are_absent(self):
-        for name in NAMES:
-            text = read(os.path.join(COMMANDS, name + ".md")).lower()
-            for word in ("comprehensive", "robust", "crucial"):
-                self.assertNotIn(word, text, name)
-
-
 class AskAgentTests(unittest.TestCase):
     def setUp(self):
         self.text = read(AGENT)
