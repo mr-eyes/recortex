@@ -1034,7 +1034,8 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 handled.add(primary)
                 continue
             review = {"accepted": True, "candidate_hash": digest, "reservation_id": review_id}
-            if observer_publisher.status_change(candidate["body"]) or any(link["key"] == "against" for link in candidate["links"]):
+            if observer_publisher.status_change(candidate["body"]) or any(
+                    link["key"] in observer_publisher.STATUS_LINKS for link in candidate["links"]):
                 review["status_authority"] = status_authority(candidate, supplied)
             eventkey = store.review_complete(primary, candidate, review)
             if eventkey is None:

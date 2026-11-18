@@ -322,6 +322,17 @@ class MarkPublishTests(PublisherBox):
         self.assertEqual([], self.log("issue comment"))
         self.assertEqual(1, len([e for e in [self.event(key)] if "against=9303" in e["body"]]))
 
+    def test_checks_without_status_authority_is_held_and_with_it_is_posted(self):
+        """checks= backs a plan part: the publisher holds it as it holds against=, so the worker must give the authority
+        its cited message gives (test_jobs_sort), or every backed claim waits for the user's answer."""
+        key, _ = self.result(links=[{"key": "checks", "part": 9302}])
+        with self.assertRaisesRegex(publisher.PublishError, "status_change"):
+            self.pub(key)
+        self.assertEqual([], self.log("issue comment"))
+        key, _ = self.queue("result", 5, tj.result_text(), links=[{"key": "checks", "part": 9103}],   # the idea it tried
+                            review={"status_authority": "agent"})
+        self.assertEqual("verified", self.pub(key)["state"])
+
     def test_the_composed_body_is_frozen_once_it_is_sending(self):
         key, _ = self.result(marks=[{"task": 7, "steps": [2]}])
         out = self.pub(key)

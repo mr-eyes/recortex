@@ -656,6 +656,16 @@ class Queued(Scripted):
                 [draft('result', RESULT, [1], links=[{'key': 'against', 'part': 1}])]))
         self.assertEqual('agent', self.events(report)[0]['review']['status_authority'])
 
+    def test_a_checks_link_carries_the_status_authority_the_cited_message_gives(self):
+        """checks= backs a plan part, a status link as against= is: the worker must give it the authority its cited
+        message gives, or every backed claim waits for the user's answer at publish."""
+        self.capture('I ran the speed benchmark: median 1.31 s over 5 runs.', role='assistant')
+        with self.index():
+            report = self.run_worker(self.scripted(
+                [label('memory', 'result', [1]), label('paper_part', sources=[1], parts=[1])],
+                [draft('result', RESULT, [1], links=[{'key': 'checks', 'part': 1}])]))
+        self.assertEqual('agent', self.events(report)[0]['review']['status_authority'])
+
     def test_an_item_for_the_to_do_task_goes_on_it_and_carries_neither_title_nor_topic(self):
         self.capture('Remind me to rerun with the other seed.')
         one = STEPS.replace('Yes, do the two steps in that order.', 'Remind me to rerun with the other seed.').replace(
