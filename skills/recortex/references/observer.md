@@ -13,7 +13,7 @@ One setting, the level, per machine and project folder, kept with the observer's
 | Level | Runs on its own | Asks you first |
 |---|---|---|
 | Notes only | memories, the status summary | a held memory, as before |
-| Assistant | the above, plus to-do items on an existing "To do" task, steps checked off, task lists and the hub's active list kept current, the reports | opening a task (the "To do" task too), closing a task, and every draft of the paper's text |
+| Assistant | the above, plus to-do items on an existing "To do" task, steps checked off, task lists and the hub's active list kept current, the reports | opening a task (the "To do" task too), closing a task, a held memory and every draft of the paper's text |
 | Everything | all of the above, plus opening and closing tasks, the board and the sub-issue links | every draft of the paper's text, and a held memory |
 
 At every level the paper's text is only proposed. In shadow mode nothing is posted, opened, closed or rendered at any level; reviewed events stay in the queue for the session.
