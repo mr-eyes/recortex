@@ -230,6 +230,25 @@ class CommandTests(tj.Programs, tj.tq.Box):
         self.in_process()
         self.assertFalse(grants.held(runtime.folder_key(self.project), [("level", "notes")]))
 
+    def test_a_second_run_of_the_chain_with_nothing_to_raise_still_ends_in_the_mode_it_began_in(self):
+        self.answer(level="notes")
+        self.assertEqual(0, self.tool("setup.py", "observer", "--level", "notes", "--yes", env=self.env_claude).returncode)
+        self.assertEqual("automatic", self.entry()["settings"]["mode"])
+        done = self.tool("setup.py", "observer", "--level", "notes", "--yes", env=self.env_claude)   # no new answer, nothing raised
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn("observer: on at the level Notes only in automatic mode", done.stdout)
+        self.assertEqual("automatic", self.entry()["settings"]["mode"])   # not left in shadow by its own first step
+
+    def test_the_users_own_terminal_runs_the_whole_chain_with_no_answer(self):
+        import observer
+        import setup as wizard
+        self.in_process()
+        with mock.patch.object(observer, "on_terminal", return_value=True), \
+                mock.patch.object(grants, "take", side_effect=AssertionError("a terminal needs no grant")):
+            word = wizard.chain_pass(runtime.folder_key(self.project), "notes", None, [("level", "notes")])
+        self.assertTrue(grants.in_pass(runtime.folder_key(self.project), [("level", "notes")], word))
+        grants.end_pass(runtime.folder_key(self.project), word)
+
     def test_after_the_chain_the_pass_is_gone(self):
         self.answer(level="notes")
         self.assertEqual(0, self.tool("setup.py", "observer", "--level", "notes", "--yes", env=self.env_claude).returncode)

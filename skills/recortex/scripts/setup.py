@@ -1346,21 +1346,28 @@ def observer_step(answers, root, python, dry):
     # Turning the observer on, raising its level, starting posting or adding the stronger model from a session needs the
     # user's recorded answer to the question about it (observer_grants); the user's own terminal needs none. The answer
     # is taken once here, and the commands of this chain go through on a pass that ends with it.
-    import observer
     import observer_grants
-    folder, word = observer_runtime.folder_key(root), None
-    wanted = [] if observer.on_terminal() else observer_grants.needs(stored_observer(repo, root), level,
-                                                                     strong or None, mode)
-    if wanted:
-        if not observer_grants.take(folder, wanted):
-            print("observer: not turned on. " + observer_grants.UNANSWERED)
-            return
-        word = observer_grants.start_pass(folder, level, strong or None)
+    folder = observer_runtime.folder_key(root)
+    word = chain_pass(folder, level, strong or None, observer_grants.needs(stored_observer(repo, root), level,
+                                                                          strong or None, mode))
+    if word is None:
+        print("observer: not turned on. " + observer_grants.UNANSWERED)
+        return
     try:
         run_observer_steps(steps, options, level, mode, model, strong, root, environment, word)
     finally:
-        if word:
-            observer_grants.end_pass(folder, word)
+        observer_grants.end_pass(folder, word)
+
+
+def chain_pass(folder, level, strong, wanted):
+    """The pass for the commands of one chain, or None when the user's answer is missing. Every chain gets one: its first
+    command puts posting back to shadow, so that its last one asks again, and a second run with nothing to raise would
+    stop half way. The grants of `wanted` are taken once, unless this runs on the user's own terminal, which needs none."""
+    import observer
+    import observer_grants
+    if wanted and not observer.on_terminal() and not observer_grants.take(folder, wanted):
+        return None
+    return observer_grants.start_pass(folder, level, strong)
 
 
 def run_observer_steps(steps, options, level, mode, model, strong, root, environment, word):
