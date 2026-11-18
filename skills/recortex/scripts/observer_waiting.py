@@ -128,7 +128,10 @@ def print_listing(store, as_json, emit, clean, header):
     """`observer.py pending --waiting`: JSON with --json, else plain text under the data header."""
     items = listing(store) if store is not None else []   # no queue yet: nothing waits
     if as_json:
-        emit({"waiting": items, "note": NOTE})
+        # The titles and plain lines are written by a model: cleaned as the text form cleans them, and the data header
+        # comes with them, since a session reads this form as it reads the other.
+        emit({"data_header": header, "note": NOTE,
+              "waiting": [dict(item, question=clean(item["question"], 600), line=clean(item["line"], 600)) for item in items]})
         return 0
     print(header)
     print(NOTE)
