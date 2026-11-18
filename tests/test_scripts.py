@@ -12925,7 +12925,8 @@ class PackagingTests(unittest.TestCase):
         auditor = " ".join(recortex.read_text(os.path.join(ROOT, "agents", "record-auditor.md")).split())
         self.assertIn("10. A record with results and no `fields` entry in `.recortex.json`: say that the briefs can be "
                       "fitted to the project's field, to be put to the user once.", auditor)
-        self.assertEqual(5, len([n for n in os.listdir(os.path.join(ROOT, "agents")) if n.endswith(".md")]))
+        # 1.5.0 adds the read-only ask agent (its own checks are in tests/test_jobs_commands.py)
+        self.assertEqual(6, len([n for n in os.listdir(os.path.join(ROOT, "agents")) if n.endswith(".md")]))
 
     def test_hook_configuration(self):
         hooks = self.read_json("hooks", "hooks.json")["hooks"]["SessionStart"]
