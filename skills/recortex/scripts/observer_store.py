@@ -487,12 +487,12 @@ class Store:
                 raise StoreError("raw_source_refused")
             source = _id(metadata.get("source_id"))
             for key, value in metadata.items():
-                if key in ("offset", "end", "observed_at"):
+                if key in ("offset", "end", "observed_at", "pair_offset", "pair_end"):
                     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
                         raise StoreError("invalid_source")
                 elif not isinstance(value, str) or len(value) > (4096 if key == "path" else 256):
                     raise StoreError("invalid_source")
-            for key in ("sha256", "content_sha256"):
+            for key in ("sha256", "content_sha256", "pair_sha256"):
                 if key in metadata and not HEX.fullmatch(metadata[key]):
                     raise StoreError("invalid_source")
             prepared.append((source, canonical(metadata)))
