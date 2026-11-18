@@ -64,6 +64,11 @@ def parser():
     release.add_argument("hold_id")
     discard = sub.add_parser("discard", help="drop a reviewed event that will not be posted; its excerpts then expire")
     discard.add_argument("eventkey")
+    drafts = sub.add_parser("drafts", help="the drafts of the paper's text that wait for the user's answer: list them, "
+                                          "--show ID what would change, or apply, later, drop ID")
+    drafts.add_argument("action", nargs="?", choices=("apply", "later", "drop"))
+    drafts.add_argument("draft", nargs="?", metavar="ID")
+    drafts.add_argument("--show", metavar="ID")
     context = sub.add_parser("context")
     context.add_argument("--query", default="")
     context.add_argument("--issue", type=int)
@@ -500,7 +505,8 @@ def main(argv=None):
         if args.command == "runtime-check" and not runtime.approval_valid(repo, config):
             emit({"code": "approval", "note": "Run observer.py enable --model MODEL --level LEVEL --yes first; the check is "
                                               "bound to the models chosen there."}); return 1
-        readonly = args.command in ("status", "pending", "holds") or getattr(args, "dry_run", False)
+        readonly = (args.command in ("status", "pending", "holds") or getattr(args, "dry_run", False)
+                    or (args.command == "drafts" and args.action is None))
         try:
             opened = observer_store.Store(repo, create=not readonly, readonly=readonly,
                          max_bytes=options["max_pending_bytes"], max_pending=options["max_pending_observations"], config=config)
@@ -556,6 +562,16 @@ def main(argv=None):
                 emit({"action": "discard", "eventkey": args.eventkey}); return 0
             if args.command == "holds":
                 emit({"holds": store.holds()}); return 0
+            if args.command == "drafts":
+                import observer_drafts
+                if args.show or args.action is None:
+                    return observer_drafts.show(store, args.show, repo, recortex.project_root()) if args.show \
+                        else observer_drafts.listing(store)
+                if args.draft is None:
+                    emit({"code": "draft_required"}); return 1
+                if args.action == "apply":
+                    return observer_drafts.apply(store, args.draft, repo, recortex.project_root())
+                return {"later": observer_drafts.later, "drop": observer_drafts.drop}[args.action](store, args.draft)
             if args.command in ("pause", "resume"):
                 scopes = ("capture", "publication") if args.scope == "all" else (args.scope,)
                 if args.command == "resume" and any(store.get_control(scope + "_paused", False) for scope in scopes):

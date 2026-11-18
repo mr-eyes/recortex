@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 
+import keeper_rules
 import names
 import observer_holds
 import observer_runtime
@@ -269,6 +270,39 @@ def _grant(store, data, project_root):
         store.grant_answer(key, answer)
 
 
+def _applied_draft(data):
+    """The short id of a Bash call that runs `observer.py drafts apply ID`, read as the shell splits it, or None."""
+    command = (data.get("tool_input") or {}).get("command") if isinstance(data.get("tool_input"), dict) else None
+    if data.get("tool_name") not in ("Bash", "bash") or not isinstance(command, str) or "drafts" not in command:
+        return None
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    if not any(os.path.basename(word) == "observer.py" for word in words):
+        return None
+    for n, word in enumerate(words[:-2]):
+        if word == "drafts" and words[n + 1] == "apply" and observer_store.DRAFT_ID.fullmatch(words[n + 2]):
+            return words[n + 2]
+    return None
+
+
+def _grant_draft(store, data, project_root):
+    """Before observer.py drafts apply ID: when the draft waits and the user answered "Approve" to the session's question
+    naming its short id and quoting its fixed line (keeper_rules.question_line; observer_sources.answered), a one-time
+    grant, which drafts apply consumes. Without it the command is refused (draft_unanswered)."""
+    short = _applied_draft(data)
+    if short is None:
+        return
+    draft = store.draft(short)
+    if draft is None or draft["state"] not in ("waiting", "later"):
+        return
+    answer = observer_sources.answered(data, project_root, short,
+                                       keeper_rules.question_line(draft["headings"], draft["topic"]), label="Approve")
+    if answer:
+        store.grant_answer(keeper_rules.grant_key(short), answer)
+
+
 def _entry_repo():
     """The repository whose holds apply here: the one this folder's private entry names, never the project file's,
     which a single edit could change. None without an entry; False when the approvals cannot be read or the entry
@@ -520,6 +554,7 @@ def _handle(event, data, config, repo, decision):
                 if not denial:
                     try:
                         _grant(store, data, project_root)
+                        _grant_draft(store, data, project_root)
                     except TimeoutError:
                         raise
                     except (observer_sources.SourceError, observer_store.StoreError, storage.StorageError, OSError,
