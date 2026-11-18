@@ -131,6 +131,13 @@ class ContributingTests(unittest.TestCase):
         self.assertIn("commands/", text)
         self.assertIn("SubagentStop", text)
 
+    def test_the_plugin_is_version_1_5_0_and_the_upgrade_entry_is_for_it(self):
+        import json
+        self.assertEqual("1.5.0", json.loads(read(".claude-plugin", "plugin.json"))["version"])
+        text = read("skills", "recortex", "references", "upgrading.md")
+        self.assertLess(text.index("## Version 1.5.0"), text.index("## Version 1.4.0"))
+        self.assertNotIn("## Version 1.5.0", text.split("## Version 1.4.0", 1)[1])
+
     def test_each_new_boundary_has_its_rule(self):
         text = read("CONTRIBUTING.md")
         for needed in ("The observer's levels", "The plan dialog and the question dialog", "The manuscript keeper",
