@@ -21,6 +21,17 @@ python3 -m http.server -d _site 8080
 page with no title, and on anything the page loads from another server. Without `--plugin` it takes the ref from
 `site.json` out of a clone of `plugin_repo` on GitHub.
 
+## Tests and tools
+
+```bash
+python3 -m unittest discover -s tests       # every check in check.py must fail when its guard is removed
+node tools/smoke.mjs http://127.0.0.1:8080  # search, theme switch, menu and "no outside request", in headless Chrome
+node tools/shoot.mjs .tmp/shots "home-1440-light|http://127.0.0.1:8080/|1440|light"   # screenshots
+```
+
+`tools/social-preview.html` is the source of `src/static/assets/social-preview.png`. The build and the tests run on
+Python 3.8 and newer.
+
 ## Publishing
 
 `.github/workflows/pages.yml` builds and checks the site on every push to `main`, then deploys it with the official

@@ -89,7 +89,7 @@ def fill_blocks(body):
 
 
 class Text(HTMLParser):
-    """Plain text of a fragment, cut into sections at each h2."""
+    """Plain text of a fragment, cut into sections at each h2 and h3."""
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -100,7 +100,7 @@ class Text(HTMLParser):
     def handle_starttag(self, tag, attrs):
         if tag in ("script", "style"):
             self.skip += 1
-        if tag == "h2":
+        if tag in ("h2", "h3"):
             attrs = dict(attrs)
             self.sections.append({"id": attrs.get("id", ""), "heading": "", "text": []})
             self.in_h2 = True
@@ -108,7 +108,7 @@ class Text(HTMLParser):
     def handle_endtag(self, tag):
         if tag in ("script", "style"):
             self.skip -= 1
-        if tag == "h2":
+        if tag in ("h2", "h3"):
             self.in_h2 = False
         if tag in ("p", "li", "div", "h1", "h2", "h3", "tr", "pre"):
             self.sections[-1]["text"].append(" ")
@@ -164,7 +164,7 @@ def build(out, plugin_args, run_checks):
                 heading = re.sub(r"\s+", " ", section["heading"]).strip()
                 if section["id"] or not heading:
                     index.append({"p": page["nav"], "h": heading, "u": page["path"] + ("#" + section["id"] if section["id"] else ""),
-                                  "x": text[:320] if heading else text[:200], "d": page["description"] if not heading else ""})
+                                  "x": text, "d": page["description"] if not heading else ""})
 
         def link(p, current=page):
             on = ' class="on" aria-current="page"' if p["id"] == current["id"] else ""
