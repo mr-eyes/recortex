@@ -350,7 +350,7 @@ class HookLineTests(Box):
         self.assertEqual(1, len(found), out)
         self.assertEqual(brief.SETUP_QUESTIONS % (2, "s"), found[0])   # the status line and the observer
         self.assertGreater(out.index(found[0]), out.index(brief.PROTOCOL))   # after the brief
-        self.assertIn("follow \"Setup questions\" in the recortex skill", found[0])
+        self.assertIn("run setup.py questions and ask what it lists as one multiple-choice batch", found[0])
 
     def test_the_count_is_one_with_a_singular_noun(self):
         self.put_state(machine={"status-line": self.entry("no")})
@@ -1441,7 +1441,8 @@ class StepCommandTests(Box):
         self.assertIn("question observer (added in 1.1.0; the answer is kept for: this machine and this folder)", done.stdout)
         self.put_state(machine={"status-line": self.entry("no")}, repos={REPO: {"observer": self.entry("no")}})
         self.assertEqual("no setup question is open\n", self.tool("setup.py", "questions").stdout)
-        self.assertEqual({"open": [], "unread": [], "count": 0}, json.loads(self.tool("setup.py", "questions", "--json").stdout))
+        self.assertEqual({"open": [], "unread": [], "count": 0, "run_noted": True},
+                         json.loads(self.tool("setup.py", "questions", "--json").stdout))
 
 
 # ---------------------------------------------------------------- the wizard and the questions
