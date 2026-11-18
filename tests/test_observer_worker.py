@@ -71,7 +71,7 @@ class WorkerTests(unittest.TestCase):
                                   'XDG_CONFIG_HOME':str(self.base/'config'),'HOME':str(self.base/'home'),
                                   'CLAUDE_CONFIG_DIR':str(self.base/'claude'),'CLAUDE_PROJECT_DIR':self.project},clear=True)
         env.start();self.addCleanup(env.stop)
-        self.config={'repo':REPO,'observer':{'enabled':True,'publisher_id':runtime.publisher_id(create=True)}}
+        self.config={'repo':REPO,'observer':{'enabled':True,'level':'everything','publisher_id':runtime.publisher_id(create=True)}}
         self.folder=Path(sources.project_directory(self.project));self.folder.mkdir(parents=True)
         for d in (self.folder,self.folder.parent,self.folder.parent.parent):d.chmod(0o700)
         self.path=self.folder/'session-1.jsonl';self.path.write_text('');self.path.chmod(0o600)
@@ -730,19 +730,21 @@ class ObserverCliTests(unittest.TestCase):
         result,value=self.cli('enable')
         self.assertEqual(1,result.returncode);self.assertEqual('model_required',value['reason'])
         self.assertFalse((self.base/'state').exists())
-        result,preview=self.cli('enable','--model','sonnet')
+        result,value=self.cli('enable','--model','sonnet')   # the level is the user's choice: nothing is previewed without one
+        self.assertEqual(1,result.returncode);self.assertEqual('level_required',value['reason'])
+        result,preview=self.cli('enable','--model','sonnet','--level','everything')
         self.assertEqual(0,result.returncode);self.assertFalse(preview['approved'])
         self.assertEqual('sonnet',preview['settings']['model']);self.assertIn('usage limits',preview['usage'])
         self.assertNotIn('$',json.dumps(preview));self.assertNotIn('billing',preview)
         self.assertFalse((self.base/'state').exists())
-        result,approved=self.cli('enable','--model','sonnet','--yes')
+        result,approved=self.cli('enable','--model','sonnet','--level','everything','--yes')
         self.assertEqual(0,result.returncode);self.assertTrue(approved['approved'])
         self.assertEqual(before,self.config.read_bytes())  # the shared project file is never written
         self.assertEqual([os.path.realpath(self.project)],list(self.approvals()))
         _,status=self.cli('status');self.assertTrue(status['approved']);self.assertFalse(status['runtime_ready'])
         self.assertEqual('sonnet',status['settings']['model'])
     def test_settings_belong_to_this_machine_and_folder_and_the_project_file_only_switches_off(self):
-        self.cli('enable','--model','sonnet','--yes')
+        self.cli('enable','--model','sonnet','--level','everything','--yes')
         other=self.base/'other';other.mkdir(mode=0o700)
         shared=json.loads(self.config.read_text());shared['observer']={'enabled':True,'mode':'automatic','model':'sonnet'}
         (other/'.recortex.json').write_text(json.dumps(shared));(other/'.recortex.json').chmod(0o600)
@@ -752,32 +754,32 @@ class ObserverCliTests(unittest.TestCase):
         status=json.loads(result.stdout);self.assertFalse(status['approved']);self.assertFalse(status['settings']['enabled'])
         self.config.write_text(json.dumps({'repo':REPO,'observer':False}))
         _,status=self.cli('status');self.assertFalse(status['approved']);self.assertEqual('off',status['project_switch'])
-        result,value=self.cli('enable','--model','sonnet','--yes')
+        result,value=self.cli('enable','--model','sonnet','--level','everything','--yes')
         self.assertEqual(1,result.returncode);self.assertEqual('project-off',value['code'])
         self.config.write_text(json.dumps({'repo':REPO}))
         _,status=self.cli('status');self.assertTrue(status['approved'])
     def test_disable_removes_only_this_folder(self):
-        self.cli('enable','--model','sonnet','--yes')
+        self.cli('enable','--model','sonnet','--level','everything','--yes')
         other=self.base/'other';other.mkdir(mode=0o700)
         (other/'.recortex.json').write_text(self.config.read_text());(other/'.recortex.json').chmod(0o600)
         moved=dict(self.env,CLAUDE_PROJECT_DIR=str(other))
         run=lambda *args:json.loads(subprocess.run([sys.executable,str(ROOT/'skills/recortex/scripts/observer.py')]+list(args),
                                     cwd=other,env=moved,capture_output=True,text=True,timeout=10).stdout)
-        self.assertTrue(run('enable','--model','sonnet','--yes')['approved'])
+        self.assertTrue(run('enable','--model','sonnet','--level','everything','--yes')['approved'])
         result,value=self.cli('disable');self.assertEqual(0,result.returncode);self.assertTrue(value['was_enabled'])
         _,status=self.cli('status');self.assertFalse(status['approved'])
         self.assertTrue(run('status')['approved'])
         self.assertEqual([os.path.realpath(other)],list(self.approvals()))
     def test_billing_variables_are_named_and_never_their_values(self):
         self.env['ANTHROPIC_API_KEY']='sk-ant-example-value'
-        _,preview=self.cli('enable','--model','sonnet')
+        _,preview=self.cli('enable','--model','sonnet','--level','everything')
         self.assertIn('ANTHROPIC_API_KEY',preview['billing']);self.assertIn('billed',preview['billing'])
-        self.cli('enable','--model','sonnet','--yes')
+        self.cli('enable','--model','sonnet','--level','everything','--yes')
         result,status=self.cli('status')
         self.assertIn('ANTHROPIC_API_KEY',status['billing']);self.assertNotIn('sk-ant-example-value',result.stdout)
     def test_invalid_model_choice_is_rejected_before_any_write(self):
         before=self.config.read_bytes()
-        result,value=self.cli('enable','--model','model with spaces','--yes')
+        result,value=self.cli('enable','--model','model with spaces','--level','everything','--yes')
         self.assertEqual(1,result.returncode);self.assertEqual('observer-unavailable',value['code'])
         self.assertEqual('observer_model',value['reason'])
         self.assertEqual(before,self.config.read_bytes());self.assertFalse((self.base/'state').exists())
@@ -807,7 +809,7 @@ class ObserverCliTests(unittest.TestCase):
             os.close(fd)
         return os.waitpid(pid,0)[1],seen
     def test_publication_pause_survives_process_restart(self):
-        self.cli('enable','--model','sonnet','--yes');self.cli('pause','publication')
+        self.cli('enable','--model','sonnet','--level','everything','--yes');self.cli('pause','publication')
         _,status=self.cli('status');self.assertTrue(status['publication_paused']);self.assertFalse(status['capture_paused'])
         result,value=self.cli('resume','publication')  # from a pipe, as Claude Code's Bash tool runs it: refused
         self.assertEqual((1,'terminal-required'),(result.returncode,value['code']))
@@ -815,7 +817,7 @@ class ObserverCliTests(unittest.TestCase):
         code,seen=self.on_terminal(('resume','publication'),b'resume')
         self.assertEqual(0,code,seen);_,status=self.cli('status');self.assertFalse(status['publication_paused'])
     def test_automatic_enable_refused_without_runtime_proof(self):
-        result,value=self.cli('enable','--mode','automatic','--model','sonnet','--yes')
+        result,value=self.cli('enable','--mode','automatic','--model','sonnet','--level','everything','--yes')
         self.assertEqual(1,result.returncode);self.assertFalse(value['approved']);self.assertEqual('runtime-gate',value['code'])
         self.assertEqual({},self.approvals());self.assertFalse((self.base/'state'/'recortex'/'private'/'octo-org__octo-repo').exists())
     def hold(self):
@@ -911,7 +913,7 @@ class ObserverCliTests(unittest.TestCase):
         self.assertEqual(0,status,seen);self.assertIn(b'"released": true',seen);self.assertEqual(['released'],self.held())
     def test_disable_asks_on_the_users_terminal_while_a_hold_applies(self):
         import pty
-        self.cli('enable','--model','sonnet','--yes')
+        self.cli('enable','--model','sonnet','--level','everything','--yes')
         self.hold()
         result,value=self.cli('disable')  # pipes: refused, and the folder stays enabled
         self.assertEqual(1,result.returncode);self.assertEqual('terminal-required',value['code'])

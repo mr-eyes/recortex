@@ -36,8 +36,18 @@ def parser():
                          help="list the reviewed memories that wait for the user's answer: post each, or drop it")
     enable = sub.add_parser("enable", help="preview this machine's settings for this folder; --yes approves and saves them")
     enable.add_argument("--mode", choices=("shadow", "automatic"), default="shadow")
-    enable.add_argument("--model", help="required: the Claude model alias or ID for the background calls")
+    enable.add_argument("--model", help="required: the Claude model alias or ID for the middle tier (drafts, reviews, summaries)")
+    enable.add_argument("--level", choices=runtime.LEVELS,
+                        help="what the observer may do on its own: notes, assistant or everything (required unless this "
+                             "folder's approval already holds one)")
+    enable.add_argument("--sort-model", help="the model that sorts each stretch of the conversation (default: the middle model)")
+    enable.add_argument("--strong-model", help="the model that drafts the paper's text for the user to accept (default: none, "
+                                               "the manuscript keeper stays off)")
     enable.add_argument("--yes", action="store_true")
+    limits = sub.add_parser("limits", help="lower this folder's daily call caps (a new approval of the same settings); "
+                                           "a higher number is refused")
+    for tier in runtime.TIERS:
+        limits.add_argument("--" + tier, type=int, metavar="N", help="calls a day on the %s tier" % tier)
     sub.add_parser("disable", help="remove this machine's settings and approval for this folder")
     for name in ("pause", "resume"):
         command = sub.add_parser(name)
@@ -62,10 +72,11 @@ def parser():
     return root
 
 
-REASONS = frozenset(("model_required", "folder_name", "observer_settings", "observer_mode", "observer_publisher",
-                     "observer_model", "observer_limit", "observer_approvals"))
+REASONS = frozenset(("model_required", "level_required", "folder_name", "observer_settings", "observer_mode",
+                     "observer_publisher", "observer_model", "observer_level", "observer_limit", "observer_approvals"))
 NOTES = {
     "model_required": "Choose the model for the background calls with --model (a Claude alias or model ID).",
+    "level_required": "Choose what the observer may do with --level notes, assistant or everything.",
     "folder_name": "The project folder's path holds a quote, a backslash or a control character; the observer cannot "
                    "be enabled there.",
     "observer_approvals": "This machine's private observer approvals file is too large, not JSON or not of the "
@@ -73,26 +84,66 @@ NOTES = {
 }
 
 
-def enable(repo, config, mode, yes=False, model=None, root=None, confirm=None, given="terminal"):
+def _stored_settings(repo, root=None):
+    """This folder's stored settings for `repo` as a dict, or {} (no entry, another repository, or one that cannot be
+    read). Read, never validated here."""
+    try:
+        entry = runtime.stored_approval(root)
+    except (ValueError, storage.StorageError, OSError):
+        return {}
+    if not isinstance(entry, dict) or entry.get("repo") != repo.lower() or not isinstance(entry.get("settings"), dict):
+        return {}
+    return entry["settings"]
+
+
+def _tier_gates_valid(repo, config, options):
+    """True when every tier that has a model holds a valid proof for it, read from this folder's queue."""
+    try:
+        with observer_store.Store(repo, create=False, readonly=True, config=config) as store:
+            state = runtime.tier_state(options, store)
+    except observer_store.StoreError as error:
+        if error.reason != "missing":
+            raise
+        state = runtime.tier_state(options, None)
+    return all(item["gate"] for item in state.values() if item["configured"])
+
+
+def enable(repo, config, mode, yes=False, model=None, root=None, confirm=None, given="terminal", level=None,
+           sort_model=None, strong_model=None):
     """Preview, or with yes=True record, this machine's settings for this project folder. Nothing is written to the
     project's shared configuration file, and nothing is created before every check has passed. `confirm`, when given,
-    is asked last, before anything is written; a code it returns stops the write."""
+    is asked last, before anything is written; a code it returns stops the write. The level is the user's choice (one of
+    runtime.LEVELS); this folder's earlier choice stands when none is given, and without either nothing is enabled. The
+    sort model defaults to the middle model and the strong model to none (the manuscript keeper stays off). Caps the
+    user lowered with `limits` stay lowered when the same repository is enabled again."""
     root = runtime.folder_key(root)
     problem = runtime.folder_problem(root)
     if problem:
         raise ValueError(problem)
     if not model:
         raise ValueError("model_required")
-    options = runtime.settings({"observer": {"enabled": True, "mode": mode, "model": model}})
+    stored = _stored_settings(repo, root)
+    level = level or (stored.get("level") if stored.get("level") in runtime.LEVELS else "")
+    if level not in runtime.LEVELS:
+        raise ValueError("level_required")
+    raw = {"enabled": True, "mode": mode, "model": model, "level": level}
+    if sort_model:
+        raw["sort_model"] = sort_model
+    if strong_model:
+        raw["strong_model"] = strong_model
+    caps = set(runtime.CALL_CAPS.values()) | set(runtime.TOKEN_BUDGETS.values())
+    raw.update({key: stored[key] for key in caps if key in stored})
+    options = runtime.settings({"observer": raw})
     try:
         identity = runtime.publisher_id(create=False)
     except (storage.StorageError, OSError):
         identity = None
     options["publisher_id"] = identity or "allocated_on_explicit_approval"
     preview = {"action": "enable", "repo": repo, "folder": root, "settings": options, "approved": False,
-               "usage": runtime.USAGE_NOTE % (options["max_invocations"], options["max_input_chars"]),
+               "level": level, "level_label": runtime.LEVEL_LABELS[level], "usage": runtime.usage_note(options),
                "note": "Settings stay on this machine for this folder; the project file can only switch the observer "
-                       "off. An isolated runtime check must succeed before independent checks or automatic posting."}
+                       "off. An isolated runtime check must succeed for each model before independent checks or "
+                       "automatic posting."}
     billing = runtime.billing_variables()
     if billing:
         preview["billing"] = runtime.BILLING_NOTE % ", ".join(billing)
@@ -102,16 +153,8 @@ def enable(repo, config, mode, yes=False, model=None, root=None, confirm=None, g
         return preview
     if runtime.project_off(config):
         return dict(preview, code="project-off")
-    if mode == "automatic":
-        try:
-            with observer_store.Store(repo, create=False, readonly=True, config=config) as store:
-                gate = store.get_control("runtime_gate")
-        except observer_store.StoreError as error:
-            if error.reason != "missing":
-                raise
-            gate = None
-        if not runtime.gate_valid(gate, options):
-            return dict(preview, code="runtime-gate")
+    if mode == "automatic" and not _tier_gates_valid(repo, config, options):
+        return dict(preview, code="runtime-gate")
     refused = confirm() if confirm is not None else None
     if refused:
         return dict(preview, code=refused)
@@ -121,6 +164,31 @@ def enable(repo, config, mode, yes=False, model=None, root=None, confirm=None, g
         pass  # the queue, so that status and the hooks find it
     runtime.approve(repo, {"observer": options}, root, given=given)
     return dict(preview, settings=options, approved=True)
+
+
+def limits(repo, config, wanted, given="terminal"):
+    """Lower this folder's daily call caps: a new approval of the same settings with the lower numbers. `wanted` maps a
+    tier to a number. A number above the cap in force is refused (code "limit-higher"), and a number below 1 is
+    refused too; nothing else changes, and the approval keeps its own time and where it was given."""
+    if not wanted:
+        return {"code": "nothing-to-change", "caps": {tier: runtime.settings(config)[key] for tier, key in
+                                                       runtime.CALL_CAPS.items()}}
+    options = runtime.settings(config)
+    if not runtime.approval_valid(repo, config):
+        return {"code": "approval", "note": "Run observer.py enable first; the limits change an approved folder."}
+    changed = dict(options)
+    for tier, number in wanted.items():
+        key = runtime.CALL_CAPS[tier]
+        if type(number) is not int or number < 1:
+            return {"code": "limit-invalid", "tier": tier}
+        if number > options[key]:
+            return {"code": "limit-higher", "tier": tier, "cap": options[key],
+                    "note": "A cap can be lowered here and never raised."}
+        changed[key] = number
+    entry = runtime.stored_approval() or {}
+    kept = entry.get("given") if entry.get("given") in ("terminal", "session") else given
+    runtime.approve(repo, {"observer": changed}, given=kept, approved_at=entry.get("approved_at"))
+    return {"action": "limits", "caps": {tier: changed[key] for tier, key in runtime.CALL_CAPS.items()}, "approved": True}
 
 
 HELD_NOTE = ("Ask the user about each with the multiple-choice question tool, one question per memory, from the "
@@ -280,24 +348,77 @@ def hook(event, config=None, repo=None):
         signal.signal(signal.SIGALRM, previous)
 
 
+def tiers_report(options, store):
+    """Per tier: its model, whether it holds a valid proof for it, the day's calls and tokens, and the caps."""
+    state = runtime.tier_state(options, store)
+    today = store.usage_today() if store is not None and store.format == observer_store.FORMAT else {}
+    out = {}
+    for tier in runtime.TIERS:
+        used = today.get(tier, {"calls": 0, "input_tokens": 0, "output_tokens": 0})
+        out[tier] = dict(state[tier], calls_24h=used["calls"], tokens_24h=used["input_tokens"] + used["output_tokens"],
+                         call_cap=options[runtime.CALL_CAPS[tier]], token_budget=options[runtime.TOKEN_BUDGETS[tier]])
+    return out
+
+
 def _status(repo, config, loaded, store, options, details):
     variables = runtime.billing_variables()
     last = store.get_control("runtime_last") if store else None
     seen = store.get_control("call_environment", []) if store else []
     called = sorted(set(variables) | {name for name in seen if name in runtime.BILLING})
     out = {"settings": options, "approved": runtime.approval_valid(repo, config), "folder": runtime.folder_key(),
-           "usage": runtime.USAGE_NOTE % (options["max_invocations"], options["max_input_chars"]),
+           "level": options["level"], "level_label": runtime.LEVEL_LABELS.get(options["level"], "not chosen"),
+           "paused": runtime.paused(repo, loaded), "usage": runtime.usage_note(options),
            "capture_preflight": observer_sources.preflight(recortex.project_root(), details=details)}
+    if out["paused"]:
+        out["note"] = runtime.PAUSED + " Answer the level question (setup.py questions), or run observer.py enable --level."
     if called:
         out["billing"] = runtime.BILLING_NOTE % ", ".join(called)
     if runtime.project_off(loaded):
         out["project_switch"] = "off"
     if store is None:
-        return dict(out, code="empty", action="status", dry_run=False, queue={})
-    return dict(out, runtime_ready=runtime.gate_valid(store.get_control("runtime_gate"), options),
+        return dict(out, code="empty", action="status", dry_run=False, queue={}, tiers=tiers_report(options, None))
+    return dict(out, runtime_ready=runtime.tier_state(options, store)["middle"]["gate"],
+                tiers=tiers_report(options, store),
                 runtime_last=last, capture_paused=store.get_control("capture_paused", False),
                 publication_paused=store.get_control("publication_paused", False),
                 worker_degraded=store.get_control("worker_degraded", ""), queue=store.status())
+
+
+def runtime_check(repo, options, store):
+    """One smoke call per distinct model of the tiers that have one, each on a reservation of its own tier. A proof is
+    kept for every tier of its model; a failed check clears only those tiers' proofs, so the other tiers go on.
+    Returns (ok, {tier: safe summary})."""
+    done, out, ok = {}, {}, True
+    for tier in ("middle", "sort", "strong"):
+        model = runtime.model_for(options, tier)
+        if tier == "strong" and not model:
+            continue   # no strong model: the keeper is off, and there is nothing to prove
+        if model not in done:
+            reservation = store.reserve_invocation("runtime_check", options[runtime.CALL_CAPS[tier]],
+                                                   options["window_hours"] * 3600, tier=tier,
+                                                   tokens=options[runtime.TOKEN_BUDGETS[tier]])
+            if reservation is None:
+                done[model] = None
+                out[tier] = {"code": "budget"}
+                ok = False
+                continue
+            proof = runtime.check_runtime(options, tier)
+            valid = runtime.gate_valid(proof, options, tier)
+            store.complete_invocation(reservation, valid, runtime.candidate_hash(proof), usage=proof.get("usage"),
+                                      model=proof.get("actual_model"))
+            done[model] = (proof, valid)
+        elif done[model] is None:
+            out[tier] = {"code": "budget"}
+            ok = False
+            continue
+        proof, valid = done[model]
+        store.set_control(runtime.gate_control(tier, options), proof if valid else None)
+        out[tier] = {key: proof.get(key) for key in ("ok", "code", "version", "elapsed", "usage", "isolation_checked",
+                                                      "canary_absent", "structured_exact", "requested_model",
+                                                      "actual_model", "api_key_source", "billing_variables")}
+        out[tier]["model"] = model
+        ok = ok and valid
+    return ok, out
 
 
 def main(argv=None):
@@ -346,12 +467,19 @@ def main(argv=None):
                 confirm = lambda: confirmed("enable", "This replaces this folder's settings while holds apply.")
             # Where the approval is given: the user's own terminal, or a session (Claude Code's Bash tool has none).
             given = "terminal" if sys.stdin.isatty() and sys.stdout.isatty() else "session"
-            result = enable(repo, loaded, args.mode, args.yes, args.model, confirm=confirm, given=given)
+            result = enable(repo, loaded, args.mode, args.yes, args.model, confirm=confirm, given=given, level=args.level,
+                            sort_model=args.sort_model, strong_model=args.strong_model)
             if result.get("code") == "terminal-required":
                 result["note"] = ("Run this enable yourself in a separate terminal, outside Claude Code: it asks you to "
                                   "confirm there.")
             emit(result)
             return int(args.yes and not result["approved"])
+        if args.command == "limits":
+            given = "terminal" if sys.stdin.isatty() and sys.stdout.isatty() else "session"
+            result = limits(repo, config, {tier: getattr(args, tier) for tier in runtime.TIERS
+                                           if getattr(args, tier) is not None}, given=given)
+            emit(result)
+            return int("approved" not in result)
         if args.command == "context":
             db = index.connect(repo, create=False)
             if db is None:
@@ -370,8 +498,8 @@ def main(argv=None):
             if tty is None:
                 emit({"code": "terminal-required", "note": TERMINAL}); return 1
         if args.command == "runtime-check" and not runtime.approval_valid(repo, config):
-            emit({"code": "approval", "note": "Run observer.py enable --model MODEL --yes first; the check is bound "
-                                              "to the model chosen there."}); return 1
+            emit({"code": "approval", "note": "Run observer.py enable --model MODEL --level LEVEL --yes first; the check is "
+                                              "bound to the models chosen there."}); return 1
         readonly = args.command in ("status", "pending", "holds") or getattr(args, "dry_run", False)
         try:
             opened = observer_store.Store(repo, create=not readonly, readonly=readonly,
@@ -443,15 +571,12 @@ def main(argv=None):
                     store.set_control(scope + "_paused", args.command == "pause")
                 emit({"action": args.command, "scope": args.scope}); return 0
             if args.command == "runtime-check":
-                reservation = store.reserve_invocation("runtime_check", options["max_invocations"], options["window_hours"] * 3600)
-                if reservation is None:
-                    emit({"code": "budget"}); return 1
-                proof = runtime.check_runtime(options)
-                ok = runtime.gate_valid(proof, options)
-                store.complete_invocation(reservation, ok, runtime.candidate_hash(proof))
-                store.set_control("runtime_gate", proof if ok else None)
-                safe = {key: proof.get(key) for key in ("ok", "code", "version", "elapsed", "usage", "isolation_checked", "canary_absent", "structured_exact", "requested_model", "actual_model", "api_key_source", "billing_variables")}
-                store.set_control("runtime_last", safe); emit(safe); return int(not ok)
+                ok, tiers = runtime_check(repo, options, store)
+                middle = tiers.get("middle", {})
+                safe = dict(middle, tiers=tiers)
+                if middle.get("code") != "budget":
+                    store.set_control("runtime_last", safe)
+                emit(safe); return int(not ok)
             if args.command in ("run-worker", "record") and args.dry_run:
                 emit({"action": args.command, "dry_run": True, "queue": store.status(),
                       "note": "No model call, queue transition or publication is performed."}); return 0

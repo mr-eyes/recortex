@@ -71,7 +71,7 @@ class ObserverHookTests(unittest.TestCase):
         import observer_runtime
         self.append("/recortex hold git-push")
         self.assertEqual("deny", self.run_hook()["hookSpecificOutput"]["permissionDecision"])
-        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "level": "everything", "model": "haiku",
                                                      "publisher_id": observer_runtime.publisher_id(create=True)}},
                                  str(self.project))
         on, self.config = self.config, {"repo": REPO, "hub": 1}  # local_config once the project file says false
@@ -87,7 +87,7 @@ class ObserverHookTests(unittest.TestCase):
         import observer_runtime
         self.append("/recortex hold git-push")
         self.run_hook()
-        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "level": "everything", "model": "haiku",
                                                      "publisher_id": observer_runtime.publisher_id(create=True)}},
                                  str(self.project))
 
@@ -112,7 +112,7 @@ class ObserverHookTests(unittest.TestCase):
         import observer_runtime
         self.append("/recortex hold git-push")
         self.run_hook()
-        observer_runtime.approve("octo-org/other", {"observer": {"enabled": True, "model": "haiku",
+        observer_runtime.approve("octo-org/other", {"observer": {"enabled": True, "level": "everything", "model": "haiku",
                                                                  "publisher_id": observer_runtime.publisher_id(create=True)}},
                                  str(self.project))
         with mock.patch("observer_hooks.observer_runtime.approval_valid", return_value=False):
@@ -141,11 +141,11 @@ class ObserverHookTests(unittest.TestCase):
     def test_automatic_mode_is_the_sessions_to_turn_on(self):
         # The user's answer to the setup question, recorded by the wizard's session: no terminal step. Without a
         # runtime proof it is still refused.
-        self.assertEqual(0, self.cli("enable", "--model", "haiku", "--yes")[0])
-        result, value, _ = self.cli("enable", "--mode", "automatic", "--model", "haiku", "--yes")
+        self.assertEqual(0, self.cli("enable", "--model", "haiku", "--level", "everything", "--yes")[0])
+        result, value, _ = self.cli("enable", "--mode", "automatic", "--model", "haiku", "--level", "everything", "--yes")
         self.assertEqual((1, "runtime-gate"), (result, value.get("code")))
         with mock.patch("observer_hooks.observer_runtime.gate_valid", return_value=True):
-            result, value, _ = self.cli("enable", "--mode", "automatic", "--model", "haiku", "--yes")
+            result, value, _ = self.cli("enable", "--mode", "automatic", "--model", "haiku", "--level", "everything", "--yes")
         self.assertEqual((0, True), (result, value["approved"]), value)
         self.assertEqual("automatic", self.folder_entry()["settings"]["mode"])
 
@@ -156,21 +156,21 @@ class ObserverHookTests(unittest.TestCase):
         import observer_runtime
         self.entry_and_hold()
         with mock.patch("observer_hooks.observer_runtime.gate_valid", return_value=True):
-            result, value, _ = self.cli("enable", "--mode", "automatic", "--model", "sonnet", "--yes")
+            result, value, _ = self.cli("enable", "--mode", "automatic", "--model", "sonnet", "--level", "everything", "--yes")
         self.assertEqual(0, result, value)
         self.assertEqual("sonnet", self.folder_entry()["settings"]["model"])
         other = "octo-org/other"
-        observer_runtime.approve(other, {"observer": {"enabled": True, "model": "haiku",
+        observer_runtime.approve(other, {"observer": {"enabled": True, "level": "everything", "model": "haiku",
                                                       "publisher_id": observer_runtime.publisher_id(create=True)}},
                                  str(self.project))
         with Store(other, config={}) as store:
             source = {"source_id": "s9", "role": "user", "direct_user": True, "text": "/recortex hold git-push"}
             store.update_holds(lambda holds: holds + [observer_holds.make_hold(source, other, "git-push")])
-        result, value, _ = self.cli("enable", "--model", "sonnet", "--yes")
+        result, value, _ = self.cli("enable", "--model", "sonnet", "--level", "everything", "--yes")
         self.assertEqual((1, "terminal-required"), (result, value["code"]))
         self.assertIn("separate terminal", value["note"])
         self.assertEqual(other, self.folder_entry()["repo"])
-        result, value, tty = self.cli("enable", "--model", "sonnet", "--yes", answer="enable")
+        result, value, tty = self.cli("enable", "--model", "sonnet", "--level", "everything", "--yes", answer="enable")
         self.assertEqual(0, result, value)
         self.assertIn("while holds apply", tty.ask.call_args.args[0])
         self.assertEqual(REPO, self.folder_entry()["repo"])
@@ -181,12 +181,12 @@ class ObserverHookTests(unittest.TestCase):
         # Automatic mode needs no terminal step, so a switch-on the user did not make is never silent: the approval
         # says where it was given, and after a session's the next session start says so once, with its date only.
         import contextlib, datetime, io, observer
-        self.assertEqual(0, self.cli("enable", "--model", "haiku", "--yes")[0])
+        self.assertEqual(0, self.cli("enable", "--model", "haiku", "--level", "everything", "--yes")[0])
         self.assertEqual("session", self.folder_entry()["given"])
         start = lambda: hooks.handle("session-start", self.data, self.config, REPO).get("systemMessage", "")
         self.assertNotIn("switched on", start())  # shadow mode posts nothing: nothing to say
         with mock.patch("observer_hooks.observer_runtime.gate_valid", return_value=True):
-            result, value, _ = self.cli("enable", "--mode", "automatic", "--model", "haiku", "--yes")
+            result, value, _ = self.cli("enable", "--mode", "automatic", "--model", "haiku", "--level", "everything", "--yes")
         self.assertEqual((0, True), (result, value["approved"]), value)
         day = datetime.datetime.fromtimestamp(self.folder_entry()["approved_at"], datetime.timezone.utc).strftime("%Y-%m-%d")
         line = hooks.SWITCHED % day
@@ -202,7 +202,7 @@ class ObserverHookTests(unittest.TestCase):
         with mock.patch.object(observer.recortex, "load_config", return_value={"repo": REPO, "hub": 1}), \
                 mock.patch.object(observer.sys, "stdin", Terminal()), contextlib.redirect_stdout(out), \
                 mock.patch("observer_hooks.observer_runtime.gate_valid", return_value=True):
-            self.assertEqual(0, observer.main(["enable", "--mode", "automatic", "--model", "sonnet", "--yes"]))
+            self.assertEqual(0, observer.main(["enable", "--mode", "automatic", "--model", "sonnet", "--level", "everything", "--yes"]))
         self.assertEqual("terminal", self.folder_entry()["given"])
         self.assertNotIn("switched on", start())  # the user's own terminal: nothing to say
 
@@ -343,7 +343,7 @@ class ObserverHookTests(unittest.TestCase):
 
     def test_resume_is_asked_on_the_users_terminal(self):
         import observer_runtime
-        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "level": "everything", "model": "haiku",
                                                      "publisher_id": observer_runtime.publisher_id(create=True)}},
                                  str(self.project))
         self.assertEqual(0, self.cli("resume", "publication")[0])  # nothing paused: nothing to ask
@@ -362,7 +362,7 @@ class ObserverHookTests(unittest.TestCase):
         # denied whether or not a hold applies, read as the shell splits it. A guard against mistakes, not a
         # boundary. Automatic mode is the setup wizard's to turn on, on the user's answer.
         import observer_runtime
-        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "level": "everything", "model": "haiku",
                                                      "publisher_id": observer_runtime.publisher_id(create=True)}},
                                  str(self.project))
         denied = ("python3 skills/recortex/scripts/observer.py resume all", "python3 observer.py resume publication",
@@ -413,7 +413,7 @@ class ObserverHookTests(unittest.TestCase):
         import contextlib, io, observer, observer_runtime
         self.append("/recortex hold git-push")
         self.run_hook()
-        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "level": "everything", "model": "haiku",
                                                      "publisher_id": observer_runtime.publisher_id(create=True)}},
                                  str(self.project))
         with mock.patch.object(observer.recortex, "load_config", return_value={"repo": REPO, "hub": 1}), \
@@ -857,7 +857,7 @@ class ObserverHookTests(unittest.TestCase):
         # Before a Bash call capture reads one scan; a hold typed past it is still found, by a search of the unread
         # tail for user messages that hold a control.
         import observer_runtime
-        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "level": "everything", "model": "haiku",
                                                      "publisher_id": observer_runtime.publisher_id(create=True)}},
                                  str(self.project))
         self.run_hook(event="stop")
@@ -873,7 +873,7 @@ class ObserverHookTests(unittest.TestCase):
 
     def test_a_hold_typed_mid_turn_in_the_unread_tail_stops_the_next_command(self):
         import observer_runtime
-        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "level": "everything", "model": "haiku",
                                                      "publisher_id": observer_runtime.publisher_id(create=True)}},
                                  str(self.project))
         self.run_hook(event="stop")
@@ -941,7 +941,7 @@ class ObserverHookTests(unittest.TestCase):
         # A session that ran before the observer was enabled, or one resumed later: its first hook reads the last
         # observer_sources.TAIL_BYTES, records the part left out as one source_gap, and stops no command for it.
         import observer_runtime
-        observer_runtime.approve(REPO, {"observer": {"enabled": True, "model": "haiku",
+        observer_runtime.approve(REPO, {"observer": {"enabled": True, "level": "everything", "model": "haiku",
                                                      "publisher_id": observer_runtime.publisher_id(create=True)}},
                                  str(self.project))
         line = json.dumps({"type": "assistant", "message": {"role": "assistant", "content": "x" * 4000}}) + "\n"
@@ -1326,7 +1326,8 @@ class FastPathTests(unittest.TestCase):
                    XDG_CACHE_HOME=str(self.base / "cache"), XDG_CONFIG_HOME=str(self.base / "config"),
                    CLAUDE_CONFIG_DIR=str(self.base / "claude"))
         with mock.patch.dict(os.environ, env, clear=True):
-            settings = {"enabled": True, "model": "sonnet", "publisher_id": observer_runtime.publisher_id(create=True)}
+            settings = {"enabled": True, "level": "everything", "model": "sonnet",
+                        "publisher_id": observer_runtime.publisher_id(create=True)}
             observer_runtime.approve(REPO, {"observer": settings}, str(project))
         transcript = self.base / "claude" / "session1.jsonl"
         transcript.parent.mkdir(mode=0o700)

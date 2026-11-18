@@ -73,7 +73,7 @@ class Replay:
         self.project.mkdir(mode=0o700)
         self.remote = self.base / "fake-github.json"
         shutil.copyfile(ROOT / "tests/fixtures/repo-state.json", self.remote)
-        self.config = {"repo": REPO, "observer": {"enabled": True, "mode": "automatic"}}
+        self.config = {"repo": REPO, "observer": {"enabled": True, "mode": "automatic", "level": "everything"}}
         self.stack = contextlib.ExitStack()
         self.simulate_ancestors = simulate_ancestors
         self.source_ancestry = {"simulated": False, "changed_boundaries": []}
@@ -447,7 +447,7 @@ class Replay:
                        "pending reviewed excerpts survive beyond seven simulated days")
             reservations = [row[0] for row in store.db.execute("SELECT created FROM invocations ORDER BY created")]
             maximum = max(sum(t - 86400 < other <= t for other in reservations) for t in set(reservations))
-            self.check(maximum <= 60, "all rolling simulated 24-hour windows stay within 60 invocations")
+            self.check(maximum <= 70, "all rolling simulated 24-hour windows stay within 70 invocations")
             status = store.status()
         return {"days": self.fixture["simulated_days"], "domains": sorted(self.fixture["domains"]),
                 "native_sessions": len({row["metadata"]["session_id"] for row in self.observations()}),

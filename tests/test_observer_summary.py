@@ -45,7 +45,7 @@ class SummaryBox(unittest.TestCase):
                          clear=True)
         env.start()
         self.addCleanup(env.stop)
-        self.config = {'repo': REPO, 'hub': 4, 'observer': {'enabled': True, 'mode': 'automatic',
+        self.config = {'repo': REPO, 'hub': 4, 'observer': {'enabled': True, 'mode': 'automatic', 'level': 'everything',
                                                             'publisher_id': runtime.publisher_id(create=True)}}
         with store.Store(REPO, config=self.config) as db:
             db.set_control('runtime_gate', {'fake_test_only': True})

@@ -32,7 +32,8 @@ class ObserverPublisherTests(unittest.TestCase):
         trusted.write_text(fixtures.REPO + " octocat hubot\n")
         os.environ.update(RECORTEX_GH=shlex.join([sys.executable, str(fixtures.ROOT / "tests/fake_gh.py")]),
                           FAKE_GH_STATE=str(self.remote), RECORTEX_TRUSTED_FILE=str(trusted))
-        self.config = {"observer": {"enabled": True, "mode": "automatic", "publisher_id": runtime.publisher_id(create=True)}}
+        self.config = {"observer": {"enabled": True, "mode": "automatic", "level": "everything",
+                                 "publisher_id": runtime.publisher_id(create=True)}}
         body = (fixtures.ROOT / "examples/octo-repo/chain/1-idea.md").read_text()
         with store.Store(fixtures.REPO, config=self.config) as db:
             db.capture([self.metadata()])
