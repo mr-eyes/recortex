@@ -1483,7 +1483,13 @@ class ModeTests(Steps):
         self.assertIn(".r-removed{display:none}", self.style().split("@media (max-width:1180px){")[0])
 
     def test_m3_the_view_keeps_the_sticky_bar_clear_of_every_jump(self):
-        self.assertIn("html.js[data-view=paper]{scroll-padding-top:var(--barpad,120px)}", self.style())   # 120px without the script
+        style = self.style()
+        self.assertNotIn("scroll-padding", style)   # a padding on the page puts the bar's own controls under it: each Tab into the bar scrolled the page
+        self.assertIn("#paper .sheet *{scroll-margin-top:var(--barpad,120px)}", style)   # 120px without the script
+        self.assertIn("#paper[data-mode=plain] .sheet *{scroll-margin-top:16px}", style)   # no bar to clear where it is static
+        self.assertIn("#paper[data-mode=plain] .sbar{position:static}", style)
+        self.assertNotRegex(style, r"\.sbar[^{]*\{[^}]*scroll-margin")   # never on the bar or its controls
+        self.assertNotRegex(style, r"\.(?:chgnav|barprint|barlink|pick|seg)[^{]*\{[^}]*scroll-margin")
         script = ScriptTests.script(None)
         self.assertIn("root.style.setProperty('--barpad', (bar.offsetHeight + 24) + 'px')", script)   # with it, the bar's own height
         self.assertEqual(1, script.count("new ResizeObserver("))
