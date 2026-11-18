@@ -1,6 +1,6 @@
 // Drives the built site in headless Chrome and checks what a script can: the search box, the theme switch and its
 // stored value, the menu, the copy button, and that nothing logs a console message or reaches another server.
-// usage: node smoke.mjs <base url>      (serve _site first: python3 -m http.server -d _site 8080)
+// usage: node smoke.mjs <base url>      (for example http://127.0.0.1:8080/recortex, with the folder above recortex/ served)
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,13 +32,13 @@ await ev("document.getElementById('searchopen').click()"); await sleep(150);
 expect('search opens', await ev("document.getElementById('searchbox').open"));
 await ev("var i=document.getElementById('searchinput'); i.value='hold'; i.dispatchEvent(new Event('input')); 1"); await sleep(100);
 const hits = await ev("Array.from(document.querySelectorAll('#searchhits .hit')).map(a => a.getAttribute('href'))");
-expect('search finds holds', hits.length > 0 && hits.some((h) => h.indexOf('/how-it-works/') === 0), JSON.stringify(hits));
+expect('search finds holds', hits.length > 0 && hits.some((h) => h.indexOf('/recortex/how-it-works/') === 0), JSON.stringify(hits));
 await ev("document.getElementById('searchclose').click()");
 
 await ev("document.getElementById('theme').click()");
-const first = await ev("document.documentElement.getAttribute('data-theme') + ' ' + localStorage.getItem('theme')");
+const first = await ev("document.documentElement.getAttribute('data-theme') + ' ' + localStorage.getItem('recortex-theme')");
 await ev("document.getElementById('theme').click()");
-const second = await ev("document.documentElement.getAttribute('data-theme') + ' ' + localStorage.getItem('theme')");
+const second = await ev("document.documentElement.getAttribute('data-theme') + ' ' + localStorage.getItem('recortex-theme')");
 expect('theme switch stores one value', first !== second && /^(light|dark) (light|dark)$/.test(first) && /^(light|dark) (light|dark)$/.test(second), first + ' / ' + second);
 expect('only the theme is stored', (await ev('localStorage.length')) === 1);
 await send('Page.navigate', { url: base + '/faq/' }); await sleep(700);
