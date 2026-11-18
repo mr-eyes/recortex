@@ -389,7 +389,7 @@ class ApprovalTests(Box):
                                         config, REPO)
             self.assertEqual({}, out)                        # not even a notice at a prompt
             start = observer_hooks.handle("SessionStart", {"session_id": "s1"}, config, REPO)
-            self.assertIn("approval", json.dumps(start))     # one line at session start
+            self.assertEqual({"systemMessage": runtime.PAUSED}, start)   # one line at session start: paused until a level is chosen
             with self.assertRaises(store.StoreError):        # and nothing was captured: no queue was made
                 store.Store(REPO, create=False, readonly=True, config=config)
             called = []
