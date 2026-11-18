@@ -7,7 +7,8 @@ part is a comment of the kind `plan` (references/planning.md). The states of the
 --dry-run, which prints the exact gh commands and writes nothing.
 
 setup    makes the label and the issue (a fixed first body), links it under the hub and writes `plans` into the
-         project file.
+         project file. It first looks, with one read, for an open issue that already carries the label `plan` and the
+         project file does not name; there it creates nothing (a dry run says the same) and says how to record it.
 digest   writes what the record holds, for the planner to read as data: digest.md and plan.json in --out.
 status   the states of the parts, the gaps and the counts, from the local index (--json for the whole report).
 check    lints every draft of a folder and makes the cross checks of a plan; writes nothing.
@@ -195,6 +196,33 @@ def write_config(config, mutate, what):
 
 # ---------------------------------------------------------------- setup
 
+PLAN_ISSUE_FOUND = ("plan: issue #%d is open and carries the label plan, but the project file does not record it, so nothing was "
+                    "created. If it is this project's plan, add \"plans\": {\"%s\": %d} to %s and run plan.py status; "
+                    "otherwise take the label off that issue first.")
+PLAN_ISSUE_UNREAD = ("plan: could not look for an open issue with the label plan (GitHub did not answer as expected), so "
+                     "nothing was created. Check gh with hooks.py --doctor and run plan.py setup again.")
+
+
+def refuse_second_plan(config, repo, profile):
+    """Stop, before anything is created or planned (a dry run too), when an open issue of the repository already carries
+    the label plan and the project file does not name it: a project that joined a record with a plan, or whose file lost
+    its `plans` entry, would otherwise get a second plan issue. One read through recortex.gh(); the number printed is an
+    integer from GitHub's answer that passed the same check as the project file's, never any text of the issue."""
+    try:
+        found = json.loads(recortex.gh(["issue", "list", "--repo", repo, "--label", LABEL[0], "--state", "open",
+                                        "--json", "number", "--limit", "100"], timeout=60))
+        numbers = sorted(row["number"] for row in found if isinstance(row, dict) and type(row.get("number")) is int
+                         and 1 <= row["number"] <= 2147483647) if isinstance(found, list) else None
+    except (recortex.GhError, ValueError, RecursionError, KeyError, TypeError):
+        numbers = None
+    if numbers is None:
+        sys.exit(PLAN_ISSUE_UNREAD)
+    own = recortex.plan_issue(config, profile)
+    other = [n for n in numbers if n != own]
+    if other:
+        sys.exit(PLAN_ISSUE_FOUND % (other[0], profile, other[0], config.get("_path") or "the project file"))
+
+
 def setup_command(args):
     config, repo, hub, plan, allowed = load(args)
     profile = plan["profile"]
@@ -204,6 +232,7 @@ def setup_command(args):
         return 0
     if hub is None:
         sys.exit("error: no hub issue number in the project file; the plan issue is a sub-issue of the hub")
+    refuse_second_plan(config, repo, profile)
     title = "The plan of the %s" % plan["noun"]
     body = body_text(config, plan, None, None, allowed)
     problems = [f for f in lint_drafts.lint_text(body, kind="plan-body", config=config) if f.level == "error"]

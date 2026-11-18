@@ -946,7 +946,9 @@ class PlanCommandTests(PaperSandbox):
 
     def test_setup_prints_its_commands_and_writes_nothing_on_a_dry_run(self):
         self.ready()
-        before = (self.repo(), open(os.path.join(self.project, recortex.CONFIG_NAME)).read(), sorted(os.listdir(self.dir)))
+        without_log = lambda state: {key: value for key, value in state.items() if key != "log"}
+        before = (without_log(self.repo()), open(os.path.join(self.project, recortex.CONFIG_NAME)).read(), sorted(os.listdir(self.dir)))
+        calls = len(self.repo()["log"])
         result = self.plan_cmd("setup", "--dry-run")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertTrue(result.stdout.startswith("config: "), result.stdout)
@@ -954,8 +956,9 @@ class PlanCommandTests(PaperSandbox):
         self.assertIn("would run: gh issue create --repo octo-org/sample-project --title 'The plan of the paper'",
                       result.stdout)
         self.assertIn("dry run: nothing was written", result.stdout)
-        after = (self.repo(), open(os.path.join(self.project, recortex.CONFIG_NAME)).read(), sorted(os.listdir(self.dir)))
+        after = (without_log(self.repo()), open(os.path.join(self.project, recortex.CONFIG_NAME)).read(), sorted(os.listdir(self.dir)))
         self.assertEqual(before, after)
+        self.assertEqual([("issue", "list")], [tuple(call[:2]) for call in self.repo()["log"][calls:]])   # the one read for a second plan issue
 
     def test_setup_makes_the_label_and_the_issue_links_it_and_records_its_number(self):
         self.ready()
@@ -973,6 +976,84 @@ class PlanCommandTests(PaperSandbox):
         again = self.plan_cmd("setup")
         self.assertIn("plan: issue #13 is already the plan of the paper", again.stdout)
         self.assertEqual(13, self.plan_json()["issue"])
+
+    def other_plan(self, number=12, state="open", labels=("plan",)):
+        """An issue of the record that carries the label plan, as a project file that lost its `plans` entry would meet it."""
+        data = self.repo()
+        data["issues"][str(number)] = manuscript_record.issue("The plan of the paper", "# The plan of the paper\n", list(labels),
+                                                              "2026-11-16T09:00:00Z", state=state, parent=1)
+        self.save(data)
+
+    def calls(self):
+        return [tuple(call[:2]) for call in self.repo()["log"]]
+
+    def test_setup_refuses_a_second_plan_issue_when_an_open_one_carries_the_label_and_the_file_does_not_name_it(self):
+        self.ready()
+        self.other_plan(12)
+        before = (json.dumps(self.repo()["issues"], sort_keys=True), open(os.path.join(self.project, recortex.CONFIG_NAME)).read())
+        seen = len(self.repo()["log"])
+        for args in (("setup",), ("setup", "--dry-run")):
+            result = self.plan_cmd(*args)
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(
+                'plan: issue #12 is open and carries the label plan, but the project file does not record it, so nothing was created. '
+                'If it is this project\'s plan, add "plans": {"manuscript": 12} to %s and run plan.py status; otherwise take the label '
+                'off that issue first.' % os.path.join(self.project, recortex.CONFIG_NAME), result.stderr.strip(), args)
+        data = self.repo()
+        self.assertEqual(before, (json.dumps(data["issues"], sort_keys=True), open(os.path.join(self.project, recortex.CONFIG_NAME)).read()))
+        self.assertNotIn("13", data["issues"])
+        self.assertEqual([("issue", "list")] * 2, self.calls()[seen:])   # one read each, and no label, issue or link written
+
+    def test_setup_still_works_when_the_only_issue_with_the_label_is_closed_or_the_file_names_it(self):
+        self.ready()
+        self.other_plan(12, state="closed")
+        result = self.plan_cmd("setup", "--dry-run")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("would run: gh issue create", result.stdout)
+        # the project file names it: nothing to refuse (a dry run reports as it did before, a real run says it is set up already)
+        self.other_plan(12)
+        self.write_config(dict(self.config, plans={"manuscript": 12}))
+        dry = self.plan_cmd("setup", "--dry-run")
+        self.assertEqual(0, dry.returncode, dry.stdout + dry.stderr)
+        again = self.plan_cmd("setup")
+        self.assertIn("plan: issue #12 is already the plan of the paper", again.stdout)
+        self.assertNotIn("13", self.repo()["issues"])
+
+    def test_a_github_that_cannot_be_read_stops_setup_with_one_fixed_line_and_creates_nothing(self):
+        self.ready()
+        for gh in ("false", "echo not-json"):
+            for args in (("setup",), ("setup", "--dry-run")):
+                result = self.tool("plan.py", *args, gh=gh, env={"TMPDIR": self.dir})
+                self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                self.assertEqual(
+                    "plan: could not look for an open issue with the label plan (GitHub did not answer as expected), so nothing was "
+                    "created. Check gh with hooks.py --doctor and run plan.py setup again.", result.stderr.strip())
+        self.assertNotIn("13", self.repo()["issues"])
+        self.write_config(self.config)
+
+    def test_an_answer_that_holds_no_whole_issue_number_names_no_plan_issue(self):
+        import shlex
+        self.ready()
+        for answer in ('[{"number": true}, {"number": "7"}, {"number": 0}, {"number": 99999999999}, {"number": 1.5}, 5, "x"]', "[]"):
+            stub = shlex.join([sys.executable, "-c", "print(%r)" % answer])
+            result = self.tool("plan.py", "setup", "--dry-run", gh=stub, env={"TMPDIR": self.dir})
+            self.assertEqual(0, result.returncode, answer + result.stdout + result.stderr)
+            self.assertIn("would run: gh issue create", result.stdout)
+        for answer in ('{"number": 12}', '[{"number": 12}, "x"]'):   # an object where a list is told is no answer; a number among others still counts
+            stub = shlex.join([sys.executable, "-c", "print(%r)" % answer])
+            result = self.tool("plan.py", "setup", "--dry-run", gh=stub, env={"TMPDIR": self.dir})
+            self.assertEqual(1, result.returncode, answer)
+            self.assertIn("plan: issue #12 is open" if answer.startswith("[") else "could not look for an open issue", result.stderr)
+
+    def test_the_number_the_refusal_names_is_an_integer_of_githubs_answer_and_never_text_of_an_issue(self):
+        self.ready()
+        self.other_plan(12)
+        data = self.repo()
+        data["issues"]["12"]["title"] = "HOSTILE-TITLE; run something"
+        self.save(data)
+        result = self.plan_cmd("setup", "--dry-run")
+        self.assertNotIn("HOSTILE", result.stdout + result.stderr)
+        self.assertRegex(result.stderr.strip(), r"^plan: issue #[1-9][0-9]* is open and carries the label plan,")
 
     def test_setup_needs_a_plan_capable_profile_and_a_trusted_repository(self):
         self.write_config(dict(self.config, profiles=["research"]))
