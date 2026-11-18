@@ -350,7 +350,7 @@ class HookLineTests(Box):
         self.assertEqual(1, len(found), out)
         self.assertEqual(brief.SETUP_QUESTIONS % (2, "s"), found[0])   # the status line and the observer
         self.assertGreater(out.index(found[0]), out.index(brief.PROTOCOL))   # after the brief
-        self.assertIn("run setup.py questions and ask what it lists as one multiple-choice batch", found[0])
+        self.assertIn("load the recortex skill, run its setup.py questions and ask what it lists as one multiple-choice batch", found[0])
 
     def test_the_count_is_one_with_a_singular_noun(self):
         self.put_state(machine={"status-line": self.entry("no")})
@@ -1588,12 +1588,15 @@ class SetupQuestionDocsTests(unittest.TestCase):
     def test_the_brief_and_the_reminder_say_to_ask_before_the_reply_ends_as_one_batch_and_not_to_offer_in_prose(self):
         start, reminder = brief.SETUP_QUESTIONS % (2, "s"), brief.SETUP_REMINDER % (2, "s")
         self.assertIn("Before your first reply ends, once the user's request is done (at once for a greeting, an open question or a "
-                      "prompt about recortex), run setup.py questions and ask what it lists as one multiple-choice batch", start)
+                      "prompt about recortex), load the recortex skill, run its setup.py questions and ask what it lists as one "
+                      "multiple-choice batch", start)
         self.assertIn("Do not offer the questions in prose.", start)
-        self.assertIn("Before this reply ends, run it and ask what it lists as one multiple-choice batch", reminder)
+        self.assertIn("Before this reply ends, load the recortex skill, run its setup.py questions and ask what it lists as one "
+                      "multiple-choice batch", reminder)
         self.assertIn("Do not just offer the questions.", reminder)
         for line in (start, reminder):
-            self.assertIn('"Setup questions" section of the recortex skill', line)
+            self.assertIn('the skill\'s "Setup questions" section', line)
+            self.assertIn("load the recortex skill", line)   # a session that has not loaded the skill has no path to its scripts
             self.assertNotIn("at the end of", line.lower())
             self.assertNotIn("first pause", line)
         self.assertLess(len(reminder) + 1, brief.CAPS["prompt-submit"])   # the prompt payload's cap

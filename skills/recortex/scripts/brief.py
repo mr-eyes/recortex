@@ -64,14 +64,14 @@ WRITING_NOT_CHOSEN = ("Writing: the user has not chosen whether recortex writes 
 # The lines of the setup questions (setup_questions.py), outside the data frame, fixed words and at most one checked integer from 1
 # to 6: SETUP_QUESTIONS and SETUP_UNREADABLE in the session-start payload only, SETUP_REMINDER in the prompt-submit payload only.
 SETUP_QUESTIONS = ("recortex: %d setup question%s to check, added since this project was set up. Before your first reply ends, "
-                   "once the user's request is done (at once for a greeting, an open question or a prompt about recortex), run "
-                   "setup.py questions and ask what it lists as one multiple-choice batch, as the \"Setup questions\" section "
-                   "of the recortex skill says. Do not offer the questions in prose.")
+                   "once the user's request is done (at once for a greeting, an open question or a prompt about recortex), load "
+                   "the recortex skill, run its setup.py questions and ask what it lists as one multiple-choice batch, as the "
+                   "skill's \"Setup questions\" section says. Do not offer the questions in prose.")
 # The reminder of the prompt-submit hook (setup_questions.reminder) is added to a later prompt while questions are open and
 # setup.py questions has not run since the session started, at most three times a session.
 SETUP_REMINDER = ("recortex: %d setup question%s still open, and setup.py questions has not run in this session. Before this "
-                  "reply ends, run it and ask what it lists as one multiple-choice batch, as the \"Setup questions\" section of "
-                  "the recortex skill says. Do not just offer the questions.")
+                  "reply ends, load the recortex skill, run its setup.py questions and ask what it lists as one multiple-choice "
+                  "batch, as the skill's \"Setup questions\" section says. Do not just offer the questions.")
 SETUP_UNREADABLE = ("recortex: the setup answers of this machine cannot be read, so no setup question is asked. Run "
                     "hooks.py --doctor.")
 WRITING_UNREADABLE = ("recortex: the writing setting of this machine cannot be read, so recortex writes nothing. Run "
