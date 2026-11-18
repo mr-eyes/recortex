@@ -12,6 +12,7 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 import test_jobs_jobs as tjj  # noqa: E402
+import test_jobs_keeper as tk  # noqa: E402
 import test_scripts as ts  # noqa: E402
 
 sys.path.insert(0, ts.SCRIPTS)
@@ -456,6 +457,42 @@ class CleanupRunTests(KeeperHelpers, tjj.JobsBox):
         self.run_worker()
         self.assertEqual([], self.present())
         self.assertEqual(2, self.last()["cleaned"])
+
+
+class RealKeeperFolderTests(tk.KeeperBox):
+    """The folders the keeper and `observer.py drafts` really make (write.py start's files, the approved copy), not copies of
+    their names: the cleanup takes them away whole."""
+
+    def draft_waiting(self):
+        self.consider()
+        self.assertEqual("drafted", self.consider(now=self.t0 + 31 * 60)["code"])
+        (found,) = self.kept()
+        return found
+
+    def test_a_real_draft_folder_and_its_approved_copy_go_when_the_draft_is_dropped_and_not_before(self):
+        import observer_drafts
+        found = self.draft_waiting()
+        self.assertEqual(0o700, os.stat(found["folder"]).st_mode & 0o777)
+        with self.open_store() as store:
+            copy, _ = observer_drafts.approved_copy(store, self.repo_name, found)
+            self.assertTrue(os.path.isfile(os.path.join(copy, "draft.md")))
+            self.assertEqual(("nothing", 0), jobs.clean_keeper(self.repo_name, store, time.time()))
+            self.assertTrue(os.path.isdir(found["folder"]) and os.path.isdir(copy))
+            store.set_draft(found["id"], "dropped", reason="dropped")
+            self.assertEqual(("ok", 2), jobs.clean_keeper(self.repo_name, store, time.time()))
+        self.assertFalse(os.path.lexists(found["folder"]) or os.path.lexists(copy))
+        self.assertEqual([], os.listdir(storage.cache_folder(self.repo_name, "keeper", create=False)))
+
+    def test_the_folder_of_a_draft_the_checks_refused_goes_at_once(self):
+        self.verdict = ("numbers", False)
+        self.consider()
+        self.assertEqual("refused", self.consider(now=self.t0 + 31 * 60)["code"])
+        (found,) = self.kept()
+        self.assertEqual("refused", found["state"])
+        self.assertTrue(os.path.isdir(found["folder"]))
+        with self.open_store() as store:
+            self.assertEqual(("ok", 1), jobs.clean_keeper(self.repo_name, store, time.time()))
+        self.assertFalse(os.path.lexists(found["folder"]))
 
 
 if __name__ == "__main__":
