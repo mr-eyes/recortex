@@ -90,16 +90,26 @@ class CommandTests(unittest.TestCase):
             self.assertFalse(pretool_guard.allowed_command(command), repr(operator))
         self.assertTrue(pretool_guard.allowed_command("python3 %s query find --words 'two words' --issue 4" % INDEX))
 
-    def test_the_index_script_is_this_scripts_folders_by_its_real_path(self):
+    def test_the_index_script_is_the_plugins_own_by_its_whole_absolute_path(self):
         with tempfile.TemporaryDirectory() as folder:
             link = os.path.join(folder, "index.py")
             os.symlink(INDEX, link)
-            self.assertTrue(pretool_guard.allowed_command("python3 %s query find --words x" % link))
+            self.assertFalse(pretool_guard.allowed_command("python3 %s query find --words x" % link))   # a link elsewhere
             elsewhere = os.path.join(folder, "other", "index.py")
             os.makedirs(os.path.dirname(elsewhere))
             with open(elsewhere, "w") as handle:
                 handle.write("print(1)\n")
             self.assertFalse(pretool_guard.allowed_command("python3 %s query find --words x" % elsewhere))
+            # a path through a link to the plugin's folder is another string: refused as well
+            folder_link = os.path.join(folder, "scripts")
+            os.symlink(ts.SCRIPTS, folder_link)
+            self.assertFalse(pretool_guard.allowed_command("python3 %s/index.py query find --words x" % folder_link))
+            self.assertFalse(pretool_guard.allowed_command("python3 %s/../scripts/index.py query find --words x" % ts.SCRIPTS))
+        relative = os.path.relpath(INDEX, os.getcwd())
+        self.assertFalse(os.path.isabs(relative))
+        self.assertFalse(pretool_guard.allowed_command("python3 %s query find --words x" % relative))
+        self.assertFalse(pretool_guard.allowed_command("python3 index.py query find --words x"))
+        self.assertTrue(pretool_guard.allowed_command("python3 %s query find --words x" % INDEX))
 
     def test_the_denial_holds_no_word_of_the_command(self):
         out = pretool_guard.ask_decision(call("echo ZZMARK-HOSTILE <script>"))

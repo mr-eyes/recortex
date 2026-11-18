@@ -39,7 +39,8 @@ def deny(reason):
 
 
 def allowed_command(command, scripts=HERE):
-    """True when `command` is exactly one `python3 <scripts>/index.py query <read> ...` and nothing else."""
+    """True when `command` is exactly one `python3 <scripts>/index.py query <read> ...` and nothing else, with the scripts
+    folder's own absolute path."""
     if not isinstance(command, str) or not command.strip() or len(command) > 4000 or OPERATORS.search(command):
         return False
     try:
@@ -48,8 +49,12 @@ def allowed_command(command, scripts=HERE):
         return False
     if len(words) < 4 or words[0] != "python3" or words[2] != "query" or words[3] not in QUERIES:
         return False
+    # The path is the plugin's own, written out in full: a relative one would be resolved against the hook's folder and
+    # not the one the command runs in, and a link elsewhere would run another file. So it must be the same string, and
+    # its real path must still be the plugin's real index.py.
+    index = os.path.join(scripts, "index.py")
     try:
-        return os.path.realpath(words[1]) == os.path.realpath(os.path.join(scripts, "index.py"))
+        return os.path.isabs(words[1]) and words[1] == index and os.path.realpath(words[1]) == os.path.realpath(index)
     except (OSError, ValueError):
         return False
 
