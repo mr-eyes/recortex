@@ -37,7 +37,7 @@ One table, in `board_rules.place()`; the first matching row wins.
 
 Only memories the mind page would tell count: an allowed account, never edited. A failure is followed when any later memory links to it, so a decision posted with `because=<the failure>` unblocks the card. Two rules for sessions follow: a failure that blocks a task names the task in one of its fields (for example `#7`), and a hold names the issue it holds.
 
-The Why field holds the plugin's own mark of what it last wrote: the status name, and after it the address of the memory behind the state. That is how a hand move is told from a card the plugin has not caught up with.
+The Why field holds the plugin's own mark of what it last wrote: the status name, after it the address of the memory behind the state, and for a task that has steps its count, for example `In Progress 3 of 5 steps` (steps done of steps not dropped, from the record's told memories; a task with no steps has no count, and its mark is as it was). That is how a hand move is told from a card the plugin has not caught up with. A new mark of the same status is written to Why alone.
 
 ### What setup does
 
@@ -55,7 +55,7 @@ Optional, in the browser, none required: keep GitHub's two default workflows (a 
 - `board.py apply --dry-run`, then `board.py apply`: syncs the index, reads the board, adds the missing cards, writes Status and Why for cards that are behind, leaves hand-moved cards alone, then reads every changed card back and says `MISMATCH` for any that did not take. At most 20 cards are written per run (`--limit`; about 40 requests, a minute or two in all); run it with a timeout of five minutes, and run it again until it says nothing waits. The cards it read back are kept in the index, so `board.py plan` and the brief are right at once. A run that stops is run again; adding a card is idempotent on GitHub's side.
 - `board.py apply --restore N`: puts one hand-moved card back, after the user's answer.
 
-Only the main session runs `apply`; hooks never write to GitHub, and the auditor runs only `plan`. A board failure never fails a record post, because no posting script calls `board.py`. A failure of `board.py` is one fixed line: `board: not done: <reason>. Run hooks.py --doctor.`
+Only the main session runs `apply`, and, from 1.5.0, the observer's worker at the level Everything (`board.apply_for`: the same run, at most 20 cards at a time, a fixed result code and no text from the board); hooks never write to GitHub, and the auditor runs only `plan`. A board failure never fails a record post, because no posting script calls `board.py`. A failure of `board.py` is one fixed line: `board: not done: <reason>. Run hooks.py --doctor.`
 
 ### When the board is updated
 

@@ -7,14 +7,16 @@ against the cards the sync stored in the index (`board_cards`), and `hand_moved`
 by hand. It reads the index only, makes no call and imports no module of the mind page.
 
 The Why text of a card is the plugin's own mark of what it last wrote: the status name, then the address of the memory
-behind it when there is one. A card whose Status differs from the record but whose Why equals the mark the record
-gives now was put there by someone else: a hand move. A card whose Why differs is simply behind.
+behind it when there is one, then "3 of 5 steps" for a task that has steps (integers from the record, never from the
+board). A card whose Status differs from the record but whose Why equals the mark the record gives now was put there by
+someone else: a hand move. A card whose Why differs is simply behind.
 """
 
 import datetime
 import json
 import os
 import re
+import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -30,9 +32,11 @@ ADDRESS = re.compile(r"https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/issue
 HOLDS = re.compile(r"^\*\*Holds:\*\*(.*)$", re.M)
 
 
-def mark(status, address=""):
-    """The Why text for a card in `status` because of the memory at `address` (checked by the caller)."""
-    return status if not address else "%s %s" % (status, address)
+def mark(status, address="", steps=None):
+    """The Why text for a card in `status` because of the memory at `address` (checked by the caller). `steps` is None, or
+    (steps done, steps) of a task that has steps: "3 of 5 steps" is added after the address (integers only)."""
+    text = status if not address else "%s %s" % (status, address)
+    return text if not steps else "%s %d of %d steps" % (text, steps[0], steps[1])
 
 
 def address_of(value):
@@ -147,9 +151,10 @@ def desired(db, allowed, now=None):
     labels = {}
     for row in db.execute("SELECT issue, label FROM labels"):
         labels.setdefault(row["issue"], set()).add(row["label"].lower())
+    counted = step_counts(db, allowed, now)
     cards = []
     for issue in db.execute("SELECT * FROM issues ORDER BY number"):
-        number, status, address, kind = issue["number"], None, "", "issue"
+        number, status, address, kind, steps = issue["number"], None, "", "issue", None
         if issue["is_pr"]:
             kind = "pull"
             if issue["state"] == "open":
@@ -162,10 +167,27 @@ def desired(db, allowed, now=None):
             placed = place(db, facts, issue, labels.get(number, set()), held, where, now)
             if placed:
                 status, address = placed
+                steps = counted.get(number)
         if status:
-            cards.append({"number": number, "kind": kind, "status": status, "address": address,
-                          "mark": mark(status, address)[:MARK_CAP]})
+            card = {"number": number, "kind": kind, "status": status, "address": address,
+                    "mark": mark(status, address, steps)[:MARK_CAP]}
+            if steps:
+                card["steps"] = steps
+            cards.append(card)
     return cards
+
+
+def step_counts(db, allowed, now=None):
+    """{issue number: (steps done, steps)} for each task that has steps (those still in the window included): what the
+    record's told steps and marks say, never the board. {} for a record that cannot say."""
+    try:
+        if not db.execute("SELECT 1 FROM steps LIMIT 1").fetchone():
+            return {}   # no steps memory anywhere: a record of 1.4.0, which pays nothing for this
+        report = index.tasks(db, allowed, closed_days=WINDOW_DAYS, now=now)
+    except (sqlite3.Error, KeyError, ValueError):
+        return {}
+    return {task["issue"]: (task["counts"]["done"], task["counts"]["steps"]) for task in report["tasks"]
+            if task["counts"]["steps"]}
 
 
 def written(why):

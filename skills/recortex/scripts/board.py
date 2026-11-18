@@ -25,6 +25,8 @@ Examples:
 """
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import re
@@ -244,6 +246,59 @@ def apply_command(args):
         print("board: %d more card(s) wait; run again" % skipped)
     moved_note(found, args)
     return 1 if errors else 0
+
+
+APPLY_CODES = ("ok", "nothing", "partial", "failed", "no-board", "entry", "unapproved", "untrusted", "refused", "error")
+
+
+def apply_for(repo, config, options=None):
+    """The worker's entry to `board.py apply` (level Everything): the same run for this project, as a short fixed-code
+    result, never an exception and never a word of what GitHub or the board said.
+
+    options: {"limit": cards at most (never above board_rules.WRITE_CAP), "pause": seconds between writes (default 1),
+    "dry_run": bool}. Returns {"code", "reason", "written", "waiting"}: code is one of APPLY_CODES ("ok" when it wrote
+    cards, "nothing" when every card was where the record puts it, "partial" when a write did not finish or did not read
+    back, "failed" for a failure of the board, with `reason` a key of board_api.REASONS, "no-board", "entry" and
+    "unapproved" for the project file's entry, "untrusted" for a repository that is not trusted, "refused" when a check
+    of the command stopped it, "error" for anything else); `written` is the number of cards written and read back,
+    `waiting` the number left for the next run (the cap of one run). Cards moved by hand are left alone, as in the
+    command, and nothing here writes to the record."""
+    options = options if isinstance(options, dict) else {}
+    out = {"code": "error", "reason": "", "written": 0, "waiting": 0}
+    try:
+        if not isinstance(repo, str) or repo.lower() not in recortex.trusted_repos():
+            return dict(out, code="untrusted")
+        state, owner, number = board_api.entry(config if isinstance(config, dict) else {}, repo)
+        if state != "approved":
+            return dict(out, code={"none": "no-board", "entry": "entry", "owner": "entry", "unapproved": "unapproved"}[state])
+        limit, pause = options.get("limit"), options.get("pause")
+        args = argparse.Namespace(
+            repo=repo, hub=None, dry_run=bool(options.get("dry_run")), restore=None,
+            pause=float(pause) if type(pause) in (int, float) and 0 <= pause <= 5 else 1.0,
+            limit=min(limit, board_rules.WRITE_CAP) if type(limit) is int and limit >= 1 else board_rules.WRITE_CAP)
+        printed = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(printed):
+                status = apply_command(args)
+        except SystemExit:
+            return dict(out, code="refused")
+        except board_api.BoardError as error:
+            return dict(out, code="failed", reason=error.code)
+        except recortex.GhError:
+            return dict(out, code="failed", reason="github")
+        text = printed.getvalue()
+        written = len(re.findall(r"^written: #[0-9]+ is in ", text, re.M))
+        waiting = re.search(r"^board: ([0-9]+) more card\(s\) wait", text, re.M)
+        out.update(written=written, waiting=int(waiting.group(1)) if waiting else 0)
+        failed = re.search(r"^board: not done: (.*)\. Run hooks\.py --doctor\.$", text, re.M)
+        if failed:
+            reasons = [key for key, words in board_api.REASONS.items() if words == failed.group(1)]
+            return dict(out, code="failed", reason=reasons[0] if reasons else "")
+        if status:
+            return dict(out, code="partial")
+        return dict(out, code="ok" if written else "nothing")
+    except Exception:  # noqa: BLE001 - the worker never fails over the board
+        return out
 
 
 def moved_note(found, args):
