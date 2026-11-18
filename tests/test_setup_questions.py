@@ -447,7 +447,7 @@ class HookLineTests(Box):
 
 
 class ReminderTests(Box):
-    """The prompt hook's reminder (1.4.0, after the live test): a session that has not run `setup.py questions` is told once or
+    """The prompt hook's reminder (1.4.0): a session that has not run `setup.py questions` is told once or
     twice, on a later prompt, with the count, in fixed words. (A prompt may also carry the hook's older lines, such as the
     reminder to refresh the status summary, which this record's first prompt does; what these tests look at is the reminder.)"""
 
