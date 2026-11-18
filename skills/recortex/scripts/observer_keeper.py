@@ -46,7 +46,7 @@ HEX = re.compile(r"[0-9a-f]{64}")
 CHECK_LINE = re.compile(r"^not ready \(check ([0-9]+)\): ", re.M)
 REVIEW_REASONS = ("supported", "unsupported", "numbers", "protected", "scope", "privacy")
 
-IDS = {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 1000000000}, "maxItems": 200}
+IDS = {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 2 ** 53}, "maxItems": 200}   # comment numbers: about 7 * 10 ** 9 on GitHub
 KEEPER_DRAFT = {"type": "object", "properties": {
     "draft": {"type": "string", "minLength": 1, "maxLength": 118000},
     "used": {"type": "object", "properties": {"parts": IDS, "results": IDS, "decisions": IDS},

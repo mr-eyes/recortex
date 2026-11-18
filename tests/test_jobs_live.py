@@ -26,6 +26,7 @@ sys.path.insert(0, ts.SCRIPTS)
 import observer  # noqa: E402
 import observer_holds  # noqa: E402
 import observer_jobs as jobs  # noqa: E402
+import observer_keeper  # noqa: E402
 import observer_runtime as runtime  # noqa: E402
 import observer_store as store  # noqa: E402
 import observer_worker as worker  # noqa: E402
@@ -275,6 +276,16 @@ class UndoNoteTests(tjj.JobsBox):
         code, text = self.undo_cli(ident)
         answer = json.loads(text)
         self.assertEqual(("not_reversible", jobs.CORRECTED["memory"]), (answer["code"], answer["note"]))
+
+
+class CommentNumberTests(unittest.TestCase):
+    def test_the_keepers_draft_names_the_comments_it_used_by_the_numbers_github_gives(self):
+        # The id lists were bounded at 10 ** 9, below any comment number a real record holds, so a real draft was invalid.
+        draft = {"draft": "# Title\n\nText.\n", "used": {"parts": [REAL_COMMENT], "results": [REAL_COMMENT + 1], "decisions": []},
+                 "memory": {"plain": "the text now says it", "changed": "A sentence.", "why": "A result."}}
+        self.assertTrue(runtime.validate(draft, observer_keeper.KEEPER_DRAFT))
+        for bad in (0, -1, 2 ** 53 + 1, True, "6972770100", 1.5):
+            self.assertFalse(runtime.validate(dict(draft, used=dict(draft["used"], parts=[bad])), observer_keeper.KEEPER_DRAFT), bad)
 
 
 class PromptTests(unittest.TestCase):
