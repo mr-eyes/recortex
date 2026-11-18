@@ -258,26 +258,31 @@ def render_command(args):
     return 0 if result["ok"] else 1
 
 
-def close_command(args):
-    config, repo, allowed = load(args)
-    report = report_of(repo, allowed)
-    task = find_task(report, args.issue)
+def close_task(repo, config, issue, dry_run=False, report=None):
+    """Close task `issue` as completed when every step is done or dropped (and one is done): write its Result, render its
+    list, close it and read it back. Says what happened, and returns {"ok", "reason", "backup"}: reason is a fixed word
+    ("closed", "not a task", "not finished", "by hand", "failed", "dry run"), backup the file that holds the replaced body
+    (None when nothing was written). A task with no steps is never closed by code, and the standing "To do" task is not
+    closed by the observer's jobs (they never ask for it)."""
+    out = {"ok": False, "reason": "failed", "backup": None}
+    report = report if report is not None else report_of(repo, recortex.allowed_users(repo))
+    task = find_task(report, issue)
     if task is None or task["state"] != "open":
-        say("not closed: #%d is not an open task of the record" % args.issue)
-        return 1
+        say("not closed: #%d is not an open task of the record" % issue)
+        return dict(out, reason="not a task")
     if not task_rules.finished(task["steps"]):
         left = [row["n"] for row in task["steps"] if row["state"] in ("open", "blocked")]
         if not task["steps"]:
-            say("not closed: #%d has no steps, and a task with no steps is never closed by code" % args.issue)
+            say("not closed: #%d has no steps, and a task with no steps is never closed by code" % issue)
         elif left:
-            say("not closed: #%d still has %s open" % (args.issue, numbers_words(left)))
+            say("not closed: #%d still has %s open" % (issue, numbers_words(left)))
         else:
-            say("not closed: no step of #%d is done; a task whose steps were all dropped is not finished" % args.issue)
-        return 1
-    live = recortex.read_issue_body(repo, args.issue)
+            say("not closed: no step of #%d is done; a task whose steps were all dropped is not finished" % issue)
+        return dict(out, reason="not finished")
+    live = recortex.read_issue_body(repo, issue)
     if task_rules.hand_changed(live):
-        say(BY_HAND % (args.issue, "", args.issue, args.issue))
-        return 1
+        say(BY_HAND % (issue, "", issue, issue))
+        return dict(out, reason="by hand")
     rows, seen = [], set()
     for row in task["steps"]:
         by = row["by"]
@@ -286,55 +291,66 @@ def close_command(args):
             rows.append((by["plain"], by["url"] or "comment %d" % by["id"]))
     stamp = recortex.stamp(now(), config)
     folder = scratch(repo)
-    base = write(folder, unique("base-%d" % args.issue, ".md"), live)
-    backup = os.path.join(folder, unique("close-%d" % args.issue, ".md"))
-    if post_body(repo, args.issue, "Result", task_rules.result_section(rows, stamp), base, backup, args.dry_run) != 0:
-        return 1
-    if args.dry_run:
-        say("would run: " + recortex.show_command(["issue", "close", str(args.issue), "--repo", repo, "--reason",
+    base = write(folder, unique("base-%d" % issue, ".md"), live)
+    backup = os.path.join(folder, unique("close-%d" % issue, ".md"))
+    if post_body(repo, issue, "Result", task_rules.result_section(rows, stamp), base, backup, dry_run) != 0:
+        return out
+    if dry_run:
+        say("would run: " + recortex.show_command(["issue", "close", str(issue), "--repo", repo, "--reason",
                                                    "completed"]))
         say("(the task list under ## Plan is rendered after the Result is written)")
-        return 0
-    result = render_task(repo, config, args.issue, report=report)
+        return dict(out, ok=True, reason="dry run")
+    result = render_task(repo, config, issue, report=report)
     if not result["ok"]:
         say("the Result is written, but the list could not be rendered; the task stays open")
-        return 1
-    recortex.gh(["issue", "close", str(args.issue), "--repo", repo, "--reason", "completed"])
-    state = json.loads(recortex.gh(["api", "repos/%s/issues/%d" % (repo, args.issue)])).get("state")
+        return dict(out, backup=backup)
+    recortex.gh(["issue", "close", str(issue), "--repo", repo, "--reason", "completed"])
+    state = json.loads(recortex.gh(["api", "repos/%s/issues/%d" % (repo, issue)])).get("state")
     if state != "closed":
-        say("MISMATCH: #%d reads back as %s; it was not closed" % (args.issue, state))
-        return 1
+        say("MISMATCH: #%d reads back as %s; it was not closed" % (issue, state))
+        return dict(out, backup=backup)
     counts = task["counts"]
     say("closed: #%d as completed, %d of %d steps done; backup of the earlier body: %s"
-        % (args.issue, counts["done"], counts["steps"], backup))
-    return 0
+        % (issue, counts["done"], counts["steps"], backup))
+    return {"ok": True, "reason": "closed", "backup": backup}
 
 
-def reopen_command(args):
+def close_command(args):
     config, repo, allowed = load(args)
+    return 0 if close_task(repo, config, args.issue, dry_run=args.dry_run, report=report_of(repo, allowed))["ok"] else 1
+
+
+def reopen_task(repo, config, issue, dry_run=False):
+    """Reopen task `issue` and put "Not finished" (or the Result the close replaced) back from the backup the close left.
+    Returns {"ok", "backup"} (the file that holds the replaced body, None when nothing was written)."""
     folder = scratch(repo)
-    live = recortex.read_issue_body(repo, args.issue)
-    before = sorted(name for name in os.listdir(folder) if name.startswith("close-%d-" % args.issue))
+    live = recortex.read_issue_body(repo, issue)
+    before = sorted(name for name in os.listdir(folder) if name.startswith("close-%d-" % issue))
     earlier = None
     if before:
         earlier = record_format.section_text(recortex.read_text(os.path.join(folder, before[-1])), "Result")
     if earlier is None or not earlier.strip() or earlier.startswith("Finished"):
         earlier = "%s Reopened %s." % (task_rules.NOT_FINISHED, recortex.stamp(now(), config))
-    if args.dry_run:
-        say("would run: " + recortex.show_command(["issue", "reopen", str(args.issue), "--repo", repo]))
+    if dry_run:
+        say("would run: " + recortex.show_command(["issue", "reopen", str(issue), "--repo", repo]))
     else:
-        recortex.gh(["issue", "reopen", str(args.issue), "--repo", repo])
-        state = json.loads(recortex.gh(["api", "repos/%s/issues/%d" % (repo, args.issue)])).get("state")
+        recortex.gh(["issue", "reopen", str(issue), "--repo", repo])
+        state = json.loads(recortex.gh(["api", "repos/%s/issues/%d" % (repo, issue)])).get("state")
         if state != "open":
-            say("MISMATCH: #%d reads back as %s; it was not reopened" % (args.issue, state))
-            return 1
-    base = write(folder, unique("base-%d" % args.issue, ".md"), live)
-    backup = os.path.join(folder, unique("reopen-%d" % args.issue, ".md"))
-    if post_body(repo, args.issue, "Result", earlier, base, backup, args.dry_run) != 0:
-        return 1
-    if not args.dry_run:
-        say("reopened: #%d; its Result says \"Not finished\" again" % args.issue)
-    return 0
+            say("MISMATCH: #%d reads back as %s; it was not reopened" % (issue, state))
+            return {"ok": False, "backup": None}
+    base = write(folder, unique("base-%d" % issue, ".md"), live)
+    backup = os.path.join(folder, unique("reopen-%d" % issue, ".md"))
+    if post_body(repo, issue, "Result", earlier, base, backup, dry_run) != 0:
+        return {"ok": False, "backup": None}
+    if not dry_run:
+        say("reopened: #%d; its Result says \"Not finished\" again" % issue)
+    return {"ok": True, "backup": None if dry_run else backup}
+
+
+def reopen_command(args):
+    config, repo, allowed = load(args)
+    return 0 if reopen_task(repo, config, args.issue, dry_run=args.dry_run)["ok"] else 1
 
 
 # ---------------------------------------------------------------- open a task, and the to-do list
