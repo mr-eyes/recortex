@@ -13,7 +13,9 @@ old body to a backup file, edits the issue and reads it back. A replacement
 requires --expected-body-file, the live body saved before drafting; a changed
 body stops the write. A second read narrows the race but is not an atomic lock.
 Use it when what the deliverable says changes: the draft is the whole new text, with no folded
-old text. For a final record the issue must be labeled final-record (not hub
+old text. With --section HEADING the draft is only the new text of one `## ` section: the live body is read, that
+section replaced and every other line kept as it is, and the whole result is what is linted, diffed, backed up and
+written (tasks.py uses it for a task's "Plan" and "Result"). For a final record the issue must be labeled final-record (not hub
 or active), and the section labels then follow the headings: the labels of new
 sections are added, those of removed sections are removed (only with
 --allow-label-removal), and the labels are read back. To convert a body of an
@@ -23,6 +25,7 @@ Examples:
   post_verified.py comment --issue 12 --kind result --body-file .tmp/result.md --dry-run
   post_verified.py comment --issue 12 --kind decision --body-file .tmp/decision.md
   post_verified.py body --issue 12 --kind final-record --body-file .tmp/topic.md --expected-body-file .tmp/topic-12.base.md --backup .tmp/topic-12.before.md --dry-run
+  post_verified.py body --issue 14 --kind active --section Plan --body-file .tmp/plan.md --expected-body-file .tmp/task-14.base.md --backup .tmp/task-14.before.md
 """
 
 import argparse
@@ -235,6 +238,8 @@ def main(argv=None):
             p.add_argument("--backup", help="file that receives the body being replaced (required unless --dry-run)")
             p.add_argument("--expected-body-file", help="live body saved before drafting; required for a real "
                            "replacement, checked in an online dry run when supplied")
+            p.add_argument("--section", help="the --body-file holds only the new text under this `## ` heading; every other "
+                           "line of the live body is kept (needs the live body, so not with --offline)")
             p.add_argument("--profile", help="comma-separated profiles that define a final record's section "
                            "headings (default: profiles in .recortex.json)")
             p.add_argument("--allow-label-removal", action="store_true",
@@ -262,6 +267,19 @@ def main(argv=None):
         register = queued == "register"
         if queued is not None and not register:
             return queued
+    composed_from = None
+    if args.command == "body" and args.section:
+        if args.offline:
+            parser.error("--section needs the live body, so it cannot be used with --offline")
+        composed_from = recortex.read_issue_body(repo, args.issue)
+        composed = record_format.replace_section(composed_from, args.section, draft)
+        if composed is None:
+            print("not posted: %s#%d has no '## %s' section, so nothing was replaced" % (repo, args.issue, args.section))
+            return 1
+        args.body_file += ".body"
+        with open(args.body_file, "w", encoding="utf-8") as handle:
+            handle.write(composed)
+        draft = composed
     expected = None
     if args.command == "body" and args.expected_body_file:
         if not os.path.isfile(args.expected_body_file):
@@ -353,6 +371,10 @@ def main(argv=None):
         if add or remove:
             labels_command = recortex.label_command(repo, args.issue, add, remove)
     old = recortex.read_issue_body(repo, args.issue)
+    if composed_from is not None and recortex.normalize(old) != recortex.normalize(composed_from):
+        print("stopped: the live body of %s#%d changed while the section was being replaced; nothing was written. Read "
+              "the current body and rerun." % (repo, args.issue))
+        return 1
     diff = list(difflib.unified_diff(recortex.normalize(old).split("\n"), recortex.normalize(draft).split("\n"),
                                      "%s#%d now" % (repo, args.issue), args.body_file, lineterm=""))
     if not diff and not labels_command:

@@ -693,6 +693,413 @@ def index_module():
 
 # ---------------------------------------------------------------- tasks.py
 
+class TasksCommandTests(TaskBox):
+    """render, close, reopen, open, add, mark and drop: through post_verified.py and create_issues.py, read back."""
+
+    def edits(self):
+        return [c for c in self.log("issue edit")]
+
+    def test_status_lists_the_tasks_and_where_the_to_do_list_is(self):
+        out = self.task("status")
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn("#7  Task: support newlines inside quoted fields  (open)  1 of 2 steps done", out.stdout)
+        self.assertIn("1. [x] Carry the quote state across physical lines", out.stdout)
+        self.assertIn("There is no standing \"To do\" task yet", out.stdout)
+        data = json.loads(self.task("status", "--json").stdout)
+        self.assertEqual(7, next(t for t in data["tasks"] if t["issue"] == 7)["issue"])
+
+    def test_render_replaces_only_the_plan_and_keeps_the_rest_of_the_body(self):
+        body = self.body(7).replace("Make the reader accept a newline", "Make the reader accept a newline (hand-edited)")
+        self.set_body(7, body)
+        self.ready()
+        out = self.task("render", "--issue", "7")
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        now = self.body(7)
+        self.assertIn("- [x] 1. Carry the quote state across physical lines\n- [ ] 2. Rerun the conformance set\n"
+                      "<!-- ghim:list sha256 ", now)
+        self.assertEqual(body.split("## Plan")[0], now.split("## Plan")[0])
+        self.assertEqual(body.split("## Result")[1], now.split("## Result")[1])
+        self.assertIn("(hand-edited)", now)
+        backups = [name for name in os.listdir(os.path.join(self.data, "private", "octo-org__octo-repo", "tasks"))
+                   if name.startswith("render-7-")]
+        self.assertEqual(1, len(backups))
+
+    def test_render_twice_changes_nothing_the_second_time(self):
+        self.assertEqual(0, self.task("render", "--issue", "7").returncode)
+        before = len(self.edits())
+        out = self.task("render", "--issue", "7")
+        self.assertEqual(0, out.returncode)
+        self.assertIn("no change", out.stdout)
+        self.assertEqual(before, len(self.edits()))
+
+    def test_a_dry_run_writes_nothing_to_github(self):
+        out = self.task("render", "--issue", "7", "--dry-run")
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        self.assertIn("would run: gh issue edit 7", out.stdout)
+        self.assertEqual([], self.edits())
+
+    def test_render_refuses_a_body_that_changed_since_it_was_read(self):
+        stale = self.body(7)
+        self.set_body(7, stale + "\nAdded by someone on GitHub.\n")
+        out = self.task("render", "--issue", "7", "--expected-body-file", self.write("stale.md", stale))
+        self.assertEqual(1, out.returncode)
+        self.assertIn("changed since it was read", out.stdout)
+        self.assertEqual([], self.edits())
+
+    def test_render_refuses_a_body_that_changes_while_it_runs(self):
+        before = self.body(7)
+        reads = self.repo().get("reads", 0)
+        out = self.task("render", "--issue", "7", env={"FAKE_GH_CHANGE_ON_READ": str(reads + 2)})
+        self.assertEqual(1, out.returncode, out.stdout)
+        self.assertIn("differs from --expected-body-file", out.stdout)
+        self.assertEqual([], self.edits())
+        self.assertTrue(self.body(7).endswith("Edited by someone else meanwhile."))   # theirs is still there
+        self.assertNotIn("ghim:list", self.body(7))
+
+    def test_a_body_with_no_plan_is_left_alone_and_reported(self):
+        self.set_body(7, self.body(7).replace("## Plan", "## Steps"))
+        self.ready()
+        out = self.task("render", "--issue", "7")
+        self.assertEqual(0, out.returncode, out.stdout)
+        self.assertIn("has no '## Plan' section", out.stdout)
+        self.assertEqual([], self.edits())
+
+    def test_a_task_without_told_steps_is_not_rendered(self):
+        out = self.task("render", "--issue", "3")
+        self.assertEqual(0, out.returncode)
+        self.assertIn("no told steps memory", out.stdout)
+        self.assertEqual([], self.edits())
+
+    def test_a_box_ticked_by_hand_is_counted_not_believed_and_not_overwritten(self):
+        self.assertEqual(0, self.task("render", "--issue", "7").returncode)
+        ticked = self.body(7).replace("- [ ] 2. Rerun", "- [x] 2. Rerun")
+        self.set_body(7, ticked)
+        self.ready()
+        task = self.task_at(7)
+        self.assertEqual(["done", "open"], [s["state"] for s in task["steps"]])   # not believed
+        self.assertTrue(task["hand"])
+        self.assertEqual([2], task["hand_steps"])
+        counts = json.loads(self.sql("SELECT value FROM meta WHERE key = 'task_counts'")[0][0])
+        self.assertEqual(1, counts["hand"])
+        edits = len(self.edits())
+        out = self.task("render", "--issue", "7")
+        self.assertEqual(1, out.returncode)
+        self.assertIn("changed by hand", out.stdout)
+        self.assertEqual(ticked, self.body(7))                  # not overwritten
+        self.assertEqual(edits, len(self.edits()))
+        status = self.task("status").stdout
+        self.assertIn("the list in the body was changed by hand", status)
+        self.assertIn("step 2 differs", status)
+
+    def test_restore_puts_a_list_changed_by_hand_back(self):
+        self.assertEqual(0, self.task("render", "--issue", "7").returncode)
+        self.set_body(7, self.body(7).replace("- [ ] 2. Rerun", "- [x] 2. Rerun"))
+        self.ready()
+        out = self.task("render", "--issue", "7", "--restore")
+        self.assertEqual(0, out.returncode, out.stdout)
+        self.assertIn("- [ ] 2. Rerun the conformance set", self.body(7))
+        self.ready()
+        self.assertFalse(self.task_at(7)["hand"])
+
+    def test_a_list_that_is_only_behind_is_rendered_not_held(self):
+        self.assertEqual(0, self.task("render", "--issue", "7").returncode)
+        self.post(9110, 5, recortex.read_text(os.path.join(CHAIN, "7-result.md")).replace(" done=%d:1" % STEPS_ID, " done=%d:2" % STEPS_ID)
+                  .replace("2026-03-12T15:30", "2026-03-13T15:30").replace("2026-03-12 15:30", "2026-03-13 15:30"))
+        self.assertFalse(self.task_at(7)["hand"])
+        self.assertEqual(0, self.task("render", "--issue", "7").returncode)
+        self.assertIn("- [x] 2. Rerun the conformance set", self.body(7))
+
+    def close_ready(self):
+        """A second result checks the second step, so that every step is done."""
+        self.post(9110, 5, recortex.read_text(os.path.join(CHAIN, "7-result.md")).replace(" done=%d:1" % STEPS_ID, " done=%d:2" % STEPS_ID)
+                  .replace("2026-03-12T15:30", "2026-03-13T15:30").replace("2026-03-12 15:30", "2026-03-13 15:30"))
+
+    def test_close_writes_the_result_renders_and_closes_when_every_step_is_done(self):
+        self.close_ready()
+        out = self.task("close", "--issue", "7")
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        self.assertIn("closed: #7 as completed, 2 of 2 steps done", out.stdout)
+        issue = self.repo()["issues"]["7"]
+        self.assertEqual(("closed", "completed"), (issue["state"], issue["state_reason"]))
+        body = self.body(7)
+        self.assertIn("- [x] 1. Carry the quote state across physical lines\n- [x] 2. Rerun the conformance set", body)
+        result = body.split("## Result")[1]
+        self.assertIn("Finished ", result)
+        self.assertEqual(2, result.count("#issuecomment-"))
+        self.assertIn("(https://github.com/octo-org/octo-repo/issues/5#issuecomment-%d)" % RESULT_ID, result)
+        self.assertNotIn("Not finished", result)
+
+    def test_close_refuses_a_task_with_an_open_step(self):
+        out = self.task("close", "--issue", "7")
+        self.assertEqual(1, out.returncode)
+        self.assertIn("still has step 2 open", out.stdout)
+        self.assertEqual("open", self.repo()["issues"]["7"].get("state", "open"))
+        self.assertEqual([], self.edits())
+
+    def test_close_never_closes_a_task_with_no_steps(self):
+        out = self.task("close", "--issue", "3")
+        self.assertEqual(1, out.returncode)
+        self.assertIn("no steps", out.stdout)
+        self.assertEqual("open", self.repo()["issues"]["3"].get("state", "open"))
+
+    def test_close_refuses_a_task_whose_steps_are_all_dropped(self):
+        drops = []
+        for n, cid in ((1, 9110), (2, 9111)):
+            text = recortex.read_text(os.path.join(CHAIN, "5-decision.md")).replace(" replaces=9102", " dropped=%d:%d" % (STEPS_ID, n))
+            text = text.replace("2026-03-12T10:10", "2026-03-13T1%d:10" % n).replace("2026-03-12 10:10", "2026-03-13 1%d:10" % n)
+            drops.append((cid, text))
+        data = self.repo()
+        data["comments"].pop(str(RESULT_ID))
+        self.save(data)
+        for cid, text in drops:
+            self.put(cid, 7, text)
+        self.set_body(5, self.body(5))
+        self.ready()
+        self.assertEqual(["dropped", "dropped"], [s["state"] for s in self.task_at(7)["steps"]])
+        out = self.task("close", "--issue", "7")
+        self.assertEqual(1, out.returncode)
+        self.assertIn("no step of #7 is done", out.stdout)
+
+    def test_close_does_not_touch_a_list_changed_by_hand(self):
+        self.close_ready()
+        self.assertEqual(0, self.task("render", "--issue", "7").returncode)
+        self.set_body(7, self.body(7).replace("- [x] 2. Rerun", "- [ ] 2. Rerun"))
+        self.ready()
+        out = self.task("close", "--issue", "7")
+        self.assertEqual(1, out.returncode)
+        self.assertIn("changed by hand", out.stdout)
+        self.assertEqual("open", self.repo()["issues"]["7"].get("state", "open"))
+
+    def test_reopen_puts_not_finished_back(self):
+        self.close_ready()
+        self.assertEqual(0, self.task("close", "--issue", "7").returncode)
+        out = self.task("reopen", "--issue", "7")
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        self.assertEqual("open", self.repo()["issues"]["7"]["state"])
+        self.assertIn("Not finished. Opened 2026-03-04 16:35 PST.", self.body(7).split("## Result")[1])
+
+    def test_a_close_dry_run_writes_nothing(self):
+        self.close_ready()
+        out = self.task("close", "--issue", "7", "--dry-run")
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        self.assertIn("would run: gh issue close 7", out.stdout)
+        self.assertEqual([], self.edits())
+        self.assertEqual([], self.log("issue close"))
+
+
+class OpenAndMarkTests(TaskBox):
+    """Opening a task, the to-do list, and steps checked or dropped by the user's words."""
+
+    def task_drafts(self, name="open1", title="Task: write the benchmark note", topic=5, steps=("Run the benchmark", "Write the table"),
+               plain="write the benchmark note in two steps"):
+        folder = os.path.join(self.dir, name)
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "steps.md"), "w") as handle:
+            handle.write(steps_text(at="2026-03-13T09:00-08:00", plain=plain, steps=steps, done="The note is posted."))
+        with open(os.path.join(folder, "task.json"), "w") as handle:
+            json.dump({"title": title, "topic": topic}, handle)
+        return folder
+
+    def issues_created(self):
+        return len(self.log("issue create"))
+
+    def newest_issue(self):
+        number = max(int(n) for n in self.repo()["issues"])
+        return number, self.repo()["issues"][str(number)]
+
+    def comments_on(self, number):
+        return [(cid, c["body"]) for cid, c in sorted(self.repo()["comments"].items(), key=lambda row: int(row[0]))
+                if c["issue"] == number]
+
+    def test_open_creates_one_active_task_with_its_steps_memory(self):
+        out = self.task("open", "--dir", self.task_drafts())
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        number, issue = self.newest_issue()
+        self.assertIn("opened: task #%d" % number, out.stdout)
+        self.assertEqual(["active"], issue["labels"])
+        self.assertEqual("Task: write the benchmark note", issue["title"])
+        body = issue["body"].replace("\r\n", "\n")
+        self.assertIn("## Goal\n\nWrite the benchmark note in two steps.", body)
+        self.assertIn("## Destination topic\n\n#5:", body)
+        self.assertIn("## Done when\n\nThe note is posted.", body)
+        self.assertIn("## Plan\n\n- [ ] 1. Run the benchmark\n- [ ] 2. Write the table\n<!-- ghim:list sha256 ", body)
+        self.assertRegex(body, r"Not finished\. Opened 2026-")
+        comments = self.comments_on(number)
+        self.assertEqual(1, len(comments))
+        self.assertEqual("steps", record_format.parse_event(comments[0][1])["type"])
+        self.assertEqual([], codes(lint(body, "active")))
+        self.assertEqual(5, issue.get("parent"))   # a sub-issue of its destination topic, as create_issues makes it
+
+    def test_the_task_is_opened_once_when_the_run_is_repeated_or_interrupted(self):
+        folder = self.task_drafts()
+        self.assertEqual(0, self.task("open", "--dir", folder).returncode)
+        first = self.issues_created()
+        again = self.task("open", "--dir", folder)
+        self.assertEqual(0, again.returncode, again.stdout)
+        self.assertEqual(first, self.issues_created())
+        self.assertIn("exists: NEW-task is #", again.stdout)
+        self.assertIn("already posted", again.stdout)
+        self.assertEqual(1, len([n for n, i in self.repo()["issues"].items() if i["title"] == "Task: write the benchmark note"]))
+
+    def test_an_interrupted_open_is_adopted_by_the_rerun_and_opens_no_second_task(self):
+        folder = self.task_drafts(name="open2", title="Task: write the second note")
+        stopped = self.task("open", "--dir", folder, env={"FAKE_GH_FAIL_AFTER": "issue create"})
+        self.assertEqual(1, stopped.returncode)
+        self.assertEqual(1, len([i for i in self.repo()["issues"].values() if i["title"] == "Task: write the second note"]))
+        out = self.task("open", "--dir", folder)
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        self.assertIn("adopted: NEW-task", out.stdout)
+        self.assertEqual(1, len([i for i in self.repo()["issues"].values() if i["title"] == "Task: write the second note"]))
+        number, _ = self.newest_issue()
+        self.assertEqual(1, len(self.comments_on(number)))
+
+    def test_open_refuses_drafts_that_are_not_in_form(self):
+        folder = self.task_drafts(name="open3")
+        with open(os.path.join(folder, "task.json"), "w") as handle:
+            json.dump({"title": "x", "topic": "five"}, handle)
+        out = self.task("open", "--dir", folder)
+        self.assertEqual(1, out.returncode)
+        self.assertIn("task.json is", out.stdout)
+        bad = self.task_drafts(name="open4", steps=("a",))
+        with open(os.path.join(bad, "steps.md"), "w") as handle:
+            handle.write(steps_text(steps=[]))
+        self.assertEqual(1, self.task("open", "--dir", bad).returncode)
+        self.assertEqual(0, self.issues_created())
+
+    def test_a_dry_run_of_open_makes_no_issue(self):
+        out = self.task("open", "--dir", self.task_drafts(), "--dry-run")
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        self.assertIn("gh issue create", out.stdout)
+        self.assertEqual(0, self.issues_created())
+
+    def item_file(self, text="remind me to rerun with the other seed"):
+        return self.write("item-%d.txt" % len(os.listdir(self.dir)), text)
+
+    def test_the_first_to_do_item_opens_the_standing_task_and_the_next_one_joins_it(self):
+        out = self.task("add", "--text-file", self.item_file())
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        number, issue = self.newest_issue()
+        self.assertEqual(("To do", ["active"]), (issue["title"], issue["labels"]))
+        self.assertIn("## Destination topic\n\nNone:", issue["body"].replace("\r\n", "\n"))
+        first = self.comments_on(number)[0][1]
+        self.assertEqual(["remind me to rerun with the other seed"], record_format.steps_list(first))
+        self.assertIn("> remind me to rerun with the other seed", first)
+        self.assertEqual("chat", record_format.agreed_form(record_format.field_text(first, "Agreed")))
+        self.ready()
+        out = self.task("add", "--text-file", self.item_file("check the other seed on Friday"))
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        self.assertEqual(number, self.newest_issue()[0])   # no second task
+        self.assertEqual(2, len(self.comments_on(number)))
+        body = self.repo()["issues"][str(number)]["body"].replace("\r\n", "\n")
+        self.assertIn("- [ ] 1. remind me to rerun with the other seed\n- [ ] 2. check the other seed on Friday\n", body)
+        self.assertEqual(number, self.query("tasks")["todo"])
+
+    def test_a_to_do_item_is_one_short_line_of_the_users_words(self):
+        too_long = self.task("add", "--text-file", self.item_file("word " * 80))
+        self.assertNotEqual(0, too_long.returncode)
+        self.assertIn("at most 300 characters", too_long.stdout + too_long.stderr)
+        empty = self.task("add", "--text-file", self.item_file("  "))
+        self.assertNotEqual(0, empty.returncode)
+        self.assertEqual(0, self.issues_created())
+
+    def words_file(self, text="yes, the second step is done"):
+        return self.write("words-%d.txt" % len(os.listdir(self.dir)), text)
+
+    def test_mark_posts_a_checkpoint_with_done_and_the_task_shows_the_step_checked(self):
+        out = self.task("mark", "--task", "7", "--steps", "2", "--words-file", self.words_file())
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        comments = self.comments_on(7)
+        posted = comments[-1][1]
+        self.assertEqual("checkpoint", record_format.parse_event(posted)["type"])
+        self.assertEqual([("done", STEPS_ID, 2)], record_format.marks(record_format.parse_marker(posted.split("\n")[0].strip())))
+        self.assertIn("> yes, the second step is done", posted)
+        self.assertEqual([], codes(lint(posted, "checkpoint")))
+        self.ready()
+        self.assertEqual(["done", "done"], [step["state"] for step in self.task_at(7)["steps"]])
+        self.assertIn("- [x] 2. Rerun the conformance set", self.body(7))   # rendered afterwards
+        self.assertEqual(0, self.task("status").returncode)
+
+    def test_mark_names_steps_as_the_task_list_numbers_them(self):
+        self.post(9110, 7, steps_text(at="2026-03-13T09:00-08:00", plain="add two checks to the task", steps=["Write the notes", "Tag the release"]))
+        out = self.task("mark", "--task", "7", "--steps", "2,4", "--words-file", self.words_file(), "--no-render")
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        posted = self.comments_on(7)[-1][1]
+        self.assertEqual([("done", STEPS_ID, 2), ("done", 9110, 2)],
+                         record_format.marks(record_format.parse_marker(posted.split("\n")[0].strip())))
+
+    def test_mark_refuses_what_it_cannot_record(self):
+        words = self.words_file()
+        for args, why in ((("--task", "7", "--steps", "5"), "has no step 5"), (("--task", "7", "--steps", "1"), "already"),
+                          (("--task", "99", "--steps", "1"), "not an open task"), (("--task", "7", "--steps", "x"), "--steps is")):
+            out = self.task("mark", *args, "--words-file", words)
+            self.assertNotEqual(0, out.returncode, args)
+            self.assertIn(why, out.stdout + out.stderr, args)
+        self.assertEqual(1, len(self.comments_on(7)))   # nothing was posted by the refusals
+
+    def test_drop_posts_a_decision_with_dropped(self):
+        out = self.task("drop", "--task", "7", "--steps", "2", "--words-file", self.words_file("drop the rerun, it is not needed"))
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        posted = self.comments_on(7)[-1][1]
+        self.assertEqual("decision", record_format.parse_event(posted)["type"])
+        self.assertEqual([("dropped", STEPS_ID, 2)], record_format.marks(record_format.parse_marker(posted.split("\n")[0].strip())))
+        self.assertEqual([], codes(lint(posted, "decision")))
+        self.ready()
+        self.assertEqual(["done", "dropped"], [step["state"] for step in self.task_at(7)["steps"]])
+        self.assertIn("- [x] 2. ~~Rerun the conformance set~~ (dropped)", self.body(7))
+
+    def test_a_dry_run_of_mark_posts_nothing(self):
+        out = self.task("mark", "--task", "7", "--steps", "2", "--words-file", self.words_file(), "--dry-run")
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        self.assertIn("would run: gh issue comment 7", out.stdout)
+        self.assertEqual([], self.log("issue comment"))
+
+
+class SectionTests(TaskBox):
+    """post_verified.py body --section: one section replaced, every other line kept, a changed body refused."""
+
+    def run_section(self, heading, text, base=None, extra=()):
+        draft = self.write("section-%d.md" % len(os.listdir(self.dir)), text)
+        base = self.write("base-%d.md" % len(os.listdir(self.dir)), base if base is not None else self.body(7))
+        backup = os.path.join(self.dir, "backup-%d.md" % len(os.listdir(self.dir)))
+        return self.tool("post_verified.py", "body", "--issue", "7", "--kind", "active", "--section", heading, "--body-file", draft,
+                         "--expected-body-file", base, "--backup", backup, *extra), backup
+
+    def test_one_section_is_replaced_and_the_rest_is_kept_as_it_is(self):
+        before = self.body(7)
+        out, backup = self.run_section("Done when", "Every file passes.")
+        self.assertEqual(0, out.returncode, out.stdout + out.stderr)
+        now = self.body(7)
+        self.assertIn("## Done when\n\nEvery file passes.\n\n## Plan", now)
+        self.assertEqual(before.split("## Done when")[0], now.split("## Done when")[0])
+        self.assertEqual(before.split("## Plan")[1], now.split("## Plan")[1])
+        self.assertEqual(before, recortex.read_text(backup).replace("\r\n", "\n"))
+
+    def test_a_section_that_is_not_there_is_not_written(self):
+        out, _ = self.run_section("Nothing here", "x")
+        self.assertEqual(1, out.returncode)
+        self.assertIn("has no '## Nothing here' section", out.stdout)
+        self.assertEqual([], self.log("issue edit"))
+
+    def test_the_whole_result_is_linted(self):
+        out, _ = self.run_section("Plan", "- [ ] 1. a\n- [ ] 3. b")
+        self.assertEqual(1, out.returncode)
+        self.assertIn("plan-list", out.stdout)
+        self.assertEqual([], self.log("issue edit"))
+
+    def test_a_body_that_differs_from_the_expected_one_stops_the_write(self):
+        out, _ = self.run_section("Done when", "Every file passes.", base=self.body(7) + "\nsomething else\n")
+        self.assertEqual(1, out.returncode)
+        self.assertIn("differs from --expected-body-file", out.stdout)
+        self.assertEqual([], self.log("issue edit"))
+
+    def test_a_section_cannot_be_replaced_offline(self):
+        draft = self.write("s.md", "x")
+        out = self.tool("post_verified.py", "body", "--issue", "7", "--kind", "active", "--section", "Plan", "--body-file", draft,
+                        "--dry-run", "--offline")
+        self.assertNotEqual(0, out.returncode)
+        self.assertIn("--section needs the live body", out.stderr)
+
+
 class MarkTargetLintTests(TaskBox):
     """The linter asks the record whether a mark's target is a steps memory of an active task with that step."""
 

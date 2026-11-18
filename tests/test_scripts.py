@@ -7266,7 +7266,7 @@ class MindIndexTests(MindSandbox):
         self.sql("UPDATE events SET at = '2026-03-09T18:00' WHERE comment = 9701",   # what the index held before this derive
                  "UPDATE meta SET value = '3' WHERE key = 'derive_version'")
         self.ready()
-        self.assertEqual(("2026-03-09T18:00-08:00", "4"), (self.sql("SELECT at FROM events WHERE comment = 9701")[0][0],
+        self.assertEqual(("2026-03-09T18:00-08:00", "5"), (self.sql("SELECT at FROM events WHERE comment = 9701")[0][0],
                                                           self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0]))
 
     def unknown_zone_result(self, at="2026-03-05T09:00Z"):

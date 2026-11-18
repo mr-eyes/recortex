@@ -7,6 +7,7 @@ A comment's "edits" list follows GitHub: newest first, and for an edited
 comment it ends with an entry for the creation of the comment. A comment that
 was never edited has no "edits" (GitHub returns an empty history and a null
 lastEditedAt for it).
+`issue close [--reason completed|"not planned"]` and `issue reopen` change an issue's state and add the timeline event.
 Fault switches:
   FAKE_GH_FAIL_ON="issue edit"   exit 1 for commands starting with these words
   FAKE_GH_FAIL_AFTER="issue create"  do the work, then exit 1 (a timeout after GitHub acted)
@@ -117,6 +118,7 @@ def api_issue(state, repo, number):
         "user": {"login": issue.get("user", "octocat")},
         "created_at": issue.get("created_at", "2026-01-05T17:00:00Z"),
         "updated_at": issue.get("updated_at", "2026-01-06T18:30:00Z"), "closed_at": issue.get("closed_at"),
+        "state_reason": issue.get("state_reason"),
         "html_url": "https://github.com/%s/%s/%s" % (repo, kind, number),
     }
     if issue.get("pull_request"):
@@ -279,6 +281,21 @@ def main():
                                        "created_at": "%sT%02d:%02d:00Z" % (state.get("date", "2026-04-01"), *divmod(cid - 9100, 60))}
         state["issues"][args[2]]["updated_at"] = state["comments"][str(cid)]["created_at"]
         print("https://github.com/%s/issues/%s#issuecomment-%d" % (repo, args[2], cid))
+    elif words in ("issue close", "issue reopen"):
+        if args[2] not in state["issues"]:
+            fail("gh: Not Found (HTTP 404)")
+        issue = state["issues"][args[2]]
+        state["clock"] = state.get("clock", 0) + 1
+        stamp = "%sT%02d:%02d:00Z" % (state.get("date", "2026-04-02"), *divmod(state["clock"], 60))
+        if words == "issue close":
+            reason = option(args, "--reason", "completed").replace(" ", "_")
+            issue.update(state="closed", closed_at=stamp, updated_at=stamp, state_reason=reason)
+            issue.setdefault("timeline", []).append({"event": "closed", "created_at": stamp, "state_reason": reason,
+                                                     "actor": {"login": ME}})
+        else:
+            issue.update(state="open", closed_at=None, updated_at=stamp, state_reason="reopened")
+            issue.setdefault("timeline", []).append({"event": "reopened", "created_at": stamp, "actor": {"login": ME}})
+        print("https://github.com/%s/issues/%s" % (repo, args[2]))
     elif words == "issue pin":
         state["issues"][args[2]]["pinned"] = True
     elif words == "issue view":

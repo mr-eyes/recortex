@@ -114,6 +114,22 @@ def section_text(body, heading):
     return None
 
 
+def replace_section(body, heading, text):
+    """`body` with the text under the level-2 section `heading` (compared without case) replaced by `text`, or None when
+    the body has no such section. The heading line and every line outside the section stay as they are (line endings
+    become LF); the new text stands after one blank line and before one blank line and the next heading."""
+    lines = body.replace("\r\n", "\n").split("\n")
+    found = recortex.body_sections(body)
+    for position, (number, name) in enumerate(found):
+        if name.lower() != heading.lower():
+            continue
+        stop = found[position + 1][0] - 1 if position + 1 < len(found) else len(lines)
+        new = [line.rstrip() for line in text.strip("\n").split("\n")] if text.strip() else []
+        more = lines[stop:]
+        return "\n".join(lines[:number] + [""] + new + ([""] if more else []) + more)
+    return None
+
+
 def table_rows(text):
     """Rows of the first Markdown table in `text`, header and separator removed, as lists of cells."""
     rows, started = [], False
