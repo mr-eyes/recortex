@@ -41,6 +41,7 @@ RUNS = ("same", "add", "del")
 TOKEN = re.compile(r"\s+|\S+\s*")   # a word with the whitespace after it; whitespace alone only at the start
 JUNK_SHARE = 5           # autojunk is used where one item is more than a fifth of the list that is matched
 MATCH_PAIRS = 100000     # places that difflib may walk for one match (copies in one list times copies in the other); more is autojunk or no match
+MATCH_WORK = 2000000     # places that one comparison may walk in all, over every match it looks for; past it the rest is replaced
 
 
 def paragraphs(text):
@@ -90,6 +91,27 @@ class NoMatches:
     quick_ratio = ratio = real_quick_ratio
 
 
+class Bounded(difflib.SequenceMatcher):
+    """A SequenceMatcher that charges every search for a match (the items of the range searched and the copies of each in the second
+    list, which is what find_longest_match walks) to one budget, MATCH_WORK, for the whole comparison. difflib searches again in the
+    ranges on both sides of every match it finds, so a chain of short matches walks nearly the whole count again for each match;
+    the budget bounds the total. Once it is spent no further match is found, and what lies between the matches already found is
+    replaced, as NoMatches replaces the whole. Prose, with few and short searches, never reaches it."""
+
+    def __init__(self, first, second, autojunk):
+        self.left = MATCH_WORK
+        super().__init__(None, first, second, autojunk=autojunk)
+
+    def find_longest_match(self, alo=0, ahi=None, blo=0, bhi=None):   # the bounds have defaults from Python 3.9 only
+        ahi = len(self.a) if ahi is None else ahi
+        bhi = len(self.b) if bhi is None else bhi
+        b2j = self.b2j   # without the items that autojunk dropped, which difflib does not walk either
+        self.left -= (ahi - alo) + sum(len(b2j.get(item, ())) for item in self.a[alo:ahi])
+        if self.left < 0:
+            return difflib.Match(alo, blo, 0)
+        return super().find_longest_match(alo, ahi, blo, bhi)
+
+
 def walked(first, counts, popular=None):
     """The pairs of places difflib walks to find a match: for each item the copies it has in `first` times the copies it has in
     the second list (`counts`), without the items that have more than `popular` copies there when autojunk drops them. Counting
@@ -108,20 +130,23 @@ def matcher(first, second):
     """A matcher over two lists of strings (the words of a paragraph, the paragraphs of a text, the keys of the blocks of a part),
     whose work is bounded at every level by one rule. difflib walks, for each item, all its copies in the first list against all
     its copies in the second, and with a few items over and over that is minutes: ten thousand paragraphs from six values are 16
-    million pairs for each match it looks for. So:
+    million pairs for each match it looks for. And it looks again in the ranges on both sides of every match, so a chain of short
+    matches multiplies that by the number of matches. So:
       - prose, and any list that walks MATCH_PAIRS pairs or fewer, is matched with autojunk off (a stretch of common words between
         two changes stays unchanged, and a reworded paragraph is marked by its words);
       - a list that walks more, or one with an item over a fifth of the second list, is matched with autojunk on, which drops the
         items with many copies as anchors (and does so only from 200 items on), when what is left walks MATCH_PAIRS or fewer;
-      - else nothing is matched, and the two lists are replaced whole."""
+      - else nothing is matched, and the two lists are replaced whole;
+      - and whichever of the first two is used, the whole comparison walks at most MATCH_WORK places (Bounded): past it the rest
+        between the matches found is replaced."""
     counts = collections.Counter(second)
     size = len(second)
     top = max(counts.values()) if counts else 0
     dominated = size > 200 and top * JUNK_SHARE > size
     if not dominated and walked(first, counts) <= MATCH_PAIRS:
-        return difflib.SequenceMatcher(None, first, second, autojunk=False)
+        return Bounded(first, second, False)
     if size >= 200 and walked(first, counts, size // 100 + 1) <= MATCH_PAIRS:
-        return difflib.SequenceMatcher(None, first, second, autojunk=True)
+        return Bounded(first, second, True)
     return NoMatches(first, second)
 
 

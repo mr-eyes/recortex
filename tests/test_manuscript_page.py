@@ -4,6 +4,7 @@ the lists of the contract, hostile text) and the style and the script. Nothing h
 tests/fake_gh.py. Versions that the record would hold are made here as text changes with planted files in the cache, so that each
 state and each key of the table can be had by itself."""
 
+import collections
 import datetime
 import hashlib
 import json
@@ -339,6 +340,59 @@ class DifferTests(unittest.TestCase):
         seconds, rows = self.took(lambda: mind_versions.since(blocks(old), blocks(new)))
         self.assertLess(seconds, 1)
         self.assertEqual(10000, len({r["i"] for r in rows if r["k"] != "removed"}))
+
+    SIX = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"]
+
+    def chain(self, side, count=750):
+        """Shared words from six values, each followed by a word of its own side: 1,500 words in which every match is one word long and
+        stands first in what is left, so that difflib searches again in nearly the whole of it after each one."""
+        return [word for k in range(count) for word in (self.SIX[k % 6], "%s%dx" % (side, k))]
+
+    def test_a_chain_of_short_matches_is_bounded_at_every_level(self):
+        lines = lambda words: "\n".join(" ".join(words[k:k + 200]) for k in range(0, len(words), 200))
+        old, new = self.chain("o"), self.chain("n")
+        # no word is over a fifth of the paragraph and one search walks 93,750 places, under MATCH_PAIRS: the matcher is the plain one
+        counts = collections.Counter(new)
+        self.assertLessEqual(mind_versions.walked(old, counts), mind_versions.MATCH_PAIRS)
+        self.assertIs(False, mind_versions.matcher(old, new).autojunk)
+        limit = 2   # seconds for each call; unbounded, each of them takes 3 to 5.5 s here, bounded about 0.2
+        self.assertLess(self.took(lambda: mind_versions.word_runs(" ".join(old), " ".join(new)))[0], limit)
+        self.assertLess(self.took(lambda: mind_versions.since(blocks(lines(old)), blocks(lines(new))))[0], limit)
+        paragraphs = lambda side: "\n\n".join(self.chain(side, 770))
+        self.assertLess(self.took(lambda: mind_versions.diff_text(paragraphs("o"), paragraphs("n")))[0], limit)
+        self.assertLess(self.took(lambda: mind_versions.since(blocks(paragraphs("o")), blocks(paragraphs("n"))))[0], limit)
+        # distinct paragraphs, each match one paragraph long and first in its range: difflib's own cost per item
+        distinct = lambda side: "\n\n".join(word for k in range(4000) for word in ("u%d" % k, "%s%d" % (side, k)))
+        self.assertLess(self.took(lambda: mind_versions.diff_text(distinct("o"), distinct("n")))[0], limit)
+
+    def test_the_whole_comparison_has_one_budget_and_prose_never_reaches_it(self):
+        old, new = self.chain("o"), self.chain("n")
+        cut = mind_versions.matcher(old, new)
+        found = cut.get_matching_blocks()
+        self.assertEqual(mind_versions.MATCH_WORK, 2000000)
+        self.assertLess(cut.left, 0)   # the budget was spent on the way
+        self.assertLess(len(found) - 1, 750)   # and the chain was cut: not every one of its 750 matches was looked for
+        runs = mind_versions.word_runs(" ".join(old), " ".join(new))
+        self.assertEqual(" ".join(old), "".join(r["text"] for r in runs if r["t"] != "add"))
+        self.assertEqual(" ".join(new), "".join(r["text"] for r in runs if r["t"] != "del"))
+        # with nothing left to spend no match is found at all, and the lists are replaced whole; with the whole budget the one word is found
+        before, after = self.PARAGRAPH.split(), self.PARAGRAPH.replace("machine of the", "machine 17 the", 1).split()
+        self.assertEqual(121, len(before))
+        spent = mind_versions.Bounded(before, after, False)
+        spent.left = 0
+        self.assertEqual([("replace", 0, 121, 0, 121)], spent.get_opcodes())
+        fresh = mind_versions.Bounded(before, after, False)
+        self.assertEqual([("equal", 0, 3, 0, 3), ("replace", 3, 4, 3, 4), ("equal", 4, 121, 4, 121)], fresh.get_opcodes())
+        # prose uses a small part of it: 1,500 words of it with edits in them
+        prose = ["the", "of", "and", "a", "to", "in"] * 30 + ["word%d" % n for n in range(1320)]
+        random.Random(5).shuffle(prose)
+        edited = list(prose)
+        for n in range(0, 1500, 97):
+            edited[n] = "edit%d" % n
+        plain = mind_versions.matcher(prose, edited)
+        self.assertIs(False, plain.autojunk)
+        plain.get_matching_blocks()
+        self.assertGreater(plain.left, mind_versions.MATCH_WORK // 2)
 
     def test_the_slow_inputs_stay_bounded_in_every_function_that_matches(self):
         import time
