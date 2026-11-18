@@ -123,10 +123,11 @@ class NumbersTests(unittest.TestCase):
 class ContributingTests(unittest.TestCase):
     def test_the_sixteenth_command_and_the_layout(self):
         text = read("CONTRIBUTING.md")
-        self.assertIn("python3 -m unittest discover -s tests -p 'test_jobs_*.py'", text)
+        for part in ("[a-j]", "[k-r]", "[s-z]"):   # the sixteenth command runs as three lines: together they pass five minutes
+            self.assertIn("python3 -m unittest discover -s tests -p 'test_jobs_%s*.py'" % part, text)
         self.assertIn("The sixteen commands", text)
         self.assertNotIn("fifteen commands", text)
-        self.assertEqual(16, len(re.findall(r"^python3 -m unittest ", text.split("```bash", 1)[1].split("```", 1)[0], re.M)))
+        self.assertEqual(18, len(re.findall(r"^python3 -m unittest ", text.split("```bash", 1)[1].split("```", 1)[0], re.M)))
         self.assertIn("commands/", text)
         self.assertIn("SubagentStop", text)
 
