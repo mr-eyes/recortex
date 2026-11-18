@@ -1,6 +1,7 @@
 """Tests of the usage view (1.5.0): usage.db, the subagent-stop hook, the injected-characters count, `usage.py show` and
 the two views of the mind page. Nothing here reaches GitHub; the scripts run against tests/fake_gh.py."""
 
+import html
 import json
 import os
 import re
@@ -250,6 +251,40 @@ class ReportTests(UsageBox):
         for planted in ("<script>", "<b>", "weird", "not a day"):
             self.assertNotIn(planted, text)
 
+    def test_the_stores_calls_are_summed_by_day_tier_job_and_model(self):
+        calls = [{"at": NOW - 100, "tier": "sort", "job": "sort", "model": "claude-haiku-5-5", "success": True,
+                  "input_tokens": 100, "output_tokens": 10, "cache_read": 60, "cache_write": 0},
+                 {"at": NOW - 50, "tier": "sort", "job": "sort", "model": "claude-haiku-5-5", "success": False,
+                  "input_tokens": 50, "output_tokens": 0, "cache_read": 0, "cache_write": 0},
+                 {"at": NOW - DAY, "tier": "middle", "job": "memories", "model": "", "success": True,
+                  "input_tokens": 7, "output_tokens": 3, "cache_read": 0, "cache_write": 0},
+                 {"at": NOW, "tier": "other", "job": "sort", "model": "x", "input_tokens": 1, "output_tokens": 1},
+                 {"at": NOW, "tier": "sort", "job": "weird", "model": "x", "input_tokens": 1, "output_tokens": 1},
+                 {"at": "soon", "tier": "sort", "job": "sort", "model": "x", "input_tokens": 1, "output_tokens": 1},
+                 {"at": NOW, "tier": "sort", "job": "sort", "model": "<b>", "input_tokens": "9", "output_tokens": -1},
+                 "not a call"]
+        self.assertEqual([store_row("2026-11-16", "middle", "memories", 1, 7, 3, ""),
+                          store_row("2026-11-17", "sort", "sort", 1, 0, 0, ""),
+                          store_row("2026-11-17", "sort", "sort", 2, 150, 10)],
+                         sorted(usage.aggregate(calls), key=lambda row: (row["day"], row["model"])))
+
+    def test_the_numbers_come_from_the_observers_own_store(self):
+        import observer_store
+        with observer_store.Store(ts.REPO) as store:
+            first = store.reserve_invocation("sort")
+            store.complete_invocation(first, True, usage={"input_tokens": 10, "cache_creation_input_tokens": 5,
+                                                          "cache_read_input_tokens": 100, "output_tokens": 20},
+                                      model="claude-haiku-5-5")
+            second = store.reserve_invocation("draft")
+            store.complete_invocation(second, True, usage={"input_tokens": 1, "output_tokens": 2}, model="claude-sonnet-5-5")
+        data = usage.report(ts.REPO, ts.EXAMPLE_CONFIG)
+        today = {entry["tier"]: (entry["calls"], entry["tokens"]) for entry in data["tiers"]}
+        self.assertEqual({"sort": (1, 135), "middle": (1, 3), "strong": (0, 0)}, today)
+        week = {(row["tier"], row["job"]): (row["calls"], row["input"], row["output"]) for row in data["periods"]["7"]}
+        self.assertEqual({("sort", "sort"): (1, 115, 20), ("middle", "memories"): (1, 1, 2)}, week)
+        self.assertFalse(data["empty"])
+        self.assertEqual(["claude-haiku-5-5", "claude-sonnet-5-5"], [e["model"] for e in data["tiers"][:2]])
+
     def test_with_no_data_the_report_says_so(self):
         data = usage.report(ts.REPO, ts.EXAMPLE_CONFIG, now=NOW, rows=[], today={})
         self.assertTrue(data["empty"])
@@ -392,7 +427,8 @@ class SubagentStopTests(SubagentBox):
         self.assertEqual([], self.rows("agents"))
 
     def test_only_integers_and_a_model_name_leave_the_transcript(self):
-        records = [json.loads(line) for line in open(TRANSCRIPT, encoding="utf-8")]
+        with open(TRANSCRIPT, encoding="utf-8") as handle:
+            records = [json.loads(line) for line in handle]
         for record in records:
             message = record.get("message")
             if isinstance(message, dict) and message.get("role") == "assistant":
@@ -443,7 +479,8 @@ class SubagentStopTests(SubagentBox):
         self.assertEqual([], self.rows("agents"))
 
     def test_an_assistant_record_with_no_stop_reason_is_not_yet_complete(self):
-        lines = open(TRANSCRIPT, encoding="utf-8").read().splitlines()
+        with open(TRANSCRIPT, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
         partial = []
         for line in lines:
             record = json.loads(line)
@@ -606,6 +643,333 @@ class InjectedCountTests(UsageBox):
         done = self.tool("hooks.py", "--doctor")
         self.assertIn("usage: usage.db cannot be written (refused (permissions))", done.stdout)
         self.assertNotIn(self.state_folder(), [line for line in done.stdout.splitlines() if line.startswith("usage:")][0])
+
+
+# ---------------------------------------------------------------- the page
+
+class UsagePageBox(ts.MindSandbox):
+    """The example record's model, rendered with a usage report put into it, as mind.py puts one in."""
+
+    def setUp(self):
+        super().setUp()
+        self.add_chain()
+        self.ready()
+        self.in_process()
+        import mind
+        self.mind = mind
+
+    def model(self):
+        result = self.tool("index.py", "query", "mind", "--json", gh="false")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        return json.loads(result.stdout)
+
+    def render(self, data="absent", model=None):
+        model = model or self.model()
+        if data != "absent":
+            model["usage"] = data
+        return self.mind.render(model)
+
+    def view(self, text, ident="usage"):
+        """The markup of one view alone: from its opening tag to the next view or the end of main."""
+        start = text.index('<section class="view" id="%s"' % ident)
+        stops = [text.find(marker, start + 10) for marker in ('<section class="view"', "</main>")]
+        return text[start:min(stop for stop in stops if stop > 0)]
+
+    def words(self, markup):
+        return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", markup)).split())
+
+
+def full_report():
+    rows = [store_row("2026-11-17", "sort", "sort", 12, 80000, 24000),
+            store_row("2026-11-17", "middle", "memories", 5, 50000, 9000, "claude-sonnet-5-5"),
+            store_row("2026-11-17", "middle", "status", 1, 3000, 700, "claude-sonnet-5-5"),
+            store_row("2026-11-14", "sort", "sort", 6, 40000, 12000),
+            store_row("2026-11-12", "strong", "paper", 1, 40000, 9000, "claude-opus-5-5")]
+    data = usage.report("octo-org/octo-repo", ts.EXAMPLE_CONFIG, now=NOW, rows=rows,
+                        today={"sort": {"calls": 12, "tokens": 104000}, "middle": {"calls": 66, "tokens": 680000}})
+    data["observer"] = "on"
+    data["agents"] = {"7": [{"agent": "record-auditor", "runs": 2, "input": 90000, "output": 1200}],
+                      "30": [{"agent": "record-auditor", "runs": 3, "input": 120000, "output": 1800},
+                             {"agent": "ask", "runs": 1, "input": 9000, "output": 300}]}
+    data["estimated"] = [{"event": "session-start", "characters": 40000, "count": 7, "tokens": 10000}]
+    return data
+
+
+class UsagePageTests(UsagePageBox):
+    def test_the_view_with_numbers_keeps_the_contract_and_tells_them(self):
+        text = self.render(full_report())
+        self.assertEqual([], ts.page_problems(text))
+        words = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", self.view(text))).split())
+        for told in ("On this machine, as of 2026-11-17 20:00 UTC. Tokens and calls, not money: under a Claude "
+                     "subscription these count against your usage limits, and no price applies.",
+                     "Sort (claude-haiku-5-5)", "Middle (claude-sonnet-5-5)", "Strong (claude-opus-5-5)",
+                     "12 of 80 calls", "104,000 of 800,000 tokens", "66 of 70 calls", "680,000 of 700,000 tokens",
+                     "The last 7 days", "The last 30 days", "Sorting a stretch", "Drafts of the paper's text",
+                     "Record auditor", "Ask", "The brief at session start: 7 times, about 10,000 tokens",
+                     "Not measured", "is not measured here."):
+            self.assertIn(told, words)
+        self.assertNotIn("$", words)
+
+    def test_the_view_is_the_last_entry_of_the_side_bar(self):
+        text = self.render(full_report())
+        entries = re.findall(r'data-nav="([a-z]+)"', text)
+        self.assertEqual("usage", entries[-1])
+        self.assertIn('<a href="#usage" data-nav="usage">What did recortex use?</a>', text)
+
+    def test_meters_are_drawn_from_whole_numbers_with_no_inline_style(self):
+        text = self.render(full_report())
+        view = self.view(text)
+        self.assertNotIn("style=", view)
+        self.assertIn('<rect class="mfg" width="15" height="4"/>', view)        # 12 of 80 calls
+        self.assertIn('<rect class="mfg hot" width="94" height="4"/>', view)    # 66 of 70 calls
+        self.assertIn('aria-hidden="true"', view)
+        bars = re.findall(r'<rect class="bar-[a-z]+" x="([0-9]+)" y="([0-9]+)" width="8" height="([0-9]+)"/>', view)
+        self.assertTrue(bars)
+        for x, y, height in bars:
+            self.assertLessEqual(int(y) + int(height), 60)
+            self.assertLess(int(x), 300)
+
+    def test_with_no_data_at_all_the_view_is_still_drawn_with_one_fixed_line(self):
+        for absent in ("absent", None, {}, "nonsense", [], {"empty": True}):
+            text = self.render(absent)
+            self.assertEqual([], ts.page_problems(text), absent)
+            view = self.view(text)
+            self.assertIn("Nothing has been counted on this machine yet.", view)
+            self.assertIn("Not measured", view)
+            self.assertNotIn("<table", view)
+        self.assertIn("as of an unknown time", self.view(self.render("absent")))
+
+    def test_with_the_observer_off_only_the_hooks_and_the_subagents_show(self):
+        data = full_report()
+        data["observer"] = "off"
+        view = self.view(self.render(data))
+        self.assertIn("The observer is off here, so there are no background calls to count.", view)
+        self.assertNotIn("Today", view)
+        self.assertNotIn("The last 7 days", view)
+        self.assertIn("The plugin&#x27;s subagents", view)   # the page escapes the apostrophe
+        self.assertIn("Record auditor", view)
+        data["observer"] = "paused"
+        self.assertIn("paused here until you choose a level", self.view(self.render(data)))
+
+    def test_hostile_values_arrive_as_text_or_are_dropped(self):
+        evil = "ZZMARK<img src=x onerror=alert(1)>"
+        data = full_report()
+        data["built"] = evil
+        data["tiers"][0]["model"] = evil
+        data["tiers"][1].update(calls="12", cap=-5, tokens=10 ** 15, budget=True)
+        data["tiers"][2]["tier"] = evil
+        data["periods"]["7"] += [{"tier": evil, "job": "sort", "calls": 1, "input": 1, "output": 1},
+                                 {"tier": "sort", "job": evil, "calls": 1, "input": 1, "output": 1}, "ZZMARK", None]
+        data["days"][3]["day"] = evil
+        data["days"][4]["sort"] = evil
+        data["largest"] = [{"kind": "agent", "name": evil, "tokens": 5}, {"kind": "observer", "name": evil, "tokens": 5},
+                           {"kind": "observer", "name": "sort sort extra", "tokens": 5}, {"kind": "x", "name": "ask", "tokens": 5}]
+        data["agents"]["7"].append({"agent": evil, "runs": 1, "input": 1, "output": 1})
+        data["estimated"].append({"event": evil, "characters": 1, "count": 1, "tokens": 1})
+        data["observer"] = "on"
+        text = self.render(data)
+        self.assertEqual([], ts.page_problems(text, marker="ZZMARK"))
+        self.assertNotIn("ZZMARK", text)
+        self.assertNotIn("onerror", text)
+        view = self.view(text)
+        self.assertIn("as of an unknown time", view)
+        self.assertIn("1,000,000,000 of 0 tokens", " ".join(re.sub(r"<[^>]+>", " ", view).split()))   # a huge number is clamped
+
+    def test_a_number_that_is_not_a_whole_number_is_zero(self):
+        data = full_report()
+        data["tiers"][0].update(calls=3.7, cap="80", tokens=None, budget=[1])
+        words = " ".join(re.sub(r"<[^>]+>", " ", self.view(self.render(data))).split())
+        self.assertIn("0 of 0 calls", words)
+        self.assertIn("0 of 0 tokens", words)
+
+    def test_the_page_makes_no_request_and_uses_no_storage_for_the_view(self):
+        text = self.render(full_report())
+        self.assertEqual([], ts.page_problems(text))
+        _, script, _ = self.mind.fixed_files()
+        for word in ts.SCRIPT_BANNED:
+            self.assertNotIn(word, script)
+        self.assertNotIn("usage", script)      # the script is the one fixed file; it learns no number and no name of this view
+        self.assertEqual(1, text.count("<script>"))
+
+    def test_the_text_of_the_view_is_never_an_attribute_value(self):
+        view = self.view(self.render(full_report()))
+        values = re.findall(r'="([^"]*)"', view)
+        for value in values:
+            self.assertTrue(re.fullmatch(r"[A-Za-z0-9 _.,:;#/()'+=?-]*", value), value)
+        self.assertNotIn("claude-haiku-5-5", " ".join(values))   # the model name is in the text of the view, in no attribute
+
+    def test_mind_py_puts_the_report_in_the_page(self):
+        usage.note_agent(ts.REPO, "recortex:record-reviewer", "claude-sonnet-5-5",
+                         {"input_tokens": 500, "output_tokens": 100, "cache_read": 4000, "cache_write": 0})
+        usage.note_injected(ts.REPO, "session-start", 8000)
+        built = self.tool("mind.py", gh="false")
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        page = recortex.read_text(os.path.join(self.data, "private", self.slug(), "mind.html"))
+        self.assertEqual([], ts.page_problems(page))
+        view = self.view(page)
+        self.assertIn("The observer is off here", view)
+        self.assertIn("Record reviewer", view)
+        self.assertIn("The brief at session start: 1 time, about 2,000 tokens", " ".join(re.sub(r"<[^>]+>", " ", view).split()))
+
+
+# ---------------------------------------------------------------- the to-do view
+
+CHAIN = os.path.join(ts.EXAMPLE, "chain")
+
+
+class TodoBox(UsagePageBox):
+    """The example record's chain, the steps memory of the task #7 and a result on topic #5 that checks its first step."""
+
+    def setUp(self):
+        ts.MindSandbox.setUp(self)
+        self.add_chain()
+        self.put(9108, 7, recortex.read_text(os.path.join(CHAIN, "6-steps.md")))
+        self.put(9109, 5, recortex.read_text(os.path.join(CHAIN, "7-result.md")))
+        self.ready()
+        self.in_process()
+        import mind
+        self.mind = mind
+
+    def page(self):
+        built = self.tool("mind.py", gh="false")
+        self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+        return recortex.read_text(os.path.join(self.data, "private", self.slug(), "mind.html"))
+
+
+class TodoPageTests(TodoBox):
+    def test_the_view_tells_a_task_with_its_checked_and_open_steps(self):
+        page = self.page()
+        self.assertEqual([], ts.page_problems(page))
+        view = self.view(page, "todo")
+        words = self.words(view)
+        self.assertIn("What is there to do?", words)
+        self.assertIn("Task: support newlines inside quoted fields 1 of 2 steps done Open it on GitHub", words)
+        self.assertIn("Done Carry the quote state across physical lines", words)
+        self.assertIn("Open Rerun the conformance set", words)
+        self.assertIn("Marked by: the reader now carries an open quote from one line to the next", words)
+        self.assertIn('class="step s-done"', view)
+        self.assertIn('class="step s-open"', view)
+        self.assertIn('data-m="9109"', view)               # the memory is on the page: the link opens it there
+        self.assertIn("https://github.com/octo-org/octo-repo/issues/7", view)
+        self.assertNotIn("style=", view)
+
+    def test_the_view_is_in_the_side_bar_before_the_map(self):
+        page = self.page()
+        entries = re.findall(r'data-nav="([a-z]+)"', page)
+        self.assertEqual(["now", "text", "threads", "settled", "lessons", "open", "todo", "map", "ask", "usage"],
+                         [entry for entry in entries if entry != "paper"])
+
+    def test_hostile_step_text_title_and_plain_line_arrive_as_text(self):
+        evil = 'ZZMARK<img src=x onerror=alert(1)> "quoted" & </li><script>x</script>'
+        data = self.repo()
+        data["issues"]["7"]["title"] = evil
+        self.save(data)
+        steps = recortex.read_text(os.path.join(CHAIN, "6-steps.md")).replace(
+            "Carry the quote state across physical lines", "ZZMARK-step <img src=x onerror=alert(1)> &amp; \"q\"")
+        self.put(9120, 7, steps.replace("2026-03-12T11:00", "2026-03-14T11:00").replace("2026-03-12 11:00", "2026-03-14 11:00"))
+        result = recortex.read_text(os.path.join(CHAIN, "7-result.md")).replace(
+            "the reader now carries an open quote", "ZZMARK-plain <b>bold</b> the reader now carries an open quote").replace(
+            "done=9108:1", "done=9120:1")
+        self.put(9121, 5, result.replace("2026-03-12T15:30", "2026-03-14T15:30").replace("2026-03-12 15:30", "2026-03-14 15:30"))
+        self.ready()
+        page = self.page()
+        self.assertEqual([], ts.page_problems(page, marker="ZZMARK"))
+        view = self.view(page, "todo")
+        self.assertNotIn("<img", view)
+        self.assertNotIn("<script", view)
+        self.assertNotIn("onerror=alert(1)>", view.replace("&lt;img src=x onerror=alert(1)&gt;", ""))
+        self.assertIn("ZZMARK-step", self.words(view))
+        for value in re.findall(r'="([^"]*)"', view):
+            self.assertNotIn("ZZMARK", value)
+
+    def test_a_task_with_no_title_told_is_named_by_its_number_alone(self):
+        model = self.model()
+        next(task for task in model["tasks"]["open"] if task["issue"] == 7)["title"] = ""
+        words = self.words(self.view(self.mind.render(model), "todo"))
+        self.assertIn("A task whose title is not told here 1 of 2 steps done", words)
+
+    def test_a_list_changed_by_hand_is_said_so(self):
+        model = self.model()
+        next(task for task in model["tasks"]["open"] if task["issue"] == 7)["hand"] = True
+        self.assertIn("The list on GitHub was changed by hand", self.words(self.view(self.mind.render(model), "todo")))
+
+    def test_with_no_task_the_view_says_so(self):
+        model = self.model()
+        for absent in ({}, None, "x", {"open": "x", "closed": 5}):
+            model["tasks"] = absent
+            text = self.mind.render(model)
+            self.assertEqual([], ts.page_problems(text))
+            self.assertIn("No task is open.", self.words(self.view(text, "todo")))
+
+    def test_a_task_closed_in_the_last_30_days_is_listed_with_its_day(self):
+        import datetime
+        day = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+        data = self.repo()
+        data["issues"]["7"].update(state="closed", closed_at=day + "T10:00:00Z", updated_at=day + "T10:00:00Z")
+        self.save(data)
+        self.ready()
+        view = self.view(self.mind.render(self.model()), "todo")
+        words = self.words(view)
+        self.assertIn("Closed in the last 30 days", words)
+        self.assertIn("1 of 2 steps done, closed on %s" % day, words)
+        closed = view[view.index("Closed in the last 30 days"):]
+        self.assertNotIn('class="step', closed)       # a closed task shows no steps, only its count
+        self.assertNotIn("Carry the quote state", closed)
+
+    def test_a_task_closed_longer_ago_is_not_listed(self):
+        data = self.repo()
+        data["issues"]["7"].update(state="closed", closed_at="2026-01-02T10:00:00Z", updated_at="2026-01-02T10:00:00Z")
+        self.save(data)
+        self.ready()
+        self.assertNotIn("Closed in the last 30 days", self.words(self.view(self.mind.render(self.model()), "todo")))
+
+    def test_hostile_values_in_the_model_are_dropped(self):
+        evil = "ZZMARK<img src=x onerror=alert(1)>"
+        model = self.model()
+        task = next(task for task in model["tasks"]["open"] if task["issue"] == 7)
+        task["steps"] += [{"n": 3, "text": evil, "state": evil, "by": None}, "ZZMARK", None,
+                          {"n": 4, "text": "fine", "state": "done", "by": {"id": evil, "issue": evil, "plain": evil}},
+                          {"n": 5, "text": "fine two", "state": "done", "by": {"id": 5 ** 30, "issue": evil, "plain": evil}}]
+        task["counts"] = {"steps": evil, "done": 10 ** 15, "open": [1]}
+        task["issue"] = evil
+        model["tasks"]["closed"] = [{"issue": 8, "title": evil, "closed": evil, "counts": {}, "steps": []}]
+        model["acts"] = [{"kind": evil, "day": "2026-11-17", "issue": 1, "comment": 1},
+                         {"kind": "task_closed", "day": evil, "issue": 7, "comment": 0}, "x", None,
+                         {"kind": "task_closed", "day": "2026-11-17", "issue": evil, "comment": evil, "undone": True}]
+        text = self.mind.render(model)
+        self.assertEqual([], ts.page_problems(text, marker="ZZMARK"))
+        self.assertNotIn("<img", self.view(text, "todo"))
+
+    def test_the_observers_acts_end_the_view_with_a_kind_a_day_and_a_link(self):
+        model = self.model()
+        model["acts"] = [{"kind": "task_closed", "day": "2026-11-17", "issue": 7, "comment": 0, "undone": False},
+                         {"kind": "memory", "day": "2026-11-16", "issue": 5, "comment": 9109, "undone": True},
+                         {"kind": "board", "day": "2026-11-16", "issue": 0, "comment": 0, "undone": False}]
+        view = self.view(self.mind.render(model), "todo")
+        words = self.words(view)
+        self.assertIn("What the observer did in the last 7 days", words)
+        self.assertIn("Closed a task, 2026-11-17 Open it on GitHub", words)
+        self.assertIn("Posted a memory, 2026-11-16 (undone) Open it on GitHub", words)
+        self.assertIn("Updated the board, 2026-11-16", words)
+        self.assertIn("https://github.com/octo-org/octo-repo/issues/5#issuecomment-9109", view)
+        self.assertTrue(words.index("Closed a task") < words.index("Posted a memory"))
+
+    def test_the_act_kinds_are_the_stores(self):
+        import observer_store
+        self.assertEqual(tuple(observer_store.ACT_KINDS), usage.ACT_KINDS)
+        self.assertEqual(set(observer_store.ACT_KINDS), set(self.mind.TODO_ACTS))
+
+    def test_the_acts_come_from_the_observers_store(self):
+        import observer_store
+        with observer_store.Store(ts.REPO) as store:
+            store.add_act("task_closed", issue=7, numbers=[2, 2])
+            store.add_act("step_marked", issue=7, comment=9109, numbers=[1])
+        found = usage.acts_report(ts.REPO)
+        self.assertEqual(["step_marked", "task_closed"], sorted(act["kind"] for act in found))
+        self.assertEqual({"day", "kind", "issue", "comment", "undone"}, set(found[0]))
+        page = self.page()
+        self.assertIn("Checked a step", self.words(self.view(page, "todo")))
+        self.assertEqual([], ts.page_problems(page))
 
 
 if __name__ == "__main__":

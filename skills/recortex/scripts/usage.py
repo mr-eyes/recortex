@@ -334,17 +334,40 @@ def injected_rows(repo, since_day):
         db.close()
 
 
+def aggregate(calls):
+    """The observer's calls (observer_store.Store.usage_rows: one dict per call with `at`, tier, job, model and the token counts)
+    as rows by day, tier, job and model: dicts with day, tier, job, model, calls, input_tokens, output_tokens. A call of a tier
+    or job off the fixed lists, or with no time, is dropped."""
+    table = {}
+    for call in calls if isinstance(calls, list) else []:
+        if not isinstance(call, dict) or call.get("tier") not in TIERS or call.get("job") not in JOBS:
+            continue
+        at = call.get("at")
+        if isinstance(at, bool) or not isinstance(at, (int, float)) or at != at or at < 0 or at > 10 ** 11:
+            continue
+        key = (day_of(at), call["tier"], call["job"], model_name(call.get("model")))
+        slot = table.setdefault(key, [0, 0, 0])
+        slot[0] += 1
+        slot[1] += whole(call.get("input_tokens"))
+        slot[2] += whole(call.get("output_tokens"))
+    return [{"day": day, "tier": tier, "job": job, "model": model, "calls": slot[0], "input_tokens": slot[1],
+             "output_tokens": slot[2]} for (day, tier, job, model), slot in sorted(table.items())]
+
+
+def _store(repo):
+    import observer_store
+    return observer_store.Store(repo, create=False, readonly=True)
+
+
 def store_rows(repo, days):
-    """The observer's calls by day, tier, job and model, from its private store: dicts with day, tier, job, model, calls,
-    input_tokens, output_tokens. [] when there is no store or it has no such rows (a project the observer never ran in)."""
+    """The observer's calls by day, tier, job and model (see aggregate), from its private store. [] when there is no store, or
+    it is of a format that holds no such columns (a project the observer never ran in)."""
     try:
-        import observer_store
-        store = observer_store.Store(repo, create=False, readonly=True)
+        store = _store(repo)
     except Exception:  # noqa: BLE001 - usage is read-only and never stops a page
         return []
     try:
-        rows = getattr(store, "usage_rows", None)
-        return [dict(row) for row in rows(days)] if rows else []
+        return aggregate(store.usage_rows(days))
     except Exception:  # noqa: BLE001
         return []
     finally:
@@ -355,17 +378,46 @@ def store_rows(repo, days):
 
 
 def store_today(repo):
-    """{tier: {"calls": n, "tokens": n}} for the rolling 24 hours, as the caps count them; {} when it cannot be read."""
+    """{tier: {"calls": n, "tokens": n}} for the rolling 24 hours, as the caps count them (input plus output tokens); {} when
+    it cannot be read."""
     try:
-        import observer_store
-        store = observer_store.Store(repo, create=False, readonly=True)
+        store = _store(repo)
     except Exception:  # noqa: BLE001
         return {}
     try:
-        window = getattr(store, "usage_window", None)
-        return window(86400) if window else {}
+        return {tier: {"calls": whole(row.get("calls")), "tokens": whole(row.get("input_tokens")) + whole(row.get("output_tokens"))}
+                for tier, row in store.usage_today().items() if tier in TIERS and isinstance(row, dict)}
     except Exception:  # noqa: BLE001
         return {}
+    finally:
+        try:
+            store.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+ACT_KINDS = ("memory", "task_opened", "steps_added", "step_marked", "task_rendered", "task_closed", "hub_rendered", "summary",
+             "board", "draft_proposed", "draft_applied")   # observer_store.ACT_KINDS; a test holds the two equal
+
+
+def acts_report(repo, days=7, limit=50):
+    """What the observer did in the last `days` days, newest first, for the to-do view: dicts with day, kind (one of ACT_KINDS),
+    issue and comment (whole numbers, 0 for none) and whether it was undone. [] when there is no store or it holds no acts."""
+    try:
+        store = _store(repo)
+    except Exception:  # noqa: BLE001
+        return []
+    try:
+        out = []
+        for act in store.acts(days):
+            at = act.get("at")
+            if act.get("kind") not in ACT_KINDS or isinstance(at, bool) or not isinstance(at, (int, float)) or not 0 <= at < 10 ** 11:
+                continue
+            out.append({"day": day_of(at), "kind": act["kind"], "issue": whole(act.get("issue")),
+                        "comment": whole(act.get("comment")), "undone": act.get("undone") is True})
+        return out[:limit]
+    except Exception:  # noqa: BLE001
+        return []
     finally:
         try:
             store.close()
@@ -391,6 +443,15 @@ def observer_state(repo, config):
         return "off", options
     except Exception:  # noqa: BLE001 - a machine with unreadable approvals has the observer off, for this page
         return "off", {}
+
+
+def model_of(options, tier):
+    """The model a tier is set to run on (observer_runtime.model_for), "" when none is set or it cannot be told."""
+    try:
+        import observer_runtime
+        return observer_runtime.model_for(options, tier)
+    except Exception:  # noqa: BLE001
+        return options.get({"sort": "sort_model", "middle": "model", "strong": "strong_model"}[tier], "") if options else ""
 
 
 def period(rows, days, now):
@@ -440,8 +501,7 @@ def report(repo, config=None, now=None, rows=None, today=None):
         calls_key, tokens_key, calls_default, tokens_default = CAP_KEYS[tier]
         cap, budget = options.get(calls_key), options.get(tokens_key)
         used = today.get(tier) if isinstance(today, dict) and isinstance(today.get(tier), dict) else {}
-        configured = options.get({"sort": "sort_model", "middle": "model", "strong": "strong_model"}[tier])
-        tiers.append({"tier": tier, "model": model_name(configured) or models.get(tier, ""),
+        tiers.append({"tier": tier, "model": model_name(model_of(options, tier)) or models.get(tier, ""),
                       "calls": whole(used.get("calls")), "cap": whole(cap) if isinstance(cap, int) else calls_default,
                       "tokens": whole(used.get("tokens")), "budget": whole(budget) if isinstance(budget, int) else tokens_default})
     periods = {}

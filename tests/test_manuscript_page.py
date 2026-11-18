@@ -28,7 +28,7 @@ import record_format  # noqa: E402
 import recortex  # noqa: E402
 
 PAGE = os.path.join(ROOT, "skills", "recortex", "page")
-EXAMPLE_PAGE_SHA = "dce8ea5db659997f3ce66825cb5ef57cf76b0509abfd6623d685cc1b5baf4769"   # the example's page at 71bf8cf, see below
+EXAMPLE_PAGE_SHA = "9af373d3f540b3d261230e093a2536cd5890e8420bb74e91d4e0f9bdf03a605e"   # the example's page at 71bf8cf plus the 1.5.0 to-do and usage views
 
 FORMS = {"autonomous": "Written without asking, under the autonomous mode.",
          "chat": "By the author in the chat, 2026-11-21 09:38 EST:\n\n> Approve",
@@ -651,7 +651,7 @@ class WhoGetsItTests(PageBox):
         self.assertEqual([], ts.page_problems(text))
         page = ts.PageReader(text)
         views = [dict(attrs)["id"] for tag, attrs in page.elements if tag == "section" and "view" in dict(attrs).get("class", "")]
-        self.assertEqual(["now", "text", "paper", "threads", "settled", "lessons", "open", "map", "ask"], views)
+        self.assertEqual(["now", "text", "paper", "threads", "settled", "lessons", "open", "todo", "map", "ask", "usage"], views)
         navs = [dict(attrs)["data-nav"] for tag, attrs in page.elements if "data-nav" in dict(attrs)]
         self.assertEqual(views, navs)
         words = self.words(text)
@@ -687,7 +687,8 @@ class WhoGetsItTests(PageBox):
 
     def test_the_built_in_examples_page_is_the_page_it_was_apart_from_the_style_and_the_script(self):
         """The example's page built with a fixed day, its style, its script and their hashes taken out, has the SHA-256 that the page of
-        commit 71bf8cf (before the manuscript view) had."""
+        commit 71bf8cf (before the manuscript view) had, plus the two views of 1.5.0 (what is there to do, what recortex used; with
+        no usage numbers in the model the second is its fixed no-data line). A change to the example record's tasks changes it."""
         sandbox = ts.MindSandbox("run")
         sandbox.setUp()
         self.addCleanup(sandbox.doCleanups)

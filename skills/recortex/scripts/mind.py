@@ -43,6 +43,7 @@ import mind_plan  # noqa: E402
 import mind_versions  # noqa: E402
 import recortex  # noqa: E402
 import storage  # noqa: E402
+import usage  # noqa: E402
 import versions  # noqa: E402
 
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "page")
@@ -374,7 +375,41 @@ HOW_TO_READ = (
 )
 NAV = (("now", "Where are we?"), ("text", None), ("threads", "How did we get here?"),
        ("settled", "What is settled?"), ("lessons", "What did we learn the hard way?"), ("open", "What is still open?"),
-       ("map", "Show me the whole mind"), ("ask", "Ask the mind"))
+       ("todo", "What is there to do?"), ("map", "Show me the whole mind"), ("ask", "Ask the mind"), ("usage", "What did recortex use?"))
+# The usage view (references/mind.md): every word on it is fixed here or is a number the page checked, a date of a fixed form or a
+# model name of a fixed form. Nothing of the record is on it.
+USAGE_LEDE = ("On this machine, as of %s. Tokens and calls, not money: under a Claude subscription these count against your "
+              "usage limits, and no price applies.")
+USAGE_BUILT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} UTC")
+USAGE_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+USAGE_MODEL = re.compile(r"[A-Za-z0-9_.:-]{1,100}")
+USAGE_TIERS = (("sort", "Sort"), ("middle", "Middle"), ("strong", "Strong"))
+USAGE_JOBS = {"sort": "Sorting a stretch", "memories": "Drafting and reviewing memories", "status": "The status summary",
+              "paper": "Drafts of the paper's text", "check": "Runtime checks"}
+USAGE_AGENTS = {"record-auditor": "Record auditor", "record-drafter": "Record drafter", "record-reviewer": "Record reviewer",
+                "record-planner": "Record planner", "record-planner-session": "Record planner, in a session", "ask": "Ask"}
+USAGE_EVENTS = {"session-start": "The brief at session start", "subagent-start": "The brief for a subagent",
+                "prompt-submit": "The reminder on a prompt", "pre-compact": "The compaction instructions",
+                "observer-session-start": "The observer's line at session start",
+                "observer-subagent-start": "The observer's line at a subagent's start",
+                "observer-prompt-submit": "The observer's reminder on a prompt",
+                "observer-pre-tool": "The observer's answer before a command"}
+USAGE_EMPTY = "Nothing has been counted on this machine yet. The numbers appear here once the observer or a subagent has run."
+USAGE_OFF = ("The observer is off here, so there are no background calls to count. What the hooks added and what the "
+             "plugin's own subagents used is below.")
+USAGE_PAUSED = ("The observer is paused here until you choose a level, so there are no background calls to count. What the "
+                "hooks added and what the plugin's own subagents used is below.")
+USAGE_LIMIT = 10 ** 9
+TODO_LEDE = ("Each open task and its steps. A step is checked when a memory that the record tells says it is done; a box ticked "
+             "on GitHub by hand is not believed here.")
+TODO_NONE = "No task is open. A task appears here when a plan is agreed or a loose item is added."
+TODO_STATES = {"open": "Open", "done": "Done", "dropped": "Dropped", "blocked": "Blocked"}
+TODO_HAND = "The list on GitHub was changed by hand, so it may differ from this one. This is what the record says."
+TODO_ACTS = {"memory": "Posted a memory", "task_opened": "Opened a task", "steps_added": "Added steps to a task",
+             "step_marked": "Checked a step", "task_rendered": "Updated a task's list on GitHub", "task_closed": "Closed a task",
+             "hub_rendered": "Updated the hub's list of active issues", "summary": "Wrote a new status summary",
+             "board": "Updated the board", "draft_proposed": "Proposed a change to the paper's text",
+             "draft_applied": "Wrote a change to the paper's text"}
 CUT = "This part is long, so the page stops here."
 CUT_LINK = "Read the rest on GitHub."
 TABLE_CUT = "Only the first 40 rows and 12 columns are shown here."
@@ -2553,6 +2588,214 @@ class Page:
                                                           for key, label in chips]),
                          E("div", {"id": "answers", "aria-live": "polite"}), self.untold_line())
 
+    # ------------------------------------------------------------ the usage view
+
+    @staticmethod
+    def whole(value):
+        """A count the report gave, as a whole number from 0 to 10^9; anything else is 0."""
+        return min(USAGE_LIMIT, max(0, integer(value)))
+
+    @classmethod
+    def count(cls, value):
+        return "{:,}".format(cls.whole(value))
+
+    @staticmethod
+    def percent(used, limit):
+        return min(100, (100 * used) // limit) if limit > 0 else 0
+
+    @staticmethod
+    def meter(used, limit):
+        """The meter of the manuscript view, from two whole numbers: a bar of 100 units, filled to used / limit."""
+        width = Page.percent(used, limit)
+        return E("svg", {"class": "umeter", "viewBox": "0 0 100 4", "preserveAspectRatio": "none", "aria-hidden": "true"},
+                 E("rect", {"class": "mbg", "width": 100, "height": 4}),
+                 E("rect", {"class": "mfg hot" if width >= 90 else "mfg", "width": width, "height": 4}))
+
+    @staticmethod
+    def table_of(heads, rows, numeric_from=0):
+        """A table of fixed column heads and cells that are text; the columns from `numeric_from` on are numbers."""
+        def cell(tag, position, content):
+            return E(tag, {"class": "num" if position >= numeric_from else None, "scope": "col" if tag == "th" else None}, content)
+        return E("div", {"class": "tbox", "tabindex": "0", "role": "region", "aria-label": "A table"},
+                 E("table", None, E("thead", None, E("tr", None, *[cell("th", n, head) for n, head in enumerate(heads)])),
+                 E("tbody", None, *[E("tr", None, *[cell("td", n, value) for n, value in enumerate(row)]) for row in rows])))
+
+    def usage_today(self, tiers):
+        out = []
+        for entry in tiers:
+            tier = entry.get("tier") if isinstance(entry, dict) else None
+            words = dict(USAGE_TIERS).get(tier)
+            if words is None:
+                continue
+            model = text_of(entry.get("model"))
+            model = model if USAGE_MODEL.fullmatch(model) else ""
+            calls, cap, tokens, budget = (self.whole(entry.get(key)) for key in ("calls", "cap", "tokens", "budget"))
+            name = [words, " (", model, ")"] if model else [words, " (not turned on)" if tier == "strong" else " (no model chosen)"]
+            out.append(E("div", {"class": "utier"}, E("p", {"class": "uname"}, *name),
+                         E("p", {"class": "quiet"}, "%s of %s calls" % (self.count(calls), self.count(cap))),
+                         self.meter(calls, cap),
+                         E("p", {"class": "quiet"}, "%s of %s tokens" % (self.count(tokens), self.count(budget))),
+                         self.meter(tokens, budget)))
+        return out
+
+    def usage_period(self, days, rows):
+        table = []
+        for row in rows if isinstance(rows, list) else []:
+            tier, job = (row.get("tier"), row.get("job")) if isinstance(row, dict) else (None, None)
+            if tier not in dict(USAGE_TIERS) or job not in USAGE_JOBS:
+                continue
+            table.append((dict(USAGE_TIERS)[tier], USAGE_JOBS[job], self.count(row.get("calls")), self.count(row.get("input")),
+                          self.count(row.get("output"))))
+        return [E("h3", None, "The last %d days" % days),
+                self.table_of(("Tier", "Job", "Calls", "Input tokens", "Output tokens"), table, 2) if table
+                else E("p", {"class": "quiet"}, "No background calls in this time.")]
+
+    def usage_bars(self, days):
+        """One bar a day for 30 days, split by tier, drawn from the report's whole numbers; the same numbers follow as a table."""
+        lines = [line for line in days if isinstance(line, dict) and USAGE_DAY.fullmatch(text_of(line.get("day")))][-30:]
+        totals = [sum(self.whole(line.get(tier)) for tier, _ in USAGE_TIERS) for line in lines]
+        if not lines or not max(totals):
+            return []
+        top, shapes = max(totals), []
+        for place, line in enumerate(lines):
+            floor = 60
+            for tier, _ in USAGE_TIERS:
+                height = (60 * self.whole(line.get(tier))) // top
+                if height:
+                    floor -= height
+                    shapes.append(E("rect", {"class": "bar-" + tier, "x": place * 10 + 1, "y": floor, "width": 8,
+                                             "height": height}))
+        table = [(text_of(line["day"]),) + tuple(self.count(line.get(tier)) for tier, _ in USAGE_TIERS) for line in lines]
+        return [E("h3", None, "Tokens a day, for 30 days"),
+                E("svg", {"class": "ubars", "viewBox": "0 0 %d 60" % (10 * len(lines)), "preserveAspectRatio": "none",
+                          "aria-hidden": "true"}, *shapes),
+                E("p", {"class": "ukey quiet"}, *[E("span", {"class": "key-" + tier}, words) for tier, words in USAGE_TIERS]),
+                E("details", {"class": "ev"}, E("summary", None, "The numbers for each day"),
+                  E("div", {"class": "evbody"}, self.table_of(("Day",) + tuple(words for _, words in USAGE_TIERS), table, 1)))]
+
+    def usage_agents(self, agents):
+        seven, thirty = (agents.get(key) if isinstance(agents.get(key), list) else [] for key in ("7", "30"))
+        found = {}
+        for slot, rows in ((0, seven), (1, thirty)):
+            for row in rows:
+                name = row.get("agent") if isinstance(row, dict) else None
+                if name in USAGE_AGENTS:
+                    found.setdefault(name, [(0, 0), (0, 0)])[slot] = (self.whole(row.get("runs")),
+                                                                      self.whole(row.get("input")) + self.whole(row.get("output")))
+        table = [(USAGE_AGENTS[name], self.count(pair[0][0]), self.count(pair[0][1]), self.count(pair[1][0]),
+                  self.count(pair[1][1])) for name, pair in sorted(found.items())]
+        return [E("h3", None, "The plugin's subagents"),
+                self.table_of(("Subagent", "Runs, 7 days", "Tokens, 7 days", "Runs, 30 days", "Tokens, 30 days"), table, 1)
+                if table else E("p", {"class": "quiet"}, "No run of the plugin's subagents has been measured on this machine.")]
+
+    def usage_view(self):
+        data = self.model.get("usage") if isinstance(self.model.get("usage"), dict) else {}
+        built = text_of(data.get("built"))
+        lede = USAGE_LEDE % (built if USAGE_BUILT.fullmatch(built) else "an unknown time")
+        if not data or data.get("empty") is True:
+            return self.view("usage", "What did recortex use?", lede, E("p", {"class": "usage-empty"}, USAGE_EMPTY),
+                             E("h3", None, "Not measured"), E("p", None, usage.NOT_MEASURED))
+        state = data.get("observer")
+        parts = []
+        if state == "on":
+            parts += [E("h3", None, "Today, in the last 24 hours")] + self.usage_today(
+                data.get("tiers") if isinstance(data.get("tiers"), list) else [])
+        else:
+            parts.append(E("p", None, USAGE_PAUSED if state == "paused" else USAGE_OFF))
+        periods = data.get("periods") if isinstance(data.get("periods"), dict) else {}
+        if state == "on":
+            parts += self.usage_period(7, periods.get("7")) + self.usage_period(30, periods.get("30"))
+            parts += self.usage_bars(data.get("days") if isinstance(data.get("days"), list) else [])
+        largest = []
+        for entry in data.get("largest", []) if isinstance(data.get("largest"), list) else []:
+            if not isinstance(entry, dict) or not self.whole(entry.get("tokens")):
+                continue
+            kind, name = entry.get("kind"), text_of(entry.get("name"))
+            if kind == "agent" and name in USAGE_AGENTS:
+                words = USAGE_AGENTS[name]
+            elif kind == "observer" and name.split(" ")[0] in dict(USAGE_TIERS) and name.split(" ")[-1] in USAGE_JOBS \
+                    and len(name.split(" ")) == 2:
+                words = "%s, %s" % (dict(USAGE_TIERS)[name.split(" ")[0]], USAGE_JOBS[name.split(" ")[1]])
+            else:
+                continue
+            largest.append(E("li", None, "%s: %s tokens" % (words, self.count(entry.get("tokens")))))
+        if largest:
+            parts += [E("h3", None, "The largest users this week"), E("ol", {"class": "plainlist"}, *largest[:5])]
+        parts += self.usage_agents(data.get("agents") if isinstance(data.get("agents"), dict) else {})
+        estimated = []
+        for entry in data.get("estimated", []) if isinstance(data.get("estimated"), list) else []:
+            event = entry.get("event") if isinstance(entry, dict) else None
+            if event in USAGE_EVENTS:
+                times = self.whole(entry.get("count"))
+                estimated.append(E("li", None, "%s: %s, about %s tokens" % (
+                    USAGE_EVENTS[event], plural(times, "1 time", "%d times"), self.count(entry.get("tokens")))))
+        if estimated:
+            parts += [E("h3", None, "Added to your sessions by the hooks"),
+                      E("p", {"class": "quiet"}, "Estimated at 4 characters a token, for the last 7 days."),
+                      E("ul", {"class": "plainlist"}, *estimated)]
+        parts += [E("h3", None, "Not measured"), E("p", None, usage.NOT_MEASURED)]
+        return self.view("usage", "What did recortex use?", lede, *parts)
+
+    # ------------------------------------------------------------ the to-do view
+
+    def todo_task(self, task, closed=False):
+        n = integer(task.get("issue"))
+        title = text_of(task.get("title"))
+        address = github_url("issue", self.repo, n)
+        counts = task.get("counts") if isinstance(task.get("counts"), dict) else {}
+        steps, done = self.whole(counts.get("steps")), self.whole(counts.get("done"))
+        head = E("h3", {"class": "tname"}, title or "A task whose title is not told here")
+        line = "%d of %d steps done" % (done, steps) if steps else "No steps yet"
+        day = text_of(task.get("closed"))
+        if closed and USAGE_DAY.fullmatch(day):
+            line += ", closed on %s" % day
+        body = [head, E("p", {"class": "quiet"}, line, J(" ", E("a", {"class": "lk", "href": address}, "Open it on GitHub"))
+                                                          if address else "")]
+        if steps and not closed:
+            body.append(self.meter(done, steps))
+        if task.get("hand") is True and not closed:
+            body.append(E("p", {"class": "quiet"}, TODO_HAND))
+        items = []
+        for step in task.get("steps", []) if isinstance(task.get("steps"), list) and not closed else []:
+            if not isinstance(step, dict) or step.get("state") not in TODO_STATES:
+                continue
+            state = step["state"]
+            made = step.get("by") if isinstance(step.get("by"), dict) else None
+            by = ""
+            if made is not None and integer(made.get("id")):
+                words = text_of(made.get("plain")) or "A memory"
+                if integer(made["id"]) in self.m:
+                    by = E("a", {"class": "lk", "href": anchor("m-%d" % integer(made["id"])), "data-m": integer(made["id"])}, words)
+                else:
+                    address = github_url("memory", self.repo, made.get("issue"), made.get("id"))
+                    by = E("a", {"class": "lk", "href": address}, words) if address else words
+            items.append(E("li", {"class": "step s-" + state}, E("span", {"class": "sk"}, TODO_STATES[state]),
+                           E("span", {"class": "sbody"}, E("span", {"class": "stx"}, text_of(step.get("text"))),
+                             E("span", {"class": "by"}, E("span", {"class": "quiet"}, "Marked by: "), by) if by != "" else "")))
+        if items:
+            body.append(E("ol", {"class": "steps"}, *items))
+        return E("section", {"class": "utask"}, *body)
+
+    def todo_view(self):
+        data = self.model.get("tasks") if isinstance(self.model.get("tasks"), dict) else {}
+        opened = [t for t in data.get("open", []) if isinstance(t, dict)] if isinstance(data.get("open"), list) else []
+        closed = [t for t in data.get("closed", []) if isinstance(t, dict)] if isinstance(data.get("closed"), list) else []
+        parts = [self.todo_task(task) for task in opened] or [E("p", {"class": "usage-empty"}, TODO_NONE)]
+        if closed:
+            parts += [E("h3", None, "Closed in the last 30 days")] + [self.todo_task(task, True) for task in closed]
+        acts = []
+        for act in self.model.get("acts", []) if isinstance(self.model.get("acts"), list) else []:
+            kind, day = act.get("kind") if isinstance(act, dict) else None, text_of(act.get("day")) if isinstance(act, dict) else ""
+            if kind not in TODO_ACTS or not USAGE_DAY.fullmatch(day):
+                continue
+            address = github_url("memory", self.repo, act.get("issue"), act.get("comment")) if integer(act.get("comment")) \
+                else github_url("issue", self.repo, act.get("issue")) if integer(act.get("issue")) else None
+            acts.append(E("li", None, "%s, %s" % (TODO_ACTS[kind], day), " (undone)" if act.get("undone") is True else "",
+                          J(" ", E("a", {"href": address}, "Open it on GitHub")) if address else ""))
+        if acts:
+            parts += [E("h3", None, "What the observer did in the last 7 days"), E("ul", {"class": "plainlist"}, *acts)]
+        return self.view("todo", "What is there to do?", TODO_LEDE, *parts)
+
     def untold(self):
         """The page's last lines: what is not told, and why."""
         missing, lines = self.model.get("not_told") or {}, []
@@ -2718,7 +2961,7 @@ class Page:
                      % text_of(built.get("words")))))
         main = E("main", {"id": "main"}, self.now_view(), self.text_view(), self.sheet_view() if self.sheet is not None else "",
                  self.threads_view(), self.settled_view(),
-                 self.lessons_view(), self.open_view(), self.map_view(), self.ask_view())
+                 self.lessons_view(), self.open_view(), self.todo_view(), self.map_view(), self.ask_view(), self.usage_view())
         panel = E("aside", {"id": "panel", "class": "panel", "aria-label": "One memory"},
                   E("button", {"type": "button", "id": "close", "class": "close"}, "Close"),
                   E("h2", {"class": "noscript-h"}, "Every memory"),
@@ -2903,6 +3146,14 @@ def main(argv=None):
                                  recortex.shipped_profiles(config.get("profiles")), config)
     finally:
         db.close()
+    try:
+        model["usage"] = usage.report(repo, config)   # numbers and fixed words; the page tells them as they are
+    except Exception:  # noqa: BLE001 - the page is built without the usage view's numbers, never not at all
+        model["usage"] = None
+    try:
+        model["acts"] = usage.acts_report(repo)   # what the observer did, for the end of the to-do view
+    except Exception:  # noqa: BLE001
+        model["acts"] = []
     wanted = mind_figures.wanted(model)
     pictures, reasons = mind_figures.load(wanted, repo, None, fetch=bool(args.sync or args.figures))
     text = render(model, pictures)

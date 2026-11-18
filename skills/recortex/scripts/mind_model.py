@@ -1016,8 +1016,41 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
             "open": opened, "map": self.map_model(), "plan": self.plan, "versions": self.versions, "sheet": self.sheet,
             "counts": {"memories": len(self.order), "threads": len(self.threads), "words": len(words),
                        "open": sum(1 for m in self.order if m["css"] == "open")},
-            "not_told": not_told,
+            "not_told": not_told, "tasks": self.tasks_model(),
         }
+
+    def tasks_model(self):
+        """The to-do view's tasks: each open task with its steps (state, and for a step that was marked the memory that marked
+        it: its id, its issue and its plain line) and the tasks closed in the last 30 days, from index.tasks, which reads told
+        memories alone. A title that someone outside the allowed accounts changed is left out. An index that cannot give them
+        gives no tasks."""
+        none = {"todo": None, "open": [], "closed": []}
+        try:
+            now = datetime.datetime.combine(self.today, datetime.time(23, 59, 59), datetime.timezone.utc)
+            report = index.tasks(self.db, self.allowed, closed_days=30, now=now)
+        except Exception:  # noqa: BLE001 - an index of an older form, or one that is not read yet
+            return none
+        items = self.found["items"]
+
+        def marked(cid):
+            memory = items.get(cid)
+            if memory is None:
+                return None
+            return {"id": cid, "issue": memory["issue"], "plain": short(memory["plain"] or "")}
+
+        def task(entry):
+            closed = (entry["closed_at"] or "")[:10]
+            return {"issue": entry["issue"], "title": short(entry["title"]) if entry["title_told"] else "",
+                    "todo": entry["todo"] is True, "hand": entry["hand"] is True, "counts": dict(entry["counts"]),
+                    "closed": closed if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", closed) else "",
+                    "steps": [{"n": step["n"], "text": short(step["text"]), "state": step["state"],
+                               "by": marked(step["by"]["id"]) if step["by"] else None} for step in entry["steps"]]}
+
+        opened = [task(entry) for entry in report["tasks"] if entry["state"] == "open"]
+        closed = [task(entry) for entry in report["tasks"] if entry["state"] == "closed"]
+        return {"todo": report["todo"],
+                "open": sorted(opened, key=lambda t: (not t["todo"], t["issue"])),
+                "closed": sorted(closed, key=lambda t: (t["closed"], t["issue"]), reverse=True)}
 
     def tree_model(self, outline):
         """The map of what we know: the project's question in the middle, the sections around it (the first half to the

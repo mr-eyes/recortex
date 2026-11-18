@@ -5595,19 +5595,22 @@ class SetupTests(Sandbox):
         # runtime check in both modes, since without it the observer reviews nothing. A step that does not pass leaves
         # what is on and says plainly why and what to run. An API key that is set is named, as enable names it.
         for bad in ({"mode": "always", "model": "sonnet"}, {"mode": "automatic"}, {"mode": "shadow", "model": "two words"},
-                    {"mode": "off", "extra": 1}, "automatic"):
+                    {"mode": "off", "extra": 1}, "automatic", {"mode": "automatic", "model": "sonnet"},   # no level chosen
+                    {"mode": "shadow", "model": "sonnet", "level": "most"}):
             result = self.setup_script("apply", "--answers", self.answers("single", observer=bad), "--root",
                                        self.project(), "--dry-run")
             self.assertNotEqual(0, result.returncode, bad)
             self.assertIn("observer", result.stderr, bad)
         script = os.path.join(SCRIPTS, "observer.py")
         automatic = self.write("answers-automatic.json", json.dumps(dict(self.ANSWERS["single"], observer={
-            "mode": "automatic", "model": "sonnet"})))
+            "mode": "automatic", "model": "sonnet", "level": "everything"})))
         shadow = self.write("answers-shadow.json", json.dumps(dict(self.ANSWERS["single"], observer={
-            "mode": "shadow", "model": "haiku"})))
-        for answers, lines in ((automatic, ("enable --mode shadow --model sonnet --yes", "runtime-check",
-                                            "enable --mode automatic --model sonnet --yes")),
-                               (shadow, ("enable --mode shadow --model haiku --yes", "runtime-check"))):
+            "mode": "shadow", "model": "haiku", "level": "notes"})))
+        for answers, lines in ((automatic, ("enable --mode shadow --model sonnet --sort-model haiku --level everything --yes",
+                                            "runtime-check",
+                                            "enable --mode automatic --model sonnet --sort-model haiku --level everything --yes")),
+                               (shadow, ("enable --mode shadow --model haiku --sort-model haiku --level notes --yes",
+                                         "runtime-check"))):
             dry = self.setup_script("apply", "--answers", answers, "--root", self.project(), "--dry-run")
             self.assertEqual(0, dry.returncode, dry.stdout + dry.stderr)
             for line in lines:
@@ -5640,21 +5643,23 @@ class SetupTests(Sandbox):
             return real.stdout, json.loads(checked.stdout.strip().splitlines()[-1])
         out, found = apply(automatic, failing)
         self.assertIn("observer: taking notes in shadow mode, but reviewing and posting nothing yet (the check failed). "
-                      "Run observer.py runtime-check; then observer.py enable --mode automatic --model sonnet --yes.\n",
-                      out)
+                      "Run observer.py runtime-check; then observer.py enable --model sonnet --sort-model haiku --level "
+                      "everything --mode automatic --yes.\n", out)
         self.assertNotIn("isolation", out)
         self.assertEqual((True, "shadow", False), (found["approved"], found["settings"]["mode"], found["runtime_ready"]))
         out, found = apply(shadow, failing)
         self.assertIn("observer: taking notes in shadow mode, but reviewing and posting nothing yet (the check failed). "
                       "Run observer.py runtime-check.\n", out)
         out, found = apply(shadow, working)
-        self.assertIn("observer: on in shadow mode, with haiku: it reviews memories and keeps them on this machine\n", out)
+        self.assertIn("observer: on at the level Notes only in shadow mode, with haiku: it reviews memories and keeps them on "
+                      "this machine\n", out)
         self.assertNotIn("These variables are set", out)
         self.assertEqual((True, "shadow", True), (found["approved"], found["settings"]["mode"], found["runtime_ready"]))
         out, found = apply(automatic, working, ANTHROPIC_API_KEY="sk-ant-example")
         self.assertIn("observer: These variables are set: ANTHROPIC_API_KEY. ", out)
         self.assertNotIn("sk-ant-example", out)
-        self.assertIn("observer: on in automatic mode, with sonnet: it posts reviewed memories on its own\n", out)
+        self.assertIn("observer: on at the level Everything in automatic mode, with sonnet: it posts reviewed memories on its "
+                      "own\n", out)
         self.assertEqual(("automatic", True), (found["settings"]["mode"], found["runtime_ready"]))
         out, found = apply(self.answers("single"), working)
         self.assertNotIn("observer.py", out)  # off by default: nothing runs
@@ -9622,12 +9627,12 @@ class MindPageTests(MindSandbox):
     def words_of(text):
         return " ".join("".join(PageReader(text).texts).split())
 
-    def test_the_manuscript_page_keeps_the_contract_and_has_the_eight_ways_in(self):
+    def test_the_manuscript_page_keeps_the_contract_and_has_the_ten_ways_in(self):
         text = self.ms_page()
         self.assertEqual([], page_problems(text))
         page = PageReader(text)
         views = [dict(attrs)["id"] for tag, attrs in page.elements if tag == "section" and "view" in dict(attrs).get("class", "")]
-        self.assertEqual(["now", "text", "threads", "settled", "lessons", "open", "map", "ask"], views)
+        self.assertEqual(["now", "text", "threads", "settled", "lessons", "open", "todo", "map", "ask", "usage"], views)
         navs = [dict(attrs)["data-nav"] for tag, attrs in page.elements if "data-nav" in dict(attrs)]
         self.assertEqual(views, navs)
         words = self.words_of(text)
