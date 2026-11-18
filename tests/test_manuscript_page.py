@@ -196,6 +196,129 @@ class DifferTests(unittest.TestCase):
         self.assertEqual([("del", " ".join(["a"] * 2500)), ("add", " ".join(["a", "b"] * 1250))], [(r["t"], r["text"]) for r in runs])
         self.assertLess(time.time() - started, 5)
 
+    PARAGRAPH = ("Update every machine of the team before the first plan is adopted. An older version reads a `plan`, `text` or `proposal` "
+                 "comment as an ordinary comment, so it shows them in no thread and counts them as nothing, and it reads `against=` as no "
+                 "link; nothing breaks and the index stays readable, but the plan and the text changes are invisible to it. The index "
+                 "re-derives its tables on the first sync of 1.3.0 (one pass, no network call for it). Two index meta keys are new "
+                 "(`plan_counts`, and the derive version); older versions ignore them. An older version lists the plan issue as one "
+                 "that needs triage, since it does not know the label `plan`; leave it as it is.")
+
+    def test_one_word_changed_in_a_paragraph_of_a_hundred_words_or_more_marks_that_word_and_no_more(self):
+        self.assertGreater(len(self.PARAGRAPH.split()), 100)
+        new = self.PARAGRAPH.replace("machine of the", "machine 17 the", 1)
+        runs = self.rebuilt(self.PARAGRAPH, new)
+        self.assertEqual([("same", 21), ("del", 2), ("add", 2)], [(r["t"], len(r["text"])) for r in runs[:3]])
+        self.assertEqual([("del", "of"), ("add", "17")], [(r["t"], r["text"]) for r in runs if r["t"] != "same"])
+        self.assertEqual(4, len(runs))
+        rows = mind_versions.since(blocks(self.PARAGRAPH), blocks(new))
+        self.assertEqual(["reworded"], [r["k"] for r in rows])
+        self.assertEqual([("del", "of"), ("add", "17")], [(r["t"], r["text"]) for r in rows[0]["runs"] if r["t"] != "same"])
+        ops = mind_versions.diff_text(self.PARAGRAPH, new)
+        self.assertEqual(["change"], [op["op"] for op in ops])
+        self.assertEqual([("del", "of"), ("add", "17")], [(r["t"], r["text"]) for r in ops[0]["runs"] if r["t"] != "same"])
+
+    @staticmethod
+    def seeded_prose(rng, count):
+        """Paragraphs of 60 to 1,400 words from a vocabulary with a few very common words, as prose has."""
+        vocabulary = ["the", "of", "and", "a", "to", "in", "is", "it", "that", "was"] * 6 + ["word%d" % n for n in range(400)]
+        return [" ".join(rng.choice(vocabulary) for _ in range(rng.choice([60, 99, 100, 121, 150, 250, 400, 800, 1400])))
+                for _ in range(count)]
+
+    def test_a_stretch_of_common_words_between_two_changes_stays_unchanged_in_a_paragraph_of_three_hundred_words(self):
+        # "the" and "of" come more than once a hundred words, which autojunk would drop as anchors; no word is over a fifth
+        words = ["w%d" % n for n in range(280)]
+        for n in range(10, 280, 30):
+            words[n] = "the" if n % 60 == 10 else "of"
+        words[150:150] = "the of the of the of".split()
+        old = " ".join(words)
+        words[149], words[156] = "AA", "BB"   # the words just before and just after the stretch
+        new = " ".join(words)
+        runs = self.rebuilt(old, new)
+        self.assertEqual([("del", "w149"), ("add", "AA"), ("del", "w150"), ("add", "BB")], [(r["t"], r["text"]) for r in runs if r["t"] != "same"])
+        self.assertIn(" the of the of the of ", [r["text"] for r in runs if r["t"] == "same"])
+        self.assertGreater(len(old.split()), 200)
+
+    def test_one_to_four_changed_words_in_seeded_prose_mark_no_more_than_the_matcher_without_autojunk_did(self):
+        import difflib
+        rng = random.Random(1402)
+        token = re.compile(r"\s+|\S+")
+
+        def before_fix(old, new):   # word_runs of bfd7b8a: space and word tokens, autojunk off
+            a, b = token.findall(old), token.findall(new)
+            runs = []
+            for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+                if tag == "equal":
+                    runs.append(("same", "".join(a[i1:i2])))
+                else:
+                    runs += [("del", "".join(a[i1:i2]))] * (i2 > i1) + [("add", "".join(b[j1:j2]))] * (j2 > j1)
+            return mind_versions.phrases(mind_versions.merge_runs(runs))
+
+        marked = lambda runs: sum(len(r["text"].strip()) for r in runs if r["t"] != "same")
+        edits = worse = 0
+        for old in self.seeded_prose(rng, 60):
+            for _ in range(3):
+                words = old.split(" ")
+                for _ in range(rng.randint(1, 4)):
+                    words[rng.randrange(len(words))] = rng.choice([str(rng.randint(2, 99)), rng.choice(words)])
+                new = " ".join(words)
+                runs = self.rebuilt(old, new)
+                edits += 1
+                worse += marked(runs) > marked(before_fix(old, new))
+        self.assertEqual(180, edits)
+        self.assertEqual(0, worse)
+
+    def test_autojunk_is_on_only_where_one_item_is_over_a_fifth_of_a_long_list(self):
+        prose = self.PARAGRAPH.split()
+        self.assertFalse(mind_versions.matcher(prose, prose).autojunk)   # prose: its common words stay anchors
+        self.assertFalse(mind_versions.matcher(["a", "b", "c", "d", "e"] * 100, ["a", "b", "c", "d", "e"] * 100).autojunk)   # a fifth, not over it
+        self.assertTrue(mind_versions.matcher(["a"] * 300, ["a"] * 300).autojunk)
+        self.assertTrue(mind_versions.matcher(["a", "b"] * 150, ["a", "b"] * 150).autojunk)
+        self.assertFalse(mind_versions.matcher(["a"] * 100, ["a"] * 100).autojunk)   # under 200 items difflib applies none, and none is asked
+        self.assertFalse(mind_versions.matcher([], []).autojunk)
+
+    def test_the_slow_inputs_stay_bounded_in_every_function_that_matches(self):
+        import time
+        started = time.time()
+        old, new = "a\n\n" * 10000, "b\n\n" * 10000
+        rows = mind_versions.since(blocks(old), blocks(new))
+        self.assertEqual(sorted(["removed"] * 10000 + ["added"] * 10000), sorted(r["k"] for r in rows))
+        self.assertEqual(10000, len({r["i"] for r in rows if r["k"] == "added"}))
+        self.assertEqual(10000, len({r["j"] for r in rows if r["k"] == "removed"}))
+        mind_versions.diff_text(old, new)
+        reversed_text = lambda order: "\n\n".join("paragraph %d" % n for n in order)
+        mind_versions.since(blocks(reversed_text(range(10000))), blocks(reversed_text(reversed(range(10000)))))
+        for words in (600, 1499):
+            for a, b in ((" ".join(["a"] * words), " ".join(["a", "b"] * (words // 2))),
+                         (" ".join(["a b"] * (words // 2)), " ".join(["b a"] * (words // 2)))):
+                mind_versions.word_runs(a, b)
+                mind_versions.since(blocks(a), blocks(b))
+        rng = random.Random(7)
+        for vocabulary in (2, 5, 9):   # a few words over and over, none over a fifth of the paragraph for the larger two
+            for count in (200, 800, 1500):
+                one = " ".join(rng.choice("abcdefghi"[:vocabulary]) for _ in range(count))
+                two = " ".join(rng.choice("abcdefghi"[:vocabulary]) for _ in range(count))
+                mind_versions.word_runs(one, two)
+                mind_versions.since(blocks(one), blocks(two))
+        self.assertLess(time.time() - started, 20)
+
+    def test_a_block_that_repeats_in_a_long_part_is_never_marked_when_it_did_not_change(self):
+        filler = lambda n: "A paragraph about topic number %d with a few words of its own." % n
+        kinds = []
+        old, new = [], []
+        for n in range(300):
+            old.append(filler(n))
+            new.append(filler(n) + (" It was rewritten in the second version." if n in (99, 100, 199, 200) else ""))
+            if n % 2:   # a block that stands 150 times among 450: over a fifth of the part, so autojunk would drop it
+                old.append("Not measured.")
+                new.append("Not measured.")
+        rows = mind_versions.since(blocks("\n\n".join(old)), blocks("\n\n".join(new)))
+        self.assertEqual(len(new), len([r for r in rows if r["k"] != "removed"]))
+        measured = [r["k"] for r in rows if r["now"] == blocks("Not measured.")[0]]
+        self.assertEqual(150, len(measured))
+        self.assertEqual({"same"}, set(measured))
+        self.assertEqual(4, len([r for r in rows if r["k"] == "reworded"]))
+        self.assertEqual(0, len([r for r in rows if r["k"] in ("added", "removed", "changed")]))
+
     def test_a_table_whose_cell_boundaries_moved_is_a_change_though_its_words_are_the_same(self):
         def entry(first, second):
             cell = lambda text: {"r": [{"t": text}], "rs": 1, "cs": 1, "h": False, "a": None}
@@ -230,6 +353,19 @@ class DifferTests(unittest.TestCase):
                                              "The reader is a state machine that reads one character at a time."))
         row = mind_versions.since(blocks("H<sub>2</sub>O remains stable."), blocks("H<sup>2</sup>O remains stable."))[0]
         self.assertIsNone(row["runs"])   # a changed block carries no marked phrases: the page shows it as it was
+
+    def test_a_sup_sub_or_emphasis_whose_text_changed_is_a_change_not_a_reworded_paragraph_drawn_flat(self):
+        kinds = lambda old, new: [r["k"] for r in mind_versions.since(blocks(old + "\n\nTail."), blocks(new + "\n\nTail."))][:1]
+        self.assertEqual(["changed"], kinds("The plots covered 10<sup>-3</sup> of the field in the first season.",
+                                            "The plots covered 10<sup>-4</sup> of the field in the first season."))
+        self.assertEqual(["changed"], kinds("The sample was H<sub>2</sub>O in the first season of the trial.",
+                                            "The sample was H<sub>3</sub>O in the first season of the trial."))
+        self.assertEqual(["changed"], kinds("The result was *small* across all of the fields in the first season.",
+                                            "The result was *large* across all of the fields in the first season."))
+        self.assertEqual(["changed"], kinds("The yield was 6 m<sup>2</sup> in the first season of the trial.",
+                                            "The yield was 6 m<sup>2</sup> in the second season of the trial."))   # a shared one is not flattened
+        self.assertEqual(["reworded"], kinds("The result was small and *sure* across the fields.",
+                                             "The result was tiny and *sure* across the fields."))   # emphasis that stays is words
 
     def test_the_cost_of_an_earlier_table_or_figure_is_the_cost_of_what_the_page_draws_of_it(self):
         cell = lambda text: {"r": [{"t": text}], "rs": 1, "cs": 1, "h": False, "a": None}
@@ -1670,7 +1806,8 @@ class FixRoundTests(Steps):
     def test_a_table_that_gained_a_row_is_another_shape_so_the_whole_block_is_shown_as_it_was_and_no_cell_is_marked(self):
         self.mode("autonomous")
         base = self.topic_body()
-        older = base.replace("| over 12 days | 1 | 0 of 1 | 0 of 1 |\n", "")
+        older = base.replace("| 5 to 7 days | 6 | 6 of 6 | 3 of 6 |\n", "")   # the first row: zipping the rows finds no cell that differs
+        self.assertNotEqual(base, older)
         self.craft([{"body": older, "before": "c" * 64}, {"body": base}])
         part = self.results(self.model())
         self.assertTrue([m for row in part["rows"] for m in row["then"]])

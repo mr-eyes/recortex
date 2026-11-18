@@ -20,6 +20,7 @@ one row per block of the new text, and one per block that only the old text had,
 reworded or changed. History and the versions of the paper keep their word-by-word look through diff_text and word_runs.
 """
 
+import collections
 import difflib
 import json
 import re
@@ -31,13 +32,14 @@ MAX_SINCE_BYTES = 2 * 1024 * 1024   # of the marked variants of the manuscript v
 MAX_PAIRS = 6000         # pairs of blocks looked at in one since(); when they are spent the rest are plain additions and removals
 MAX_CELLS = 4000000      # words of one block times words of the other, summed over the pairs that since() matches by words
 MAX_WORDS = 1500         # a paragraph of more words than this is paired with another by its words' overlap, never matched by words
-MAX_TOKENS = 3000        # a pair of paragraphs with more word and space tokens than this in either is one deletion and one addition
+MAX_TOKENS = 1500        # a pair of paragraphs with more words than this in either is one deletion and one addition
 SAME_WORDS, SAME_CHARS = 2, 16   # a run of unchanged words this short between two changes joins them
 WHOLE_SHARE = 0.6        # more of the longer side changed than this: the paragraph is one deletion and one addition
 REWORD_RATIO = 0.5       # paragraphs whose words match at least this much are one paragraph reworded
 OPS = ("same", "add", "del", "change", "cut")
 RUNS = ("same", "add", "del")
-TOKEN = re.compile(r"\s+|\S+")
+TOKEN = re.compile(r"\s+|\S+\s*")   # a word with the whitespace after it; whitespace alone only at the start
+JUNK_SHARE = 5           # autojunk works only where one item is more than a fifth of what is matched
 
 
 def paragraphs(text):
@@ -67,20 +69,35 @@ def merge_runs(runs):
     return [{"t": kind, "text": text} for kind, text in out]
 
 
+def matcher(first, second):
+    """difflib.SequenceMatcher over two lists of strings, with autojunk only where one item is more than a fifth of the second
+    list (and the list is long enough for difflib to apply it at all): that is text made to be slow ("a a a ..."). On prose
+    autojunk would drop the common words and the spaces as anchors, and a reworded paragraph of 100 words or more would
+    become a whole deletion and a whole addition."""
+    top = max(collections.Counter(second).values()) if second else 0
+    return difflib.SequenceMatcher(None, first, second, autojunk=len(second) > 200 and top * JUNK_SHARE > len(second))
+
+
 def word_runs(old, new):
-    """The runs of a changed paragraph, matched by words (whitespace kept with the words around it)."""
+    """The runs of a changed paragraph, matched by words (each word with the whitespace after it; the whitespace that two changed
+    stretches share goes back to the unchanged text after them, so that a stretch ends at its last word)."""
     a, b = TOKEN.findall(old), TOKEN.findall(new)
     if len(a) > MAX_TOKENS or len(b) > MAX_TOKENS:   # too long to match by words: the whole paragraph is replaced
         return merge_runs([("del", old), ("add", new)])
-    runs = []
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b).get_opcodes():
+    runs, carry = [], ""
+    for tag, i1, i2, j1, j2 in matcher(a, b).get_opcodes():
         if tag == "equal":
-            runs.append(("same", "".join(a[i1:i2])))
-        else:
-            if i2 > i1:
-                runs.append(("del", "".join(a[i1:i2])))
-            if j2 > j1:
-                runs.append(("add", "".join(b[j1:j2])))
+            runs.append(("same", carry + "".join(a[i1:i2])))
+            carry = ""
+            continue
+        gone, came = "".join(a[i1:i2]), "".join(b[j1:j2])
+        space = gone[len(gone.rstrip()):]
+        if gone.rstrip() and came.rstrip() and space and came[len(came.rstrip()):] == space and i2 < len(a) and j2 < len(b):
+            gone, came, carry = gone[:len(gone) - len(space)], came[:len(came) - len(space)], space
+        if gone:
+            runs.append(("del", gone))
+        if came:
+            runs.append(("add", came))
     return merge_runs(runs)
 
 
@@ -90,7 +107,7 @@ def diff_text(before, after, collapse=True):
     sides. A difference past CUT_CHARS of changed text ends with {"op": "cut"}."""
     a, b = paragraphs(before), paragraphs(after)
     ops, spent, same = [], 0, 0
-    matcher = difflib.SequenceMatcher(None, a, b)
+    differ = matcher(a, b)
 
     def flush():
         nonlocal same
@@ -98,7 +115,7 @@ def diff_text(before, after, collapse=True):
             ops.append({"op": "same", "n": same})
         same = 0
 
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+    for tag, i1, i2, j1, j2 in differ.get_opcodes():
         if tag == "equal":
             if collapse:
                 same += i2 - i1
@@ -288,7 +305,9 @@ def phrases(runs):
 def inline_shape(runs):
     """(signature, math) of the inline runs of a paragraph: the signature lists, in order, every run that is more than plain
     words (code with its text, a link with its target, a citation with its target, the emphasis, superscript or subscript a
-    text run carries, a formula with its source), and `math` says that the paragraph holds a formula anywhere."""
+    text run carries with its text, a formula with its source), and `math` says that the paragraph holds a formula, a
+    superscript or a subscript anywhere (the marks of a reworded paragraph are drawn as plain words, which would flatten
+    them)."""
     signature, math = [], False
     for run in runs if isinstance(runs, list) else []:
         if not isinstance(run, dict):
@@ -306,15 +325,18 @@ def inline_shape(runs):
             signature.append(("cite", run.get("cite"), run.get("n")))
         elif "t" in run or "w" in run:
             flags = tuple(flag for flag in ("sup", "sub", "i", "b") if run.get(flag) is True)
+            if "sup" in flags or "sub" in flags:
+                math = True   # drawn as words, a superscript or a subscript reads as another number: shown as it was
             if flags:
-                signature.append(("styled", flags))
+                signature.append(("styled", flags, run.get("t") if isinstance(run.get("t"), str) else run.get("w")))
     return signature, math
 
 
 def reword_or_change(old, new):
     """"reworded" for two paragraphs that differ in plain words only, else "changed": a formula on either side (the marks of a
-    reworded paragraph are drawn as words, which would show the formula's source), or a run that is more than plain words
-    (code, a link's target, a citation, emphasis, a superscript or a subscript) that the two sides do not share."""
+    reworded paragraph are drawn as words, which would show the formula's source), a superscript or a subscript on either side,
+    or a run that is more than plain words (code, a link's target, a citation, emphasis) that the two sides do not share, in
+    its kind or in its text."""
     first, math_first = inline_shape(old.get("p"))
     second, math_second = inline_shape(new.get("p"))
     if math_first or math_second or first != second:
@@ -337,13 +359,13 @@ def pairs(old, new, budget, first=None, second=None):
         second = words(new) if second is None else second
         if not first or not second:
             return None
-        matcher = difflib.SequenceMatcher(None, first, second)
-        if matcher.real_quick_ratio() < REWORD_RATIO or matcher.quick_ratio() < REWORD_RATIO:
+        both = matcher(first, second)
+        if both.real_quick_ratio() < REWORD_RATIO or both.quick_ratio() < REWORD_RATIO:
             return None
         if len(first) > MAX_WORDS or len(second) > MAX_WORDS:   # too long to match by words: the overlap of the words decides
             return "changed"
         budget[1] -= len(first) * len(second)
-        return reword_or_change(old, new) if matcher.ratio() >= REWORD_RATIO else None
+        return reword_or_change(old, new) if both.ratio() >= REWORD_RATIO else None
     if kind == "block":
         left, right = old["block"], new["block"]
         same = isinstance(left, dict) and isinstance(right, dict) and left.get("kind") == right.get("kind") \
@@ -420,7 +442,7 @@ def since(old_blocks, new_blocks, old_entries=None, new_entries=None):
             cache[n] = words(blocks[n]) if block_kind(blocks[n]) == "p" else None
         return cache[n]
 
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, first, second).get_opcodes():
+    for tag, i1, i2, j1, j2 in matcher(first, second).get_opcodes():
         if tag == "equal":
             out += [row("same", new_blocks[j], None, None, j, i1 + j - j1) for j in range(j1, j2)]
             continue
@@ -429,6 +451,10 @@ def since(old_blocks, new_blocks, old_entries=None, new_entries=None):
             found = None
             for later in range(j, j2):
                 if budget[0] <= 0 or budget[1] <= 0:
+                    break
+                if first[i] == second[later]:   # the same block again (one that autojunk or a long part left unmatched): no change
+                    budget[0] -= 1
+                    found = (later, "same")
                     break
                 how = pairs(old_blocks[i], new_blocks[later], budget, words_of(old_blocks, old_words, i),
                             words_of(new_blocks, new_words, later))
@@ -440,6 +466,10 @@ def since(old_blocks, new_blocks, old_entries=None, new_entries=None):
                 continue
             later, how = found
             out += [row("added", new_blocks[n], None, None, n, None) for n in range(j, later)]
+            if how == "same":
+                out.append(row("same", new_blocks[later], None, None, later, i))
+                j = later + 1
+                continue
             runs = None
             if how == "reworded":
                 runs = phrases(word_runs(block_text(old_blocks[i]), block_text(new_blocks[later])))
