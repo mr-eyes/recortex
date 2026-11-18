@@ -1084,6 +1084,18 @@ class Store:
                                    (time.time() if at is None else float(at), kind, issue, comment,
                                     canonical(list(numbers)), backup)).lastrowid
 
+    def log_act(self, kind, **fields):
+        """add_act for an act whose work is already done: the act's id, or None when the log could not take it. The failure
+        is counted (note_act_failure) and never raised, so that what was done is not stopped by its own log."""
+        try:
+            return self.add_act(kind, **fields)
+        except Exception:  # noqa: BLE001 - the work stands; only the log of it is missing, and that is counted
+            try:
+                self.note_act_failure()
+            except Exception:  # noqa: BLE001 - a log that cannot say it failed is the log's problem
+                pass
+            return None
+
     def note_act_failure(self, now=None):
         """Count one write of the acts log that failed (the post it was for stands): the control `acts_failed` holds a whole
         count and the UTC day of the last failure, nothing else. The count starts again at 1 when the last failure is

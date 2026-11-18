@@ -3,6 +3,8 @@
 failing, by one fixed notice at session start (observer_hooks). Nothing here reaches GitHub; the scripts run against
 tests/fake_gh.py."""
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -14,10 +16,14 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 import test_jobs_jobs as tjj  # noqa: E402
+import test_jobs_keeper as tk  # noqa: E402
 import test_scripts as ts  # noqa: E402
 
 sys.path.insert(0, ts.SCRIPTS)
+import keeper_rules  # noqa: E402
+import observer_drafts  # noqa: E402
 import observer_hooks as hooks  # noqa: E402
+import observer_jobs as jobs  # noqa: E402
 import observer_store as store_module  # noqa: E402
 
 REPO = ts.REPO
@@ -170,6 +176,110 @@ class ActsFailedNoticeTests(tjj.HookBox):
         self.assertNotIn(self.HOSTILE, json.dumps(out))
         self.assertEqual(["2"], self.said(out))
         self.assertTrue(re.fullmatch(r"[A-Za-z0-9 .,:;#()'\"_\n-]*", hooks.ACTS_FAILED % 2), hooks.ACTS_FAILED)
+
+
+def failing_log():
+    return mock.patch.object(store_module.Store, "add_act", side_effect=store_module.StoreError("invalid_act"))
+
+
+class DraftActsFailedTests(tk.KeeperBox):
+    """The acts of the paper's drafts (proposed, applied) are logged like the others: when the log cannot take one, the
+    draft stands, the failure is counted once, and status and --doctor say so."""
+
+    def failed(self):
+        with self.open_store() as store:
+            return store.acts_failed()
+
+    def told(self):
+        status = json.loads(self.cmd("observer.py", "status").stdout)
+        doctor = [line for line in self.cmd("hooks.py", "--doctor").stdout.splitlines() if line.startswith("observer log:")]
+        return status, doctor
+
+    def propose(self):
+        self.consider()
+        with failing_log():
+            done = self.consider(now=self.t0 + 31 * 60)
+        self.assertEqual("drafted", done["code"], done)
+        return done["draft"]
+
+    def test_a_draft_proposed_stands_when_its_act_could_not_be_logged_and_the_failure_is_counted(self):
+        ident = self.propose()
+        (found,) = self.kept()
+        self.assertEqual((ident, "waiting"), (found["id"], found["state"]))
+        with self.open_store() as store:
+            self.assertEqual([], store.acts(days=1))
+            self.assertIsNotNone(keeper_rules.recorded(store.get_control(keeper_rules.CONTENTS, []), ident))
+        self.assertEqual(1, self.failed()["n"])
+        status, doctor = self.told()
+        self.assertEqual(1, status["acts_failed"])
+        self.assertEqual(1, len(doctor), doctor)
+        self.assertIn("could not be written 1 time(s)", doctor[0])
+
+    def test_a_draft_applied_stands_when_its_act_could_not_be_logged_and_the_failure_is_counted(self):
+        self.consider()
+        ident = self.consider(now=self.t0 + 31 * 60)["draft"]
+        with self.open_store() as store:
+            content = keeper_rules.recorded(store.get_control(keeper_rules.CONTENTS, []), ident)
+            self.assertTrue(store.grant_answer(keeper_rules.grant_key(ident, content), "toolu_01approve"))
+            before = len(store.acts(days=1))
+            with failing_log(), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, observer_drafts.apply(store, ident, self.repo_name, self.project))
+            self.assertEqual("applied", store.draft(ident)["state"])
+            self.assertEqual(before, len(store.acts(days=1)))   # no act of the application was logged
+        self.assertIn(tk.DRAFT_TEXT, self.body(5))   # the text is written
+        self.assertEqual(1, self.failed()["n"])
+        status, doctor = self.told()
+        self.assertEqual(1, status["acts_failed"])
+        self.assertEqual(1, len(doctor), doctor)
+
+
+class JobsActsFailedTests(tjj.JobsBox):
+    """The acts of the housekeeping (a list rendered, a task closed, the hub's list, the board) are logged like the others:
+    the write was made, so a log that cannot take its act is counted and the step goes on."""
+
+    def failed(self):
+        with store_module.Store(REPO, config=self.pcfg) as db:
+            return db.acts_failed()
+
+    def test_a_rendered_task_stands_and_the_failed_log_is_counted_instead_of_stopping_the_step(self):
+        with failing_log():
+            steps = self.jobs()
+        self.assertEqual("ok", steps["render"])
+        self.assertIn("- [x] 1. Carry the quote state across physical lines", self.body(7))
+        self.assertEqual([], self.acts(["task_rendered"]))
+        self.assertGreaterEqual(self.failed()["n"], 1)
+
+    def test_a_closed_task_stands_and_the_failed_log_is_counted(self):
+        self.finish_task()
+        with failing_log():
+            steps = self.jobs()
+        self.assertEqual("ok", steps["close"])
+        self.assertEqual("closed", self.issue_state(7))
+        self.assertEqual([], self.acts(["task_closed"]))
+        self.assertGreaterEqual(self.failed()["n"], 1)
+
+    def test_the_hub_and_the_board_acts_are_counted_when_they_cannot_be_logged(self):
+        with mock.patch.object(jobs.board, "apply_for", return_value={"code": "ok", "written": 2, "waiting": 0}), \
+                failing_log():
+            steps = self.jobs()
+        self.assertEqual(("ok", "ok"), (steps["hub"], steps["board"]))
+        self.assertEqual([], self.acts(["hub_rendered", "board"]))
+        self.assertGreaterEqual(self.failed()["n"], 3)   # a list, the hub's list and the board, at least
+
+
+class LogActTests(tjj.HookBox):
+    """Store.log_act: the id of the act, or None and one counted failure."""
+
+    def test_it_returns_the_act_or_counts_the_failure_and_never_raises(self):
+        with self.store() as db:
+            self.assertIsInstance(db.log_act("memory", issue=5, comment=9101), int)
+            self.assertIsNone(db.acts_failed())
+            self.assertIsNone(db.log_act("not_a_kind"))   # the store refuses it
+            self.assertEqual(1, db.acts_failed()["n"])
+            with mock.patch.object(store_module.Store, "add_act", side_effect=RuntimeError("boom")), \
+                    mock.patch.object(store_module.Store, "note_act_failure", side_effect=store_module.StoreError("full")):
+                self.assertIsNone(db.log_act("memory", issue=5))   # not even a failed count raises
+            self.assertEqual(1, db.acts_failed()["n"])
 
 
 if __name__ == "__main__":

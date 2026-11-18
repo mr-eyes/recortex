@@ -28,7 +28,6 @@ import index
 import keeper_rules
 import names
 import observer_runtime as runtime
-import observer_store
 import record_format
 import recortex
 import storage
@@ -235,10 +234,7 @@ def run_draft(repo, config, store, options, invoke, entry, state, now, project_r
     ident = store.add_draft(topic, headings, folder, base_hash, due_hash=entry["key"], state="waiting")
     store.set_control(keeper_rules.CONTENTS,
                       keeper_rules.remember(store.get_control(keeper_rules.CONTENTS, []), ident, content))
-    try:
-        store.add_act("draft_proposed", issue=topic)
-    except observer_store.StoreError:
-        pass
+    store.log_act("draft_proposed", issue=topic)   # a log that cannot take it is counted, never a failed draft
     return {"code": "drafted", "draft": ident}
 
 

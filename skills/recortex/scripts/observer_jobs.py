@@ -117,7 +117,7 @@ def render_step(repo, config, store, report, texts, room, now):
             done += 1
             backup = backup_name(result.get("backup"))
             keep_after(repo, task["issue"], result.get("backup"))
-            store.add_act("task_rendered", issue=task["issue"], backup=backup, at=now)
+            store.log_act("task_rendered", issue=task["issue"], backup=backup, at=now)
         elif not result.get("ok"):
             return ("failed" if not done else "ok"), done, waiting
     return ("waiting" if waiting else "ok" if done else "nothing"), done, waiting
@@ -140,7 +140,7 @@ def close_step(repo, config, store, options, report, room, now):
         if result.get("reason") == "closed":
             closed += 1
             backup = result.get("backup")
-            store.add_act("task_closed", issue=task["issue"], backup=backup_name(backup), at=now)
+            store.log_act("task_closed", issue=task["issue"], backup=backup_name(backup), at=now)
             keep_after(repo, task["issue"], backup)
         else:
             return ("failed" if not closed else "ok"), closed
@@ -186,7 +186,7 @@ def hub_step(repo, config, store, db, report, room, now):
     if os.path.isfile(backup):
         os.chmod(backup, 0o600)
     keep_after(repo, hub, backup)
-    store.add_act("hub_rendered", issue=hub, backup=backup_name(backup), at=now)
+    store.log_act("hub_rendered", issue=hub, backup=backup_name(backup), at=now)
     return "ok"
 
 
@@ -207,7 +207,7 @@ def board_step(repo, config, store, now):
     result = board.apply_for(repo, config, {"pause": 0})
     code = result.get("code")
     if code == "ok":
-        store.add_act("board", numbers=[min(max(int(result.get("written", 0)), 0), 10 ** 6)], at=now)
+        store.log_act("board", numbers=[min(max(int(result.get("written", 0)), 0), 10 ** 6)], at=now)
         return "waiting" if result.get("waiting") else "ok"
     if code in ("nothing", "no-board"):
         return "nothing"

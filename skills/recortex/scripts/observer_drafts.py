@@ -183,10 +183,7 @@ def apply(store, ident, repo, project_root):
     lines = [line for line in output.splitlines() if line.strip()][-12:]
     if code == 0:
         store.set_draft(ident, "applied")
-        try:
-            store.add_act("draft_applied", issue=draft["topic"])
-        except Exception:  # noqa: BLE001 - the log is a convenience; the text is written
-            pass
+        store.log_act("draft_applied", issue=draft["topic"])   # the text is written: a failed log is counted, nothing more
         emit({"action": "apply", "draft": ident, "output": lines})
         return 0
     if any(sign in output for sign in STALE_SIGNS):
