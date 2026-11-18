@@ -35,24 +35,27 @@ UNREADABLE = ("recortex: the ask agent only reads the record, and this command c
               "Run python3 index.py query find, recall, timeline, tasks or plan, and nothing else.")
 
 
-# A program that gives a command a terminal of its own, which a session can use to look like the user's: one list, so that the
-# check and its tests name the same helpers. A word of the command line only counts as a helper at the start of a command
-# or after a space, a quote or an operator, and when a space, a quote or an operator follows (so `script.sh` is not one).
-PTY_HELPERS = ("script", "unbuffer", "expect", "socat", "faketty", "pty", "openpty", "forkpty")
-PTY_HELPER = re.compile(r"(?:^|[\s;&|(\'\"])(?:%s)(?=[\s;&|)\'\"]|$)" % "|".join(PTY_HELPERS))
+# A program that gives a command a terminal of its own, or hides where it runs from, which a session can use to look like
+# the user's: one list, so that the check and its tests name the same helpers. A name counts at any word boundary (after a
+# space, a quote, an operator, a dot or a slash, and before a bracket as well), but not inside a longer word or after a
+# dash: `scripts/` and `--script` are not helpers.
+PTY_HELPERS = ("script", "unbuffer", "expect", "socat", "faketty", "pty", "openpty", "forkpty", "zpty", "tmux", "screen",
+               "ssh", "setsid", "nohup")
+PTY_HELPER = re.compile(r"(?<![A-Za-z0-9_-])(?:%s)(?![A-Za-z0-9_-])" % "|".join(PTY_HELPERS))
 USERS_COMMAND = re.compile(r"(?:observer|setup)\.py")
-TERMINAL_DENIAL = ("recortex: observer.py and setup.py are not run through a pseudo-terminal helper (script, unbuffer, expect, "
-                   "socat, faketty, pty): what they ask for is the user's own answer. Ask the user to run the command in "
-                   "their own terminal, outside Claude Code.")
+OBSERVER_UNDER_CLAUDE = re.compile(r"CLAUDECODE")   # a command that names this variable and observer.py is working round the check
+TERMINAL_DENIAL = ("recortex: observer.py and setup.py are not run through a program that makes a terminal or hides where "
+                   "they run (script, unbuffer, expect, socat, faketty, pty, tmux, screen, ssh, setsid, nohup): what they ask "
+                   "for is the user's own answer. Ask the user to run the command in their own terminal, outside Claude Code.")
 
 
 def terminal_decision(data):
     """The denial for a Bash call that runs observer.py or setup.py through a pseudo-terminal helper, or None."""
     tool_input = data.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    if (data.get("tool_name") in ("Bash", "bash") and isinstance(command, str) and USERS_COMMAND.search(command)
-            and PTY_HELPER.search(command)):
-        return deny(TERMINAL_DENIAL)
+    if data.get("tool_name") in ("Bash", "bash") and isinstance(command, str) and USERS_COMMAND.search(command):
+        if PTY_HELPER.search(command) or (OBSERVER_UNDER_CLAUDE.search(command) and "observer.py" in command):
+            return deny(TERMINAL_DENIAL)
     return None
 
 

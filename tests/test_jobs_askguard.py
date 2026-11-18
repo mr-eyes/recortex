@@ -141,15 +141,27 @@ THROUGH_A_TERMINAL = (
     'socat - EXEC:"python3 %s disable",pty' % OBSERVER,
     "faketty python3 %s drafts drop ab12cd34" % OBSERVER,
     "echo undo | script -qec 'python3 %s undo 4' /dev/null" % OBSERVER,
+    "cat x.script; python3 %s later ab12cd34" % OBSERVER,             # after a dot
+    "(unbuffer python3 %s later ab12cd34)" % OBSERVER,                # in brackets
+    "/usr/bin/script -qc 'python3 %s later ab12cd34' /dev/null" % OBSERVER,   # after a slash
+    "python3 -c 'import pty;pty.spawn([\"python3\",\"%s\"])'" % OBSERVER,   # before a bracket's dot and after a semicolon
+    "tmux new-session -d 'python3 %s later ab12cd34'" % OBSERVER,
+    "screen -dm python3 %s later ab12cd34" % OBSERVER,
+    "ssh localhost python3 %s later ab12cd34" % OBSERVER,
+    "setsid python3 %s later ab12cd34" % OBSERVER,
+    "nohup python3 %s later ab12cd34 &" % OBSERVER,
+    "python3 -c 'import zpty' %s" % OBSERVER,
+    "env -u CLAUDECODE python3 %s later ab12cd34" % OBSERVER,           # the variable named beside observer.py
+    "CLAUDECODE= python3 %s discard x" % OBSERVER,
 )
 NOT_THROUGH_A_TERMINAL = (
     "python3 %s status" % OBSERVER,
     "python3 %s pending --waiting --json" % OBSERVER,
-    "cat script.sh; python3 %s status" % OBSERVER,
+    "cat scripts.txt; python3 %s status --source-details" % OBSERVER,   # `scripts` is not `script`
+    "python3 %s status --no-script" % OBSERVER,                            # nor is a dashed option
     "python3 %s observer --level notes --dry-run" % SETUP,
     "ls %s" % ts.SCRIPTS,
     "script -qc 'ls' /dev/null",   # a terminal for another command is not this check's business
-    "FOO=script python3 %s status" % OBSERVER,
 )
 
 

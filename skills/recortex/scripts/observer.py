@@ -277,9 +277,56 @@ def terminal():
         return None
 
 
-def on_terminal():
+CLAUDE_NAMES = ("claude",)   # what a Claude Code process is called (its name, or the first word of its command line)
+ANCESTORS = 64              # how far up the parents the check looks
+
+
+def ancestry(limit=ANCESTORS):
+    """The names of this process's parents, nearest first, at most `limit`: from /proc on Linux, from `ps` elsewhere. Each is
+    the process's own name and the first word of its command line, so that a renamed or relinked program shows either way.
+    Whatever cannot be read ends the walk."""
+    names, pid = [], os.getppid()
+    for _ in range(limit):
+        if pid <= 1:
+            break
+        try:
+            with open("/proc/%d/stat" % pid) as handle:
+                stat = handle.read()
+            comm = stat[stat.index("(") + 1:stat.rindex(")")]
+            parent = int(stat[stat.rindex(")") + 2:].split()[1])
+            try:
+                with open("/proc/%d/cmdline" % pid, "rb") as handle:
+                    first = handle.read(512).split(b"\0")[0].decode("utf-8", "replace")
+            except OSError:
+                first = ""
+        except (OSError, ValueError, IndexError):
+            import subprocess
+            try:
+                done = subprocess.run(["ps", "-o", "ppid=,comm=", "-p", str(pid)], capture_output=True, text=True, timeout=2)
+                fields = done.stdout.split(None, 1)
+                parent, comm, first = int(fields[0]), fields[1].strip(), fields[1].strip()
+            except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+                break
+        names += [os.path.basename(comm), os.path.basename(first)]
+        pid = parent
+    return names
+
+
+def inside_claude(environ=None, parents=None):
+    """True when this command runs inside a Claude Code session: the environment carries CLAUDECODE, or a parent process is
+    the claude program. The user's own terminal is neither; a `!` command typed inside Claude Code is, and is refused too.
+    `parents` is the ancestry (ancestry() by default), for a test."""
+    if (os.environ if environ is None else environ).get("CLAUDECODE"):
+        return True
+    return any(name in CLAUDE_NAMES for name in (ancestry() if parents is None else parents))
+
+
+def on_terminal(parents=None):
     """True when this command runs on the user's own terminal: a controlling terminal and a tty for stdin and stdout, which a
-    command run by Claude Code's Bash tool does not have."""
+    command run by Claude Code's Bash tool does not have, and outside any Claude Code session, whatever terminal one has
+    made for it (inside_claude). A guard against mistakes: a session with shell access can find another way."""
+    if inside_claude(parents=parents):
+        return False
     tty = terminal()
     if tty is None:
         return False

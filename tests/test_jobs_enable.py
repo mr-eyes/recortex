@@ -18,6 +18,7 @@ import test_jobs_setup as tj  # noqa: E402
 import test_scripts as ts  # noqa: E402
 
 sys.path.insert(0, ts.SCRIPTS)
+import observer  # noqa: E402
 import observer_grants as grants  # noqa: E402
 import observer_hooks  # noqa: E402
 import observer_runtime as runtime  # noqa: E402
@@ -483,6 +484,53 @@ class SwitchedLineTests(unittest.TestCase):
     def test_a_folder_the_user_turned_on_in_their_terminal_says_nothing(self):
         with mock.patch.object(observer_hooks.observer_runtime, "stored_approval", return_value=dict(self.entry(), given="terminal")):
             self.assertEqual("", observer_hooks._switched(self.store()))
+
+
+class InsideClaudeTests(unittest.TestCase):
+    """The user's own terminal is outside every Claude Code session: CLAUDECODE in the environment, or a claude program
+    among the parents, makes the process a session's, whatever terminal it has."""
+
+    def terminal(self):
+        tty = mock.MagicMock()
+        tty.__enter__.return_value = tty
+        return mock.patch.object(observer, "terminal", return_value=tty)
+
+    def test_claudecode_in_the_environment_is_a_session(self):
+        self.assertTrue(observer.inside_claude(environ={"CLAUDECODE": "1"}, parents=[]))
+        self.assertFalse(observer.inside_claude(environ={}, parents=[]))
+        self.assertFalse(observer.inside_claude(environ={"CLAUDECODE": ""}, parents=["bash"]))
+
+    def test_a_claude_program_among_the_parents_is_a_session(self):
+        self.assertTrue(observer.inside_claude(environ={}, parents=["python3", "zsh", "claude", "zsh", "tmux"]))
+        self.assertFalse(observer.inside_claude(environ={}, parents=["python3", "zsh", "tmux", "sshd", "systemd"]))
+        self.assertFalse(observer.inside_claude(environ={}, parents=["claude-code-docs", "claudette"]))   # another name
+
+    def test_a_terminal_inside_a_session_is_refused_and_the_users_own_is_not(self):
+        with self.terminal(), mock.patch.dict(os.environ, {"CLAUDECODE": "1"}):
+            self.assertFalse(observer.on_terminal(parents=[]))
+        environment = {key: value for key, value in os.environ.items() if key != "CLAUDECODE"}
+        with self.terminal(), mock.patch.dict(os.environ, environment, clear=True):
+            self.assertFalse(observer.on_terminal(parents=["bash", "claude"]))
+            self.assertTrue(observer.on_terminal(parents=["bash", "tmux", "sshd"]))
+            self.assertTrue(observer.on_terminal(parents=[]))
+
+    def test_the_ancestry_is_read_from_the_parents_and_is_bounded(self):
+        names = observer.ancestry()
+        self.assertIsInstance(names, list)
+        self.assertTrue(all(isinstance(name, str) for name in names))
+        self.assertLessEqual(len(names), 2 * observer.ANCESTORS)
+        if os.path.isdir("/proc/%d" % os.getppid()):
+            with open("/proc/%d/stat" % os.getppid()) as handle:
+                stat = handle.read()
+            self.assertEqual(stat[stat.index("(") + 1:stat.rindex(")")], names[0])   # the nearest parent first
+        with mock.patch.object(observer.os, "getppid", return_value=1):
+            self.assertEqual([], observer.ancestry())
+
+    def test_the_commands_that_ask_for_the_users_terminal_use_it(self):
+        import inspect
+        source = inspect.getsource(observer)
+        for place in ("answered=on_terminal()", "if args.yes and not on_terminal():", "on_terminal() or store.take_grant"):
+            self.assertIn(place, source)
 
 
 class TableTests(unittest.TestCase):
