@@ -26,8 +26,9 @@ done
 run python3 "$S/index.py" sync && run python3 "$S/mind.py"
 PAGE="$D/cache/recortex/private/$(echo "$REPO" | sed 's#/#__#')/mind.html"
 cp "$PAGE" "$D/mind.html"
-# the story pictures: the page at 1240 wide, the thread from its title down to the failure and the decision it caused, light and dark
-run node "$HERE/shots.mjs" "$D/mind.html" "$D/shots" mind-story 1240 thread-5 910 1 225
+# the story pictures: the page in a 1240 by 1418 window scrolled to the thread's title, 1100 wide of it kept, at 0.8 so that each file
+# stays about 200 KB: the side bar, the title, "Where it stands" and the story from the first decision to the open question, light and dark
+run node "$HERE/shots.mjs" "$D/mind.html" "$D/shots" mind-story 1240 thread-5 1418 0.8 1100 10
 cp "$D/shots/mind-story-light-thread-5.png" "$R/assets/mind-story-light.png"
 cp "$D/shots/mind-story-dark-thread-5.png" "$R/assets/mind-story-dark.png"
 # the two drawings

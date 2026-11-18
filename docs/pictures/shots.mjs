@@ -1,10 +1,13 @@
-// Headless Chrome screenshots. usage: node shots.mjs <file.html> <shots dir> <prefix> <width> <hash,hash,...|-> [maxheight] [scale] [top]
+// Headless Chrome screenshots. usage: node shots.mjs <file.html> <shots dir> <prefix> <width> <hash,hash,...|-> [maxheight] [scale] [top] [view]
+// With view (a number of pixels), each hash is scrolled to view pixels below the top of a window maxheight tall and the window is
+// shot as a reader sees it, side bar included, and top is then the width to keep (0: all of it); without view the whole page is
+// shot from top down.
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 const file = resolve(process.argv[2]), shots = resolve(process.argv[3]), prefix = process.argv[4], width = +process.argv[5];
-const hashes = process.argv[6] === '-' ? [''] : process.argv[6].split(','), maxh = +(process.argv[7] || 2600), scale = +(process.argv[8] || 2), top = +(process.argv[9] || 0);
+const hashes = process.argv[6] === '-' ? [''] : process.argv[6].split(','), maxh = +(process.argv[7] || 2600), scale = +(process.argv[8] || 2), top = +(process.argv[9] || 0), view = process.argv[10] === undefined ? null : +process.argv[10];
 mkdirSync(shots, { recursive: true }); const profile = mkdtempSync(join(tmpdir(), 'recortex-chrome-'));
 const chrome = spawn('google-chrome', ['--headless=new', '--remote-debugging-port=0', '--user-data-dir=' + profile, '--no-first-run', '--window-size=1400,1000', 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -23,8 +26,12 @@ ws.addEventListener('message', (m) => { const msg = JSON.parse(m.data);
 const send = (method, params = {}) => new Promise((r) => { const id = ++seq; waiting.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
 const ev = async (expression) => { const r = await send('Runtime.evaluate', { expression, returnByValue: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text); return r.result.value; };
 for (const d of ['Runtime', 'Log', 'Network', 'Page']) await send(d + '.enable');
-await send('Emulation.setDeviceMetricsOverride', { width, height: Math.min(maxh, 1200), deviceScaleFactor: scale, mobile: false });
-const shot = async (name) => { await ev('scrollTo(0,0)'); await sleep(400);
+await send('Emulation.setDeviceMetricsOverride', { width, height: view === null ? Math.min(maxh, 1200) : maxh, deviceScaleFactor: scale, mobile: false });
+const shot = async (name) => {
+  if (view !== null) { await ev(`scrollBy(0, ${-view})`); await sleep(400);
+    const w = Math.min(top || Infinity, await ev('document.documentElement.clientWidth'));   // without the scroll bar, and without the shadow the closed side panel casts at the right edge
+    const r = await send('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: await ev('scrollY'), width: w, height: maxh, scale: 1 } }); writeFileSync(join(shots, name + '.png'), Buffer.from(r.data, 'base64')); return; }
+  await ev('scrollTo(0,0)'); await sleep(400);
   const m = await send('Page.getLayoutMetrics'); const h = await ev('Math.max(document.body.scrollHeight, document.querySelector("main") ? document.querySelector("main").scrollHeight : 0)');
   const clip = { x: 0, y: top, width: m.cssContentSize.width, height: Math.min(Math.max(h - top, 600), maxh), scale: 1 };
   const r = await send('Page.captureScreenshot', { format: 'png', clip, captureBeyondViewport: true }); writeFileSync(join(shots, name + '.png'), Buffer.from(r.data, 'base64')); };

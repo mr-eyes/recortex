@@ -230,6 +230,22 @@ class PictureTests(unittest.TestCase):
             self.assertEqual(1, len(first), mode)
             self.assertEqual(expected, first[0] + " " + texts[texts.index(first[0]) + 1], mode)
 
+    def png_size(self, name):
+        with open(os.path.join(ROOT, "assets", name), "rb") as handle:
+            head = handle.read(24)
+        self.assertEqual(b"\x89PNG\r\n\x1a\n", head[:8], name)
+        return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+
+    def test_the_two_story_pictures_are_png_files_of_one_size_and_make_sh_draws_that_size(self):
+        light, dark = (self.png_size("mind-story-%s.png" % mode) for mode in ("light", "dark"))
+        self.assertEqual(light, dark)
+        for mode in ("light", "dark"):
+            self.assertLess(os.path.getsize(os.path.join(ROOT, "assets", "mind-story-%s.png" % mode)), 240 * 1024)   # what a README load costs
+        call = re.search(r"mind-story [0-9]+ thread-5 ([0-9]+) ([0-9.]+) ([0-9]+) ([0-9]+)\n", read("docs", "pictures", "make.sh"))
+        self.assertIsNotNone(call)
+        height, scale, width = int(call.group(1)), float(call.group(2)), int(call.group(3))
+        self.assertEqual(light, (round(width * scale), round(height * scale)))   # the crop and the files stay in step
+
 
 if __name__ == "__main__":
     unittest.main()
