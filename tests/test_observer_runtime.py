@@ -43,7 +43,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual([], runtime.billing_variables({'ANTHROPIC_API_KEY': ''}))
     def test_approval_belongs_to_one_machine_and_one_project_folder(self):
         (self.base / 'a').mkdir(); (self.base / 'b').mkdir()
-        config = {'observer': {'enabled': True, 'publisher_id': runtime.publisher_id(create=True)}}
+        config = {'observer': {'enabled': True, 'level': 'notes', 'publisher_id': runtime.publisher_id(create=True)}}
         approval = runtime.approval_record('octo-org/octo-repo', config, str(self.base / 'a'))
         self.assertTrue(runtime.approval_valid('octo-org/octo-repo', config, approval, str(self.base / 'a')))
         self.assertFalse(runtime.approval_valid('octo-org/octo-repo', config, approval, str(self.base / 'b')))
@@ -76,7 +76,8 @@ class RuntimeTests(unittest.TestCase):
         # A claude on PATH, so the gate and the guard are what stop the launch (CI machines have no claude).
         with patch.object(runtime.subprocess,'Popen') as launch, \
                 patch.object(runtime.shutil,'which',return_value=sys.executable):
-            self.assertEqual(runtime.invoke({},SCHEMA,'extract',{})['code'],'runtime-gate')
+            self.assertEqual(runtime.invoke({},SCHEMA,'extract',{})['code'],'level')  # no model call before a level is chosen
+            self.assertEqual(runtime.invoke({},SCHEMA,'extract',{'level':'notes'})['code'],'runtime-gate')
             with patch.dict(os.environ,{'RECORTEX_OBSERVER':'1'}):
                 self.assertEqual(runtime.invoke({},SCHEMA,'smoke',{})['code'],'recursion')
             launch.assert_not_called()
@@ -123,7 +124,7 @@ class RuntimeTests(unittest.TestCase):
         p['version']='2.1.1';p['mark']=runtime._proof_mark(p)
         self.assertFalse(runtime.gate_valid(p))
     def test_settings_bounds(self):
-        self.assertEqual(runtime.settings({'observer':{'max_invocations':900}})['max_invocations'],60)
+        self.assertEqual(runtime.settings({'observer':{'max_invocations':900}})['max_invocations'],70)
         for settings in ({'max_invocations':True},{'shell':'bad'}):
             with self.assertRaises(ValueError):runtime.settings({'observer':settings})
 
