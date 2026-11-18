@@ -186,6 +186,9 @@ class Lookup:
         issue = self.issue(found["issue"])
         active = bool(issue) and any(label.lower() == "active" for label in issue["labels"])
         if not self.online:
+            import index
+            if not index.derived_current(self.db):
+                return UNKNOWN   # an index that an earlier version derived holds no steps yet: it cannot say
             count = self.db.execute("SELECT COUNT(*) AS n FROM steps WHERE comment = ?", (cid,)).fetchone()["n"]
         else:
             try:

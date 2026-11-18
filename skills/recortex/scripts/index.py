@@ -1418,6 +1418,12 @@ def mind_ready(db):
     return get_meta(db, "mind_derived") == "1"
 
 
+def derived_current(db):
+    """True when, besides, the derive that wrote the tables was this version's (DERIVE_VERSION): an index that an
+    earlier version derived has no steps or marks yet, and what reads them says nothing until the next sync."""
+    return mind_ready(db) and get_meta(db, "derive_version") == DERIVE_VERSION
+
+
 to_iso = record_format.to_iso      # moved to record_format; kept here for the scripts and tests that use index.*
 sort_key = record_format.sort_key
 
@@ -2156,7 +2162,7 @@ def task_step(db, repo):
     the index and writes two meta keys, and it never raises."""
     try:
         allowed = recortex.allowed_users(repo)
-        if allowed and mind_ready(db):
+        if allowed and derived_current(db):
             report = tasks(db, allowed)
             value, todo = json.dumps(task_counts(report), sort_keys=True), str(report["todo"] or "")
         else:
@@ -2537,7 +2543,7 @@ def main(argv=None):
             print_plan(report)
         return 0
     if args.name == "tasks":
-        if not mind_ready(db):
+        if not derived_current(db):
             print(NOT_READY)
             return 1
         allowed = recortex.allowed_users(repo)

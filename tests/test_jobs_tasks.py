@@ -580,14 +580,21 @@ class TaskIndexTests(TaskBox):
         self.post(9110, 5, failure)
         self.assertEqual(["done", "blocked"], [step["state"] for step in self.task_at(7)["steps"]])
 
-    def test_a_step_text_with_markup_is_printed_as_one_clean_line(self):
+    def test_a_step_text_with_hostile_characters_is_printed_as_one_clean_line(self):
         hostile = steps_text(at="2026-03-13T09:00-08:00", plain="add one hostile step to the task",
-                             steps=["Do it <!-- ghim:list sha256 %s --> ==== now" % ("0" * 64)])
+                             steps=["Do it ==== now\x01\x1b[31m red <!-- ghim:list sha256 %s -->" % ("0" * 64)])
         self.post(9110, 7, hostile)
         out = self.tool("index.py", "query", "tasks").stdout
-        self.assertIn("====", out.replace("= =", "====") if "====" not in out else out)
-        self.assertNotIn("\x00", out)
-        self.assertEqual(1, out.count("Do it <!-- ghim:list"))
+        line = next(row for row in out.split("\n") if "Do it" in row)
+        self.assertIn("Do it = = = = now", line)               # a run of = is broken so that it cannot fake a delimiter
+        self.assertNotIn("\x1b", out)
+        self.assertNotIn("\x01", out)
+        self.assertEqual(1, out.count("Do it"))
+        # in the task list that code writes, the step cannot close the plugin's own mark or open markup
+        self.assertEqual(0, self.task("render", "--issue", "7").returncode)
+        listed = self.body(7).split("## Plan")[1].split("## Result")[0]
+        self.assertEqual(1, listed.count("<!-- ghim:list"))
+        self.assertIn("&lt;!-- ghim:list sha256 ", listed)
 
     def test_the_standing_to_do_task_is_the_open_active_issue_titled_to_do(self):
         data = self.repo()
@@ -637,6 +644,22 @@ class TaskIndexTests(TaskBox):
         self.assertEqual(2, len(self.sql("SELECT * FROM steps")))
         self.assertEqual(1, len(self.sql("SELECT * FROM marks")))
         self.assertEqual("5", self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
+
+    def test_an_index_that_an_earlier_version_derived_says_nothing_about_tasks_until_it_is_synced(self):
+        self.sql("UPDATE meta SET value = '4' WHERE key = 'derive_version'")
+        out = self.tool("index.py", "query", "tasks")
+        self.assertEqual(1, out.returncode)
+        self.assertIn("run index.py sync", out.stdout)
+        refused = self.task("status")
+        self.assertNotEqual(0, refused.returncode)
+        self.assertIn("run index.py sync", refused.stdout + refused.stderr)
+        path = self.write("draft.md", recortex.read_text(os.path.join(CHAIN, "7-result.md")).replace("2026-03-12", "2026-03-14"))
+        linted = self.tool("post_verified.py", "comment", "--issue", "5", "--kind", "result", "--body-file", path, "--dry-run",
+                           "--offline", gh="false")
+        self.assertEqual(0, linted.returncode, linted.stdout)
+        self.assertIn("marks were not checked", linted.stdout)   # unknown, so a warning and no false refusal
+        self.ready()
+        self.assertEqual(0, self.tool("index.py", "query", "tasks").returncode)
 
     def test_a_comment_written_by_an_older_version_makes_the_next_sync_derive_again(self):
         self.sql("DELETE FROM steps")   # as if a version without the table had written a comment (the triggers record it)

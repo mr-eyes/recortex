@@ -89,7 +89,7 @@ def open_index(repo):
         sys.exit("error: the local index cannot be read (%s); run index.py sync" % type(error).__name__)
     if db is None:
         sys.exit("error: no local index yet; run index.py sync first")
-    if not index.mind_ready(db):
+    if not index.derived_current(db):
         sys.exit(index.NOT_READY)
     return db
 
