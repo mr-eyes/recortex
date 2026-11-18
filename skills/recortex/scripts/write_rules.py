@@ -16,6 +16,8 @@ Never due, and never material: a part that is planned, in doubt, moved, waiting,
 names no paper; a result that does not stand; a topic whose body an outside account wrote or changed.
 """
 
+import hashlib
+import json
 import os
 import re
 import sys
@@ -237,6 +239,15 @@ def texts_since_pause(db, items, allowed):
         "SELECT comment, at, author, created_at FROM events WHERE type = 'resume'")
         if (row["author"] or "").lower() in allowed and row["comment"] not in edited], default="")
     return [row for row in text_memories(db, items) if row["time"] > pause]
+
+
+def due_key(row):
+    """The hash of one due row (SHA-256 in hex): its topic, heading, parts, results and decisions, each list sorted. The
+    keeper keeps it to tell that a part's due row has not changed (stable), has changed (asked about again) or is the
+    one a user put off or dropped. What `why` says is not part of it: the same material gives the same key."""
+    plain = [int(row["topic"]), str(row["heading"]).lower(), sorted(int(c) for c in row["parts"]),
+             sorted(int(c) for c in row["results"]), sorted(int(c) for c in row["decisions"])]
+    return hashlib.sha256(json.dumps(plain, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def counts(db, config, allowed, state):
