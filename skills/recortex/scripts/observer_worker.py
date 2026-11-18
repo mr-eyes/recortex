@@ -1071,6 +1071,8 @@ def _process(repo, config, project_root=None, invoke_fn=None):
             used.update(candidate["sources"])
             if role == "task" and opener is None:
                 opener = primary
+            if candidate["kind"] == "failure":
+                failures[checks["at"]] = eventkey
         # What the sorter neither used nor set aside is offered again, a bounded number of times.
         leftover = "candidate_limit" if len(raws) == options["max_candidates"] else "uncertain"
         for item in offered:
@@ -1079,8 +1081,6 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 continue
             if current["state"] == "observed" or _attempts(current["reason"])[0] in RETRY_SOON:
                 store.defer(item["source_id"], _again(leftover, current["reason"] if current["state"] == "deferred"
-            if candidate["kind"] == "failure":
-                failures[checks["at"]] = eventkey
                                                       else ""))
         store.set_control("worker_last", {"at": time.time(), "code": "ok", "selected": report["selected"],
                                           "reviewed": report["reviewed"], "ready": len(report["ready"]),
