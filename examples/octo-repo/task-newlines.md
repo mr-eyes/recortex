@@ -12,10 +12,8 @@ All 12 quoted-newline files in conformance set v2 pass, and no file that passes 
 
 ## Plan
 
-| Step | Owner | State |
-|---|---|---|
-| Carry the quote state across physical lines | Claude session | running |
-| Rerun the conformance set | Claude session | to do |
+- [ ] 1. Carry the quote state across physical lines
+- [ ] 2. Rerun the conformance set
 
 ## Result
 

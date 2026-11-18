@@ -85,6 +85,12 @@ class Lookup:
         index holds a complete edit history for that updated_at that shows only allowed accounts (index.cleared_comments)."""
         return self.remember(("memory", cid), lambda: self._memory(cid))
 
+    def steps_memory(self, cid):
+        """The comment `cid` as a target of a mark: what memory() says, plus count (how many steps it lists; 0 when it is
+        no steps memory) and active (True when its issue carries the label `active`), or None when there is no such
+        comment."""
+        return self.remember(("steps", cid), lambda: self._steps(cid))
+
     def issue(self, number):
         """Issue or pull request `number`: dict(labels, pull, blocks={"table": set, "figure": set}), or None."""
         return self.remember(("issue", number), lambda: self._issue(number))
@@ -170,6 +176,24 @@ class Lookup:
         return {"type": event["type"], "at": at or "", "time": record_format.instant(at, data.get("created_at")),
                 "issue": int(match.group(1)), "author": (data.get("user") or {}).get("login") or "",
                 "edited": self._edited(cid, data.get("created_at"), data.get("updated_at"))}
+
+    def _steps(self, cid):
+        found = self.memory(cid)
+        if found is None:
+            return None
+        if found["type"] != "steps":
+            return dict(found, count=0, active=False)
+        issue = self.issue(found["issue"])
+        active = bool(issue) and any(label.lower() == "active" for label in issue["labels"])
+        if not self.online:
+            count = self.db.execute("SELECT COUNT(*) AS n FROM steps WHERE comment = ?", (cid,)).fetchone()["n"]
+        else:
+            try:
+                data = json.loads(recortex.gh(["api", "repos/%s/issues/comments/%d" % (self.repo, cid)]))
+            except ValueError:
+                raise recortex.GhError("GitHub's answer for comment %d could not be read" % cid)
+            count = len(record_format.steps_list((data or {}).get("body") or "")) if isinstance(data, dict) else 0
+        return dict(found, count=count, active=active)
 
     def _issue(self, number):
         if not self.online:

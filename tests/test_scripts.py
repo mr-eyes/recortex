@@ -6670,6 +6670,8 @@ class MemoryFormatTests(unittest.TestCase):
         expected |= {("text", "because", b) for b in ("result", "decision", "correction", "plan")}
         expected |= {("plan", "replaces", "plan"), ("decision", "instead", "plan"), ("plan", "instead", "plan")}
         expected |= {(a, "checks", "plan") for a in ("result", "failure")} | {("result", "against", "plan")}
+        # 1.5.0: a steps memory restates the list of an earlier steps memory of the same task, and links nothing else.
+        expected |= {("steps", "replaces", "steps")}
         self.assertEqual(expected, allowed)
 
     def test_fields_evidence_and_folds_read_the_same_with_crlf(self):
@@ -12713,7 +12715,7 @@ class PackagingTests(unittest.TestCase):
     def test_no_file_holds_an_earlier_name_outside_the_places_that_keep_it(self):
         """Like the digit scan: the names from before the rename appear only where they are kept on purpose."""
         earlier = re.compile(r"gh[-_ ]?issues[-_ ]?manager|ghim", re.I)  # GHIM_ and ghim.py hold "ghim"
-        markers = re.compile(r"ghim:(?:event|resume:start|resume:end)")  # the record format, kept (D3)
+        markers = re.compile(r"ghim:(?:event|list|resume:start|resume:end)")  # the record format, kept (D3)
 
         def upgrade_section(lines):
             inside, keep = False, set()

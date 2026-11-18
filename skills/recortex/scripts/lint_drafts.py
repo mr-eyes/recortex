@@ -197,6 +197,15 @@ KINDS = {
             "**Version:**",
         ],
     },
+    "steps": {
+        "header": "Steps",
+        "sections": [
+            plain_field("steps"),
+            "**Agreed:**",
+            "**Steps:**",
+            "**Done when:**",
+        ],
+    },
     "proposal": {
         "header": "Proposal",
         "sections": [
@@ -535,7 +544,8 @@ def check_event_marker(text, kind, template, add):
 
 ARTICLE = {"result": "a result", "decision": "a decision", "failure": "a failure", "correction": "a correction",
            "idea": "an idea", "question": "a question", "checkpoint": "a checkpoint", "triage": "a triage comment",
-           "plan": "a planned part", "text": "a change of the text", "proposal": "a proposal"}
+           "plan": "a planned part", "text": "a change of the text", "proposal": "a proposal",
+           "steps": "a task's steps"}
 EVIDENCE_KINDS = record_format.EVIDENCE_TYPES
 STEM_REPEATS = {
     "result": ("that", "we found"),
@@ -547,10 +557,11 @@ STEM_REPEATS = {
     "question": ("we asked",),
     "plan": ("to", "we plan"),
     "text": ("that", "we changed"),
+    "steps": ("to", "we agreed"),
 }
 QUESTION_WORDS = ("whether", "why", "how", "what", "which", "who", "when", "where", "if")
 PLAIN_RANGE = (20, 200)
-NOT_CHECKED = ("links", "comment addresses", "evidence", "explanations", "plan topic")
+NOT_CHECKED = ("links", "comment addresses", "evidence", "explanations", "plan topic", "marks")
 
 
 def is_reconstructed(text):
@@ -861,6 +872,108 @@ def check_proposal(text, template, profiles, add):
             add("error", "proposal-hash", found[label]["line"] + 1, "'**%s:**' is 'sha256 `<64 hex>`'" % label)
 
 
+def check_marks(text, kind, add):
+    """The mark keys of the marker (record_format.MARK_KEYS): on which kinds, in what form. What a mark points at is
+    checked with the record (check_record)."""
+    first, _ = record_format.first_lines(text)
+    match = record_format.MARKER.match(first.strip())
+    if not match:
+        return
+    pairs = [part.split("=", 1) for part in match.group(1).split()]
+    carried = [(key, value) for key, value in pairs if key in record_format.MARK_KEYS]
+    if not carried:
+        return
+    for key, value in carried:
+        if kind not in record_format.MARK_RULES[key]:
+            carriers = [ARTICLE[k] for k in sorted(record_format.MARK_RULES[key])]
+            add("error", "mark-kind", 1, "%s does not carry %s=; it is carried by %s"
+                % (ARTICLE.get(kind, "this kind of comment"), key, listed(carriers).replace(" and ", " or ")))
+        elif is_reconstructed(text):
+            add("error", "mark-kind", 1, "a reconstructed memory carries no mark (%s=) in this version" % key)
+        if not record_format.MARK_VALUE.fullmatch(value):
+            add("error", "mark-value", 1, "%s=%s is not one to four groups '<steps comment id>:<n>[,<n>...]' joined by "
+                "';', with step numbers from 1 to 20, for example %s=2900000124:2,3" % (key, value[:60], key))
+            continue
+        seen = set()
+        for group in value.split(";"):
+            cid, numbers = group.split(":")
+            listed_here = numbers.split(",")
+            if len(set(listed_here)) != len(listed_here) or any((cid, n) in seen for n in listed_here):
+                add("error", "mark-value", 1, "%s=%s names the same step twice; name each step once" % (key, value[:60]))
+                break
+            seen.update((cid, n) for n in listed_here)
+
+
+def check_steps(text, template, add):
+    """The steps of a task: how the user agreed to them, the numbered one-line steps, the check that ends the task."""
+    found, repeated = field_map(text)
+    for label in sorted(repeated):
+        add("error", "field-repeat", found[label]["line"] + 1, "'**%s:**' stands more than once" % label)
+    if template:
+        return
+    agreed = found.get("Agreed")
+    if agreed is not None:
+        if not agreed["text"].strip():
+            add("error", "field-empty", agreed["line"] + 1, "'**Agreed:**' is empty; say how the user agreed")
+        elif record_format.agreed_form(agreed["text"]) is None:
+            add("error", "steps-agreed", agreed["line"] + 1, "'**Agreed:**' starts with 'Approved in the plan dialog, "
+                "<date time zone>.' or with 'By <name or role> in the chat, <date time zone>:' and the user's words "
+                "quoted on lines that start with >")
+    steps = found.get("Steps")
+    if steps is not None:
+        rows = [(number + 1, line) for number, line in steps["parts"][1:] if line.strip()]
+        items = []
+        for number, line in rows:
+            match = record_format.STEP_LINE.match(line.strip())
+            if match is None:
+                add("error", "steps-list", number, "a line of '**Steps:**' is '<n>. <one line>'; this one is neither a "
+                    "numbered step nor blank")
+            else:
+                items.append((number, int(match.group(1)), match.group(2).strip()))
+        if not items:
+            add("error", "steps-list", steps["line"] + 1, "'**Steps:**' lists at least one step, numbered from 1")
+        if len(items) > record_format.STEPS_MAX:
+            add("error", "steps-list", steps["line"] + 1, "'**Steps:**' lists %d steps; at most %d"
+                % (len(items), record_format.STEPS_MAX))
+        for position, (number, written, step) in enumerate(items, 1):
+            if written != position:
+                add("error", "steps-list", number, "the steps are numbered 1, 2, 3, ... in order; this one is %d, "
+                    "not %d" % (written, position))
+                break
+        for number, written, step in items:
+            if len(step) > record_format.STEP_TEXT_MAX:
+                add("error", "steps-list", number, "a step is one line of at most %d characters"
+                    % record_format.STEP_TEXT_MAX)
+    need_text(found, "Done when", add, 300, True)
+
+
+PLAN_ITEM = re.compile(r"^- \[( |x)\] ([0-9]{1,3})\. (\S.*)$")
+
+
+def check_active(text, add):
+    """A task may hold a task list under '## Plan' (tasks.py render writes it): each line that starts with '- [' is
+    '- [ ] <n>. <step>' or '- [x] <n>. <step>', numbered from 1 in order."""
+    sections = recortex.body_sections(text)
+    lines = text.replace("\r\n", "\n").split("\n")
+    for position, (number, heading) in enumerate(sections):
+        if heading.strip().lower() != "plan":
+            continue
+        stop = sections[position + 1][0] - 1 if position + 1 < len(sections) else len(lines)
+        expected = 1
+        for offset in range(number, stop):
+            line = lines[offset]
+            if not line.startswith("- ["):
+                continue
+            match = PLAN_ITEM.match(line.rstrip())
+            if match is None:
+                add("error", "plan-list", offset + 1, "a task-list line under '## Plan' is '- [ ] <n>. <step>' or "
+                    "'- [x] <n>. <step>'")
+            elif int(match.group(2)) != expected:
+                add("error", "plan-list", offset + 1, "the steps under '## Plan' are numbered 1, 2, 3, ... in order; "
+                    "this one is %s, not %d" % (match.group(2), expected))
+            expected += 1
+
+
 def check_plan_body(text, template, add):
     """The readable copy of the plan, kept in the body of the plan issue: a title line, the role sentence, the time the
     copy was made, then the sections. It holds no history and no comment text beyond the plan's own lines."""
@@ -1068,6 +1181,9 @@ def needs_record(text, kind):
         found.add("explanations")
     if kind == "plan" and re.search(r"^\*\*Topic:\*\* *#[1-9]", text, re.M):
         found.add("plan topic")
+    if kind in {k for kinds in record_format.MARK_RULES.values() for k in kinds} and record_format.marks(
+            record_format.parse_marker(first)):
+        found.add("marks")
     return found
 
 
@@ -1117,6 +1233,31 @@ def check_record(text, kind, lookup, add):
                 add("error", "link-target", 1, "%s=%d: memory %d was edited after it was posted, so it is not told and "
                     "the link would lead nowhere; link to the memory that corrects it, or leave the link out"
                     % (key, target, target))
+    for key, target, step in record_format.marks(marker) if not is_reconstructed(text) else []:
+        if kind not in record_format.MARK_RULES[key]:
+            continue  # check_marks says so
+        found = lookup.steps_memory(target)
+        if found is unknown:
+            skipped.add("marks")
+        elif found is None:
+            add("error", "mark-target", 1, "%s=%d:%d: there is no comment %d in %s%s; take the id from tasks.py status "
+                "or from the memory id: line of post_verified.py" % (key, target, step, target, repo, sync))
+        elif found["type"] != "steps":
+            add("error", "mark-target", 1, "%s=%d:%d: comment %d is not a steps memory (it is a comment of type %s)"
+                % (key, target, step, target, found["type"]))
+        elif not found["active"]:
+            add("error", "mark-target", 1, "%s=%d:%d: the steps memory %d is on #%d, which is not an active task"
+                % (key, target, step, target, found["issue"]))
+        elif step > found["count"]:
+            add("error", "mark-target", 1, "%s=%d:%d: the steps memory %d lists %d step%s, not %d"
+                % (key, target, step, target, found["count"], "" if found["count"] == 1 else "s", step))
+        elif not lookup.counts(found["author"]):
+            add("error", "mark-target", 1, "%s=%d:%d: the steps memory %d was written by %s, an account outside your "
+                "allowed list, so the mark would count for nothing" % (key, target, step, target,
+                                                                       shown_login(found["author"])))
+        elif lookup.trusted and found.get("edited"):
+            add("error", "mark-target", 1, "%s=%d:%d: the steps memory %d was edited after it was posted, so it is not "
+                "told and the mark would count for nothing" % (key, target, step, target))
     if kind == "plan" and not is_reconstructed(text):
         check_plan_record(text, lookup, add, skipped)
     for item in record_format.citations(text, repo):
@@ -1329,10 +1470,14 @@ def lint_text(text, kind="generic", template=False, allow_placeholders=False,
     if kind == "plan-body":
         check_plan_body(text, template, add)
 
+    if kind == "active" and not template:
+        check_active(text, add)
+
     if KINDS[kind].get("header") and kind != "resume":
         text = text.replace("\r\n", "\n")
         check_event_marker(text, kind, template, add)
         check_marker_links(text, kind, add)
+        check_marks(text, kind, add)
         if kind in record_format.MEMORY_TYPES:
             check_plain(text, kind, template, add)
             check_quoted_fields(text, add)
@@ -1344,6 +1489,8 @@ def lint_text(text, kind="generic", template=False, allow_placeholders=False,
             check_text(text, template, profiles, add)
         elif kind == "proposal":
             check_proposal(text, template, profiles, add)
+        elif kind == "steps":
+            check_steps(text, template, add)
         not_checked(needs_record(text, kind) if lookup is None else check_record(text, kind, lookup, add), add)
 
     if kind != "resume" and (recortex.RESUME_START in text or recortex.RESUME_END in text):

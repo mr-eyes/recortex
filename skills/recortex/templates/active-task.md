@@ -12,12 +12,11 @@
 
 ## Plan
 
-| Step | Owner | State |
-|---|---|---|
-| {{step}} | {{owner}} | {{to do, running, done}} |
+- [ ] 1. {{step}}
+- [ ] 2. {{step}}
 
 ## Result
 
 Not finished. Opened {{YYYY-MM-DD HH:MM ZONE}}.
 
-<!-- At the end: replace the line above with the result, with numbers, denominators and source paths, and a link to the comment on the destination topic that carries it. If the result is adopted (merged, integrated, released), edit the destination body to say what the deliverable now says. Then close this issue. This issue never carries a section label. -->
+<!-- The Plan is a task list that the plugin keeps current from the task's steps memories (tasks.py render): write it as '- [ ] <n>. <step>' and leave the boxes to the plugin. At the end: replace the line above with the result, with numbers, denominators and source paths, and a link to the comment on the destination topic that carries it. If the result is adopted (merged, integrated, released), edit the destination body to say what the deliverable now says. Then close this issue. This issue never carries a section label. -->

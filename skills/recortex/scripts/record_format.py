@@ -20,15 +20,16 @@ import recortex
 import zones
 
 EVENT_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question", "record", "triage",
-               "plan", "text", "proposal")
-HEADED_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question", "plan", "text")
-MEMORY_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question", "plan", "text")
-# The seven kinds of memory that the observer may queue and post; a plan and a text change are the main session's.
-OBSERVED_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question")
+               "plan", "text", "proposal", "steps")
+HEADED_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question", "plan", "text", "steps")
+MEMORY_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question", "plan", "text", "steps")
+# The eight kinds of memory that the observer may queue and post (since 1.5.0 a task's steps among them); a plan and a
+# text change are the main session's.
+OBSERVED_TYPES = ("result", "decision", "failure", "checkpoint", "correction", "idea", "question", "steps")
 ISO = r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:Z|[+-][0-9]{2}:[0-9]{2})"
 STAMP = r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} (?:[A-Z]{2,5}|UTC[+-][0-9]{1,2}(?::[0-9]{2})?)\b"
 MARKER = re.compile(r"^<!-- ghim:event ((?:[a-z]+=\S+ )*[a-z]+=\S+) -->\s*$")
-EVENT_HEADING = re.compile(r"^### (Result|Decision|Failure|Checkpoint|Correction|Idea|Question|Triage|Plan|Text|Proposal)"
+EVENT_HEADING = re.compile(r"^### (Result|Decision|Failure|Checkpoint|Correction|Idea|Question|Triage|Plan|Text|Proposal|Steps)"
                            r"( \(reconstructed\))?: "
                            r"(%s) - (.+?)\s*$"
                            % STAMP)
@@ -290,14 +291,24 @@ def event_at(event, created_at):
 
 LINK_KINDS = ("because", "replaces", "instead", "checks", "against")
 LINK_VALUE = re.compile(r"[1-9][0-9]{0,18}(?:,[1-9][0-9]{0,18}){0,3}")  # one to four comment ids; use fullmatch
-MARKER_KEYS = ("type", "at", "recorded", "source", "eventkey") + LINK_KINDS
+# Since 1.5.0 a memory may also mark steps of a task: `done=` on a result, a failure, a correction or a checkpoint, and
+# `dropped=` on a decision. The value names one to four steps memories, each with the numbers of its steps that the
+# mark is about: `done=<steps comment id>:<n>[,<n>...][;<steps comment id>:<n>...]`. A mark is not a link: a checkpoint
+# still carries no link, and what a mark counts for is decided by task_rules.
+MARK_KEYS = ("done", "dropped")
+STEP_NUMBER = r"(?:[1-9]|1[0-9]|20)"
+MARK_GROUP = r"[1-9][0-9]{0,18}:%s(?:,%s){0,19}" % (STEP_NUMBER, STEP_NUMBER)
+MARK_VALUE = re.compile(r"%s(?:;%s){0,3}" % (MARK_GROUP, MARK_GROUP))   # use fullmatch
+MARK_RULES = {"done": frozenset(("result", "failure", "correction", "checkpoint")), "dropped": frozenset(("decision",))}
+STEPS_MAX = 20
+MARKER_KEYS = ("type", "at", "recorded", "source", "eventkey") + LINK_KINDS + MARK_KEYS
 SIX = ("result", "decision", "failure", "correction", "idea", "question")  # the memories of 0.6.0 that may link
-LINKABLE = SIX + ("plan", "text")  # a checkpoint never links; a text change links only as the carrier of because
+LINKABLE = SIX + ("plan", "text", "steps")  # a checkpoint never links; a text change links only as the carrier of because; a task's steps only restate (replaces)
 # key -> the kind of the memory that carries it -> the kinds it may point at. Nothing points at a text change.
 LINK_RULES = {
     "because": dict({kind: frozenset(SIX + ("plan",)) for kind in SIX + ("plan",)},
                     text=frozenset(("result", "decision", "correction", "plan"))),
-    "replaces": dict({kind: frozenset([kind]) for kind in SIX + ("plan",)}, correction=frozenset(SIX)),
+    "replaces": dict({kind: frozenset([kind]) for kind in SIX + ("plan", "steps")}, correction=frozenset(SIX)),
     "instead": dict({kind: frozenset(["idea", "decision"]) for kind in ("decision", "idea", "result")},
                     decision=frozenset(["idea", "decision", "plan"]), plan=frozenset(["plan"])),
     "checks": {"result": frozenset(["question", "idea", "decision", "plan"]),
@@ -324,6 +335,22 @@ def links(marker):
     return out
 
 
+def marks(marker):
+    """[(key, steps comment id, step number)] of the mark keys of a parsed marker, in the order written ("done" or
+    "dropped"). A key whose whole value is not in the form of MARK_VALUE is ignored; the others are kept. The same
+    step is listed once."""
+    out = []
+    for key, value in (marker or {}).items():
+        if key in MARK_KEYS and MARK_VALUE.fullmatch(value or ""):
+            for group in value.split(";"):
+                cid, numbers = group.split(":")
+                for number in numbers.split(","):
+                    item = (key, int(cid), int(number))
+                    if item not in out:
+                        out.append(item)
+    return out
+
+
 # ---------------------------------------------------------------- memories: the lines of a comment
 
 PLAIN_LABELS = {
@@ -336,6 +363,7 @@ PLAIN_LABELS = {
     "question": "In plain words, we asked",
     "correction": "In plain words, we corrected ourselves",
     "checkpoint": "In plain words, we paused here",
+    "steps": "In plain words, we agreed to",
 }
 FIELD = re.compile(r"^\*\*([A-Z][^*\n]{0,60}):\*\*")
 EVIDENCE_LABEL = "Evidence"
@@ -673,6 +701,42 @@ NOT_KEPT = ("this account may not write files to the repository", "a branch rule
 KEPT_FROM_AUTHOR = re.compile(r"(?:[1-9][0-9]{0,3} paragraphs? (?:was|were) changed by hand and (?:was|were) left as "
                               r"(?:it is|they are)\.|Nothing was changed by hand\.)")
 VERSION_NAME = re.compile(r"Version name: ([a-z0-9][a-z0-9.-]{0,39}); commit (%s); manifest sha256 (%s)" % ("[0-9a-f]{40}", SHA256))
+
+
+# The two forms that the Agreed field of a steps memory starts with, as (key, pattern, a quote follows): the user approved
+# the plan in the plan dialog, or said so in the chat, in words the memory quotes.
+AGREED_FORMS = (
+    ("dialog", re.compile(r"Approved in the plan dialog, %s\." % STAMP), False),
+    ("chat", re.compile(r"By %s in the chat, %s:" % (WHO, STAMP)), True),
+)
+STEP_LINE = re.compile(r"^([0-9]{1,3})\. (\S.*)$")
+STEP_TEXT_MAX = 300
+
+
+def agreed_form(text):
+    """The key of the form that the text of an Agreed field starts with ("dialog" or "chat"), or None. Only the first
+    line is read; the chat form needs a quote after it."""
+    lines = (text or "").split("\n")
+    for key, pattern, quoted in AGREED_FORMS:
+        if pattern.fullmatch(lines[0].strip()):
+            if quoted and not any(line.lstrip().startswith(">") and line.lstrip(" >").strip() for line in lines[1:]):
+                return None
+            return key
+    return None
+
+
+def steps_items(body):
+    """[(written number, text)] of the lines `N. text` in the **Steps:** field of a steps memory, in order; other lines
+    of the field are left out. The number is as written (the linter checks it)."""
+    text = field_text(body, "Steps") or ""
+    return [(int(match.group(1)), match.group(2).strip()) for match in
+            (STEP_LINE.match(line.strip()) for line in text.split("\n")) if match]
+
+
+def steps_list(body):
+    """The steps of a steps memory as texts, in order: the first is step 1. At most STEPS_MAX; the reader is lenient
+    (the numbers as written are not used) and the linter is strict."""
+    return [text for _, text in steps_items(body)][:STEPS_MAX]
 
 
 def body_bytes(text):

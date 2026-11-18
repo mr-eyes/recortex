@@ -19,6 +19,7 @@ python3 -m unittest discover -s tests -p test_manuscript_paper.py
 python3 -m unittest discover -s tests -p test_manuscript_page.py
 python3 -m unittest discover -s tests -p test_status_summary.py
 python3 -m unittest discover -s tests -p test_setup_questions.py
+python3 -m unittest discover -s tests -p 'test_jobs_*.py'
 ```
 
 The fifteen commands hold every test between them; each takes under five minutes. The first four hold every class in `tests/test_scripts.py`, the fifth the observer's tests, the sixth the continuity demonstration, the next seven the tests of the paper's plan, its writing, its versions (the branch, the names, the restore), the approval path with the dry runs, the History and the layout, the paper's own export and the manuscript page (the block differ, the numbered versions, the marks, the slots, authorship, the modes and the print), the fourteenth the status summary (the resume block's In short, the staleness reminder and the page) and the last the setup questions an update adds (the answers of a machine, the hook's line, `setup.py questions`). `python3 -m unittest discover -s tests` runs them all in one command of about twelve minutes, which CI uses. A new class in `test_scripts.py` goes into one of the four lists; a new `test_*.py` file needs a command whose `-p` pattern matches it. `mkdir -p .tmp` makes the folder that a test needs when its class runs first in a fresh clone.

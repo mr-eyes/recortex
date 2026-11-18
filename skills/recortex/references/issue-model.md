@@ -74,7 +74,7 @@ A body is at most 65,536 characters. A deliverable section that needs more is sp
 
 ## Events
 
-An event is something that happened and will matter later. Each one becomes a dated comment on its topic issue, never a new top-level issue and never text in a body. Nine kinds of memory, and two typed comments that are not memories (the triage comment and the proposal), each with a template:
+An event is something that happened and will matter later. Each one becomes a dated comment on its topic issue, never a new top-level issue and never text in a body. Ten kinds of memory, and two typed comments that are not memories (the triage comment and the proposal), each with a template:
 
 | Kind | When | Template |
 |---|---|---|
@@ -87,6 +87,7 @@ An event is something that happened and will matter later. Each one becomes a da
 | Question | A question raised inside a thread's work, not yet answered | `templates/comment-question.md` |
 | Plan | A part of the plan of the deliverable: what the paper will claim, show or concede ([The plan of the deliverable](#the-plan-of-the-deliverable)) | `templates/comment-plan.md` |
 | Text | The text of a topic body changed, by the plugin or by hand | `templates/comment-text.md` |
+| Steps | The user agreed to a plan with numbered steps, on an `active` task ([Tasks, steps and marks](#tasks-steps-and-marks)) | `templates/comment-steps.md` |
 | Triage | An issue opened by hand was given a type and a route | `templates/comment-triage.md` |
 | Proposal | The plugin proposed a change of the text and waits for a merge on GitHub (not a memory; the anchor of an approval) | `templates/comment-proposal.md` |
 
@@ -118,6 +119,7 @@ Directly under the heading, one line in plain words that completes a fixed label
 | Checkpoint | `**In plain words, we paused here:**` | a statement of where things stand |
 | Plan | `**In plain words, we plan to:**` | a verb phrase |
 | Text | `**In plain words, we changed the text to say that:**` | a statement |
+| Steps | `**In plain words, we agreed to:**` | a verb phrase |
 
 The linter refuses a plain line that is missing, longer than one line, under 20 or over 200 characters, ends with a period, holds a backtick, an issue number (`#N`), a URL, a path or file name, or a commit hash, repeats its label ("we decided to we decided"), or holds a number that stands in no field of the same memory, neither as written nor rounded ("about 3 times" stands for a field's 3.05, "2 million" for 2,000,000). The heading, the marker and the folds do not count as fields: put the number in a field, with its source, or leave it out of the line. The line is a summary written for someone who was away for a month; the fields stay the record, and in a decision the quote stays the decision.
 
@@ -152,15 +154,24 @@ Who may link to what (`LINK_RULES` in `scripts/record_format.py`, used by the li
 | `because` | result, decision, failure, correction, idea, question | plan |
 | `because` | text | result, decision, correction, plan |
 | `replaces` | plan | plan |
+| `replaces` | steps | steps |
 | `instead` | decision, plan | plan |
 | `checks` | result, failure | plan |
 | `against` | result | plan |
 
 An idea has one of four states from the links that point at it, the first that applies: set aside (`instead`), tried (`checks`, a result or a failure put it to a test), taken up (a decision or a result made `because` of it, and no result has tested the idea itself), else not tested yet. `index.py query recall` prints `taken up` in its state column and leaves such an idea out of its list of untried ideas in other threads. The state is worked out when the index is read: an older version of the plugin on the same index calls the same idea untried.
 
-A result never replaces a decision: it `checks` it, and a new decision replaces it. A change of the text (`text`) carries `because` and nothing links to it. A correction never `replaces` a plan memory: a plan is revised, not corrected. A failure that `checks` a planned claim does not put it in doubt: not tested is not negative. A checkpoint carries no link and is never a target; triage and record comments carry none; a reconstructed memory carries none in this version. A key appears once, and an id stands under one key. The marker accepts only `type`, `at`, `recorded`, `source`, `eventkey` (32 lowercase hexadecimal characters, written by the observer's publisher) and the five link keys, so a misspelled key is an error. Add a link only when its sentence read aloud is true; link to the nearest cause, not to its ancestors. Most memories have one link, and none is better than a guess: a posted link cannot be edited away (a correction can replace the memory that carried a wrong one).
+A result never replaces a decision: it `checks` it, and a new decision replaces it. A change of the text (`text`) carries `because` and nothing links to it. A correction never `replaces` a plan memory: a plan is revised, not corrected. A failure that `checks` a planned claim does not put it in doubt: not tested is not negative. A checkpoint carries no link and is never a target; triage and record comments carry none; a reconstructed memory carries none in this version. A key appears once, and an id stands under one key. The marker accepts only `type`, `at`, `recorded`, `source`, `eventkey` (32 lowercase hexadecimal characters, written by the observer's publisher), the five link keys and the two mark keys (`done`, `dropped`; see [Tasks, steps and marks](#tasks-steps-and-marks)), so a misspelled key is an error. Add a link only when its sentence read aloud is true; link to the nearest cause, not to its ancestors. Most memories have one link, and none is better than a guess: a posted link cannot be edited away (a correction can replace the memory that carried a wrong one).
 
 When it can ask the record (`post_verified.py`, `lint_drafts.py --index` or `--online --issue N`), the linter checks each target: it exists in this repository, it is a memory, it is not later than the draft, the rules above allow it, and, when the repository is in your trusted list, it was written by an allowed account. A memory by any other account is not told on the mind page, so a link to it would lead nowhere; if that account belongs to the project, add its login to the repository's line in your trusted list.
+
+### Tasks, steps and marks
+
+A task is an `active` issue. Its steps are a `steps` memory on it: the plain line, **Agreed** (how the user agreed: `Approved in the plan dialog, <date time zone>.`, or `By <name or role> in the chat, <date time zone>:` and the user's words quoted), **Steps** (a numbered list of 1 to 20 one-line steps) and **Done when**. A later `steps` memory on the same task adds steps, and one with `replaces=` (a `steps` memory of the same task) restates the list it replaces and takes its place in the numbering. The steps of a task are numbered 1 to N across its standing `steps` memories, oldest first; a `steps` memory that is not told, or that a later one replaces, gives no steps. One standing task per project, titled "To do", holds the loose to-do items: each is a `steps` memory of one step.
+
+A step is checked by a mark in the marker of a later memory: `done=<steps comment id>:<n>[,<n>...]` on a result, a failure, a correction or a checkpoint (the agent reported the step finished), and `dropped=<...>` on a decision (the user dropped it). One to four groups, joined by `;`, with step numbers from 1 to 20 (`done=9108:1,2;9112:3`). A mark is not a link: a checkpoint still carries none. A mark counts only when the memory that carries it is told and not replaced or set aside, and the steps memory it points at is told, not replaced, and has that step; otherwise it counts for nothing, and `index.py query consistency` reports it (`mark-target`). A step is then, by the first rule that applies: dropped, done, blocked (a failure names the task and nothing followed) or open.
+
+A task's body shows its steps as a task list under `## Plan`: `- [ ] <n>. <step>` or `- [x] <n>. <step>`, written by `tasks.py render` from the memories and never believed the other way: a box ticked or unticked on GitHub is not a mark. The line `<!-- ghim:list sha256 ... -->` after the list is the plugin's own mark of what it last wrote, so that a list changed by hand is told from one that is only behind.
 
 ### Evidence
 

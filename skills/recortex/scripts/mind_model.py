@@ -375,8 +375,10 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
     def read_memories(self):
         found = index.memories(self.db, self.allowed)
         every = sorted((m for m in found["items"].values() if m["kind"] in KINDS), key=lambda m: (m["time"], m["id"]))
-        # a kind this version does not know: left out, counted. A plan comment is known: the plan part of the model tells it.
-        self.unknown_kinds = len([m for m in found["items"].values() if m["kind"] not in KINDS and m["kind"] != "plan"])
+        # a kind this version does not know: left out, counted. A plan comment is known: the plan part of the model tells it,
+        # and a steps memory is known: the to-do view tells it.
+        self.unknown_kinds = len([m for m in found["items"].values() if m["kind"] not in KINDS
+                                  and m["kind"] not in ("plan", "steps")])
         self.older = max(0, len(every) - CAP_MEMORIES)
         kept = every[self.older:]
         self.found = found

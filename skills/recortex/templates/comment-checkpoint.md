@@ -13,4 +13,4 @@
 
 **Open questions:** {{questions waiting for the owner, or "None"}}
 
-<!-- Optional parts, explained in references/templates.md. A checkpoint carries no link and no Evidence. Folds: after the last field, explain a word that cannot be understood without this project, and write what this thread is about when recall says nobody has yet. Delete this note: {{delete this note}} -->
+<!-- Optional parts, explained in references/templates.md. A checkpoint carries no link and no Evidence. It may carry done=<id of a steps comment>:<step numbers> in its marker for the steps that the agent reported finished and that its Done since the last checkpoint field names (see references/tasks.md). Folds: after the last field, explain a word that cannot be understood without this project, and write what this thread is about when recall says nobody has yet. Delete this note: {{delete this note}} -->
