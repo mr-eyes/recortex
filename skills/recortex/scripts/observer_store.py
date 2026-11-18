@@ -35,7 +35,8 @@ TRANSITIONS = {"ready": {"sending", "deferred", "rejected"},
                "sending": {"verified", "uncertain"}, "uncertain": {"verified"},
                "deferred": {"ready", "rejected", "sending"}, "reviewed": {"ready", "deferred", "rejected"}}
 SOURCE_FIELDS = frozenset(("source_id", "session_id", "role", "event_type", "path", "offset", "end",
-                           "sha256", "content_sha256", "observed_at"))
+                           "sha256", "content_sha256", "observed_at", "via", "call_id", "pair_offset", "pair_end",
+                           "pair_sha256"))
 SOURCE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}")
 KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
 HEX = re.compile(r"[0-9a-f]{64}")
