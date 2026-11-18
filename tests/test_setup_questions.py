@@ -277,15 +277,17 @@ class Box(ts.RecordSandbox):
     def settings_file(self, value=None, raw=None):
         return put_json(self.settings, value, raw=raw)
 
-    def approval(self, root=None, raw=None, mode=0o600, level=None, **settings):
+    def approval(self, root=None, raw=None, mode=0o600, level=None, observer_mode="shadow", **settings):
         """The observer's approvals file: with a `level` the form 2 entry of 1.5.0 (the keys in `settings` are added to its
-        settings), without one the form 1 entry that 1.4.0 wrote, which holds no level."""
+        settings), without one the form 1 entry that 1.4.0 wrote, which holds no level. `mode` is the file's permissions;
+        `observer_mode` is shadow or automatic."""
         path = os.path.join(self.dir, "xdg-state", "recortex", "private", "observer-approvals.json")
-        entry = {"repo": self.repo_name.lower(), "settings": dict({"enabled": True, "mode": "shadow", "model": "sonnet"},
+        entry = {"repo": self.repo_name.lower(), "settings": dict({"enabled": True, "mode": observer_mode, "model": "sonnet"},
                                                                   **settings)}
         if level:
             entry["settings"]["level"] = level
-        value = {"form": 2 if level else 1, "folders": {os.path.realpath(root or self.project): entry}}
+        entry["root"] = os.path.realpath(root or self.project)
+        value = {"form": 2 if level else 1, "folders": {entry["root"]: entry}}
         return put_json(path, value, mode=mode, raw=raw)
 
     def touch(self, *names):
