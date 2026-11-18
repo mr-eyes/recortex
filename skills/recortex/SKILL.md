@@ -62,7 +62,7 @@ Five commands in `commands/`, for the user to type; each tells you to load this 
 | `/recortex:status` | Where the project stands, the open tasks and next steps, what is due in the text, what waits for a yes |
 | `/recortex:usage` | What recortex used, in tokens and calls |
 
-`@agent-recortex:ask` starts the read-only `ask` agent for a longer question about the project's history. The docs do not promise that an @-mention always runs the agent; the command is the other way in.
+`@agent-recortex:ask` starts the `ask` agent for a longer question about the project's history; a hook lets it run only `index.py query` reads. The docs do not promise that an @-mention always runs the agent; the command is the other way in.
 
 ## The model in brief
 

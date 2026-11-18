@@ -12764,7 +12764,7 @@ class PackagingTests(unittest.TestCase):
         self.assertNotIn("forceRemoveDeletedPlugins", market)
         hooks = self.read_json("hooks", "hooks.json")["hooks"]
         commands = [h["command"] for entries in hooks.values() for entry in entries for h in entry["hooks"]]
-        self.assertEqual(11, len(commands))  # four brief events, the observer on six, and the usage hook at a subagent's stop
+        self.assertEqual(12, len(commands))  # four brief events, the observer on six, the usage hook at a subagent's stop, and the guard before a Bash call
         for command in commands:
             relative = re.search(r"^\"\$\{CLAUDE_PLUGIN_ROOT\}\"/(skills/recortex/scripts/[a-z_]+\.sh)( [a-z-]+)?$",
                                  command).group(1)

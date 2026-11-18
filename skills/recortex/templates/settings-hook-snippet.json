@@ -75,6 +75,11 @@
             "type": "command",
             "command": "\"$HOME/.claude/skills/recortex/scripts/run_observer_hook.sh\" pre-tool",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "\"$HOME/.claude/skills/recortex/scripts/run_pretool_guard.sh\"",
+            "timeout": 5
           }
         ]
       }
