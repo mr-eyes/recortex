@@ -55,6 +55,27 @@ def add_ids(body):
     return re.sub(r"<h([23])([^>]*)>(.*?)</h\1>", fix, body, flags=re.S)
 
 
+def label_tables(body):
+    """Copy each column's heading onto its cells, so that a narrow screen can stack a table's rows."""
+    def one(match):
+        table = match.group(0)
+        rows = re.split(r"(?=<tr>)", table)
+        heads = [re.sub(r"<[^>]+>", "", h).strip() for h in re.findall(r"<th>(.*?)</th>", table, flags=re.S)]
+        out = []
+        for row in rows:
+            if "<td" in row and heads:
+                n = [-1]
+
+                def cell(m):
+                    n[0] += 1
+                    label = heads[n[0]] if n[0] < len(heads) and n[0] > 0 else ""
+                    return '<td data-label="%s">' % html.escape(label, quote=True) if label else "<td>"
+                row = re.sub(r"<td>", cell, row)
+            out.append(row)
+        return "".join(out)
+    return re.sub(r'<table class="plain">.*?</table>', one, body, flags=re.S)
+
+
 def command_block(lines, prompt):
     rows = "\n".join('<span class="prompt">%s</span><span class="line">%s</span>' % (prompt, html.escape(line))
                      for line in lines)
@@ -131,7 +152,7 @@ def build(out, plugin_args, run_checks):
         body = read(os.path.join(SRC, "pages", page["file"]))
         for key, value in tokens.items():
             body = body.replace("{{%s}}" % key, value)
-        body = fill_blocks(add_ids(body))
+        body = label_tables(fill_blocks(add_ids(body)))
         left = re.findall(r"\{\{[^}]*\}\}", body)
         if left:
             sys.exit("%s: not filled: %s" % (page["file"], left[:3]))

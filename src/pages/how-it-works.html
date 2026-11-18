@@ -79,7 +79,12 @@
 <p class="fine">The session asks each as a multiple-choice question. Only your recorded answer lets the command through, once and for ten minutes.</p>
 
 <h3 id="holds">Holds</h3>
-<div class="prose"><p>Say <code>/recortex hold git-push</code>, <code>/recortex hold git-tag</code> or <code>/recortex hold gh-release</code> and the hook refuses that command in this repository until you lift the hold in your own terminal with <code>observer.py release</code>. Say "off the record" and the observer posts nothing from that session. When you release the hold, what it kept back is offered again, and a held note goes to the list that waits for your yes. Holds guard against mistakes. They are not a security boundary.</p></div>
+<ul class="notes">
+<li>Say <code>/recortex hold git-push</code>, <code>/recortex hold git-tag</code> or <code>/recortex hold gh-release</code>. The hook then refuses that command in this repository.</li>
+<li>Say "off the record" and the observer posts nothing from that session.</li>
+<li>Only you lift a hold, in your own terminal, with <code>observer.py release</code>. What it kept back is then offered again, and a held note goes to the list that waits for your yes.</li>
+</ul>
+<p class="fine">Holds guard against mistakes. They are not a security boundary.</p>
 
 <h2 id="tiers">Three tiers of model, each for its own job</h2>
 <div class="tbox"><table class="plain">
