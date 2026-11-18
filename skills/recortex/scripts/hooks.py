@@ -896,6 +896,7 @@ def doctor():
             ("state top folder", storage.state_top(), "top"),
             ("state folder", os.path.join(storage.state_top(), storage.PRIVATE, name), "private"),
             ("prompt state file", os.path.join(storage.state_top(), storage.PRIVATE, name, "prompt-state.json"), "file"),
+            ("setup questions run note", os.path.join(storage.state_top(), storage.PRIVATE, name, names.SETUP_RUN), "file"),
             ("key top folder", storage.state_top(for_key=True), "top"),
             ("key file (contents not shown)", storage.key_path(), "file")]
     seen = set()

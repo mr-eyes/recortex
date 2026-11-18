@@ -1019,6 +1019,22 @@ class PlanCommandTests(PaperSandbox):
         self.assertIn("plan: issue #12 is already the plan of the paper", again.stdout)
         self.assertNotIn("13", self.repo()["issues"])
 
+    def test_with_a_plan_recorded_another_open_issue_with_the_label_is_not_looked_for_and_the_advice_never_replaces_it(self):
+        self.ready()
+        self.other_plan(12)
+        self.other_plan(15)   # two open issues carry the label; the project file records #12
+        self.write_config(dict(self.config, plans={"manuscript": 12}))
+        seen = len(self.repo()["log"])
+        dry = self.plan_cmd("setup", "--dry-run")
+        self.assertEqual(0, dry.returncode, dry.stdout + dry.stderr)   # as it reported before the guard: no "add plans ... 15"
+        self.assertNotIn("is open and carries the label plan", dry.stdout + dry.stderr)
+        self.assertIn("would run: gh issue create", dry.stdout)
+        again = self.plan_cmd("setup")
+        self.assertEqual(0, again.returncode, again.stdout + again.stderr)
+        self.assertIn("plan: issue #12 is already the plan of the paper", again.stdout)
+        self.assertEqual([], [call for call in self.calls()[seen:] if call == ("issue", "list")])   # no read for it: a plan is recorded
+        self.assertNotIn("13", self.repo()["issues"])
+
     def test_a_github_that_cannot_be_read_stops_setup_with_one_fixed_line_and_creates_nothing(self):
         self.ready()
         for gh in ("false", "echo not-json"):

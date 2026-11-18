@@ -534,6 +534,46 @@ class ReminderTests(Box):
         self.assertIn("2 setup questions open", done.stdout)
         self.assertFalse(os.path.exists(os.path.join(self.dir, "elsewhere")))
 
+    def test_a_run_note_that_cannot_be_kept_is_said_in_one_fixed_line_before_the_count_and_a_kept_one_says_nothing(self):
+        setup = import_setup()
+        kept = self.tool("setup.py", "questions")
+        self.assertEqual(0, kept.returncode, kept.stdout + kept.stderr)
+        self.assertNotIn(setup.RUN_NOT_NOTED, kept.stdout)
+        self.assertTrue(load_json(self.run_path())["ran"])
+        self.assertTrue(json.loads(self.tool("setup.py", "questions", "--json").stdout)["run_noted"])
+        self.fixture.reset()
+        os.makedirs(os.path.dirname(self.run_path()), mode=0o700, exist_ok=True)
+        os.symlink(os.path.join(self.dir, "elsewhere"), self.run_path())   # storage refuses a link
+        refused = self.tool("setup.py", "questions")
+        self.assertEqual(0, refused.returncode, refused.stdout + refused.stderr)
+        lines = refused.stdout.rstrip("\n").split("\n")
+        self.assertEqual("setup questions: the time this ran could not be kept on this machine, so a later prompt may remind you again; "
+                         "hooks.py --doctor says why.", setup.RUN_NOT_NOTED)
+        self.assertEqual(1, lines.count(setup.RUN_NOT_NOTED))
+        self.assertEqual("2 setup questions open", lines[-1])   # the count still ends it
+        self.assertEqual(lines.index(setup.RUN_NOT_NOTED), len(lines) - 2)
+        self.assertFalse(json.loads(self.tool("setup.py", "questions", "--json").stdout)["run_noted"])
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "elsewhere")))
+        # also when the answers file cannot be read and the questions are not asked
+        self.put_state(raw="not json")
+        unread = self.tool("setup.py", "questions")
+        self.assertEqual(setup.RUN_NOT_NOTED, unread.stdout.rstrip("\n").split("\n")[-1])
+        self.assertIn("cannot be read", unread.stdout)
+
+    def test_a_loose_run_note_is_said_in_the_same_line_and_doctor_lists_the_file_and_flags_it(self):
+        setup = import_setup()
+        self.assertEqual(0, self.tool("setup.py", "questions").returncode)
+        listed = self.tool("hooks.py", "--doctor").stdout
+        self.assertIn("setup questions run note", listed)
+        self.assertIn(self.run_path(), listed)
+        os.chmod(self.run_path(), 0o644)
+        loose = self.tool("setup.py", "questions")
+        self.assertIn(setup.RUN_NOT_NOTED, loose.stdout)
+        self.assertEqual(0o644, stat.S_IMODE(os.stat(self.run_path()).st_mode))   # never replaced or tightened by the command
+        doctor = self.tool("hooks.py", "--doctor").stdout
+        self.assertRegex(doctor, r"setup questions run note\s+%s\s+owner .*mode 644, permissions for group or others: refused" % re.escape(self.run_path()))
+        self.assertIn("setup questions run note %s is mode 644" % self.run_path(), doctor)
+
     def test_no_reminder_when_no_question_is_open(self):
         self.put_state(machine={"status-line": self.kept("no")}, repos={REPO: {"observer": self.kept("no")}})
         self.start(session="s")
@@ -587,9 +627,11 @@ class ReminderTests(Box):
             self.assertEqual([], self.reminded(self.prompt("s")), name)   # this is its second prompt
 
     def test_a_file_of_run_times_that_does_not_fit_counts_as_never_run_and_an_unsafe_one_stops_it(self):
-        for text in ("not json", "[]", '{"ran": "now"}', '{"ran": true}', '{"ran": -1}', '{"ran": 1e30}', '{"ran": 1, "other": 2}'):
+        for text in ("not json", "[]", '{"ran": "now"}', '{"ran": true}', '{"ran": -1}', '{"ran": 1e30}', "extra key"):
             self.fixture.reset()
             self.start(session="s")
+            if text == "extra key":   # a time after the start: only the check of the keys makes it count as never run
+                text = '{"ran": %f, "other": 2}' % (time.time() + 1)
             put_json(self.run_path(), None, raw=text)
             self.assertEqual([[], [brief.SETUP_REMINDER % (2, "s")]], self.asked("s", 2), text)
         self.fixture.reset()
@@ -1579,6 +1621,7 @@ class SetupQuestionDocsTests(unittest.TestCase):
         self.assertIn("at most three times a session", reference)
         self.assertIn("as one multiple-choice batch, not offered in prose", reference)
         self.assertIn("setup-questions-run.json", reference)
+        self.assertIn("`questions` says so in one fixed line before its count, and `hooks.py --doctor` lists the file", reference)
         hooks = self.read("skills", "recortex", "references", "hooks-and-index.md")
         self.assertIn(brief.SETUP_QUESTIONS % (2, "s"), hooks)
         self.assertIn(brief.SETUP_REMINDER % (2, "s"), hooks)

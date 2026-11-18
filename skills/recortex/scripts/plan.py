@@ -7,8 +7,8 @@ part is a comment of the kind `plan` (references/planning.md). The states of the
 --dry-run, which prints the exact gh commands and writes nothing.
 
 setup    makes the label and the issue (a fixed first body), links it under the hub and writes `plans` into the
-         project file. It first looks, with one read, for an open issue that already carries the label `plan` and the
-         project file does not name; there it creates nothing (a dry run says the same) and says how to record it.
+         project file. With no plan recorded it first looks, with one read, for an open issue that already carries the label `plan`;
+         there it creates nothing (a dry run says the same) and says how to record it.
 digest   writes what the record holds, for the planner to read as data: digest.md and plan.json in --out.
 status   the states of the parts, the gaps and the counts, from the local index (--json for the whole report).
 check    lints every draft of a folder and makes the cross checks of a plan; writes nothing.
@@ -205,7 +205,7 @@ PLAN_ISSUE_UNREAD = ("plan: could not look for an open issue with the label plan
 
 def refuse_second_plan(config, repo, profile):
     """Stop, before anything is created or planned (a dry run too), when an open issue of the repository already carries
-    the label plan and the project file does not name it: a project that joined a record with a plan, or whose file lost
+    the label plan and the project file records no plan (the caller asks only then): a project that joined a record with a plan, or whose file lost
     its `plans` entry, would otherwise get a second plan issue. One read through recortex.gh(); the number printed is an
     integer from GitHub's answer that passed the same check as the project file's, never any text of the issue."""
     try:
@@ -217,10 +217,8 @@ def refuse_second_plan(config, repo, profile):
         numbers = None
     if numbers is None:
         sys.exit(PLAN_ISSUE_UNREAD)
-    own = recortex.plan_issue(config, profile)
-    other = [n for n in numbers if n != own]
-    if other:
-        sys.exit(PLAN_ISSUE_FOUND % (other[0], profile, other[0], config.get("_path") or "the project file"))
+    if numbers:
+        sys.exit(PLAN_ISSUE_FOUND % (numbers[0], profile, numbers[0], config.get("_path") or "the project file"))
 
 
 def setup_command(args):
@@ -232,7 +230,8 @@ def setup_command(args):
         return 0
     if hub is None:
         sys.exit("error: no hub issue number in the project file; the plan issue is a sub-issue of the hub")
-    refuse_second_plan(config, repo, profile)
+    if recortex.plan_issue(config, profile) is None:   # a recorded plan is the plan, whatever else carries the label
+        refuse_second_plan(config, repo, profile)
     title = "The plan of the %s" % plan["noun"]
     body = body_text(config, plan, None, None, allowed)
     problems = [f for f in lint_drafts.lint_text(body, kind="plan-body", config=config) if f.level == "error"]

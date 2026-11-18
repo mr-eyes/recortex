@@ -1613,6 +1613,8 @@ NOT_SET_UP = ("setup questions: this project is not set up (no project file with
 NOT_TRUSTED = "setup questions: the repository of this project is not in your trusted list, so nothing is asked."
 UNREAD_LABELS = "setup questions: GitHub could not be read, so the labels are not checked now; the next run checks them."
 NOT_NOTED = "setup questions: the note that no label is missing could not be kept on this machine; it is checked again next time."
+RUN_NOT_NOTED = ("setup questions: the time this ran could not be kept on this machine, so a later prompt may remind you again; "
+                 "hooks.py --doctor says why.")
 
 
 def questions_project():
@@ -1660,14 +1662,17 @@ def questions_command(args):
     if config is None:
         print(line)
         return 0
+    run_kept = True
     try:
         setup_questions.note_run(repo)   # the prompt hook then stops reminding this session; a refusal never stops the command
     except (OSError, ValueError, storage.StorageError):
-        pass
+        run_kept = False
     found = setup_questions.read()
     if found["state"] == "unreadable":
         print("setup questions: the answers of this machine cannot be read (%s), so no question is asked. Run hooks.py "
               "--doctor." % setup_questions.NOT_READABLE[found["why"]])
+        if not run_kept:
+            print(RUN_NOT_NOTED)
         return 0
     results = questions_results(config, repo, found["data"])
     noted = True
@@ -1690,7 +1695,7 @@ def questions_command(args):
                         for o in r.question.options],
             "record": setup_questions.render_command(setup_questions.record_words(r.question, "yes|no|later"))}
             for r in shown],
-            "unread": unread, "count": len(shown)}, indent=1))
+            "unread": unread, "count": len(shown), "run_noted": run_kept}, indent=1))
         return 0
     for result in shown:
         print("\n".join(setup_questions.describe(result, repo, config)))
@@ -1698,6 +1703,8 @@ def questions_command(args):
         print(UNREAD_LABELS)
     if not noted:
         print(NOT_NOTED)
+    if not run_kept:
+        print(RUN_NOT_NOTED)
     print("%d setup question%s open" % (len(shown), "" if len(shown) == 1 else "s") if shown
           else "no setup question is open")
     return 0
