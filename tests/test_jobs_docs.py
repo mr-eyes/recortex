@@ -2,6 +2,7 @@
 look, the numbers and question templates in the docs are the ones in the code, the upgrade entry is above 1.4.0's, the
 README stays under its word cap, and the words the project bans are not in the files this release wrote. No network."""
 
+import html
 import os
 import re
 import sys
@@ -155,6 +156,79 @@ class WordsTests(unittest.TestCase):
             text = read(*path).lower()
             for word in BANNED:
                 self.assertNotIn(word, text, "%s: %s" % ("/".join(path), word))
+
+
+class PictureTests(unittest.TestCase):
+    """The drawing of how recortex works (1.5.1) says what 1.5.0 does, and the words that name it are the same everywhere."""
+
+    PICTURE = "how-it-works"
+
+    def svg(self, mode):
+        return read("assets", "%s-%s.svg" % (self.PICTURE, mode))
+
+    def label(self, mode):
+        found = re.fullmatch(r'(?s).*?<svg [^>]*aria-label="([^"]+)"[^>]*>.*', self.svg(mode))
+        self.assertIsNotNone(found, mode)
+        return html.unescape(found.group(1))
+
+    def texts(self, mode):
+        return [html.unescape(re.sub(r"<[^>]+>", "", node)) for node in re.findall(r"<text [^>]*>(.*?)</text>", self.svg(mode))]
+
+    def alts(self, *path):
+        """The alt text of each picture block that shows the drawing, in the page `path`."""
+        found = []
+        for block in re.findall(r"<picture>(.*?)</picture>", read(*path), re.S):
+            if "%s-light.svg" % self.PICTURE in block:
+                found.append(html.unescape(re.search(r'<img [^>]*alt="([^"]*)"', block).group(1)))
+        return found
+
+    def test_the_readme_and_the_page_use_the_label_the_drawing_carries_word_for_word(self):
+        self.assertEqual(self.label("light"), self.label("dark"))
+        for path in (("README.md",), ("docs", "how-it-works.md")):
+            self.assertEqual([self.label("light")], self.alts(*path), path[-1])
+
+    def test_the_dark_drawing_is_the_light_one_in_the_dark_colors(self):
+        colors = re.compile(r"#[0-9A-Fa-f]{6}")
+        self.assertEqual(colors.sub("#", self.svg("light")), colors.sub("#", self.svg("dark")))
+        self.assertNotEqual(self.svg("light"), self.svg("dark"))
+
+    def test_the_drawing_has_no_script_and_loads_nothing(self):
+        for mode in ("light", "dark"):
+            svg = self.svg(mode)
+            self.assertEqual(["http://www.w3.org/2000/svg"], re.findall(r"https?://[^\s\"')]+", svg), mode)
+            for word in ("<script", "<foreignObject", "<image", "<a ", "<use", "<style", "xlink", "href=", "src=", "javascript:"):
+                self.assertNotIn(word, svg, "%s: %s" % (mode, word))
+            self.assertEqual([], [ref for ref in re.findall(r"url\(([^)]*)\)", svg) if not re.fullmatch(r"#[a-z]+", ref)], mode)   # the arrowheads only
+            self.assertIsNone(re.search(r"\son[a-z]+=", svg), mode)
+            self.assertIn('role="img"', svg)
+
+    def test_the_four_stages_follow_the_readme_line_in_order(self):
+        words = [word.upper() for word in re.findall(r"[A-Za-z]+", "See. Record. Recall. Act.")]
+        self.assertIn("See. Record. Recall. Act.", read("README.md"))
+        for mode in ("light", "dark"):
+            heads = [re.match(r"[A-Z]+", text).group(0) for text in self.texts(mode) if re.match(r"(SEE|RECORD|RECALL|ACT): ", text)]
+            self.assertEqual(words, heads, mode)
+
+    def test_the_observer_is_drawn_with_its_levels_its_jobs_and_what_waits_for_a_yes(self):
+        names = {"notes": "Notes only", "assistant": "Assistant", "everything": "Everything"}
+        self.assertEqual(sorted(names), sorted(observer_runtime.LEVELS))   # a level the code gains is a pill the drawing needs
+        for mode in ("light", "dark"):
+            text = " ".join(self.texts(mode))
+            for level in observer_runtime.LEVELS:
+                self.assertIn(names[level], self.texts(mode), (mode, level))
+            for words in ("optional, if enabled", "at the level you choose", "Keeps notes", "Keeps a to-do list", "with checkmarks",
+                          "Waits for your yes", "a held memory", "task to open or close", "paper's text"):
+                self.assertIn(words, text, (mode, words))
+
+    def test_the_five_commands_in_the_drawing_are_the_five_the_plugin_has(self):
+        expected = "/recortex:" + NAMES[0] + "".join(", :" + name for name in NAMES[1:])
+        for name in NAMES:
+            self.assertTrue(os.path.isfile(os.path.join(ROOT, "commands", name + ".md")), name)
+        for mode in ("light", "dark"):
+            texts = self.texts(mode)
+            first = [text for text in texts if text.startswith("/recortex:")]
+            self.assertEqual(1, len(first), mode)
+            self.assertEqual(expected, first[0] + " " + texts[texts.index(first[0]) + 1], mode)
 
 
 if __name__ == "__main__":

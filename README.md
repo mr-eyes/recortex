@@ -12,7 +12,7 @@ keeps findings, decisions, failures and deliverable text in GitHub issues.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works-dark.svg">
-  <img src="assets/how-it-works-light.svg" alt="A session writes to GitHub issues. The record gives back a brief at every session start, the mind page, the finished text and a board; an optional observer can also post reviewed memories.">
+  <img src="assets/how-it-works-light.svg" alt="An optional observer follows each session at the level you choose, keeps notes and a to-do list with checkmarks, and asks you before anything it should not do alone. GitHub issues are the record. The cortex works from it: a brief, the mind page, the finished text and a board.">
 </picture>
 
 ## What you get

@@ -28,38 +28,86 @@ def frame(w, h, p, body, label):
             '<rect width="%d" height="%d" rx="18" fill="%s"/>%s</svg>\n') % (w, h, w, h, html.escape(label), p["brand"], p["quiet"],
                                                                          w, h, p["bg"], "".join(body))
 
+def head(x, word, rest, p):
+    """A column heading: the stage word in the deep brand color, what it is in the quiet one."""
+    return '<text x="%s" y="44" font-size="12" font-weight="600" text-anchor="start" %s><tspan fill="%s">%s</tspan><tspan fill="%s">%s</tspan></text>' % (
+        x, FONT, p["deep"], word, p["quiet"], html.escape(rest))
+
+def tick(x, y, done, p):
+    """A small checkbox, ticked or empty."""
+    out = ['<rect x="%s" y="%s" width="11" height="11" rx="2.5" fill="none" stroke="%s" stroke-width="1.5"/>' % (x, y, p["brand"] if done else p["quiet"])]
+    if done:
+        out.append('<path d="M%s,%s L%s,%s L%s,%s" fill="none" stroke="%s" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>' % (
+            x + 2.6, y + 5.8, x + 4.9, y + 8.2, x + 8.6, y + 3, p["brand"]))
+    return out
+
+LABEL = ("An optional observer follows each session at the level you choose, keeps notes and a to-do list with checkmarks, "
+         "and asks you before anything it should not do alone. GitHub issues are the record. The cortex works from it: "
+         "a brief, the mind page, the finished text and a board.")
+
 def how(p):
     b = []
-    # column 1: the session
-    b += [T(40, 44, "YOUR SESSION", 12, "quiet", 600, p=p), box(40, 60, 230, 208, p)]
-    for i, (mark, line) in enumerate((("found", "finds a result"), ("decided", "makes a decision"), ("wrong", "hits a failure"), ("idea", "has an idea"))):
-        y = 100 + i * 42
-        b += ['<circle cx="68" cy="%d" r="6" fill="%s"/>' % (y - 5, p["brand"]), T(86, y, line, 16, serif=True, p=p)]
+    top, h = 60, 254
+    see, rec, rcl, act = (32, 244), (316, 158), (514, 194), (748, 180)   # x and width of the four columns, 40 apart
+    mid = top + h // 2
+    # See: the observer, optional, drawn with a dashed edge and a tab on it
+    x, w = see
+    b += [head(x, "SEE", ": THE OBSERVER", p),
+          '<rect x="%s" y="%s" width="%s" height="%s" rx="12" fill="%s" stroke="%s" stroke-width="1.5" stroke-dasharray="6 5"/>' % (x, top, w, h, p["sheet"], p["quiet"]),
+          '<rect x="%s" y="%s" width="132" height="1" fill="%s"/><rect x="%s" y="%s" width="132" height="1" fill="%s"/>' % (x + 13, top - 1, p["bg"], x + 13, top, p["sheet"]), T(x + 20, top + 4, "optional, if enabled", 11.5, "quiet", p=p)]
+    b += [T(x + 16, top + 36, "Follows each session", 13.5, weight=600, p=p), T(x + 16, top + 52, "at the level you choose", 11.5, "quiet", p=p)]
+    px = x + 16
+    for name in ("Notes only", "Assistant", "Everything"):
+        pw = round(len(name) * 5.6 + 14)
+        b += [box(px, top + 60, pw, 22, p, fill="wash", stroke="brand", r=11, sw=1), T(px + pw / 2, top + 75, name, 11, "ink", anchor="middle", p=p)]
+        px += pw + 5
+    b += [T(x + 16, top + 108, "Keeps notes", 13.5, weight=600, p=p), T(x + 16, top + 124, "memories of what was said", 11.5, "quiet", p=p)]
+    b += [T(x + 16, top + 150, "Keeps a to-do list", 13.5, weight=600, p=p)] + tick(x + 16, top + 157, True, p) + tick(x + 31, top + 157, True, p) + tick(x + 46, top + 157, False, p)
+    b += [T(x + 66, top + 167, "with checkmarks", 11.5, "quiet", p=p)]
+    b += [T(x + 16, top + 193, "Waits for your yes", 13.5, weight=600, p=p), T(x + 16, top + 209, "on a held memory, a draft of the", 11.5, "quiet", p=p),
+          T(x + 16, top + 223, "paper's text and, at Assistant, a", 11.5, "quiet", p=p), T(x + 16, top + 237, "task to open or close", 11.5, "quiet", p=p)]
     # arrow 1
-    b += [arrow(282, 164, 352, 164, p), T(317, 150, "memories", 12, "deep", 600, "middle", p=p)]
-    # the optional observer: a quiet dashed path under arrow 1
-    b += ['<line x1="282" y1="236" x2="352" y2="236" stroke="%s" stroke-width="2" stroke-dasharray="5 5" marker-end="url(#q)"/>' % p["quiet"],
-          T(317, 224, "observer", 11.5, "quiet", 600, "middle", p=p), T(317, 256, "if enabled", 10.5, "quiet", anchor="middle", p=p)]
-    # column 2: the record
-    b += [T(366, 44, "GITHUB ISSUES: THE RECORD", 12, "quiet", 600, p=p), box(366, 60, 250, 208, p)]
-    b += [box(384, 76, 214, 44, p, fill="wash", stroke="brand", r=9), T(398, 103, "Hub", 15, weight=600, p=p), T(584, 103, "pinned", 12, "quiet", anchor="end", p=p)]
-    for i, name in enumerate(("Topic: the text so far", "Topic: the text so far")):
-        y = 134 + i * 62
-        b += [box(384, y, 214, 50, p, fill="bg", r=9), T(398, y + 21, name, 13.5, weight=600, p=p)]
-        b += ['<circle cx="%d" cy="%d" r="4.5" fill="%s"/>' % (403 + k * 15, y + 36, p["brand"]) for k in range(5 - i * 2)]
-        b += [T(403 + (5 - i * 2) * 15 + 4, y + 40, "dated memories", 11.5, "quiet", p=p)]
+    b += [arrow(see[0] + see[1] + 4, mid, rec[0] - 4, mid, p)]
+    # Record: GitHub issues
+    x, w = rec
+    b += [head(x, "RECORD", ": GITHUB ISSUES", p), box(x, top, w, h, p)]
+    b += [box(x + 16, top + 16, w - 32, 48, p, fill="wash", stroke="brand", r=9), T(x + 28, top + 45, "Hub", 15, weight=600, p=p), T(x + w - 28, top + 45, "pinned", 12, "quiet", anchor="end", p=p)]
+    y = top + 76
+    b += [box(x + 16, y, w - 32, 72, p, fill="bg", r=9), T(x + 28, y + 25, "Topic", 13.5, weight=600, p=p), T(x + 28, y + 42, "the text so far", 11.5, "quiet", p=p)]
+    b += ['<circle cx="%d" cy="%d" r="4.5" fill="%s"/>' % (x + 33 + k * 15, y + 57, p["brand"]) for k in range(3)] + [T(x + 82, y + 61, "memories", 11.5, "quiet", p=p)]
+    y = top + 160
+    b += [box(x + 16, y, w - 32, 72, p, fill="bg", r=9), T(x + 28, y + 25, "Task", 13.5, weight=600, p=p), T(x + 28, y + 42, "steps, checked off", 11.5, "quiet", p=p)]
+    b += tick(x + 28, y + 52, True, p) + tick(x + 43, y + 52, True, p) + tick(x + 58, y + 52, False, p)
     # arrow 2
-    b += [arrow(628, 164, 698, 164, p), T(663, 150, "read only", 12, "deep", 600, "middle", p=p)]
-    # column 3: what comes back
-    b += [T(712, 44, "WHAT COMES BACK", 12, "quiet", 600, p=p)]
-    for i, (head, sub) in enumerate((("A brief", "at the start of every session"), ("The mind page", "the memory, told in sentences"),
-                                     ("The finished text", "compiled from the topics"), ("A board", "kept current by the record"))):
-        y = 60 + i * 54
-        b += [box(712, y, 208, 46, p, r=9), T(726, y + 20, head, 14.5, weight=600, p=p), T(726, y + 37, sub, 12, "quiet", p=p)]
+    b += [arrow(rec[0] + rec[1] + 4, mid, rcl[0] - 4, mid, p)]
+    # Recall: the cortex works from the record
+    x, w = rcl
+    b += [head(x, "RECALL", ": THE CORTEX", p)]
+    items = (("A brief", "at the start of every session"), ("The mind page", "the memory, told in sentences"),
+             ("The finished text", "compiled from the topics"), ("A board", "kept current by the record"))
+    for i, (name, sub) in enumerate(items):
+        y = top + i * 50
+        b += [box(x, y, w, 43, p, r=9), T(x + 14, y + 19, name, 14.5, weight=600, p=p), T(x + 14, y + 36, sub, 12, "quiet", p=p)]
+    y = top + 199
+    b += [box(x, y, w, 55, p, r=9), T(x + 14, y + 19, "Five commands", 14.5, weight=600, p=p), T(x + 14, y + 35, "/recortex:record, :ask, :todo,", 12, "quiet", p=p),
+          T(x + 14, y + 48, ":status, :usage", 12, "quiet", p=p)]
+    # arrow 3
+    b += [arrow(rcl[0] + rcl[1] + 4, mid, act[0] - 4, mid, p)]
+    # Act: the session
+    x, w = act
+    b += [head(x, "ACT", ": YOUR SESSION", p), box(x, top, w, h, p)]
+    for i, line in enumerate(("finds a result", "makes a decision", "hits a failure", "has an idea")):
+        y = top + 46 + i * 38
+        b += ['<circle cx="%d" cy="%d" r="6" fill="%s"/>' % (x + 24, y - 5, p["brand"]), T(x + 40, y, line, 15, serif=True, p=p)]
+    b += ['<line x1="%s" y1="%s" x2="%s" y2="%s" stroke="%s" stroke-width="1"/>' % (x + 16, top + 186, x + w - 16, top + 186, p["rule"]),
+          T(x + 16, top + 208, "Without the observer,", 11.5, "quiet", p=p), T(x + 16, top + 223, "the session records its", 11.5, "quiet", p=p),
+          T(x + 16, top + 238, "own memories.", 11.5, "quiet", p=p)]
     # the loop back
-    b += ['<path d="M816,284 C816,322 640,326 480,326 C320,326 155,322 155,280" fill="none" stroke="%s" stroke-width="2.5" stroke-dasharray="6 6" marker-end="url(#a)"/>' % p["brand"],
-          T(480, 316, "so the next session starts where this one stopped", 13.5, "deep", anchor="middle", serif=True, italic=True, p=p)]
-    return frame(960, 348, p, b, "How recortex works: a session writes memories to GitHub issues, and the record gives back a brief, the mind page, the finished text and a board; an optional observer, off unless enabled, can also queue and post reviewed memories")
+    bottom = top + h
+    b += ['<path d="M%d,%d C%d,%d 640,%d 480,%d C320,%d %d,%d %d,%d" fill="none" stroke="%s" stroke-width="2.5" stroke-dasharray="6 6" marker-end="url(#a)"/>' % (
+              x + w // 2, bottom + 16, x + w // 2, bottom + 54, bottom + 60, bottom + 60, bottom + 60, see[0] + see[1] // 2, bottom + 54, see[0] + see[1] // 2, bottom + 12, p["brand"]),
+          T(480, bottom + 50, "so the next session starts where this one stopped", 13.5, "deep", anchor="middle", serif=True, italic=True, p=p)]
+    return frame(960, bottom + 82, p, b, LABEL)
 
 def board(p):
     b = [T(32, 42, "sample-project record", 17, weight=600, p=p), T(928, 42, "Private", 12, "quiet", anchor="end", p=p),

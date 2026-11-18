@@ -4,7 +4,7 @@ What lives in GitHub, what a session does with it, and what comes back after a c
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/how-it-works-dark.svg">
-  <img src="../assets/how-it-works-light.svg" alt="A session writes memories to GitHub issues. The record gives back a brief at every session start, the mind page, the finished text and a board.">
+  <img src="../assets/how-it-works-light.svg" alt="An optional observer follows each session at the level you choose, keeps notes and a to-do list with checkmarks, and asks you before anything it should not do alone. GitHub issues are the record. The cortex works from it: a brief, the mind page, the finished text and a board.">
 </picture>
 
 ## What it sets up
