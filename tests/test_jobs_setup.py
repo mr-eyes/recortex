@@ -51,6 +51,16 @@ class Programs:
                 "echo \"$@\" >> '%s'\ncat >/dev/null\nprintf '%%s\\n' '%s' '%s'\n" % (log, json.dumps(init), json.dumps(done)))
         return os.path.join(self.dir, "bin-" + name), log
 
+    def answer(self, level=None, strong=None):
+        """The user's recorded answers a `setup.py observer ... --yes` of a session goes on (its gate has its own tests:
+        test_jobs_enable). Planted for this folder in the sandbox's private state, where the command reads them."""
+        import observer_grants
+        self.in_process()
+        folder = observer_runtime.folder_key(self.project)
+        for kind, value in (("level", level), ("strong", strong)):
+            if value:
+                self.assertTrue(observer_grants.put(folder, kind, value, "toolu_test"))
+
     def with_path(self, folder, **extra):
         env = dict(QUIET, PATH=folder + os.pathsep + os.environ["PATH"])
         env.update(extra)
@@ -266,6 +276,9 @@ class StepTests(Programs, tq.Box):
         self.env_claude = self.with_path(self.bin)
 
     def observer(self, *args, env=None):
+        if "--yes" in args:
+            self.answer(args[args.index("--level") + 1] if "--level" in args else None,
+                        args[args.index("--strong") + 1] if "--strong" in args else None)
         return self.tool("setup.py", "observer", *args, env=dict(self.env_claude, **(env or {})))
 
     def test_the_dry_run_prints_the_steps_and_makes_no_write_and_no_model_call(self):
@@ -409,8 +422,10 @@ class PlanStepTests(Programs, tq.Box):
         bin_folder, log = self.stand_in()
         env = self.with_path(bin_folder)
         self.assertEqual(0, self.tool("setup.py", "writing", "set", "--mode", "review", "--yes").returncode)
+        self.answer(level="everything")
         self.assertEqual(0, self.tool("setup.py", "observer", "--level", "everything", "--yes", env=env).returncode)
         self.assertIn("paper-proposals", self.open_ids())
+        self.answer(strong="opus")
         self.assertEqual(0, self.tool("setup.py", "observer", "--strong", "opus", "--yes", env=env).returncode)
         self.assertNotIn("paper-proposals", self.open_ids())
         self.assertIn("paper-proposals", self.groups()["answered"])
@@ -455,6 +470,7 @@ class PausedUntilALevelTests(Programs, tq.Box):
         self.assertIn(LEVEL, self.open_ids())
         # the user answers with a level: now the observer works
         bin_folder, working_log = self.stand_in()
+        self.answer(level="notes")
         done = self.tool("setup.py", "observer", "--level", "notes", "--yes", env=self.with_path(bin_folder))
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
         status = self.status(env=self.with_path(bin_folder))

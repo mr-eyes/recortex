@@ -1343,13 +1343,37 @@ def observer_step(answers, root, python, dry):
               % repo)
         return
     environment = dict(os.environ, CLAUDE_PROJECT_DIR=root)  # the folder its entry is for
+    # Turning the observer on, raising its level, starting posting or adding the stronger model from a session needs the
+    # user's recorded answer to the question about it (observer_grants); the user's own terminal needs none. The answer
+    # is taken once here, and the commands of this chain go through on a pass that ends with it.
+    import observer
+    import observer_grants
+    folder, word = observer_runtime.folder_key(root), None
+    wanted = [] if observer.on_terminal() else observer_grants.needs(stored_observer(repo, root), level,
+                                                                     strong or None, mode)
+    if wanted:
+        if not observer_grants.take(folder, wanted):
+            print("observer: not turned on. " + observer_grants.UNANSWERED)
+            return
+        word = observer_grants.start_pass(folder, level, strong or None)
+    try:
+        run_observer_steps(steps, options, level, mode, model, strong, root, environment, word)
+    finally:
+        if word:
+            observer_grants.end_pass(folder, word)
+
+
+def run_observer_steps(steps, options, level, mode, model, strong, root, environment, word):
+    """The commands of observer_step, one after the other, each with one line of what happened. `word` is the pass of the
+    chain (observer_grants), given to each enable and printed in no line."""
     again = " ".join(["observer.py", "enable"] + options)
     automatic = " ".join(["observer.py", "enable", "--mode", "automatic"] + options)
     then = (" then %s --yes" % automatic) if mode == "automatic" else ""
     for number, (command, what) in enumerate(steps):
         print("run: %s   # %s" % (" ".join(command), what))
         try:
-            done = subprocess.run(command, capture_output=True, text=True, cwd=root, env=environment, timeout=240)
+            sent = command + ["--pass", word] if word and "enable" in command else command
+            done = subprocess.run(sent, capture_output=True, text=True, cwd=root, env=environment, timeout=240)
             lines = done.stdout.strip().splitlines()
             value = json.loads(lines[-1]) if lines else {}
             code = value.get("code", "") if done.returncode else ""

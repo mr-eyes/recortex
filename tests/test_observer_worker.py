@@ -725,7 +725,13 @@ class ObserverCliTests(unittest.TestCase):
         self.env=dict(os.environ,CLAUDE_PROJECT_DIR=str(self.project),RECORTEX_TRUSTED_FILE=str(trusted),
                       XDG_STATE_HOME=str(self.base/'state'),XDG_CACHE_HOME=str(self.base/'cache'),XDG_CONFIG_HOME=str(self.base/'config'))
         self.env.pop('RECORTEX_CONFIG',None)
-    def cli(self,*args):
+    def cli(self,*args,answered=True):
+        if answered and '--yes' in args and 'enable' in args:
+            # the user's recorded answer a session's enable goes on; who may enable is tested in test_jobs_enable
+            import observer_grants
+            with patch.dict(os.environ,{'XDG_STATE_HOME':str(self.base/'state')}):
+                for kind,option in (('level','--level'),('strong','--strong-model')):
+                    if option in args:observer_grants.put(os.path.realpath(self.project),kind,args[args.index(option)+1],'toolu_test')
         result=subprocess.run([sys.executable,str(ROOT/'skills/recortex/scripts/observer.py')]+list(args),
                               cwd=self.project,env=self.env,capture_output=True,text=True,timeout=10)
         self.assertEqual('',result.stderr)
@@ -777,6 +783,9 @@ class ObserverCliTests(unittest.TestCase):
         moved=dict(self.env,CLAUDE_PROJECT_DIR=str(other))
         run=lambda *args:json.loads(subprocess.run([sys.executable,str(ROOT/'skills/recortex/scripts/observer.py')]+list(args),
                                     cwd=other,env=moved,capture_output=True,text=True,timeout=10).stdout)
+        import observer_grants
+        with patch.dict(os.environ,{'XDG_STATE_HOME':str(self.base/'state')}):
+            observer_grants.put(os.path.realpath(other),'level','everything','toolu_test')   # the user's answer for that folder
         self.assertTrue(run('enable','--model','sonnet','--level','everything','--yes')['approved'])
         result,value=self.cli('disable');self.assertEqual(0,result.returncode);self.assertTrue(value['was_enabled'])
         _,status=self.cli('status');self.assertFalse(status['approved'])
@@ -791,7 +800,7 @@ class ObserverCliTests(unittest.TestCase):
         self.assertIn('ANTHROPIC_API_KEY',status['billing']);self.assertNotIn('sk-ant-example-value',result.stdout)
     def test_invalid_model_choice_is_rejected_before_any_write(self):
         before=self.config.read_bytes()
-        result,value=self.cli('enable','--model','model with spaces','--level','everything','--yes')
+        result,value=self.cli('enable','--model','model with spaces','--level','everything','--yes',answered=False)
         self.assertEqual(1,result.returncode);self.assertEqual('observer-unavailable',value['code'])
         self.assertEqual('observer_model',value['reason'])
         self.assertEqual(before,self.config.read_bytes());self.assertFalse((self.base/'state').exists())

@@ -500,7 +500,7 @@ def answered(data, project_root, short, line, label="Post", max_bytes=ANSWER_BYT
     """The id of the user's answer `label` to the newest question about `short` in the main transcript, or None.
 
     The question is an AskUserQuestion call in a main-session assistant record, one of whose questions names `short`
-    and no other short id, quotes `line` (the memory's description, observer_store.description) as it is once
+    and no other short id (`short` None: a setup question, which names none; `line` is then its fixed first sentence), quotes `line` (the memory's description, observer_store.description) as it is once
     whitespace is normalized, so that the user answered about that memory and not about a description the session
     wrote, and offers an option labeled `label`; the answer is the result Claude Code recorded for that
     call, matched by its id: the record's structured answers, or, for a call of one question, its fixed sentence. A
@@ -552,7 +552,7 @@ def answered(data, project_root, short, line, label="Post", max_bytes=ANSWER_BYT
                         text = question.get("question")
                         options = question.get("options") if isinstance(question.get("options"), list) else []
                         labels = [o.get("label") for o in options if isinstance(o, dict)]
-                        if (isinstance(text, str) and set(SHORT_ID.findall(text)) == {short}
+                        if (isinstance(text, str) and (short is None or set(SHORT_ID.findall(text)) == {short})
                                 and line in " ".join(text.split())):
                             asked[block["id"]] = (text, label in labels, len(questions))
             elif asked and b'"tool_result"' in row and any(key.encode() in row for key in asked):

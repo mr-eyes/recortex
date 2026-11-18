@@ -1,0 +1,250 @@
+"""One-time grants for turning the observer on, or raising its level or its stronger model, from a session.
+
+The observer's level and its stronger model are the user's choices, made by answering the setup questions
+(`observer-level`, `paper-proposals`). A session that runs `observer.py enable ... --yes` or `setup.py observer ...
+--yes` does so on that answer only: the hook (pretool_guard.py, before the Bash call, observer on or off) looks in the
+main transcript for the user's recorded answer to the plugin's own question, as for a held memory (observer_sources.
+answered), and records a grant for exactly the level the chosen option names, or for the stronger model. The command
+refuses without it unless it runs on the user's own terminal. A grant holds 10 minutes for this folder and is used
+once; `setup.py observer`, which runs a chain of commands, takes it once and gives the chain a pass (a random word, for
+its commands only, ended when the chain ends).
+
+The grants and the pass are one small private file beside the approvals (storage.py), never in the project tree. Nothing
+in it is text: folders, kinds, values from fixed lists, times and ids."""
+
+import contextlib
+import json
+import os
+import re
+import secrets
+import shlex
+import time
+
+import field_sheet
+import observer_runtime as runtime
+import recortex
+import storage
+
+FILE = "enable-grants.json"
+LOCK = "enable-grants.lock"
+SECONDS = 600
+CAP = 65536
+KEPT = 20            # entries of the file, the newest
+STRONG_MODEL = "opus"  # the model the paper-proposals question names; another one is the user's own command
+RANK = {"notes": 1, "assistant": 2, "everything": 3}
+LEVEL_QUESTION, STRONG_QUESTION = "observer-level", "paper-proposals"
+UNANSWERED = ("recortex observer: turning the observer on, or raising its level or its stronger model, needs your "
+              "answer to the question about it. Ask it as setup.py questions prints it (observer-level, or "
+              "paper-proposals for the stronger model), and then run the command again. You can also run it yourself "
+              "in a terminal outside Claude Code.")
+PASS = re.compile(r"[0-9a-f]{32}")
+ANSWER = re.compile(r"[A-Za-z0-9_-]{1,80}")
+
+
+# ---------------------------------------------------------------- what a command needs
+
+def needs(stored, level, strong, mode):
+    """The grants a command that sets `level`, `strong` (a model, or None) and `mode` needs, given this folder's stored
+    settings: [("level", level)] when the folder has no level yet (a new folder, or an approval of 1.4.0), or the level
+    is raised, or posting goes from shadow to automatic; [("strong", model)] when the stronger model is new or
+    changes. Lowering anything needs none."""
+    stored = stored if isinstance(stored, dict) else {}
+    old = stored.get("level") if stored.get("level") in runtime.LEVELS else ""
+    out = []
+    new = level or old
+    if new in runtime.LEVELS and (not old or RANK[new] > RANK[old]
+                                  or (mode == "automatic" and not (stored.get("enabled") and stored.get("mode") == "automatic"))):
+        out.append(("level", new))
+    if strong and strong != stored.get("strong_model"):
+        out.append(("strong", strong))
+    return out
+
+
+# ---------------------------------------------------------------- the file
+
+def _path(create=False):
+    folder = storage.folder(storage.state_top(for_key=True), create=create, tighten=create)
+    return None if folder is None else os.path.join(folder, FILE)
+
+
+def _read():
+    path = _path()
+    if path is None:
+        return {}
+    info = storage.check_path(path, "file")
+    if not info or info.st_size > CAP:
+        return {}
+    try:
+        data = json.loads(storage.read_file(path) or "")
+    except (ValueError, RecursionError):
+        return {}
+    return data.get("folders") if isinstance(data, dict) and isinstance(data.get("folders"), dict) else {}
+
+
+@contextlib.contextmanager
+def _writer():
+    top = storage.state_top(for_key=True)
+    with field_sheet.approvals_lock(top, LOCK):
+        folders = _read()
+        yield folders
+        trimmed = dict(sorted(folders.items(), key=lambda row: max([e.get("until", 0) for e in row[1].values()
+                                                                    if isinstance(e, dict)] or [0]))[-KEPT:])
+        storage.write_file(_path(create=True), json.dumps({"form": 1, "folders": trimmed}, sort_keys=True) + "\n")
+
+
+def _live(entry, now):
+    return isinstance(entry, dict) and type(entry.get("until")) in (int, float) and now < entry["until"] < now + 2 * SECONDS
+
+
+def put(folder, kind, value, answer, now=None):
+    """Record the grant for this folder: the user's answer `answer` (a tool id) to the question about `kind`."""
+    if kind not in ("level", "strong") or not ANSWER.fullmatch(str(answer)):
+        return False
+    if kind == "level" and value not in runtime.LEVELS or kind == "strong" and value != STRONG_MODEL:
+        return False
+    now = time.time() if now is None else now
+    with _writer() as folders:
+        folders.setdefault(folder, {})[kind] = {"value": value, "answer": answer, "until": now + SECONDS}
+    return True
+
+
+def held(folder, wanted, now=None):
+    """True when every grant of `wanted` ([(kind, value)]) is there and live for this folder."""
+    now = time.time() if now is None else now
+    entries = _read().get(folder)
+    entries = entries if isinstance(entries, dict) else {}
+    return all(_live(entries.get(kind), now) and entries[kind].get("value") == value for kind, value in wanted)
+
+
+def take(folder, wanted, now=None):
+    """Use the grants of `wanted` once: True when every one was live (they are then spent), else False and nothing is
+    spent."""
+    now = time.time() if now is None else now
+    with _writer() as folders:
+        entries = folders.get(folder)
+        entries = entries if isinstance(entries, dict) else {}
+        if not all(_live(entries.get(kind), now) and entries[kind].get("value") == value for kind, value in wanted):
+            return False
+        for kind, _ in wanted:
+            entries.pop(kind, None)
+    return True
+
+
+def start_pass(folder, level, strong, now=None):
+    """The word that lets the commands of one chain through, after `take` spent the grants: for the level and the stronger
+    model the chain sets (its first command may put posting back to shadow before the last one raises it again, so the
+    pass covers the target, not each command's own need)."""
+    now = time.time() if now is None else now
+    word = secrets.token_hex(16)
+    with _writer() as folders:
+        folders.setdefault(folder, {})["pass"] = {"word": word, "until": now + SECONDS, "level": level or "",
+                                                   "strong": strong or ""}
+    return word
+
+
+def in_pass(folder, wanted, word, now=None):
+    """True when `word` is the live pass of this folder and its target is what `wanted` asks for."""
+    now = time.time() if now is None else now
+    if not isinstance(word, str) or not PASS.fullmatch(word):
+        return False
+    entries = _read().get(folder)
+    entry = entries.get("pass") if isinstance(entries, dict) else None
+    return (_live(entry, now) and entry.get("word") == word
+            and all(entry.get(kind) == value for kind, value in wanted))
+
+
+def end_pass(folder, word):
+    with _writer() as folders:
+        entries = folders.get(folder)
+        if isinstance(entries, dict) and isinstance(entries.get("pass"), dict) and entries["pass"].get("word") == word:
+            entries.pop("pass", None)
+
+
+# ---------------------------------------------------------------- the hook's side
+
+def _question(identifier):
+    import setup_questions
+    return next(question for question in setup_questions.QUESTIONS if question.id == identifier)
+
+
+def question_line(kind):
+    """The fixed first sentence of the question about `kind`: what the session's question must hold for the user's answer
+    to count (setup.py questions prints the whole text; the wizard asks the same first sentence)."""
+    text = " ".join(_question(LEVEL_QUESTION if kind == "level" else STRONG_QUESTION).text.split())
+    return text.split("?", 1)[0] + "?"
+
+
+def label_for(kind, value):
+    """The label of the option that chooses `value`: the level's own option, or "Yes (Recommended)" for the stronger model
+    (opus only: another model is named in the "Other" box, which no recorded label can show). None when no option does."""
+    if kind == "level":
+        for option in _question(LEVEL_QUESTION).options:
+            words = [word for step in option.commands for word in step]
+            if "--level" in words and words[words.index("--level") + 1] == value:
+                return option.label
+        return None
+    if kind == "strong" and value == STRONG_MODEL:
+        return next((option.label for option in _question(STRONG_QUESTION).options if option.answer == "yes"), None)
+    return None
+
+
+def _option(words, name):
+    for number, word in enumerate(words):
+        if word == name and number + 1 < len(words):
+            return words[number + 1]
+        if word.startswith(name + "="):
+            return word.split("=", 1)[1]
+    return None
+
+
+def requested(command):
+    """(level, strong) a Bash `command` would turn on with --yes, read as the shell splits it, or None when it is not an
+    `observer.py enable --yes`, a `setup.py observer --yes` or a `setup.py apply --answers FILE --yes`. Either may be None.
+    A guard against mistakes: a session with shell access can write what it likes."""
+    if not isinstance(command, str) or "observer" not in command and "apply" not in command:
+        return None
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    if "--yes" not in words:
+        return None
+    for number, word in enumerate(words):
+        base = os.path.basename(word)
+        rest = [w for w in words[number + 1:] if not w.startswith("--")]
+        if base == "observer.py" and "enable" in rest[:2]:
+            return _option(words, "--level"), _option(words, "--strong-model")
+        if base == "setup.py" and rest[:1] == ["observer"]:
+            return _option(words, "--level"), _option(words, "--strong")
+        if base == "setup.py" and rest[:1] == ["apply"]:
+            path = _option(words, "--answers")
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    answers = json.loads(handle.read(CAP))
+                given = answers.get("observer") if isinstance(answers, dict) else None
+            except (TypeError, OSError, ValueError, RecursionError):
+                return None
+            if isinstance(given, dict) and given.get("mode") not in (None, "off"):
+                strong = given.get("strong") if isinstance(given.get("strong"), str) else None
+                return given.get("level") if isinstance(given.get("level"), str) else None, strong
+            return None
+    return None
+
+
+def record_from_hook(data):
+    """Before the Bash call `data`: for the level and the stronger model the command asks for, the grant when the user's
+    recorded answer to the question about it chose that very level (or the stronger model). Raises what answered raises; the
+    hook swallows it, and then the command is refused for want of a grant."""
+    import observer_sources
+    asks = requested((data.get("tool_input") or {}).get("command"))
+    if asks is None:
+        return
+    root = recortex.project_root()
+    folder = runtime.folder_key(root)
+    for kind, value in zip(("level", "strong"), asks):
+        label = label_for(kind, value) if isinstance(value, str) else None
+        if label is None:
+            continue
+        answer = observer_sources.answered(data, root, None, question_line(kind), label=label)
+        if answer:
+            put(folder, kind, value, answer)

@@ -689,7 +689,8 @@ class CliTests(Box):
     def run_cli(self, *args):
         import observer
         out = self.io.StringIO()
-        with self.contextlib.redirect_stdout(out):
+        # These tests are about what enable stores, not about who may run it: the gate has its own tests (test_jobs_enable).
+        with mock.patch("observer_grants.needs", return_value=[]), self.contextlib.redirect_stdout(out):
             code = observer.main(list(args))
         return code, json.loads(out.getvalue())
 

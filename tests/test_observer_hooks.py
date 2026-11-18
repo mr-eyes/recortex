@@ -131,7 +131,8 @@ class ObserverHookTests(unittest.TestCase):
             tty.ask.return_value = answer
         out = io.StringIO()
         with mock.patch.object(observer.recortex, "load_config", return_value={"repo": REPO, "hub": 1}), \
-                mock.patch.object(observer, "terminal", return_value=tty), contextlib.redirect_stdout(out):
+                mock.patch.object(observer, "terminal", return_value=tty), \
+                mock.patch("observer_grants.needs", return_value=[]), contextlib.redirect_stdout(out):   # who may enable: test_jobs_enable
             code = observer.main(list(args))
         return code, json.loads(out.getvalue().splitlines()[-1]), tty
 
@@ -190,7 +191,7 @@ class ObserverHookTests(unittest.TestCase):
             result, value, _ = self.cli("enable", "--mode", "automatic", "--model", "haiku", "--level", "everything", "--yes")
         self.assertEqual((0, True), (result, value["approved"]), value)
         day = datetime.datetime.fromtimestamp(self.folder_entry()["approved_at"], datetime.timezone.utc).strftime("%Y-%m-%d")
-        line = hooks.SWITCHED % day
+        line = hooks.SWITCHED % (day, "Everything", "off")
         self.assertIn(line, start().split("\n"))
         self.assertNotIn("switched on", start())  # once
         self.data = dict(self.data, session_id="session2")

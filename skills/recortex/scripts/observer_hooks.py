@@ -224,9 +224,10 @@ def _reminder(store, data):
     return line
 
 
-# Once, at the next session start after a session switched automatic mode on (the date is the only value in it).
-SWITCHED = ("recortex observer: automatic mode was switched on for this folder on %s from a session; run observer.py "
-            "disable in your own terminal to turn it off.")
+# At the next session start after a session switched automatic mode on, and again whenever the level or the stronger model
+# changes: the date, the level's name and whether paper proposals (the stronger model) are on are the only values in it.
+SWITCHED = ("recortex observer: automatic mode was switched on for this folder on %s from a session, at the level %s, "
+            "with paper proposals %s; run observer.py disable in your own terminal to turn it off.")
 TOOL_EVENTS = ("PreToolUse",)
 SCAN_ROUNDS = 16  # bounded scans one hook makes to catch up with its transcript, at the edges of a turn
 SCAN_SECONDS = 1.0  # and the time they may take; before a Bash call one scan only, so that the hold check is never late
@@ -402,10 +403,14 @@ def _switched(store):
     at = entry.get("approved_at")
     if type(at) not in (int, float) or not math.isfinite(at) or not 0 < at < 4102444800:
         return ""
-    if store.get_control("switch_told") == at:
+    level = settings.get("level") if settings.get("level") in observer_runtime.LEVELS else ""
+    strong = bool(settings.get("strong_model"))
+    told = [at, level, strong]   # told again when the level or the stronger model changes, not only on a new approval
+    if store.get_control("switch_told") == told:
         return ""
-    store.set_control("switch_told", at)
-    return SWITCHED % time.strftime("%Y-%m-%d", time.gmtime(at))
+    store.set_control("switch_told", told)
+    return SWITCHED % (time.strftime("%Y-%m-%d", time.gmtime(at)),
+                       observer_runtime.LEVEL_LABELS.get(level, "not chosen"), "on" if strong else "off")
 
 
 def _posted_key(data):
@@ -603,14 +608,15 @@ SELF_RELEASE = {"reason": "recortex observer: only the user releases a hold, swi
                           "undoes an act, in a separate terminal outside Claude Code."}
 # One row for each subcommand of observer.py: how a session's own call to it is kept in check. "safe": it only reads, or
 # only does what the settings and the caps already allow, or only does less. "grant": it changes what waits for the user
-# or GitHub, and the command refuses without the one-time grant the hook records from the user's own recorded answer to
-# that exact item's question (or without the user's own terminal). "terminal": it is the user's own command, asked on
+# or GitHub (or turns the observer on, raises its level or adds the stronger model: `enable`), and the command refuses
+# without the one-time grant the hook records from the user's own recorded answer to that exact item's question (or
+# without the user's own terminal). "terminal": it is the user's own command, asked on
 # their terminal, and the hook refuses a session's own Bash call to it (UNDO below is made from these rows). A test holds
 # this table, the parser of observer.py and the pattern together; observer.py states each row's reason at its definition.
 COMMANDS = {"status": "safe", "holds": "safe", "pending": "safe", "log": "safe", "context": "safe", "hook": "safe",
             "runtime-check": "safe", "run-worker": "safe", "record": "safe", "reconcile": "safe", "limits": "safe",
-            "enable": "safe", "pause": "safe",
-            "act": "grant", "later": "grant", "discard": "grant", "drafts": "grant",
+            "pause": "safe",
+            "enable": "grant", "act": "grant", "later": "grant", "discard": "grant", "drafts": "grant",
             "release": "terminal", "disable": "terminal", "resume": "terminal", "undo": "terminal"}
 TERMINAL_ONLY = tuple(sorted(name for name, how in COMMANDS.items() if how == "terminal"))
 UNDO = re.compile(r"observer(?:\.py)?\b.*\b(?:%s)\b" % "|".join(TERMINAL_ONLY))

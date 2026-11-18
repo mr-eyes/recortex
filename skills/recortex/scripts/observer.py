@@ -44,8 +44,10 @@ def parser():
                          help="everything that waits for the user's answer: held memories, tasks to open or close, "
                               "drafts of the paper's text, each with its question")
     pending.add_argument("--json", action="store_true", help="with --waiting: JSON instead of text")
-    # enable: safe by design, the setup wizard's own step on the user's answer to the level question; it cannot be run by a
-    # project file, and the user sees and removes it with status and disable.
+    # enable: grant. Turning the observer on, raising its level, starting posting or adding the stronger model needs the
+    # user's recorded answer to the question about it (observer_grants: the hook records a one-time grant for exactly the
+    # level, or the stronger model, the user chose) or the user's terminal; lowering anything needs neither. It cannot be
+    # run by a project file, and the user sees and removes it with status and disable.
     enable = sub.add_parser("enable", help="preview this machine's settings for this folder; --yes approves and saves them")
     enable.add_argument("--mode", choices=("shadow", "automatic"), default="shadow")
     enable.add_argument("--model", help="required: the Claude model alias or ID for the middle tier (drafts, reviews, summaries)")
@@ -56,6 +58,7 @@ def parser():
     enable.add_argument("--strong-model", help="the model that drafts the paper's text for the user to accept (default: none, "
                                                "the manuscript keeper stays off)")
     enable.add_argument("--yes", action="store_true")
+    enable.add_argument("--pass", dest="enable_pass", help=argparse.SUPPRESS)   # the word of setup.py's chain (observer_grants)
     # limits: safe, it only lowers the day's caps (a higher number is refused): a session can make the observer do less, never more.
     limits = sub.add_parser("limits", help="lower this folder's daily call caps (a new approval of the same settings); "
                                            "a higher number is refused")
@@ -567,8 +570,21 @@ def main(argv=None):
                 confirm = lambda: confirmed("enable", "This replaces this folder's settings while holds apply.")
             # Where the approval is given: the user's own terminal, or a session (Claude Code's Bash tool has none).
             given = "terminal" if sys.stdin.isatty() and sys.stdout.isatty() else "session"
+            wanted, folder = [], runtime.folder_key()
+            if args.yes and not on_terminal():
+                import observer_grants
+                wanted = observer_grants.needs(_stored_settings(repo), args.level, args.strong_model, args.mode)
+            if wanted:   # asked last, with the hold check, once every setting has been checked: the answer is for this level
+                holds_confirm = confirm
+                confirm = lambda: ("enable_unanswered" if not (observer_grants.in_pass(folder, wanted, args.enable_pass)
+                                                              or observer_grants.held(folder, wanted))
+                                   else holds_confirm() if holds_confirm else None)
             result = enable(repo, loaded, args.mode, args.yes, args.model, confirm=confirm, given=given, level=args.level,
                             sort_model=args.sort_model, strong_model=args.strong_model)
+            if wanted and result.get("approved") and not observer_grants.in_pass(folder, wanted, args.enable_pass):
+                observer_grants.take(folder, wanted)   # the user's answer is used once
+            if result.get("code") == "enable_unanswered":
+                result["note"] = observer_grants.UNANSWERED
             if result.get("code") == "terminal-required":
                 result["note"] = ("Run this enable yourself in a separate terminal, outside Claude Code: it asks you to "
                                   "confirm there.")
