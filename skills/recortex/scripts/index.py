@@ -27,6 +27,10 @@ query    answers from the index alone, with no network:
            recall        for a new memory on --issue N: the newest memories of its thread
                          with their state, open questions and untried ideas elsewhere,
                          and the words explained so far
+           tasks         the tasks (open `active` issues) with their steps and which memory checked each,
+                         the standing "To do" task, and what was changed by hand (--json: the same as data)
+           find          --words "...": the ranked packet of memories the observer reads, quoted as data
+                         (--issue N puts that thread first); needs a trusted repository and no observer
            timeline      every event in time order, filtered by --issue, --type, --since
            triage        open issues that need triage: those labeled triage, and those
                          with no role label (hub, final-record, active) and no closed-out
@@ -40,6 +44,8 @@ Examples:
   index.py query impact --path bench/out/run-0304/summary.tsv
   index.py query timeline --issue 3 --type decision
   index.py query recall --issue 5
+  index.py query tasks
+  index.py query find --words "quoted newlines"
   index.py query mind
 """
 
@@ -64,9 +70,10 @@ import plan_rules  # noqa: E402
 import recortex  # noqa: E402
 import record_format  # noqa: E402
 import storage  # noqa: E402
+import task_rules  # noqa: E402
 
 FORMAT = "2"
-DERIVE_VERSION = "4"   # what derive makes of a comment (4: a heading's zone abbreviation becomes an offset); a stored index that differs is derived again, with no network
+DERIVE_VERSION = "5"   # what derive makes of a comment (4: a heading's zone abbreviation becomes an offset; 5: the steps and marks tables); a stored index that differs is derived again, with no network
 OVERLAP = 60  # seconds read again at each incremental sync, so items stamped in the same second are not missed
 ISO_UTC = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")  # used with fullmatch
 IDENTITY = ("repo", "format", "mark")
@@ -112,6 +119,8 @@ CREATE TABLE IF NOT EXISTS evidence(comment INTEGER, ordinal INTEGER, kind TEXT,
   path TEXT, line_from INTEGER, line_to INTEGER);
 CREATE TABLE IF NOT EXISTS explanations(comment INTEGER, ordinal INTEGER, kind TEXT, word TEXT, revised INTEGER,
   meaning TEXT, why TEXT, also TEXT, story TEXT);
+CREATE TABLE IF NOT EXISTS steps(comment INTEGER, issue INTEGER, ordinal INTEGER, text TEXT);
+CREATE TABLE IF NOT EXISTS marks(source INTEGER, kind TEXT, target INTEGER, step INTEGER);
 CREATE TABLE IF NOT EXISTS comment_edit_reads(comment INTEGER PRIMARY KEY, node TEXT, stamp TEXT, edits INTEGER,
   last_edited TEXT, complete INTEGER);
 CREATE TABLE IF NOT EXISTS comment_edits(comment INTEGER, seq INTEGER, at TEXT, editor TEXT);
@@ -129,7 +138,8 @@ DERIVED = ("labels", "sections", "events", "blocks", "sources", "refs", "numbers
 # plugin on the same index leaves these tables alone; the triggers below record that it wrote comments or events, and
 # a sync of this version then derives everything again. The triggers are not in SCHEMA, which a new index runs
 # statement by statement, split at each ";"; run_sync makes them under the sync lock.
-MIND = ("links", "event_fields", "evidence", "explanations")
+MIND = ("links", "event_fields", "evidence", "explanations", "steps", "marks")
+MIND_BY_SOURCE = ("links", "marks")   # keyed by the comment that carries them (column "source"); the others by "comment"
 MIND_TRIGGERS = (
     """CREATE TRIGGER IF NOT EXISTS mind_behind_ci AFTER INSERT ON comments
   BEGIN UPDATE meta SET value = '0' WHERE key = 'mind_derived'; END""",
@@ -802,6 +812,7 @@ def run_sync(repo, hub, rebuild, timeout, deadline, timeline_cap):
     set_meta(db, "sync_complete", "1" if summary["complete"] else "0")
     db.commit()
     plan_step(db, repo)
+    task_step(db, repo)
     summary_step(db, repo)
     summary["board"] = board_step(db, repo, clock, timeout)
     db.close()
@@ -1360,15 +1371,15 @@ def derive_mind(db, comments=None):
     if comments is None:
         for table in MIND:
             db.execute("DELETE FROM %s" % table)
-        rows = db.execute("SELECT c.id, c.body, e.type FROM comments c JOIN events e ON e.comment = c.id "
+        rows = db.execute("SELECT c.id, c.issue, c.body, e.type FROM comments c JOIN events e ON e.comment = c.id "
                           "WHERE e.type IN (%s)" % ",".join("?" * len(kinds)), kinds).fetchall()
     else:
         rows = []
         for cid in sorted(set(comments)):
-            db.execute("DELETE FROM links WHERE source = ?", (cid,))
-            for table in MIND[1:]:
-                db.execute("DELETE FROM %s WHERE comment = ?" % table, (cid,))
-            row = db.execute("SELECT c.id, c.body, e.type FROM comments c JOIN events e ON e.comment = c.id "
+            for table in MIND:
+                db.execute("DELETE FROM %s WHERE %s = ?" % (table, "source" if table in MIND_BY_SOURCE else "comment"),
+                           (cid,))
+            row = db.execute("SELECT c.id, c.issue, c.body, e.type FROM comments c JOIN events e ON e.comment = c.id "
                              "WHERE c.id = ?", (cid,)).fetchone()
             if row is not None and row["type"] in kinds:
                 rows.append(row)
@@ -1377,6 +1388,11 @@ def derive_mind(db, comments=None):
         marker = record_format.parse_marker(record_format.first_lines(body)[0])
         for key, target in record_format.links(marker):
             db.execute("INSERT INTO links VALUES (?,?,?)", (cid, key, target))
+        for key, target, step in record_format.marks(marker):
+            db.execute("INSERT INTO marks VALUES (?,?,?,?)", (cid, key, target, step))
+        if kind == "steps":
+            for ordinal, text in enumerate(record_format.steps_list(body), 1):
+                db.execute("INSERT INTO steps VALUES (?,?,?,?)", (cid, row["issue"], ordinal, text))
         own = record_format.PLAIN_LABELS[kind]
         ordinal = 0
         for label, text in record_format.fields(body):
@@ -1531,6 +1547,7 @@ def consistency(db, profiles):
                                  "shows %s. sub_issues.py plan says more" % (
                                      child, parent, "its parent as #%d" % row["parent"] if row else "no parent")})
     findings.extend(plan_findings(db, profiles))
+    findings.extend(task_findings(db))
     # figures and tables without a source
     for row in db.execute("SELECT * FROM blocks WHERE has_source = 0 ORDER BY issue"):
         findings.append({"kind": "unsourced-block", "issue": row["issue"],
@@ -2017,6 +2034,177 @@ def plan_step(db, repo):
     db.commit()
 
 
+TASK_COUNT_KEYS = ("tasks", "steps", "done", "next_task", "next_step", "hand")
+CLOSED_DAYS = 30   # how long a closed task is still listed (tasks(..., closed_days=))
+MENTION_IN_FIELD = record_format.MENTION
+
+
+def active_issues(db):
+    """{number: issue row} of the issues (not pull requests) that carry the label `active`."""
+    rows = {row["number"]: row for row in db.execute("SELECT * FROM issues WHERE is_pr = 0")}
+    return {row["issue"]: rows[row["issue"]] for row in db.execute("SELECT DISTINCT issue FROM labels WHERE "
+                                                                     "lower(label) = 'active'") if row["issue"] in rows}
+
+
+def todo_task(db, allowed, active=None):
+    """(the number of the standing "To do" task, the other numbers that match): the open `active` issues titled "To do"
+    that an allowed account opened, the lowest number first (every account counts when `allowed` is empty)."""
+    counts = counts_for(allowed)
+    active = active_issues(db) if active is None else active
+    found = sorted(number for number, row in active.items() if row["state"] == "open"
+                   and task_rules.is_todo_title(row["title"]) and counts(row["author"]))
+    return (found[0] if found else None), found[1:]
+
+
+def title_told(db, row, counts):
+    """True when an allowed account opened the issue and no account that is not allowed renamed it."""
+    if not counts(row["author"]):
+        return False
+    return all(counts(actor) for (actor,) in db.execute(
+        "SELECT actor FROM timeline WHERE issue = ? AND event = 'renamed'", (row["number"],)))
+
+
+def closed_recently(stamp, days, now):
+    try:
+        then = datetime.datetime.strptime(stamp or "", "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return False
+    return 0 <= (now - then).total_seconds() <= days * 86400
+
+
+def tasks(db, allowed, closed_days=None, now=None):
+    """The tasks of the record and their steps, from told memories alone (task_rules has the rules).
+
+    A task is an `active` issue (not a pull request) that an allowed account opened; every account counts when `allowed`
+    is empty. Returns {"everyone", "todo" (the number of the standing "To do" task or None), "todo_extra" (other
+    issues with that title), "tasks": [...]}. Each task, by issue number, is a dict: issue, title, title_told, state
+    ("open" or "closed"), closed_at, todo (bool), steps (the assessed steps of task_rules.assess, each with by: None or
+    {"id", "kind", "plain", "url"} of the memory that marked it), counts (task_rules.counts), blocked, hand (True when
+    the list in the body was changed by hand: see task_rules.hand_changed), hand_steps (the steps whose box differs from
+    the computed state, for a list changed by hand), listed (the body has a task list).
+    Only open tasks are listed, and with `closed_days` also the tasks closed that many days ago or less."""
+    found = memories(db, allowed)
+    items, counts = found["items"], counts_for(allowed)
+    active = active_issues(db)
+    todo, extra = todo_task(db, allowed, active)
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    texts, steps_of = {}, {}
+    for row in db.execute("SELECT comment, ordinal, text FROM steps ORDER BY comment, ordinal"):
+        texts.setdefault(row["comment"], []).append(row["text"])
+    for cid, memory in items.items():
+        if memory["kind"] == "steps":
+            steps_of.setdefault(memory["issue"], []).append(cid)
+    marks = [(row["source"], row["kind"], row["target"], row["step"])
+             for row in db.execute("SELECT source, kind, target, step FROM marks ORDER BY rowid")]
+    urls = {row["comment"]: row["url"] for row in db.execute("SELECT comment, url FROM events")}
+    named = {}   # failures that name a task in a field, as board_rules does: told failures that no link points at
+    pointed = {target for memory in items.values() for _, target in memory["links"]}
+    for row in db.execute("SELECT comment, text FROM event_fields"):
+        memory = items.get(row["comment"])
+        if memory is not None and memory["kind"] == "failure" and row["comment"] not in pointed:
+            for match in MENTION_IN_FIELD.finditer(row["text"] or ""):
+                named.setdefault(int(match.group(1)), set()).add(row["comment"])
+    out = []
+    for number, issue in sorted(active.items()):
+        opened = issue["state"] == "open"
+        if not counts(issue["author"]):
+            continue
+        if not opened and not (closed_days and closed_recently(issue["closed_at"], closed_days, now)):
+            continue
+        standing = [{"comment": cid, "time": items[cid]["time"], "texts": texts.get(cid, []),
+                     "replaces": [target for key, target in items[cid]["links"] if key == "replaces"],
+                     "state": items[cid]["state"]} for cid in steps_of.get(number, [])]
+        failures = {cid for cid, memory in items.items() if memory["kind"] == "failure" and memory["issue"] == number
+                    and cid not in pointed} | named.get(number, set())
+        assessed = task_rules.assess(task_rules.numbered(standing), marks, items, blocked=bool(failures) and opened)
+        for step in assessed:
+            by = items.get(step["by"]) if step["by"] is not None else None
+            step["by"] = None if by is None else {"id": by["id"], "kind": by["kind"], "plain": by["plain"],
+                                                  "url": urls.get(by["id"]) or ""}
+        out.append({"issue": number, "title": issue["title"], "title_told": title_told(db, issue, counts),
+                    "state": "open" if opened else "closed", "closed_at": issue["closed_at"], "todo": number == todo,
+                    "steps": assessed, "counts": task_rules.counts(assessed), "blocked": bool(failures) and opened,
+                    "hand": opened and task_rules.hand_changed(issue["body"]),
+                    "hand_steps": task_rules.box_differences(issue["body"], assessed)
+                    if opened and task_rules.hand_changed(issue["body"]) else [],
+                    "listed": bool(task_rules.plan_list(issue["body"])[0])})
+    return {"everyone": found["everyone"], "todo": todo, "todo_extra": extra, "tasks": out}
+
+
+def task_counts(report):
+    """The counts that the session brief's tasks line is made of, as integers (see TASK_COUNT_KEYS), from tasks():
+    tasks (open tasks that have steps), steps (not dropped) and done in them, the next open step (its task's number and
+    its number; 0 and 0 when none) and hand (open tasks whose list was changed by hand). The next step is the first of
+    the lowest-numbered task that is not the "To do" task, else of that one."""
+    live = [task for task in report["tasks"] if task["state"] == "open" and task["steps"]]
+    counts = dict.fromkeys(TASK_COUNT_KEYS, 0)
+    counts.update(tasks=len(live), steps=sum(t["counts"]["steps"] for t in live),
+                  done=sum(t["counts"]["done"] for t in live),
+                  hand=sum(1 for task in report["tasks"] if task["hand"]))
+    for task in sorted(live, key=lambda task: (task["todo"], task["issue"])):
+        step = task_rules.next_open(task["steps"])
+        if step is not None:
+            counts.update(next_task=task["issue"], next_step=step["n"])
+            break
+    return counts
+
+
+def task_step(db, repo):
+    """The step of a sync that keeps meta.task_counts (JSON of integers, see task_counts) and meta.todo_task (the number
+    of the standing "To do" task, or ""), for a repository the user trusts; "" for both otherwise. Local only: it reads
+    the index and writes two meta keys, and it never raises."""
+    try:
+        allowed = recortex.allowed_users(repo)
+        if allowed and mind_ready(db):
+            report = tasks(db, allowed)
+            value, todo = json.dumps(task_counts(report), sort_keys=True), str(report["todo"] or "")
+        else:
+            value, todo = "", ""
+    except Exception:  # noqa: BLE001 - the record's sync is done; the task counts are a summary of it
+        value, todo = "", ""
+    set_meta(db, "task_counts", value)
+    set_meta(db, "todo_task", todo)
+    db.commit()
+
+
+def task_findings(db):
+    """Consistency findings about marks (`mark-target`): a told memory carries a mark that counts for nothing, because
+    the comment it points at is no steps memory, is not on an active issue, is not told or was replaced, or has no such
+    step. Never edits anything."""
+    repo = get_meta(db, "repo") or ""
+    allowed = recortex.allowed_users(repo) if repo else set()
+    if not allowed:
+        return []
+    found = memories(db, allowed)["items"]
+    every = {row["comment"]: row for row in db.execute("SELECT comment, issue, type FROM events")}
+    active = set(active_issues(db))
+    count = {}
+    for row in db.execute("SELECT comment, COUNT(*) AS n FROM steps GROUP BY comment"):
+        count[row["comment"]] = row["n"]
+    out = []
+    for row in db.execute("SELECT source, kind, target, step FROM marks ORDER BY rowid"):
+        source = found.get(row["source"])
+        if source is None or source["kind"] not in record_format.MARK_RULES.get(row["kind"], ()) or source["reconstructed"]:
+            continue
+        target, why = found.get(row["target"]), None
+        if row["target"] not in every:
+            why = "there is no such comment"
+        elif every[row["target"]]["type"] != "steps":
+            why = "it is not a steps memory"
+        elif every[row["target"]]["issue"] not in active:
+            why = "its issue is not an active task"
+        elif target is None:
+            why = "it is not told (an account that is not allowed, or an edit)"
+        elif target["state"] == "replaced":
+            why = "a later steps memory replaced it"
+        elif row["step"] > count.get(row["target"], 0):
+            why = "it lists only %d step%s" % (count.get(row["target"], 0), "" if count.get(row["target"], 0) == 1 else "s")
+        if why:
+            out.append({"kind": "mark-target", "issue": source["issue"], "detail": "memory %d marks step %d of comment %d "
+                        "(%s=), which counts for nothing: %s" % (row["source"], row["step"], row["target"], row["kind"], why)})
+    return out
+
+
 POSTED = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 
 
@@ -2213,6 +2401,30 @@ def print_plan(report):
             print("gap %s: %s" % (name, clean(json.dumps(gap[name]), 400)))
 
 
+def print_tasks(report):
+    """The text of query tasks: every value from the record through clean(), under DATA_HEADER."""
+    print(DATA_HEADER)
+    if report["todo_extra"]:
+        print("More than one open task is titled \"To do\": the standing one is #%d; the others are %s (leave them or "
+              "close them)." % (report["todo"], ", ".join("#%d" % n for n in report["todo_extra"])))
+    for task in report["tasks"]:
+        counts = task["counts"]
+        print("#%d  %s  (%s%s)  %d of %d steps done%s%s" % (
+            task["issue"], clean(task["title"]) if task["title_told"] else "(title not told)", task["state"],
+            ", the standing to-do list" if task["todo"] else "", counts["done"], counts["steps"],
+            ", %d dropped" % counts["dropped"] if counts["dropped"] else "",
+            "; the list in the body was changed by hand" if task["hand"] else ""))
+        for step in task["steps"]:
+            by = step["by"]
+            box = {"done": "x", "dropped": "-"}.get(step["state"], " ")
+            print("  %d. [%s] %s%s%s" % (step["n"], box, clean(step["text"]),
+                                        "" if step["state"] in ("done", "open") else "  (%s)" % step["state"],
+                                        "" if by is None else "  <- %s %d: %s %s" % (
+                                            clean(by["kind"], 20), by["id"], clean(by["plain"] or "no plain line", 120),
+                                            clean(by["url"], 120))))
+    print("%d task(s)" % len(report["tasks"]))
+
+
 def describe_index(db):
     counts = {table: db.execute("SELECT COUNT(*) AS n FROM %s" % table).fetchone()["n"]
               for table in ("issues", "comments", "timeline", "sections", "events", "blocks", "sources", "numbers")}
@@ -2245,8 +2457,10 @@ def main(argv=None):
                         "folder, for at most background_sync_seconds (default 300)")
     p.add_argument("--lock-held", action="store_true", help=argparse.SUPPRESS)
     p = sub.add_parser("query", help="answer from the index, with no network")
-    p.add_argument("name", choices=["brief", "consistency", "impact", "mind", "plan", "recall", "timeline", "triage"])
+    p.add_argument("name", choices=["brief", "consistency", "find", "impact", "mind", "plan", "recall", "tasks", "timeline",
+                                    "triage"])
     p.add_argument("--path")
+    p.add_argument("--words", help="find: the words to look for in the record's memories")
     p.add_argument("--commit")
     p.add_argument("--issue", type=int)
     p.add_argument("--type")
@@ -2320,6 +2534,40 @@ def main(argv=None):
             print(json.dumps(report, indent=1))
         else:
             print_plan(report)
+        return 0
+    if args.name == "tasks":
+        if not mind_ready(db):
+            print(NOT_READY)
+            return 1
+        allowed = recortex.allowed_users(repo)
+        if not allowed:
+            print("tasks: this repository is not in your trusted list; tasks are told only from the accounts you allow")
+            return 1
+        report = tasks(db, allowed, closed_days=CLOSED_DAYS)
+        if args.json:
+            print(json.dumps(report, indent=1, sort_keys=True))
+        else:
+            print_tasks(report)
+        return 0
+    if args.name == "find":
+        if not args.words or not args.words.strip():
+            parser.error("find needs --words \"...\", what to look for")
+        if not mind_ready(db):
+            print(NOT_READY)
+            return 1
+        allowed = recortex.allowed_users(repo)
+        if not allowed:
+            print("find: this repository is not in your trusted list; the record is read only from the accounts you "
+                  "allow")
+            return 1
+        import observer_context  # noqa: E402 - the ranked packet the observer reads, framed as quoted data
+        packet = observer_context.build_packet(db, repo, allowed, query=args.words[:2000], issue=args.issue)
+        if args.json:
+            print(json.dumps({key: packet[key] for key in ("text", "selected", "incomplete", "omitted_groups")},
+                             indent=1))
+        else:
+            print(DATA_HEADER)
+            print(packet["text"])
         return 0
     if args.name == "recall":
         if args.issue is None:
