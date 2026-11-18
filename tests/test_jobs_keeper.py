@@ -232,10 +232,9 @@ class KeeperBox(tw.WritingBox):
         self.mode("review")
         self.ready()
         self.in_process({"CLAUDE_CONFIG_DIR": None})
-        global observer_keeper, observer_runtime, observer_store
-        import observer_keeper  # noqa: E402
-        import observer_runtime  # noqa: E402
-        import observer_store  # noqa: E402
+        import observer_keeper
+        import observer_runtime
+        import observer_store
         self.keeper, self.runtime, self.store_module = observer_keeper, observer_runtime, observer_store
         self.calls = []
         self.options = dict(SETTINGS)
