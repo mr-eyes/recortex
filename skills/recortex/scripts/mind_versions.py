@@ -39,7 +39,8 @@ REWORD_RATIO = 0.5       # paragraphs whose words match at least this much are o
 OPS = ("same", "add", "del", "change", "cut")
 RUNS = ("same", "add", "del")
 TOKEN = re.compile(r"\s+|\S+\s*")   # a word with the whitespace after it; whitespace alone only at the start
-JUNK_SHARE = 5           # autojunk works only where one item is more than a fifth of what is matched
+JUNK_SHARE = 5           # autojunk is used where one item is more than a fifth of the list that is matched
+MATCH_PAIRS = 100000     # places that difflib may walk for one match (copies in one list times copies in the other); more is autojunk or no match
 
 
 def paragraphs(text):
@@ -69,13 +70,59 @@ def merge_runs(runs):
     return [{"t": kind, "text": text} for kind, text in out]
 
 
+class NoMatches:
+    """What matcher() gives when difflib would walk too many places: it finds no match at all, so the two lists are replaced as
+    wholes, as the budget of pairs does for paragraphs. It answers what the callers ask of a SequenceMatcher."""
+    autojunk = None
+
+    def __init__(self, first, second):
+        self.first, self.second = first, second
+
+    def get_opcodes(self):
+        a, b = len(self.first), len(self.second)
+        if a and b:
+            return [("replace", 0, a, 0, b)]
+        return [("delete", 0, a, 0, 0)] if a else [("insert", 0, 0, 0, b)] if b else []
+
+    def real_quick_ratio(self):
+        return 0.0
+
+    quick_ratio = ratio = real_quick_ratio
+
+
+def walked(first, counts, popular=None):
+    """The pairs of places difflib walks to find a match: for each item the copies it has in `first` times the copies it has in
+    the second list (`counts`), without the items that have more than `popular` copies there when autojunk drops them. Counting
+    stops once the sum is over MATCH_PAIRS."""
+    total = 0
+    for item, n in collections.Counter(first).items():
+        copies = counts.get(item, 0)
+        if copies and (popular is None or copies <= popular):
+            total += n * copies
+            if total > MATCH_PAIRS:
+                break
+    return total
+
+
 def matcher(first, second):
-    """difflib.SequenceMatcher over two lists of strings, with autojunk only where one item is more than a fifth of the second
-    list (and the list is long enough for difflib to apply it at all): that is text made to be slow ("a a a ..."). On prose
-    autojunk would drop the common words as anchors, and a stretch of them between two changes would be marked as changed
-    too."""
-    top = max(collections.Counter(second).values()) if second else 0
-    return difflib.SequenceMatcher(None, first, second, autojunk=len(second) > 200 and top * JUNK_SHARE > len(second))
+    """A matcher over two lists of strings (the words of a paragraph, the paragraphs of a text, the keys of the blocks of a part),
+    whose work is bounded at every level by one rule. difflib walks, for each item, all its copies in the first list against all
+    its copies in the second, and with a few items over and over that is minutes: ten thousand paragraphs from six values are 16
+    million pairs for each match it looks for. So:
+      - prose, and any list that walks MATCH_PAIRS pairs or fewer, is matched with autojunk off (a stretch of common words between
+        two changes stays unchanged, and a reworded paragraph is marked by its words);
+      - a list that walks more, or one with an item over a fifth of the second list, is matched with autojunk on, which drops the
+        items with many copies as anchors (and does so only from 200 items on), when what is left walks MATCH_PAIRS or fewer;
+      - else nothing is matched, and the two lists are replaced whole."""
+    counts = collections.Counter(second)
+    size = len(second)
+    top = max(counts.values()) if counts else 0
+    dominated = size > 200 and top * JUNK_SHARE > size
+    if not dominated and walked(first, counts) <= MATCH_PAIRS:
+        return difflib.SequenceMatcher(None, first, second, autojunk=False)
+    if size >= 200 and walked(first, counts, size // 100 + 1) <= MATCH_PAIRS:
+        return difflib.SequenceMatcher(None, first, second, autojunk=True)
+    return NoMatches(first, second)
 
 
 def word_runs(old, new):

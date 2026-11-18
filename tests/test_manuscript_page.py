@@ -267,7 +267,7 @@ class DifferTests(unittest.TestCase):
         self.assertEqual(180, edits)
         self.assertEqual(0, worse)
 
-    def test_autojunk_is_on_only_where_one_item_is_over_a_fifth_of_a_long_list(self):
+    def test_autojunk_is_on_where_one_item_is_over_a_fifth_of_a_long_list_and_not_on_prose(self):
         prose = self.PARAGRAPH.split()
         self.assertFalse(mind_versions.matcher(prose, prose).autojunk)   # prose: its common words stay anchors
         self.assertFalse(mind_versions.matcher(["a", "b", "c", "d", "e"] * 100, ["a", "b", "c", "d", "e"] * 100).autojunk)   # a fifth, not over it
@@ -275,6 +275,70 @@ class DifferTests(unittest.TestCase):
         self.assertTrue(mind_versions.matcher(["a", "b"] * 150, ["a", "b"] * 150).autojunk)
         self.assertFalse(mind_versions.matcher(["a"] * 100, ["a"] * 100).autojunk)   # under 200 items difflib applies none, and none is asked
         self.assertFalse(mind_versions.matcher([], []).autojunk)
+
+    @staticmethod
+    def took(work):
+        import time
+        started = time.time()
+        result = work()
+        return time.time() - started, result
+
+    def test_a_list_that_walks_too_many_places_is_matched_with_autojunk_or_not_at_all(self):
+        rng = random.Random(1403)
+        six = lambda count: [rng.choice("abcdef") for _ in range(count)]
+        # ten thousand items from six values: 16 million places for each match, none of them over a fifth of the list
+        kind = lambda m: "plain" if m.autojunk is False else "junk" if m.autojunk else "none"
+        self.assertEqual("junk", kind(mind_versions.matcher(six(10000), six(10000))))   # what is left to walk is nothing: all six are common
+        # a hundred values with a hundred copies each: not common enough for autojunk, and a million places: nothing is matched
+        periodic = ["p%d" % (n % 100) for n in range(10000)]
+        self.assertEqual("none", kind(mind_versions.matcher(periodic, periodic)))
+        self.assertEqual([("replace", 0, 10000, 0, 10000)], mind_versions.matcher(periodic, periodic).get_opcodes())
+        self.assertEqual([("delete", 0, 3, 0, 0)], mind_versions.NoMatches(["a", "b", "c"], []).get_opcodes())
+        self.assertEqual([("insert", 0, 0, 0, 2)], mind_versions.NoMatches([], ["a", "b"]).get_opcodes())
+        self.assertEqual([], mind_versions.NoMatches([], []).get_opcodes())
+        self.assertEqual((0.0, 0.0, 0.0), (mind_versions.NoMatches(["a"], ["a"]).real_quick_ratio(),
+                                           mind_versions.NoMatches(["a"], ["a"]).quick_ratio(), mind_versions.NoMatches(["a"], ["a"]).ratio()))
+        # a short second list cannot be helped by autojunk (difflib applies it from 200 items): many places there are no match
+        self.assertEqual("none", kind(mind_versions.matcher(["a", "b"] * 5000, ["a", "b"] * 99)))
+        # prose and the lists the rest of the tests use walk far fewer
+        self.assertEqual("plain", kind(mind_versions.matcher(self.PARAGRAPH.split(), self.PARAGRAPH.split())))
+        self.assertEqual("plain", kind(mind_versions.matcher(["a", "b", "c", "d", "e"] * 100, ["a", "b", "c", "d", "e"] * 100)))
+        self.assertLessEqual(5 * 100 * 100, mind_versions.MATCH_PAIRS)
+
+    def test_ten_thousand_items_from_six_values_are_compared_in_well_under_a_second_at_every_level(self):
+        rng = random.Random(1404)
+        six = lambda count: [rng.choice("abcdef") for _ in range(count)]
+        first, second = six(10000), six(10000)
+        # the words of a paragraph (the matcher itself, then pairs() with the words it is given; past MAX_WORDS it says changed)
+        seconds, _ = self.took(lambda: mind_versions.matcher(first, second).get_opcodes())
+        self.assertLess(seconds, 1)
+        one, two = blocks(" ".join(first))[0], blocks(" ".join(second))[0]
+        seconds, how = self.took(lambda: mind_versions.pairs(one, two, [6000, 4000000], first, second))
+        self.assertLess(seconds, 1)
+        self.assertEqual("changed", how)
+        words_a, words_b = " ".join(six(1500)), " ".join(six(1500))   # the most that word_runs matches
+        seconds, runs = self.took(lambda: mind_versions.word_runs(words_a, words_b))
+        self.assertLess(seconds, 1)
+        self.assertEqual(words_a, "".join(r["text"] for r in runs if r["t"] != "add"))
+        self.assertEqual(words_b, "".join(r["text"] for r in runs if r["t"] != "del"))
+        # the paragraphs of a text (diff_text) and the blocks of a part (since)
+        old, new = "\n\n".join(first), "\n\n".join(second)
+        seconds, ops = self.took(lambda: mind_versions.diff_text(old, new))
+        self.assertLess(seconds, 1)
+        self.assertTrue(ops)
+        seconds, rows = self.took(lambda: mind_versions.since(blocks(old), blocks(new)))
+        self.assertLess(seconds, 1)
+        self.assertEqual(10000, len({r["i"] for r in rows if r["k"] != "removed"}))   # every new block is told once
+        self.assertEqual(10000, len({r["j"] for r in rows if r["k"] not in ("added",)}))   # and every old block
+        # a hundred values over and over with an edit in every fiftieth: not common enough for autojunk, and 1,000,000 places
+        periodic = ["p%d" % (n % 100) for n in range(10000)]
+        edited = [("q%d" % n if n % 50 == 0 else word) for n, word in enumerate(periodic)]
+        old, new = "\n\n".join(periodic), "\n\n".join(edited)
+        seconds, _ = self.took(lambda: mind_versions.diff_text(old, new))
+        self.assertLess(seconds, 1)
+        seconds, rows = self.took(lambda: mind_versions.since(blocks(old), blocks(new)))
+        self.assertLess(seconds, 1)
+        self.assertEqual(10000, len({r["i"] for r in rows if r["k"] != "removed"}))
 
     def test_the_slow_inputs_stay_bounded_in_every_function_that_matches(self):
         import time
