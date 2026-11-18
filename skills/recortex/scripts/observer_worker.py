@@ -13,6 +13,7 @@ import re
 import sqlite3
 import subprocess
 import time
+import unicodedata
 
 import index
 import mind_model
@@ -415,6 +416,28 @@ def _flat(text):
     return " ".join((text or "").split())
 
 
+TITLE_MAX = 120
+TITLE_SHAPES = re.compile(r"[<>`|\\]|!\[|\]\(|@|#[0-9]|://|www\.", re.ASCII)
+
+
+def title_problem(title, config, repo):
+    """Why the title a model gave a new task is refused, or None. A title is model text that GitHub shows as an issue's
+    name, so it goes through what a body goes through: no secret and none of the project's restricted patterns
+    ("privacy"), nothing of this machine, no address, mention, markup or reference (outbound_problem), no banned word
+    ("title"); and it must be one plain line of at most TITLE_MAX characters, with no control or bidi character."""
+    if not isinstance(title, str) or not title.strip() or len(title) > TITLE_MAX:
+        return "title"
+    if any(unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") for c in title) or TITLE_SHAPES.search(title):
+        return "title"
+    if privacy_problem(title, config):
+        return "privacy"
+    if observer_publisher.outbound_problem(title, repo, status_ok=True):
+        return "title"
+    if any(f.level == "error" for f in lint_drafts.lint_text(title, kind="generic", config=config)):
+        return "title"
+    return None
+
+
 def _agreed(body):
     """(form, quote) of a steps memory's Agreed field: the form as record_format.agreed_form reads it ("dialog", "chat" or
     None) and the user's quoted words, whitespace collapsed."""
@@ -467,6 +490,10 @@ def candidate_problem(candidate, supplied, context, config, repo=None, plan=None
     if (kind == "steps" and not {"plan_agreed", "to_do"} & set(allowed)) or (marks and "step_done" not in allowed) \
             or (links and "paper_part" not in allowed):
         return "level"
+    if "task_title" in candidate:
+        problem = title_problem(candidate["task_title"], config, repo or config.get("repo", ""))
+        if problem:
+            return problem
     targets = {target["issue"] for target in context["targets"]}
     if kind == "steps":
         role = plan.get("role") or ("task" if candidate.get("task_title") else "todo")

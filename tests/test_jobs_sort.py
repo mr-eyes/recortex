@@ -400,6 +400,69 @@ class Refusals(Scripted):
                          (event['issue'], event['task_title'], event['topic'], event['kind']))
         self.assertEqual(([], []), (event['marks'], event['links']))
 
+    def title_case(self, title, reason):
+        """A new task whose title is `title` is refused before any review, and nothing is queued."""
+        self.assertRefused(reason, [self.agreed_titled([1, 2], title)], [label('plan_agreed', sources=[1, 2])])
+        with store.Store(REPO, config=self.config) as db:
+            self.assertEqual([], db.events())
+
+    def agreed_titled(self, sids, title):
+        return draft('steps', STEPS, sids, issue=0, title=title, topic=2)
+
+    def test_title_a_secret_in_the_title_of_a_new_task(self):
+        self.title_case('Rotate ghp_' + 'A' * 36, 'privacy')
+
+    def test_title_a_restricted_pattern_in_the_title_of_a_new_task(self):
+        self.config['restricted_patterns'] = [{'name': 'site code', 'pattern': '\\bST-[0-9]{3}\\b', 'example': 'ST-204'}]
+        self.title_case('Clean up site ST-204', 'privacy')
+
+    def test_title_a_local_path_in_the_title_of_a_new_task(self):
+        self.title_case('Fix the reader in /home/alice/project', 'title')
+
+    def test_title_a_banned_word_in_the_title_of_a_new_task(self):
+        self.config['banned_words'] = ['frobnicate']
+        self.title_case('Frobnicate the reader', 'title')
+
+    def test_title_a_control_or_bidi_character_in_the_title_of_a_new_task(self):
+        self.title_case('Fix the reader\u202e gnp.exe', 'title')
+
+    def test_title_a_line_break_in_the_title_of_a_new_task(self):
+        self.title_case('Fix the reader\nthen the writer', 'title')
+
+    def test_title_an_over_long_title_of_a_new_task(self):
+        # The drafter's schema caps the title, so such a draft fails whole: it costs a draft call, queues nothing and
+        # reaches no reviewer. The check in code holds for a candidate that got past it some other way.
+        report = self.staged([self.agreed_titled([1, 2], 'x' * (worker.TITLE_MAX + 1))],
+                             [label('plan_agreed', sources=[1, 2])])
+        self.assertEqual((['sort', 'draft'], 'draft-failed', []), (self.purposes(), report['code'], report['ready']))
+        self.assertEqual('title', worker.title_problem('x' * (worker.TITLE_MAX + 1), {'repo': REPO}, REPO))
+        self.assertEqual('title', worker.title_problem('', {'repo': REPO}, REPO))
+        self.assertEqual('title', worker.title_problem('   ', {'repo': REPO}, REPO))
+        self.assertIsNone(worker.title_problem('x' * worker.TITLE_MAX, {'repo': REPO}, REPO))
+
+    def test_title_markup_in_the_title_of_a_new_task(self):
+        self.title_case('Fix <b>the</b> reader', 'title')
+
+    def test_title_a_mention_in_the_title_of_a_new_task(self):
+        self.title_case('Thanks @hubot for the reader', 'title')
+
+    def test_title_an_outside_address_in_the_title_of_a_new_task(self):
+        self.title_case('See https://collector.example.test/x', 'title')
+
+    def test_title_a_reference_in_the_title_of_a_new_task(self):
+        self.title_case('Redo the work of #12', 'title')
+
+    def test_title_a_backtick_in_the_title_of_a_new_task(self):
+        self.title_case('Use `code` here', 'title')
+
+    def test_title_a_plain_title_of_the_longest_length_stands(self):
+        report = self.staged([self.agreed_titled([1, 2], 'x' * worker.TITLE_MAX)], [label('plan_agreed', sources=[1, 2])])
+        self.assertEqual(['sort', 'draft', 'review'], self.purposes())
+        self.assertEqual(1, len(report['ready']))
+
+    def test_title_the_to_do_task_a_first_item_opens_has_a_fixed_title(self):
+        self.assertIsNone(worker.title_problem('To do', {'repo': REPO}, REPO))
+
     def test_steps_authority_a_new_task_that_cites_no_approval(self):
         self.assertRefused('steps-authority', [self.agreed([1])], [label('plan_agreed', sources=[1, 2])])
 
