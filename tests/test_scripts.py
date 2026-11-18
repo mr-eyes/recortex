@@ -2289,8 +2289,11 @@ class HookTests(RecordSandbox):
         sizes = dict(re.findall(r"===== ([a-z-]+) \(\w+\): ([0-9]+) characters", printed.stdout))
         import brief as brief_module
         # 0.6.0's, with the one sentence at start, the In short of the example's resume block (402 characters) in the session
-        # brief and the sentence that tells the summary to be kept (187) in the compaction payload
-        self.assertEqual({"session-start": str(2773 + len(brief_module.SAY) + 1 + 402), "subagent-start": "1099",
+        # brief and the sentence that tells the summary to be kept (187) in the compaction payload; and 1.5.0's report line,
+        # since the example's two active tasks have had no memory for more than 14 days
+        idle = "2 tasks had no memory in %d days: #3, #7." % brief_module.IDLE_DAYS
+        self.assertEqual({"session-start": str(2773 + len(brief_module.SAY) + 1 + 402 + len(idle) + 1),
+                          "subagent-start": "1099",
                           "prompt-submit": "151", "pre-compact": str(635 + 187)}, sizes)
         built = self.tool("mind.py", gh="false")
         self.assertEqual(0, built.returncode, built.stdout + built.stderr)

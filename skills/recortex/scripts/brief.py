@@ -27,6 +27,7 @@ import names
 import field_sheet
 import board_api
 import board_rules
+import task_rules
 
 BEGIN = "===== BEGIN PROJECT STATUS DATA (recortex) ====="
 END = "===== END PROJECT STATUS DATA ====="
@@ -78,10 +79,25 @@ WRITING_UNREADABLE = ("recortex: the writing setting of this machine cannot be r
                       "hooks.py --doctor.")
 
 
+TASKS_BY_HAND = ("Tasks: %d %s changed by hand on GitHub. Load the recortex skill and run its tasks.py status.")
+TASK_LINES = 5          # lines "- #14 step 4: (text)" inside the data frame, at most
+STEP_CAP = 100          # characters of a step's text the brief shows
+IDLE_DAYS = 14          # an open task with no told memory for this long is reported
+REPORT_NUMBERS = 10     # issue numbers one report line names, at most
+# Format and bidirectional controls: a step's words never carry them into a payload.
+HIDDEN = re.compile("[\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u206f\ufeff\U000e0000-\U000e007f]")
+
 def defuse(text):
     """Keep data from imitating the delimiters that frame it, and from spanning lines."""
     text = re.sub(r"[\x00-\x1f\x7f]+", " ", text)
     return re.sub(r"=(?==)", "= ", text)
+
+
+def step_text(text):
+    """A step's words for the data frame: format and bidirectional controls out, the delimiters defused (defuse), one line,
+    at most STEP_CAP characters."""
+    text = " ".join(defuse(HIDDEN.sub("", text or "")).split())
+    return text if len(text) <= STEP_CAP else text[:STEP_CAP - 3] + "..."
 
 
 def cap(text, limit):
@@ -256,6 +272,126 @@ class Record:
                 "the paper\" could mean the record's text or the file, ask which." % (
                     changed, "" if changed == 1 else "s", "it" if changed == 1 else "them")]
 
+    def task_counts(self):
+        """(counts, bad): meta.task_counts as the sync wrote it, a dict of integers from 0 to PLAN_RANGE under exactly the
+        keys of index.TASK_COUNT_KEYS (the steps done never more than the steps), or None when there is none; bad is True
+        when the value is anything else. Nothing but these integers is ever read from it."""
+        raw = index.get_meta(self.db, "task_counts")
+        if not raw:
+            return None, False
+        try:
+            data = json.loads(raw)
+        except (ValueError, RecursionError):
+            return None, True
+        if not isinstance(data, dict) or set(data) != set(index.TASK_COUNT_KEYS) or any(
+                type(value) is not int or not 0 <= value <= PLAN_RANGE for value in data.values()) \
+                or data["done"] > data["steps"]:
+            return None, True
+        return data, False
+
+    def step_totals(self):
+        """(steps done, steps) over the open tasks that have steps, or None when there are none: two checked integers."""
+        counts, _ = self.task_counts()
+        return (counts["done"], counts["steps"]) if counts and counts["tasks"] and counts["steps"] else None
+
+    def task_lines(self):
+        """The fixed lines about tasks, outside the data frame: wording and checked integers, nothing of a step. One line of
+        counts for the open tasks that have steps, and one when a task's list was changed by hand on GitHub (the session then
+        asks the user, as the skill says)."""
+        counts, bad = self.task_counts()
+        if bad or not counts:
+            return []
+        out = []
+        if counts["tasks"]:
+            line = "Tasks: %d open, %d of %d steps done" % (counts["tasks"], counts["done"], counts["steps"])
+            if counts["next_task"]:
+                line += "; next: step %d of #%d" % (counts["next_step"], counts["next_task"])
+            out.append(line + ".")
+        if counts["hand"]:
+            out.append(TASKS_BY_HAND % (counts["hand"], "list was" if counts["hand"] == 1 else "lists were"))
+        return out
+
+    def task_items(self, limit=TASK_LINES):
+        """The lines for inside the data frame: the next open step of up to `limit` open tasks, "- #14 step 4: (text)", the
+        text through step_text (the caller adds the heading). [] when the counts say there is nothing to show. A step's words come from a told steps
+        memory only (index.tasks)."""
+        counts, bad = self.task_counts()
+        if bad or not counts or not counts["tasks"] or limit < 1:
+            return []
+        try:
+            report = index.tasks(self.db, self.allowed)
+        except sqlite3.Error:
+            return []
+        rows = []
+        for task in sorted((t for t in report["tasks"] if t["state"] == "open" and t["steps"]),
+                           key=lambda t: (t["todo"], t["issue"])):
+            step = task_rules.next_open(task["steps"])
+            if step is not None:
+                rows.append("- #%d step %d: %s" % (task["issue"], step["n"], step_text(step["text"])))
+            if len(rows) == limit:
+                break
+        return rows
+
+    def idle_tasks(self, now=None):
+        """The numbers of the open tasks (`active` issues an allowed account opened, the standing "To do" task apart) that have
+        had no told memory for IDLE_DAYS days, counted from the newer of their opening and their newest memory."""
+        if not self.allowed:
+            return []
+        try:
+            now = now or datetime.datetime.now(datetime.timezone.utc)
+            limit = (now - datetime.timedelta(days=IDLE_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            todo = index.todo_task(self.db, self.allowed)[0]
+            numbers = [n for n in self.open_with("active")
+                       if n != todo and (self.issues[n]["author"] or "").lower() in self.allowed]
+            if not numbers:
+                return []
+            newest = {}
+            for item in index.memories(self.db, self.allowed)["items"].values():
+                newest[item["issue"]] = max(item["time"], newest.get(item["issue"], ""))
+            return [n for n in numbers
+                    if max(newest.get(n, ""), record_format.sort_key(self.issues[n]["created_at"])) < limit]
+        except sqlite3.Error:
+            return []
+
+    def stale_bodies(self):
+        """The numbers of the topic issues (label `final-record`) whose body was last written before the newest told result,
+        decision, correction or failure on them: what `index.py query consistency` calls stale-body, from told memories alone.
+        A body outside the paper's plan is reported like any other and never edited."""
+        if not self.allowed:
+            return []
+        try:
+            newest = {}
+            for item in index.memories(self.db, self.allowed)["items"].values():
+                if item["kind"] in ("result", "decision", "correction", "failure"):
+                    newest[item["issue"]] = max(item["time"], newest.get(item["issue"], ""))
+            out = []
+            for number in sorted(newest):
+                issue = self.issues.get(number)
+                if issue is not None and "final-record" in self.labels.get(number, []) and \
+                        newest[number] > record_format.sort_key(issue["last_edited_at"] or issue["created_at"]):
+                    out.append(number)
+            return out
+        except (sqlite3.Error, KeyError, IndexError):
+            return []
+
+    def report_lines(self, now=None):
+        """The two reports of the session brief, outside the data frame: fixed words and issue numbers (at most
+        REPORT_NUMBERS each). They give way after the task lines."""
+        def named(numbers):
+            return ", ".join("#%d" % n for n in numbers[:REPORT_NUMBERS]) + (
+                ", and %d more" % (len(numbers) - REPORT_NUMBERS) if len(numbers) > REPORT_NUMBERS else "")
+
+        out = []
+        idle = self.idle_tasks(now)
+        if idle:
+            out.append("%d task%s had no memory in %d days: %s." % (len(idle), "" if len(idle) == 1 else "s", IDLE_DAYS,
+                                                                    named(idle)))
+        stale = self.stale_bodies()
+        if stale:
+            out.append("%d topic bod%s older than %s newest result: %s." % (
+                len(stale), "y is" if len(stale) == 1 else "ies are", "its" if len(stale) == 1 else "their", named(stale)))
+        return out
+
     def board_moved(self):
         """The numbers of the cards someone moved by hand; [] when no board was read or the index cannot say."""
         try:
@@ -335,6 +471,9 @@ class Record:
         counts, _ = self.plan_counts() if self.plan() else (None, False)
         if counts and counts["issue"]:
             key.append(counts["against"])
+        totals = self.step_totals()
+        if totals:
+            key.append(list(totals))   # only for a project with tasks, so that another project's fingerprint is as before
         return json.dumps(key)
 
 
@@ -354,7 +493,7 @@ def resume_days(config):
     return min(30, max(1, value))
 
 
-def session_lines(record, topic_limit, active_limit):
+def session_lines(record, topic_limit, active_limit, task_items=()):
     lines = []
     if record.hub:
         lines.append("Hub: #%d %s %s" % (record.hub, record.title(record.hub), record.url(record.hub)))
@@ -374,6 +513,9 @@ def session_lines(record, topic_limit, active_limit):
         lines.append("- #%d %s" % (number, record.title(number)))
     if len(active) > active_limit:
         lines.append("- and %d more" % (len(active) - active_limit))
+    if task_items:   # already through step_text; the first list to give way when the brief does not fit
+        lines.append("Next steps of open tasks:")
+        lines.extend(task_items)
     untriaged = [row["issue"] for row in index.triage(record.db, record.allowed)]
     if untriaged:
         lines.append("%d issue%s need%s triage: %s%s" % (
@@ -396,7 +538,9 @@ def session_payload(record, fresh, reserve=0):
     board = record.board_note()  # fixed wording, outside the data frame; empty for a project without a board
     head = ["recortex record brief for %s (%s)." % (record.repo, record.freshness(fresh)),
             "Rules: " + RULES % record.repo, ALIAS, SAY] + ([field] if field else []) + ([board] if board else []) + \
-        record.plan_lines() + record.writing_lines() + record.own_paper_lines() + ["", BEGIN, DATA_NOTE, ""]
+        record.plan_lines() + record.writing_lines() + record.own_paper_lines() + record.task_lines()
+    reports = record.report_lines()   # fixed words and numbers; they give way after the task lines below
+    opening = ["", BEGIN, DATA_NOTE, ""]
     resume = index.get_meta(record.db, "resume") or ""
     note = index.get_meta(record.db, "resume_note") or "not read"
     days = resume_days(record.config)
@@ -410,13 +554,20 @@ def session_payload(record, fresh, reserve=0):
     if index.get_meta(record.db, "resume_ignored"):
         tail_lines.append(defuse(index.get_meta(record.db, "resume_ignored")))
     end = "\n" + END + "\n" + PROTOCOL
-    fixed = len("\n".join(head + tail_lines)) + len(end) + 2
     resume_floor = min(len(defuse_block(resume)), 1500) if resume else 10
-    body = []
-    for topics, active in ((15, 20), (8, 10), (4, 5), (2, 3), (0, 0)):
-        body = session_lines(record, topics, active)
+    rows = record.task_items()
+    # What gives way, in this order: the lines of next steps (all of them, then three, then one), then the two reports, then
+    # the other lists, as before.
+    tries = [(15, 20, n, True) for n in sorted({len(rows), min(3, len(rows)), min(1, len(rows)), 0}, reverse=True)]
+    tries += [(15, 20, 0, False)] if reports else []
+    tries += [(8, 10, 0, False), (4, 5, 0, False), (2, 3, 0, False), (0, 0, 0, False)]
+    for topics, active, steps, shown in tries:
+        head_now = head + (reports if shown else []) + opening
+        fixed = len("\n".join(head_now + tail_lines)) + len(end) + 2
+        body = session_lines(record, topics, active, rows[:steps])
         if fixed + len("\n".join(body)) + resume_floor <= limit:
             break
+    head = head_now
     middle = "\n".join(body)
     room = limit - fixed - len(middle) - 1
     if room < 0:  # even the shortest lists do not fit: cut them, never the END line
@@ -501,11 +652,19 @@ def prompt_payload(record):
     against = "; plan: %d part%s a finding against %s" % (
         counts["against"], " has" if counts["against"] == 1 else "s have", "it" if counts["against"] == 1 else "them") \
         if counts and counts["issue"] and counts["against"] else ""
-    text = ("recortex: record %s%s; active: %s%s. Record results, decisions and failures as they happen "
-            "(invoke the recortex skill to post)." % (
-                record.repo, ", hub #%d" % record.hub if record.hub else "",
-                ", ".join("#%d" % n for n in active[:10]) + (" and more" if len(active) > 10 else "") or "none",
-                against))
+    totals = record.step_totals()
+    steps = "; steps: %d of %d done" % totals if totals else ""
+
+    def build(more):
+        return ("recortex: record %s%s; active: %s%s%s. Record results, decisions and failures as they happen "
+                "(invoke the recortex skill to post)." % (
+                    record.repo, ", hub #%d" % record.hub if record.hub else "",
+                    ", ".join("#%d" % n for n in active[:10]) + (" and more" if len(active) > 10 else "") or "none",
+                    against, more))
+
+    text = build(steps)
+    if len(text) > CAPS["prompt-submit"]:
+        text = build("")   # the segment of steps is the first thing to go; then the old cut applies
     return cap(text, CAPS["prompt-submit"])
 
 
