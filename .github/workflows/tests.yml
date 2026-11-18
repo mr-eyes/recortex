@@ -15,17 +15,20 @@ concurrency:
 
 jobs:
   test:
-    name: Python ${{ matrix.python }} on ${{ matrix.os }}
+    name: Python ${{ matrix.python }} on ${{ matrix.os }}, ${{ matrix.shard }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
+        python: ['3.8', '3.14']
+        # The commands of each shard are in tests/ci_shards.py; a test checks that this list names every shard there.
+        shard: [scripts-1, scripts-2, write, versions, page, jobs]
         include:
-          - os: ubuntu-22.04
-            python: '3.8'
-          - os: ubuntu-24.04
-            python: '3.14'
+          - python: '3.8'
+            os: ubuntu-22.04
+          - python: '3.14'
+            os: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,11 +36,12 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
-      - name: Run every offline test
+      - name: Run shard ${{ matrix.shard }}
         shell: bash
         env:
           GH_TOKEN: ''
           GITHUB_TOKEN: ''
+          SHARD: ${{ matrix.shard }}
         run: |
           # The suite selects tests/fake_gh.py explicitly. Refuse accidental live calls.
           ci_bin="$RUNNER_TEMP/recortex-ci-bin"
@@ -49,4 +53,4 @@ jobs:
           SH
           chmod +x "$ci_bin/gh"
           export PATH="$ci_bin:$PATH"
-          python -m unittest discover -s tests -v
+          python tests/ci_shards.py run "$SHARD"

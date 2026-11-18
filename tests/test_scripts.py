@@ -12845,7 +12845,7 @@ class PackagingTests(unittest.TestCase):
                    and not any(fnmatch.fnmatch(name, pattern) for pattern in patterns)]
         self.assertEqual([], missing)
         workflow = recortex.read_text(os.path.join(ROOT, ".github", "workflows", "tests.yml"))
-        self.assertIn("python -m unittest discover -s tests -v", workflow)
+        self.assertIn('python tests/ci_shards.py run "$SHARD"', workflow)   # CI runs the shards of tests/ci_shards.py
         self.assertIn("timeout-minutes: 45", workflow)
 
     def test_the_skill_sends_the_planned_headings_through_the_writing_mode(self):
