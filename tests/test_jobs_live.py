@@ -5,7 +5,9 @@ Sonnet (draft, review) calls gave to this invented text with the corrected wordi
 u01.json); the pass is replayed through the real worker and publisher against the fake gh. The models are not run here:
 the tests hold what the pass does with answers like theirs, and that the prompts keep the lines the answers rest on."""
 
+import contextlib
 import copy
+import io
 import json
 import os
 import sys
@@ -15,11 +17,15 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
+import test_jobs_jobs as tjj  # noqa: E402
 import test_jobs_publisher as tp  # noqa: E402
+import test_jobs_tasks as tj  # noqa: E402
 import test_scripts as ts  # noqa: E402
 
 sys.path.insert(0, ts.SCRIPTS)
+import observer  # noqa: E402
 import observer_holds  # noqa: E402
+import observer_jobs as jobs  # noqa: E402
 import observer_runtime as runtime  # noqa: E402
 import observer_store as store  # noqa: E402
 import observer_worker as worker  # noqa: E402
@@ -149,6 +155,126 @@ class UserFindingTests(LiveBox):
         self.assertEqual([], self.posted())
         with store.Store(REPO, config=self.pcfg) as db:
             self.assertEqual({"withheld"}, {db.observation(s["id"])["reason"] for s in self.data["sources"]})
+
+
+REAL_COMMENT = 6972770100   # where GitHub's comment numbers stood in 2026: the fake's own start at 9104 hid a bound of 10 ** 9
+
+
+class ActsTests(tjj.JobsBox):
+    """The acts log of a record whose comments are numbered as GitHub numbers them: a memory, a task opened and a step
+    checked were left out of it when the number of the comment was above the store's bound for counts."""
+
+    def setUp(self):
+        super().setUp()
+        data = self.repo()
+        data["next_comment"] = REAL_COMMENT
+        self.save(data)
+
+    def test_an_act_keeps_a_comment_number_above_a_billion_and_refuses_what_is_no_number(self):
+        with store.Store(REPO, config=self.pcfg) as db:
+            ident = db.add_act("memory", issue=6, comment=REAL_COMMENT)
+            self.assertEqual(REAL_COMMENT, db.act(ident)["comment"])
+            for comment in (-1, 2 ** 53 + 1, True, "6972770100", 1.5):
+                with self.assertRaises(store.StoreError, msg=repr(comment)):
+                    db.add_act("memory", issue=6, comment=comment)
+            for issue in (-1, 10 ** 9 + 1, False):
+                with self.assertRaises(store.StoreError, msg=repr(issue)):
+                    db.add_act("memory", issue=issue, comment=REAL_COMMENT)
+            with self.assertRaises(store.StoreError):
+                db.add_act("memory", issue=6, comment=REAL_COMMENT, numbers=[10 ** 9 + 1])
+
+    def test_a_task_opened_its_mark_and_a_memory_are_in_the_log_with_their_addresses(self):
+        opener, source = self.task_event()
+        marked, _ = self.result(marks=[{"task": 0, "steps": [1]}], **{"with": source})
+        memory, _ = self.result()
+        opened = self.pub(opener)
+        self.assertEqual("verified", opened["state"], opened)
+        self.assertGreater(opened["receipt"]["comment_id"], 10 ** 9)
+        self.assertEqual("verified", self.pub(marked)["state"])
+        self.assertEqual("verified", self.pub(memory)["state"])
+        kinds = {act["kind"]: act for act in self.acts()}
+        self.assertEqual({"task_opened", "step_marked", "memory"}, set(kinds))
+        for act in kinds.values():
+            self.assertGreater(act["comment"], 10 ** 9)
+        self.use()
+        code, text = self.cli("log")
+        self.assertEqual(0, code)
+        for word in ("opened a task", "checked steps off", "posted a memory"):
+            self.assertIn(word, text)
+        self.assertIn("#issuecomment-%d" % opened["receipt"]["comment_id"], text)
+        self.assertEqual(3, text.count("#issuecomment-"))
+
+
+class UndoNoteTests(tjj.JobsBox):
+    """An undo that writes nothing says why, in fixed words, and a body GitHub still shows as it was before a newer act
+    is told as changed since, not as a bare "failed"."""
+
+    def two_hub_renders(self):
+        self.jobs()
+        first = self.acts(["hub_rendered"])[0]
+        self.ready()
+        self.finish_task()
+        self.jobs()   # closes the task; the hub shows it gone once the record is read again
+        self.ready()
+        self.jobs()
+        second = self.acts(["hub_rendered"])[0]
+        self.assertNotEqual(first["id"], second["id"])
+        return first, second
+
+    def undo_cli(self, act):
+        with mock.patch.object(observer, "confirmed", return_value=None):
+            return self.cli("undo", str(act))
+
+    def test_a_render_a_later_act_replaced_is_told_as_changed_since_with_a_reason(self):
+        first, second = self.two_hub_renders()
+        self.use()
+        before = self.body(4)
+        code, text = self.undo_cli(first["id"])
+        self.assertEqual(1, code)
+        answer = json.loads(text)
+        self.assertEqual("changed_since", answer["code"])
+        self.assertEqual(jobs.UNDO_NOTES["changed_since"], answer["note"])
+        self.assertEqual(before, self.body(4))   # nothing was written
+        with store.Store(REPO, config=self.pcfg) as db:
+            self.assertFalse(db.act(first["id"])["undone"])
+
+    def test_a_read_that_still_shows_the_body_from_before_the_newer_act_is_told_as_changed_since(self):
+        # GitHub's API may answer a moment after a write with the body from before it. The check of the write then finds the
+        # body changed (its own read is the new one): the user is told that, not "failed".
+        first, second = self.two_hub_renders()
+        self.use()
+        stale = jobs.recortex.read_text(os.path.join(jobs.tasks.scratch(REPO), jobs.after_name(first["backup"])))
+        real, reads = jobs.recortex.read_issue_body, []
+
+        def read(repo, number, *args, **kwargs):
+            reads.append(number)
+            return stale if len(reads) == 1 else real(repo, number, *args, **kwargs)
+        before = self.body(4)
+        with mock.patch.object(jobs.recortex, "read_issue_body", side_effect=read):
+            code, text = self.undo_cli(first["id"])
+        self.assertEqual((1, "changed_since"), (code, json.loads(text)["code"]), text)
+        self.assertIn("no longer the one this act wrote", json.loads(text)["note"])
+        self.assertEqual(before, self.body(4))
+
+    def test_every_refusal_has_a_line_and_a_success_has_none(self):
+        self.assertEqual({"changed_since", "no_backup", "failed", "not_closed", "not_open", "already_undone", "no_such_act"},
+                         set(jobs.UNDO_NOTES))
+        for code in ("restored", "reopened", "closed_not_planned", "not_reversible", "terminal-required"):
+            self.assertEqual("", jobs.undo_note(code), code)
+        for code, note in jobs.UNDO_NOTES.items():
+            self.assertTrue(note.endswith("."), code)
+        self.use()
+        code, text = self.undo_cli(999999)
+        self.assertEqual("no_such_act", json.loads(text)["code"])
+        self.assertEqual(jobs.UNDO_NOTES["no_such_act"], json.loads(text)["note"])
+
+    def test_a_kind_that_is_corrected_another_way_keeps_its_own_note(self):
+        self.use()
+        with store.Store(REPO, config=self.pcfg) as db:
+            ident = db.add_act("memory", issue=5, comment=9109)
+        code, text = self.undo_cli(ident)
+        answer = json.loads(text)
+        self.assertEqual(("not_reversible", jobs.CORRECTED["memory"]), (answer["code"], answer["note"]))
 
 
 class PromptTests(unittest.TestCase):

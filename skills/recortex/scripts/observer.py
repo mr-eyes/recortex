@@ -560,7 +560,8 @@ def _acts(args, store, repo, config, options):
                                             "it asks you to confirm there.") if refused == "terminal-required" else ""})
             return 1
         result = observer_jobs.undo(store, repo, config, args.act)
-        emit(result)
+        note = result.get("note") or observer_jobs.undo_note(result["code"])
+        emit(dict(result, note=note) if note else result)
         return int(result["code"] not in ("restored", "reopened", "closed_not_planned"))
     if not runtime.approval_valid(repo, config) or options["mode"] != "automatic":
         emit({"code": "approval", "note": "Only an approved folder in automatic mode acts."}); return 1

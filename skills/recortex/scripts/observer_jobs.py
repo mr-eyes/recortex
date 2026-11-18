@@ -311,7 +311,24 @@ CORRECTED = {"memory": "A posted comment is never edited or deleted: correct a m
              "draft_proposed": "Nothing was written: answer the draft's question, or drop it with observer.py drafts "
                                "drop ID.",
              "draft_applied": "A text change is undone with versions.py restore."}
+# Why undo wrote nothing, in fixed words, for the code it prints (observer.py adds the line to a code that has one).
+UNDO_NOTES = {"changed_since": "Nothing was written: the body is no longer the one this act wrote, because a later act or "
+                               "someone else changed it. Undo the newer act first, or put the text back by hand.",
+              "no_backup": "Nothing was written: the copy of the body this act kept is gone, so there is nothing to put "
+                           "back. Put the text back by hand.",
+              "failed": "Nothing was written: GitHub or the check before the write refused it. observer.py log lists the "
+                        "acts; try again in a minute.",
+              "not_closed": "Nothing was written: that task is not closed now.",
+              "not_open": "Nothing was written: that task is not open now.",
+              "already_undone": "That act was undone before.",
+              "no_such_act": "No act has that number: observer.py log lists them."}
 ADDRESS = "https://github.com/%s/issues/%d"
+
+
+def undo_note(code):
+    """The fixed line that says why an undo changed nothing; "" for a code that has none (a success, or a kind that is
+    corrected another way, which carries its own note)."""
+    return UNDO_NOTES.get(code, "")
 
 
 def address(repo, row):
@@ -359,10 +376,12 @@ def _restore(repo, config, row, kind):
         return "changed_since"
     base = tasks.write(folder, tasks.unique("base-undo-%d" % row["issue"], ".md"), live)
     kept = os.path.join(folder, tasks.unique("undo-%d" % row["issue"], ".md"))
-    code, _ = quiet(post_verified.main, ["body", "--repo", repo, "--issue", str(row["issue"]), "--kind", kind,
-                                         "--body-file", path, "--expected-body-file", base, "--backup", kept])
+    code, printed = quiet(post_verified.main, ["body", "--repo", repo, "--issue", str(row["issue"]), "--kind", kind,
+                                               "--body-file", path, "--expected-body-file", base, "--backup", kept])
     if code != 0:
-        return "failed"
+        # GitHub may still answer with the body from before a newer act (a read a moment after a write): the write's own
+        # check then finds the body changed, and that is what the user is told, not a bare "failed".
+        return "changed_since" if "differs from --expected-body-file" in printed else "failed"
     if os.path.isfile(kept):
         os.chmod(kept, 0o600)
     return "restored"

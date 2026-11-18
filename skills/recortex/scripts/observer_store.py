@@ -27,6 +27,7 @@ except ImportError:
 
 
 COUNT_MAX = 10 ** 9   # a token count the store keeps; anything else is stored as 0
+COMMENT_MAX = 2 ** 53   # a comment number on GitHub (about 7 * 10 ** 9 in 2026) is far above COUNT_MAX
 USAGE_DAYS = 35       # how long a call's token counts are kept
 MODEL = re.compile(r"[A-Za-z0-9_.:-]{1,100}")
 DEFAULT_BYTES = 128 * 1024 * 1024
@@ -1035,8 +1036,9 @@ class Store:
         (counts, never text) and the name of the backup file it left, when there is one. Returns the act's id."""
         if kind not in ACT_KINDS or backup is None or (backup and not BACKUP.fullmatch(backup)):
             raise StoreError("invalid_act")
-        values = [issue, comment] + list(numbers)
+        values = [issue] + list(numbers)
         if (len(numbers) > 20 or any(type(value) is not int or not 0 <= value <= COUNT_MAX for value in values)
+                or type(comment) is not int or not 0 <= comment <= COMMENT_MAX
                 or not isinstance(at if at is not None else 0.0, (int, float))):
             raise StoreError("invalid_act")
         with self.transaction():
