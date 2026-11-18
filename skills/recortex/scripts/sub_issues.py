@@ -29,6 +29,7 @@ import index  # noqa: E402
 import recortex  # noqa: E402
 
 BATCH = 40
+LIMIT = 60   # links one `apply` writes at most; the rest waits for the next run
 UNREAD = "sub-issues: GitHub could not be read just now; run the command again."
 REFUSED = ("sub-issues: GitHub refused the link (an older GitHub Enterprise Server, or more than 100 sub-issues "
            "under one parent); the hub's tables stay the structure.")
@@ -152,7 +153,11 @@ def show(rows):
     print("sub-issues: %d of %d link(s) are in place" % (done, len(rows)))
 
 
-def main(argv=None):
+def main(argv=None, result=None):
+    """The command. `result`, when a dict is given, is filled for a caller that needs more than the exit code: "linked"
+    (links written and read back in place) and "waiting" (links left for the next run by --limit). The output is the same."""
+    result = result if isinstance(result, dict) else {}
+    result.update(linked=0, waiting=0)
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("plan", "apply"):
@@ -162,8 +167,8 @@ def main(argv=None):
         if name == "apply":
             p.add_argument("--dry-run", action="store_true", help="print the exact commands; write nothing")
             p.add_argument("--pause", type=float, default=1.0, help="seconds between writes")
-            p.add_argument("--limit", type=int, default=60, metavar="N",
-                           help="links written at most in one run (default 60); run again for the rest")
+            p.add_argument("--limit", type=int, default=LIMIT, metavar="N",
+                           help="links written at most in one run (default %d); run again for the rest" % LIMIT)
     args = parser.parse_args(argv)
     config = recortex.load_config()
     repo = recortex.resolve_repo(args.repo, config)
@@ -212,6 +217,7 @@ def main(argv=None):
             return 1
         for position, (parent, child) in enumerate(written):
             if parents.get(child) == parent:
+                result["linked"] += 1
                 print("linked: #%d is under #%d" % (child, parent))
             elif not (stopped and position == len(written) - 1):
                 print("MISMATCH: #%d does not read back under #%d" % (child, parent))
@@ -220,6 +226,7 @@ def main(argv=None):
         print(REFUSED)
         failed += 1
     if len(todo) > args.limit:
+        result["waiting"] = len(todo) - args.limit
         print("sub-issues: %d more link(s) wait; at most %d are written at a time; run again"
               % (len(todo) - args.limit, args.limit))
     return 1 if failed else 0

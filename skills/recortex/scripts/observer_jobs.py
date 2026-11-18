@@ -10,7 +10,9 @@ reverses where it can) and stops only itself when it fails: the reason is one fi
 3. close   a finished task is closed (level Everything), or the user is asked to close it (Assistant). Never the standing
            "To do" task, never a task with no steps, never one whose list was changed by hand.
 4. hub     the hub's "## Active issues" table, from the open `active` issues, when the hub body has that heading.
-5. links   sub_issues.py apply, for tasks the observer opened (Everything).
+5. links   sub_issues.py apply, for tasks the observer opened (Everything): "ok" when it linked something, "nothing" when
+           there was nothing to link (or only links another parent holds, which it leaves alone), "waiting" when its cap
+           of one run left links for the next run, "failed" when GitHub refused or could not be read.
 6. board   board.apply_for, when this machine has a board for the project (Everything).
 Steps 2 to 4 need the level Assistant or Everything; Notes only runs none of 2 to 6. In shadow mode nothing runs at all.
 Once a day, before step 1, one more step takes away the manuscript keeper's old working folders (clean_keeper): a plain
@@ -195,11 +197,14 @@ def links_step(repo, config, store, now):
     opened = [row for row in store.acts(days=35, kinds=("task_opened",)) if row["at"] > store.get_control(LINKS_LAST, 0)]
     if not opened:
         return "nothing"
-    code, text = quiet(sub_issues.main, ["apply", "--repo", repo, "--pause", "0"])
+    result = {}
+    code, text = quiet(sub_issues.main, ["apply", "--repo", repo, "--pause", "0"], result=result)
     if code not in (0, None):
         return "failed"
+    if result.get("waiting"):
+        return "waiting"   # the cap of one run left links: the time of this run is not kept, so the next run goes on
     store.set_control(LINKS_LAST, now)
-    return "ok"
+    return "ok" if result.get("linked") or not result else "nothing"
 
 
 def board_step(repo, config, store, now):

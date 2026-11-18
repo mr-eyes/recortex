@@ -177,13 +177,39 @@ class SubIssueStepTests(LinksBox):
         self.assertIn("#%d under #%d: has another parent on GitHub (left alone)" % (number, TOPIC), shown.getvalue())
         mark = self.log_end()
         steps = self.jobs()
-        self.assertEqual("ok", steps["links"])   # it ran and found nothing it may write
+        self.assertEqual("nothing", steps["links"])   # it ran and found nothing it may write: it does not say it linked
+        self.assertGreater(self.control(jobs.LINKS_LAST, 0), 0)   # and it need not run again for this task
         self.assertEqual(OTHER, self.parent_of(number))
         self.assertEqual([], self.mutations(mark))
         found = [f for f in self.query("consistency") if f["kind"] == "sub-issue" and f["issue"] == number]
         self.assertEqual(1, len(found), found)
         self.assertIn("GitHub shows its parent as #%d" % OTHER, found[0]["detail"])
         self.assertEqual("nothing", self.jobs()["links"])
+
+    def test_a_task_that_is_already_linked_is_nothing_to_link(self):
+        number = self.open_task(linked=True)
+        mark = self.log_end()
+        steps = self.jobs()
+        self.assertEqual("nothing", steps["links"])
+        self.assertEqual([], self.mutations(mark))
+        self.assertGreater(self.control(jobs.LINKS_LAST, 0), 0)
+        self.assertEqual(TOPIC, self.parent_of(number))
+
+    def test_links_left_by_the_cap_of_one_run_are_made_by_the_next_runs(self):
+        first = self.open_task()
+        second = self.open_task(title="Task: tag the release", steps=("Update the notes", "Tag it"))
+        with mock.patch.object(sub_issues, "LIMIT", 1):   # the cap of one run (60 in use), so that two tasks pass it
+            steps = self.jobs()
+            self.assertEqual("waiting", steps["links"])
+            self.assertEqual([TOPIC, None], [self.parent_of(first), self.parent_of(second)])
+            self.assertEqual(0, self.control(jobs.LINKS_LAST, 0))   # not kept: the next run goes on
+            steps = self.jobs()
+            self.assertEqual("ok", steps["links"])
+            self.assertEqual([TOPIC, TOPIC], [self.parent_of(first), self.parent_of(second)])
+            self.assertGreater(self.control(jobs.LINKS_LAST, 0), 0)
+            mark = self.log_end()
+            self.assertEqual("nothing", self.jobs()["links"])
+        self.assertEqual([], self.graphql(mark))
 
     def test_a_github_that_refuses_the_link_costs_one_fixed_word_and_the_run_goes_on(self):
         number = self.open_task()
