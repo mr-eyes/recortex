@@ -72,8 +72,8 @@ def merge_runs(runs):
 def matcher(first, second):
     """difflib.SequenceMatcher over two lists of strings, with autojunk only where one item is more than a fifth of the second
     list (and the list is long enough for difflib to apply it at all): that is text made to be slow ("a a a ..."). On prose
-    autojunk would drop the common words and the spaces as anchors, and a reworded paragraph of 100 words or more would
-    become a whole deletion and a whole addition."""
+    autojunk would drop the common words as anchors, and a stretch of them between two changes would be marked as changed
+    too."""
     top = max(collections.Counter(second).values()) if second else 0
     return difflib.SequenceMatcher(None, first, second, autojunk=len(second) > 200 and top * JUNK_SHARE > len(second))
 
