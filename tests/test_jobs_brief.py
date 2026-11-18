@@ -398,5 +398,129 @@ class FrozenTests(BriefBox):
         self.assertEqual(["2 tasks had no memory in 14 days: #3, #7."], added)
 
 
+class StatusSegmentTests(BriefBox):
+    """The two integers of the state file and the segment " \u00b7 steps 7/12" of the status line."""
+
+    def environ(self):
+        return {"RECORTEX_TESTING": "1", "RECORTEX_DATA_HOME": self.data_home, "HOME": self.dir}
+
+    def status(self):
+        import statusline
+        path = statusline.status_file(os.path.abspath(self.project), self.environ())
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def line(self, data):
+        import statusline
+        return statusline.line(json.dumps({"workspace": {"project_dir": os.path.abspath(self.project)}}), self.environ(),
+                               statusline.epoch(data["synced_at"]) + 125)
+
+    def start(self):
+        done = self.hook("session-start", session="s1")
+        self.assertEqual(0, done.returncode, done.stderr)
+
+    def test_the_hook_writes_the_steps_and_the_line_shows_them_after_the_age(self):
+        self.start()
+        data = self.status()
+        self.assertEqual((1, 2), (data["steps_done"], data["steps_total"]))
+        self.assertEqual({"v", "state", "reason", "repo", "synced_at", "observer", "steps_done", "steps_total"}, set(data))
+        self.assertEqual("recortex on \u00b7 read 2 min ago \u00b7 steps 1/2", self.line(data))
+
+    def test_a_project_with_no_steps_has_the_file_and_the_line_of_1_4_0(self):
+        data = self.repo()
+        for cid in (tt.STEPS_ID, tt.RESULT_ID):
+            data["comments"].pop(str(cid))
+        self.save(data)
+        self.assertEqual(0, self.tool("index.py", "sync", "--rebuild").returncode)
+        self.start()
+        data = self.status()
+        self.assertEqual({"v", "state", "reason", "repo", "synced_at", "observer"}, set(data))
+        self.assertEqual("recortex on \u00b7 read 2 min ago", self.line(data))
+
+    def test_the_segment_comes_before_the_note_of_a_paused_observer_and_not_in_a_building_line(self):
+        import statusline
+        self.start()
+        data = dict(self.status(), observer="paused")
+        path = statusline.status_file(os.path.abspath(self.project), self.environ())
+        with open(path, "w") as handle:
+            json.dump(data, handle)
+        self.assertEqual("recortex on \u00b7 read 2 min ago \u00b7 steps 1/2 \u00b7 observer paused until you choose a level",
+                         self.line(data))
+        data = dict(data, state="building", synced_at="")
+        with open(path, "w") as handle:
+            json.dump(data, handle)
+        self.assertEqual("recortex on \u00b7 reading \u00b7 observer paused until you choose a level",
+                         statusline.line(json.dumps({"workspace": {"project_dir": os.path.abspath(self.project)}}),
+                                         self.environ(), 0))
+
+    def test_a_file_with_a_bad_pair_of_integers_gives_the_fallback_line_and_never_a_word_of_it(self):
+        import statusline
+        self.start()
+        good = self.status()
+        path = statusline.status_file(os.path.abspath(self.project), self.environ())
+        bad = [{"steps_done": 1}, {"steps_total": 2}, {"steps_done": "1", "steps_total": 2}, {"steps_done": 1, "steps_total": "2"},
+               {"steps_done": True, "steps_total": 2}, {"steps_done": 1.0, "steps_total": 2}, {"steps_done": -1, "steps_total": 2},
+               {"steps_done": 3, "steps_total": 2}, {"steps_done": 1, "steps_total": 100000}, {"steps_done": None, "steps_total": 2},
+               {"steps_done": [1], "steps_total": 2}, {"steps_done": 1, "steps_total": 2, "steps": 3}]
+        for extra in bad:
+            data = {k: v for k, v in good.items() if not k.startswith("steps")}
+            data.update(extra)
+            with open(path, "w") as handle:
+                json.dump(data, handle)
+            self.assertEqual("recortex off \u00b7 run hooks.py --doctor", self.line(good), repr(extra))
+        data = dict(good, steps_done=0, steps_total=0)
+        with open(path, "w") as handle:
+            json.dump(data, handle)
+        self.assertEqual("recortex on \u00b7 read 2 min ago", self.line(good))   # nothing to count: no segment
+        self.assertEqual(statusline.STEPS_MAX, 99999)
+
+
+class DoctorAndPrintTests(BriefBox):
+    """`hooks.py --doctor` and `--print` cover the lines of tasks."""
+
+    def test_the_doctor_says_what_the_counts_are_and_why_a_line_is_shown_and_prints_no_step_text(self):
+        done = self.tool("hooks.py", "--doctor", gh="false")
+        lines = [line for line in done.stdout.split("\n") if line.startswith(("tasks:", "reports:"))]
+        self.assertEqual(2, len(lines), done.stdout)
+        self.assertTrue(lines[0].startswith("tasks: 1 open with steps, 1 of 2 steps done; next is step 2 of #7; "))
+        self.assertIn("up to 5 next steps inside the data frame", lines[0])
+        self.assertEqual("reports: 2 tasks with no memory in 14 days, 0 topic bodies older than their newest result (the brief "
+                         "names them at session start, after the task lines)", lines[1])
+        self.assertNotIn("Rerun the conformance set", done.stdout)
+
+    def test_the_doctor_says_so_when_the_counts_are_not_in_the_form_the_sync_writes_or_there_are_none(self):
+        db = sqlite3.connect(self.index_file())
+        try:
+            db.execute("UPDATE meta SET value = 'nope' WHERE key = 'task_counts'")
+            db.commit()
+            done = self.tool("hooks.py", "--doctor", gh="false")
+            self.assertIn("tasks: the counts the sync keeps are not in the form the plugin writes, so the brief shows no "
+                          "line about tasks; run index.py sync", done.stdout)
+            db.execute("UPDATE meta SET value = '' WHERE key = 'task_counts'")
+            db.commit()
+            done = self.tool("hooks.py", "--doctor", gh="false")
+            self.assertIn("tasks: no counts yet (the sync keeps them), so the brief shows no line about tasks", done.stdout)
+            db.execute("UPDATE meta SET value = '{\"tasks\": 0, \"steps\": 0, \"done\": 0, \"next_task\": 0, "
+                       "\"next_step\": 0, \"hand\": 2}' WHERE key = 'task_counts'")
+            db.commit()
+            done = self.tool("hooks.py", "--doctor", gh="false")
+            self.assertIn("tasks: no open task has steps, so the brief shows no line about them", done.stdout)
+            self.assertIn("tasks: 2 lists were changed by hand on GitHub; the brief says so and asks the session to ask the "
+                          "user", done.stdout)
+        finally:
+            db.close()
+
+    def test_print_shows_the_tasks_line_and_every_payload_within_its_cap(self):
+        import brief
+        printed = self.tool("hooks.py", "--print", gh="false")
+        self.assertEqual(0, printed.returncode, printed.stdout + printed.stderr)
+        sizes = {name: int(size) for name, size in re.findall(r"===== ([a-z-]+) \(\w+\): ([0-9]+) characters", printed.stdout)}
+        self.assertEqual(set(brief.CAPS), set(sizes))
+        for name, size in sizes.items():
+            self.assertLessEqual(size, brief.CAPS[name], name)
+        self.assertIn("Tasks: 1 open, 1 of 2 steps done; next: step 2 of #7.", printed.stdout)
+        self.assertIn("steps: 1 of 2 done", printed.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

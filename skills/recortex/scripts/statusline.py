@@ -3,7 +3,8 @@
 
     python3 statusline.py < the JSON that Claude Code gives a status line command
 
-Prints one line, `recortex on · read 2 h ago`, `recortex on · reading`, `recortex off · not trusted` and the like, or
+Prints one line, `recortex on · read 2 h ago`, `recortex on · read 2 h ago · steps 7/12` (while open tasks have steps),
+`recortex on · reading`, `recortex off · not trusted` and the like, or
 nothing at all when the folder holds no project file (.recortex.json, or the name from before the rename). With no state
 file for the folder it prints `recortex · starting` only when the JSON Claude Code gives shows that no request has been
 answered yet (`cost.total_api_duration_ms` is 0, or `context_window.current_usage` is null, which Claude Code's
@@ -41,7 +42,9 @@ FALLBACK = "recortex off · run hooks.py --doctor"
 STARTING = "recortex · starting"   # no state file yet, and no request answered yet in this session
 MISSING = {}   # what read_state returns for no file at all, as against None for a file that fails its checks
 KEYS = ("v", "state", "reason", "repo", "synced_at")
-OPTIONAL = ("observer",)   # written since 1.5.0: "paused" while an observer approved before 1.5.0 waits for a level, else ""
+OPTIONAL = ("observer", "steps_done", "steps_total")   # written since 1.5.0: "paused" while an observer approved before 1.5.0
+# waits for a level, else ""; and, only while open tasks have steps, the steps done and the steps (two integers, together)
+STEPS_MAX = 99999
 PAUSED = "observer paused until you choose a level"   # observer_runtime.PAUSED without its prefix, held equal by a test
 MAX_BYTES = 2048
 
@@ -153,6 +156,12 @@ def read_state(path):
         return None
     if data.get("observer", "") not in ("", "paused"):
         return None
+    if ("steps_done" in data) != ("steps_total" in data):
+        return None
+    if "steps_done" in data:
+        done, total = data["steps_done"], data["steps_total"]
+        if type(done) is not int or type(total) is not int or not 0 <= done <= total <= STEPS_MAX:
+            return None
     if data["state"] not in ("on", "building", "off"):
         return None
     if (data["reason"] in SHORT) != (data["state"] == "off") or (data["state"] != "off" and data["reason"] != ""):
@@ -197,7 +206,8 @@ def line(stdin_text="", environ=None, now=None):
     note = " · " + PAUSED if data.get("observer") == "paused" else ""
     if data["state"] == "building":
         return "recortex on · reading" + note
-    return "recortex on · read %s" % ago(data["synced_at"], time.time() if now is None else now) + note
+    steps = " · steps %d/%d" % (data["steps_done"], data["steps_total"]) if data.get("steps_total") else ""
+    return "recortex on · read %s" % ago(data["synced_at"], time.time() if now is None else now) + steps + note
 
 
 def main():

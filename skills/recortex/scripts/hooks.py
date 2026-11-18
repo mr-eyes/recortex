@@ -208,14 +208,18 @@ def refresh_statusline():
         pass
 
 
-def write_status(state, reason="", repo="", synced="", observer=""):
+def write_status(state, reason="", repo="", synced="", observer="", steps=None):
     """The state of the record for this project folder, for the status line: {"v", "state", "reason", "repo",
     "synced_at", "observer"} and nothing else, written through storage.write_file. `observer` is "paused" while an
-    observer approved before 1.5.0 waits for the user to choose a level, else "". A hook never fails over it."""
+    observer approved before 1.5.0 waits for the user to choose a level, else "". `steps` is None, or (steps done, steps)
+    of the open tasks that have steps: two checked integers, "steps_done" and "steps_total", added to the file only then.
+    A hook never fails over it."""
     try:
         path = storage.status_path(recortex.project_root())
-        storage.write_file(path, json.dumps({"v": 1, "state": state, "reason": reason, "repo": repo,
-                                             "synced_at": synced, "observer": observer}))
+        data = {"v": 1, "state": state, "reason": reason, "repo": repo, "synced_at": synced, "observer": observer}
+        if steps and all(type(n) is int for n in steps) and 0 <= steps[0] <= steps[1] <= 99999:
+            data.update(steps_done=steps[0], steps_total=steps[1])
+        storage.write_file(path, json.dumps(data))
     except (OSError, ValueError, storage.StorageError):
         pass
 
@@ -276,7 +280,7 @@ def run(event, data, budget):
         if event in ("session-start", "prompt-submit"):
             building = LAST.get("building") is True
             write_status("building" if building else "on", "", repo, LAST.get("synced_at") or "",
-                         "paused" if observer_paused(repo, config) else "")
+                         "paused" if observer_paused(repo, config) else "", LAST.get("steps"))
             LAST["state"] = "building" if building else "on"
         return text
     except Unavailable as error:
@@ -576,7 +580,7 @@ def produce(event, data, budget, config, repo, hub):
             index.set_meta(db, "last_sync_error", "%s at %s" % (failure, index.now_utc()))
             db.commit()
         record = brief.Record(db, config, repo)
-        LAST.update(synced_at=record.synced or "", fresh=fresh)
+        LAST.update(synced_at=record.synced or "", fresh=fresh, steps=record.step_totals())
         if event == "session-start":
             # the line about the setup questions is made first, so that the brief's lists and resume block make room for it
             questions, held = setup_line(repo, config, record, session, brief.CAPS["session-start"] // 2)
@@ -834,6 +838,37 @@ def plan_doctor_lines(db, config, repo):
         state, counts["issue"], "; ".join("%s %d" % (key, counts[key]) for key in index.PLAN_COUNT_KEYS[1:]))]
 
 
+def task_doctor_lines(db, config, repo):
+    """For --doctor: the task counts the sync kept, which lines of the brief they give, and the two reports. Fixed wording and
+    integers only; never a word of a step or a title."""
+    record = brief.Record(db, config, repo)
+    counts, bad = record.task_counts()
+    if bad:
+        return ["tasks: the counts the sync keeps are not in the form the plugin writes, so the brief shows no line about "
+                "tasks; run index.py sync"]
+    if counts is None:
+        return ["tasks: no counts yet (the sync keeps them), so the brief shows no line about tasks"]
+    lines = []
+    if counts["tasks"]:
+        said = "tasks: %d open with steps, %d of %d steps done" % (counts["tasks"], counts["done"], counts["steps"])
+        if counts["next_task"]:
+            said += "; next is step %d of #%d" % (counts["next_step"], counts["next_task"])
+        lines.append(said + "; the session brief and the status line show them, and the brief lists up to %d next steps "
+                     "inside the data frame (the first lines to give way when it nears %d characters)"
+                     % (brief.TASK_LINES, brief.CAPS["session-start"]))
+    else:
+        lines.append("tasks: no open task has steps, so the brief shows no line about them")
+    if counts["hand"]:
+        lines.append("tasks: %d list%s changed by hand on GitHub; the brief says so and asks the session to ask the user"
+                     % (counts["hand"], " was" if counts["hand"] == 1 else "s were"))
+    idle, stale = record.idle_tasks(), record.stale_bodies()
+    lines.append("reports: %d task%s with no memory in %d days, %d topic bod%s older than %s newest result (the brief "
+                 "names them at session start, after the task lines)" % (
+                     len(idle), "" if len(idle) == 1 else "s", brief.IDLE_DAYS, len(stale),
+                     "y" if len(stale) == 1 else "ies", "its" if len(stale) == 1 else "their"))
+    return lines
+
+
 def writing_doctor_lines(db, config, repo):
     """For --doctor: the writing mode of this machine and the state of the author's own paper, in fixed words. Never a
     path, a login or text from the record. Nothing for a project whose profiles have no plan."""
@@ -1008,6 +1043,8 @@ def doctor():
         for line in board_lines(db, config, repo):
             print(line)
         for line in plan_doctor_lines(db, config, repo):
+            print(line)
+        for line in task_doctor_lines(db, config, repo):
             print(line)
         for line in writing_doctor_lines(db, config, repo):
             print(line)
