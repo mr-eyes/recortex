@@ -33,7 +33,7 @@ machine, that offers to set the field.
 At session start the brief may also carry one fixed line, once per session, saying how many setup questions an update
 added that this project and this machine have not answered yet (setup_questions.py); it holds a number and fixed words,
 reads only local files and makes no GitHub call. If the session has not run `setup.py questions` by its second prompt, one
-more fixed line with the count is added to a later prompt (prompt-submit), at most twice a session and only while the prompt
+more fixed line with the count is added to a later prompt (prompt-submit), at most three times a session and only while the prompt
 hook is on. Off with RECORTEX_SETUP_QUESTIONS=0 or "setup_questions": false in the settings file of the plugin.
 
 --print shows the four payloads and their sizes, for the user to check.
@@ -386,7 +386,7 @@ def setup_line(repo, config, record, session, room):
 
 def setup_reminder(repo, config, record, entry, session, room):
     """The reminder about the setup questions for a later prompt (setup_questions.reminder): one fixed line with a number, at most
-    twice a session, and only while questions are open and `setup.py questions` has not run since the session started. It has
+    three times a session, and only while questions are open and `setup.py questions` has not run since the session started. It has
     to fit `room`, the rest of the cap of the prompt payload, so that it adds to no payload that is already full. Never raises:
     any failure gives no line, and the prompt's payload is as it was."""
     if not session:

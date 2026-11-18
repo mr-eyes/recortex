@@ -22,7 +22,7 @@ and writes nothing but the note that no label is missing and the time it ran. `s
 only read the file. A file that cannot be read (a symlink, loose permissions, not JSON, not of the form, too large) is never
 replaced and is reported in one fixed line that points to hooks.py --doctor.
 
-A session that does not ask at the end of its first reply is reminded once or twice: the prompt-submit hook (hooks.py) adds one
+A session that does not ask before its first reply ends is reminded up to three times: the prompt-submit hook (hooks.py) adds one
 fixed line with the count (reminder below) to a later prompt, while questions are open and `setup.py questions` has not run since
 the session started. The time of the session's start is in the prompt state, and the time `setup.py questions` last ran is a small
 file beside it (storage.py, names.SETUP_RUN); both are numbers, and nothing read from them is printed.
@@ -521,7 +521,7 @@ def mark_asked(repo, session, state_io=None):
 
 # ---------------------------------------------------------------- the reminder of the prompt hook
 
-REMIND_MAX = 2     # reminders to one session
+REMIND_MAX = 3     # reminders to one session
 REMIND_FROM = 2    # the prompt of the session (counted by the prompt hook) that may carry the first
 REMIND_GAP = 3     # prompts between one reminder and the next
 

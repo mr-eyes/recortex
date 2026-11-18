@@ -448,7 +448,7 @@ class HookLineTests(Box):
 
 class ReminderTests(Box):
     """The prompt hook's reminder (1.4.0): a session that has not run `setup.py questions` is told once or
-    twice, on a later prompt, with the count, in fixed words. (A prompt may also carry the hook's older lines, such as the
+    up to three times, on a later prompt, with the count, in fixed words. (A prompt may also carry the hook's older lines, such as the
     reminder to refresh the status summary, which this record's first prompt does; what these tests look at is the reminder.)"""
 
     def prompt(self, session, env=None):
@@ -491,11 +491,12 @@ class ReminderTests(Box):
         self.assertEqual([[], [brief.SETUP_REMINDER % (1, "")]], self.asked("s", 2))
         self.assertIn("1 setup question still open", brief.SETUP_REMINDER % (1, ""))
 
-    def test_at_most_twice_a_session_and_three_prompts_apart(self):
+    def test_at_most_three_times_a_session_and_three_prompts_apart(self):
         self.start(session="s")
-        out = self.asked("s", 9)
-        self.assertEqual([2, 5], [n + 1 for n, found in enumerate(out) if found])
-        self.assertEqual((2, 5), (self.marks("s")["reminded"], self.marks("s")["reminded_at"]))
+        out = self.asked("s", 14)
+        self.assertEqual([2, 5, 8], [n + 1 for n, found in enumerate(out) if found])   # not a fourth, at 11
+        self.assertEqual((3, 8), (self.marks("s")["reminded"], self.marks("s")["reminded_at"]))
+        self.assertEqual(3, setup_questions.REMIND_MAX)
 
     def test_a_session_that_ran_the_questions_is_not_reminded_and_the_next_session_is(self):
         self.start(session="a")
@@ -578,7 +579,7 @@ class ReminderTests(Box):
                              ("a negative start", lambda e: e.update(start=-5)),
                              ("a string count of reminders", lambda e: e.update(reminded="1")),
                              ("a negative count of reminders", lambda e: e.update(reminded=-1)),
-                             ("reminded twice already", lambda e: e.update(reminded=2, reminded_at=2)),
+                             ("reminded three times already", lambda e: e.update(reminded=3, reminded_at=2)),
                              ("a reminder mark that is no number", lambda e: e.update(reminded=1, reminded_at="2"))):
             changed = json.loads(json.dumps(state))
             change(changed["s"])
@@ -1541,25 +1542,49 @@ class SetupQuestionDocsTests(unittest.TestCase):
         self.assertNotIn("asks once when the brief says so", skill)
         self.assertIn("setup_questions.py", skill)
 
-    def test_the_brief_the_skill_and_the_reference_say_to_ask_at_the_end_of_the_first_reply_and_never_to_chain_a_dry_run(self):
-        for words in (brief.SETUP_QUESTIONS, self.read("skills", "recortex", "SKILL.md").split("### Setup questions", 1)[1].split("###", 1)[0],
-                      self.read("skills", "recortex", "references", "setup.md").split("## Questions added after setup", 1)[1]):
-            self.assertIn("end of the reply that completes the user's first request", words)
-            self.assertIn("greeting, an open question or about recortex", words)
-            self.assertNotIn("not before the user's first task", words)
+    def test_the_brief_and_the_reminder_say_to_ask_before_the_reply_ends_as_one_batch_and_not_to_offer_in_prose(self):
+        start, reminder = brief.SETUP_QUESTIONS % (2, "s"), brief.SETUP_REMINDER % (2, "s")
+        self.assertIn("Before your first reply ends, once the user's request is done (at once for a greeting, an open question or a "
+                      "prompt about recortex), run setup.py questions and ask what it lists as one multiple-choice batch", start)
+        self.assertIn("Do not offer the questions in prose.", start)
+        self.assertIn("Before this reply ends, run it and ask what it lists as one multiple-choice batch", reminder)
+        self.assertIn("Do not just offer the questions.", reminder)
+        for line in (start, reminder):
+            self.assertIn('"Setup questions" section of the recortex skill', line)
+            self.assertNotIn("at the end of", line.lower())
+            self.assertNotIn("first pause", line)
+        self.assertLess(len(reminder) + 1, brief.CAPS["prompt-submit"])   # the prompt payload's cap
+        self.assertLess(len(brief.SETUP_REMINDER % (6, "s")) + 1, brief.CAPS["prompt-submit"])
+        self.assertLess(len(start) + 1, brief.CAPS["session-start"] // 2)   # the room the hook gives the line at session start
+
+    def test_the_skill_and_the_reference_say_when_to_ask_that_a_yes_approves_the_step_and_when_to_stop(self):
         skill = self.read("skills", "recortex", "SKILL.md").split("### Setup questions", 1)[1].split("###", 1)[0]
         reference = self.read("skills", "recortex", "references", "setup.md").split("## Questions added after setup", 1)[1]
-        self.assertNotIn("first pause", skill)
-        self.assertIn("run the dry run alone and show it, run the real command only after the user's answer, never chained", skill)
-        self.assertIn("the session runs the dry run alone, shows its output, and runs the real command only after the user's answer, "
-                      "never chained with it in one shell command", reference)
+        for words in (skill, reference):
+            self.assertIn("greeting, an open question or about recortex", words)
+            self.assertIn("A Yes to a question approves that question's step", words)
+            self.assertIn("never chained", words)
+            self.assertNotIn("first pause", words)
+            self.assertNotIn("only after the user's answer", words)   # the earlier wording: the Yes is the answer, no second question
+        self.assertIn("before your first reply ends, once the user's request is done", skill)
+        self.assertIn("do not offer the questions in prose and wait for a yes", skill)
+        self.assertIn("say in the reply, in a line or two, what it will do", skill)
+        self.assertIn("without another question", skill)
+        self.assertIn("Stop and ask only when the dry run shows something the question did not name, for example a GitHub write it did "
+                      "not mention", skill)
+        self.assertIn("It then runs the real command and `setup.py answer`", reference)
+        self.assertIn("It stops and asks again only when the dry run shows something the question did not name", reference)
         self.assertIn("A later prompt may carry a reminder line with the count", skill)
         self.assertIn("A session that has not asked is reminded", reference)
-        self.assertIn("at most twice a session", reference)
+        self.assertIn("at most three times a session", reference)
+        self.assertIn("as one multiple-choice batch, not offered in prose", reference)
         self.assertIn("setup-questions-run.json", reference)
         hooks = self.read("skills", "recortex", "references", "hooks-and-index.md")
-        self.assertIn("setup questions still open, and setup.py questions has not run in this session", hooks)
-        self.assertIn(brief.SETUP_REMINDER.split("%d")[0], hooks)
+        self.assertIn(brief.SETUP_QUESTIONS % (2, "s"), hooks)
+        self.assertIn(brief.SETUP_REMINDER % (2, "s"), hooks)
+        self.assertIn("at most three times a session and three prompts apart", hooks)
+        for name in ("upgrading.md", "writing.md"):
+            self.assertNotIn("end of the reply that completes", self.read("skills", "recortex", "references", name))
 
     def test_the_registry_is_in_the_order_of_the_spec_with_the_scopes_it_names(self):
         self.assertEqual(("writing-mode", "own-paper", "manuscript-profile", "labels", "status-line", "observer"),
