@@ -514,6 +514,21 @@ class InsideClaudeTests(unittest.TestCase):
             self.assertTrue(observer.on_terminal(parents=["bash", "tmux", "sshd"]))
             self.assertTrue(observer.on_terminal(parents=[]))
 
+    def test_setup_py_takes_the_same_answer_on_a_terminal_inside_a_session_as_on_none(self):
+        import setup as wizard
+        folder = os.path.join(tempfile.gettempdir(), "no-such-folder-for-the-chain-pass")
+        with self.terminal(), mock.patch.dict(os.environ, {"CLAUDECODE": "1"}), \
+                mock.patch.object(grants, "take", return_value=False) as take:
+            self.assertIsNone(wizard.chain_pass(folder, "notes", None, [("level", "notes")]))   # a terminal in a session is none
+            take.assert_called_once()
+        environment = {key: value for key, value in os.environ.items() if key != "CLAUDECODE"}
+        with self.terminal(), mock.patch.dict(os.environ, environment, clear=True), \
+                mock.patch.object(observer, "ancestry", return_value=["bash", "tmux"]), \
+                mock.patch.object(grants, "take", return_value=False) as take, \
+                mock.patch.object(grants, "start_pass", return_value="0" * 32):
+            self.assertEqual("0" * 32, wizard.chain_pass(folder, "notes", None, [("level", "notes")]))   # the user's own
+            take.assert_not_called()
+
     def test_the_ancestry_is_read_from_the_parents_and_is_bounded(self):
         names = observer.ancestry()
         self.assertIsInstance(names, list)

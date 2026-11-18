@@ -153,6 +153,10 @@ THROUGH_A_TERMINAL = (
     "python3 -c 'import zpty' %s" % OBSERVER,
     "env -u CLAUDECODE python3 %s later ab12cd34" % OBSERVER,           # the variable named beside observer.py
     "CLAUDECODE= python3 %s discard x" % OBSERVER,
+    "SCRIPT -qc 'python3 %s observer --level notes --yes' /dev/null" % SETUP,   # a helper name in upper case
+    "Unbuffer python3 %s observer --strong opus --yes" % SETUP,
+    "env -u CLAUDECODE python3 %s observer --level everything --yes" % SETUP,    # setup.py is the user's command as well
+    "CLAUDECODE=0 python3 %s apply --answers a.json --yes" % SETUP,
 )
 NOT_THROUGH_A_TERMINAL = (
     "python3 %s status" % OBSERVER,

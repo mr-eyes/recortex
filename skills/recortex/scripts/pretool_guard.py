@@ -41,9 +41,9 @@ UNREADABLE = ("recortex: the ask agent only reads the record, and this command c
 # dash: `scripts/` and `--script` are not helpers.
 PTY_HELPERS = ("script", "unbuffer", "expect", "socat", "faketty", "pty", "openpty", "forkpty", "zpty", "tmux", "screen",
                "ssh", "setsid", "nohup")
-PTY_HELPER = re.compile(r"(?<![A-Za-z0-9_-])(?:%s)(?![A-Za-z0-9_-])" % "|".join(PTY_HELPERS))
+PTY_HELPER = re.compile(r"(?<![A-Za-z0-9_-])(?:%s)(?![A-Za-z0-9_-])" % "|".join(PTY_HELPERS), re.I)
 USERS_COMMAND = re.compile(r"(?:observer|setup)\.py")
-OBSERVER_UNDER_CLAUDE = re.compile(r"CLAUDECODE")   # a command that names this variable and observer.py is working round the check
+OBSERVER_UNDER_CLAUDE = re.compile(r"CLAUDECODE")   # a command that names this variable and observer.py or setup.py is working round the check
 TERMINAL_DENIAL = ("recortex: observer.py and setup.py are not run through a program that makes a terminal or hides where "
                    "they run (script, unbuffer, expect, socat, faketty, pty, tmux, screen, ssh, setsid, nohup): what they ask "
                    "for is the user's own answer. Ask the user to run the command in their own terminal, outside Claude Code.")
@@ -54,7 +54,7 @@ def terminal_decision(data):
     tool_input = data.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if data.get("tool_name") in ("Bash", "bash") and isinstance(command, str) and USERS_COMMAND.search(command):
-        if PTY_HELPER.search(command) or (OBSERVER_UNDER_CLAUDE.search(command) and "observer.py" in command):
+        if PTY_HELPER.search(command) or OBSERVER_UNDER_CLAUDE.search(command):   # observer.py or setup.py is named: USERS_COMMAND
             return deny(TERMINAL_DENIAL)
     return None
 
