@@ -162,13 +162,19 @@ def _capture(store, event, data, project_root, repo, config, capture=True, round
     if not capture:
         stream = "controls_" + stream
     controlled = refused = unproven = False
+    # The plan and question dialogs the user answered are sources too (observer_sources): a result is matched with its
+    # call by call id, and the last calls of a transcript are kept with it. Only the capturing stream reads them.
+    calls = observer_sources.load_calls(store, stream) if capture else None
+    kept = dict(calls) if calls is not None else None
+    stats = {} if capture else None
     # Each scan is bounded; a few in a row catch up with a transcript that grew by a large turn (attachments alone
     # can pass a scan's 256 KiB), so that lag is not reported as a problem. They stop at SCAN_SECONDS too.
     until = time.monotonic() + SCAN_SECONDS
     for _ in range(rounds):
         old = store.cursor(stream)
         try:
-            rows, cursor = observer_sources.scan(scan_data, project_root, cursor=old if old is not None else start)
+            rows, cursor = observer_sources.scan(scan_data, project_root, cursor=old if old is not None else start,
+                                                 calls=calls, stats=stats)
         except observer_sources.SourceError as error:
             if rounds != 1 or str(error) != "source-format":
                 raise
@@ -185,6 +191,10 @@ def _capture(store, event, data, project_root, repo, config, capture=True, round
         if (cursor == (old if old is not None else start) or os.stat(path, follow_symlinks=False).st_size <= cursor
                 or time.monotonic() > until):
             break
+    if capture:
+        if calls != kept:   # nothing new since the last hook: no write
+            observer_sources.save_calls(store, stream, calls)
+        observer_sources.add_unread(store, stats.get("dialogs_unread", 0))
     # What is left is a line Claude Code is still writing, or a backlog the next hook goes on with.
     behind, stale = os.stat(path, follow_symlinks=False).st_size > cursor, False
     if behind and rounds == 1:

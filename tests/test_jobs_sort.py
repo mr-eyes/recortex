@@ -695,6 +695,95 @@ class Queued(Scripted):
                                 if db.observation(sid)['state'] == 'deferred'))
 
 
+class Dialogs(Scripted):
+    """The plan dialog and the question dialog as the pass sees them: captured by the hook's scan, shown to the sorter by
+    number with their fixed texts, and held to the weaker authority of a choice."""
+
+    DIALOG = 'Approved in the plan dialog, 2026-03-12 11:00 PST.'
+
+    def steps(self):
+        return STEPS.replace('By the project lead in the chat, 2026-03-12 11:00 PST:\n\n> Yes, do the two steps in that order.',
+                             self.DIALOG).replace('1. Carry the quote state across physical lines\n2. Rerun the conformance set',
+                                                  '1. Write a failing test for a newline inside a quoted field\n'
+                                                  '2. Change the tokenizer to carry the quote state across lines\n'
+                                                  '3. Rerun the three sample files')
+
+    def put(self, name):
+        import observer_hooks
+        lines = (ROOT / 'tests/fixtures/dialogs' / name).read_text().splitlines()
+        with self.path.open('a') as handle:
+            handle.write('\n'.join(lines) + '\n')
+        with store.Store(REPO, config=self.config) as db:
+            observer_hooks._capture(db, 'Stop', self.hook, self.project, REPO, self.config)
+            return db
+
+    def test_an_approved_plan_becomes_a_new_task_and_the_sorter_sees_the_dialog_by_number(self):
+        self.put('plan-approved.jsonl')
+        calls = self.scripted([label('plan_agreed', sources=[1, 2])],
+                              lambda payload: [draft('steps', self.steps(), [1, 2], issue=0, title='Quoted newlines', topic=2)])
+        with self.index():
+            report = self.run_worker(calls)
+        shown = self.calls[0][1]['sources']
+        self.assertEqual([('assistant', 'plan_dialog', False), ('user', 'plan_dialog', False)],
+                         [(v['role'], v['via'], v['direct_user']) for v in shown])
+        self.assertIn('Plan: newlines inside quoted fields', shown[0]['text'])
+        self.assertEqual('Approved the plan in the plan dialog.', shown[1]['text'])
+        self.assertEqual(['sort', 'draft', 'review'], self.purposes())
+        self.assertEqual(1, len(report['ready']))
+        candidate = self.events(report)[0]['candidate']
+        self.assertEqual((0, 'Quoted newlines', 2), (candidate['issue'], candidate['task_title'], candidate['topic']))
+
+    def test_the_hook_keeps_the_dialog_calls_and_counts_a_shape_it_cannot_read(self):
+        import hashlib
+        import observer_sources
+        self.put('plan-approved.jsonl')
+        stream = hashlib.sha256(str(self.path).encode('utf-8')).hexdigest()
+        with store.Store(REPO, config=self.config) as db:
+            self.assertEqual(1, len(observer_sources.load_calls(db, stream)))
+            self.assertEqual(0, observer_sources.unread(db))
+        unknown = (ROOT / 'tests/fixtures/dialogs/plan-rejected.jsonl').read_text().replace(
+            "The user doesn't want to proceed with this tool use.", 'The plan was set aside in some new way.')
+        with self.path.open('a') as handle:
+            handle.write(unknown)
+        import observer_hooks
+        with store.Store(REPO, config=self.config) as db:
+            observer_hooks._capture(db, 'Stop', self.hook, self.project, REPO, self.config)
+            self.assertEqual(1, observer_sources.unread(db))
+            self.assertEqual(2, len(observer_sources.load_calls(db, stream)))
+
+    def test_a_rejected_plan_opens_no_task_even_when_the_sorter_says_it_was_agreed(self):
+        self.put('plan-rejected.jsonl')
+        calls = self.scripted([label('plan_agreed', sources=[1, 2])],
+                              lambda payload: [draft('steps', self.steps(), [1, 2], issue=0, title='Quoted newlines', topic=2)])
+        with self.index():
+            report = self.run_worker(calls)
+        shown = self.calls[0][1]['sources']
+        self.assertEqual('Rejected the plan in the plan dialog.', shown[1]['text'])
+        self.assertEqual((['sort', 'draft'], []), (self.purposes(), report['ready']))
+        with store.Store(REPO, config=self.config) as db:
+            self.assertEqual([], db.events())
+
+    def test_the_typed_feedback_of_a_rejected_plan_reaches_no_model(self):
+        self.put('plan-rejected-feedback.jsonl')
+        self.run_worker(self.scripted([], [], ignored=[1, 2]))
+        text = json.dumps(self.calls[0][1])
+        records = [json.loads(l) for l in (ROOT / 'tests/fixtures/dialogs/plan-rejected-feedback.jsonl').read_text().splitlines()]
+        feedback = next(r['toolUseResult'] for r in records if isinstance(r.get('toolUseResult'), str)
+                        and 'the user said' in r['toolUseResult']).split('the user said:')[-1].strip()
+        self.assertTrue(feedback)
+        self.assertNotIn(feedback, text)
+
+    def test_a_choice_in_a_question_dialog_is_a_decision_but_never_a_change_of_status(self):
+        self.put('question-answered.jsonl')
+        shown = None
+        with self.index():
+            self.run_worker(self.scripted([], [], ignored=[1, 2]))
+        shown = self.calls[0][1]['sources']
+        self.assertEqual(['question_dialog', 'question_dialog'], [v['via'] for v in shown])
+        self.assertTrue(shown[1]['text'].startswith('Chose "'))
+        self.assertFalse(shown[1]['direct_user'])
+
+
 class Decisions(Scripted):
     def test_a_decision_may_rest_on_the_fixed_words_of_a_question_dialog_choice(self):
         words = 'Chose "strict" when asked "Which quoting?"'
