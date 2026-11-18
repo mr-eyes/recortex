@@ -177,6 +177,7 @@ def build(out, plugin_args, run_checks):
             "bodyclass": "home" if page["id"] == "home" else "inner",
             "mainclass": "home" if page["id"] == "home" else "doc",
             "version": config["version"],
+            "repo": config["plugin_repo"],
             "copyright": html.escape(config["copyright"]),
         }
         text = shell

@@ -380,3 +380,32 @@ table.plain td{font-family:var(--serif);line-height:1.45}
 }
 .nameline{max-width:none}
 
+
+/* ---------- parts the pages use besides the mock's ---------- */
+.hero h1{font-size:50px}
+.hero .sub{font-size:19.5px;max-width:38em}
+.askcard{background:var(--sheet);border-radius:14px;padding:14px 18px;margin:0 0 12px;max-width:640px;border-left:3px solid var(--wrong)}
+.askcard .lab{margin-bottom:6px}
+.askcard .q{font:17px/1.45 var(--serif);margin:0 0 10px}
+.askcard .opts{display:flex;gap:8px;flex-wrap:wrap;margin:0}
+.askcard .opts span{border:1px solid var(--rule);border-radius:999px;padding:3px 14px;font-size:14px;background:var(--fog)}
+.cols3{list-style:none;padding:0;margin:0 0 14px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.cols3 .col{background:var(--sheet);border-radius:16px;padding:16px 20px;border-top:3px solid var(--brand)}
+.cols3 .col:nth-child(2){border-top-color:var(--found)}
+.cols3 .col:nth-child(3){border-top-color:var(--decided)}
+.cols3 h3{font-size:19px;margin:0 0 8px}
+.cols3 p{font:15.5px/1.5 var(--serif);margin:0 0 8px}
+.notes{padding-left:20px;margin:0 0 14px;max-width:70ch}
+.notes li{font:16px/1.5 var(--serif);margin-bottom:6px}
+.faq details{background:var(--sheet);border-radius:14px;margin:0 0 10px;padding:0 20px;max-width:760px}
+.faq summary{cursor:pointer;font:600 18px/1.4 var(--serif);padding:14px 0;list-style:none;display:flex;justify-content:space-between;gap:14px}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"+";color:var(--thread);font:400 22px/1.2 var(--sans)}
+.faq details[open] summary::after{content:"\2212"}
+.faq details p{font:16.5px/1.55 var(--serif);margin:0 0 16px;color:var(--ink);max-width:62ch}
+.faq details a{color:var(--thread)}
+.doors.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:760px){
+  .hero h1{font-size:34px}
+  .cols3{grid-template-columns:1fr}
+}
