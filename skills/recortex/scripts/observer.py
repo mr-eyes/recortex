@@ -390,7 +390,8 @@ def release(store, hold_id, tty):
     if tty.ask(question) != "release":
         return {"code": "not-confirmed", "hold_id": hold_id}
     store.update_holds(lambda holds: observer_holds.release(holds, hold_id))
-    return {"action": "release", "hold_id": hold_id, "released": True}
+    # The moments the hold kept off the record go back to the sort (no other hold covering them): a whole number.
+    return {"action": "release", "hold_id": hold_id, "released": True, "offered_again": store.offered_again}
 
 
 def _alarm(signum, frame):
@@ -492,8 +493,10 @@ def _status(repo, config, loaded, store, options, details):
         out["project_switch"] = "off"
     if store is None:
         return dict(out, code="empty", action="status", dry_run=False, queue={}, tiers=tiers_report(options, None))
+    failed = store.acts_failed()   # acts the log could not take (their posts stand): a count and the UTC day of the last
     return dict(out, runtime_ready=runtime.tier_state(options, store)["middle"]["gate"],
-                tiers=tiers_report(options, store),
+                tiers=tiers_report(options, store), acts_failed=failed["n"] if failed else 0,
+                acts_failed_day=failed["day"] if failed else "",
                 runtime_last=last, capture_paused=store.get_control("capture_paused", False),
                 publication_paused=store.get_control("publication_paused", False),
                 worker_degraded=store.get_control("worker_degraded", ""), queue=store.status(),
@@ -739,6 +742,8 @@ def main(argv=None):
                 if observer_publisher.opens_task(event["candidate"]):
                     # The task will not be opened: the marks that waited for it have nothing to mark.
                     observer_publisher.release_dependents(store, event, False)
+                if event["candidate"]["kind"] == "failure":
+                    observer_publisher.release_because(store, event)   # a decision drafted with it stands alone
                 emit({"action": "discard", "eventkey": args.eventkey}); return 0
             if args.command == "holds":
                 emit({"holds": store.holds()}); return 0

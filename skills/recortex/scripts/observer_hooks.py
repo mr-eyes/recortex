@@ -64,6 +64,9 @@ ACTS_TOLD = "acts_told"     # store control: {"at": when the line was last shown
 ACTS_DAYS = 7               # the line looks back this far at most
 TASKS_CAP = ("recortex observer: today's limit of automatic tasks is reached; a task waits in the queue. Run "
              "observer.py pending.")
+# At session start, while the log of what the observer did keeps failing (a post stands and its act could not be written):
+# one fixed line with a whole number, at most once a day. The count and the day of the last failure are the store's control.
+ACTS_FAILED = "recortex observer: the log of what it did could not be written %d time(s); run hooks.py --doctor."
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -161,6 +164,20 @@ def _tasks_cap_line(store):
         store.set_control("task_cap_told", at)
         return TASKS_CAP
     return ""
+
+
+def _acts_failed_line(store):
+    """ACTS_FAILED with the count while the log of acts keeps failing (its last failure is within ACTS_FAILED_DAYS), once a
+    UTC day; else "". Nothing but the control's whole number reaches the line."""
+    failed = store.acts_failed()
+    now = time.time()
+    if failed is None or failed["day"] < observer_store.day_of(now - observer_store.ACTS_FAILED_DAYS * 86400):
+        return ""
+    today = observer_store.day_of(now)
+    if store.get_control(observer_store.ACTS_FAILED_TOLD) == today:
+        return ""
+    store.set_control(observer_store.ACTS_FAILED_TOLD, today)
+    return ACTS_FAILED % failed["n"]
 
 
 def _ran_waiting(data):
@@ -922,6 +939,9 @@ def _handle(event, data, config, repo, decision):
                 acts = _acts_line(store, data, config)
                 if acts:
                     lines.append(acts)
+                lost = _acts_failed_line(store)
+                if lost:
+                    lines.append(lost)
             if event in ("SessionStart", "UserPromptSubmit"):
                 cap = _tasks_cap_line(store)
                 if cap:

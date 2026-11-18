@@ -214,12 +214,22 @@ def outbound_problem(body, repo, status_ok=False):
     return None
 
 
+def withheld_review(event):
+    """True for an event kept from a candidate the reviewer rejected with the reason withheld: its review says so (the
+    store makes one only for that, observer_store.review_complete with hold)."""
+    review = event.get("review") or {}
+    return review.get("accepted") is False and review.get("reason") == "withheld"
+
+
 def held_back(store, event, config):
     """Why the automatic gate holds this event back, as reasons of observer_holds.ANSWER_REASONS, which the main
-    session passes on the user's answer to its question: a change of an earlier memory's status that rests neither on
-    the user's typed words nor on the agent's message to the user. The observer does not judge confidentiality: a
-    project marked as handling sensitive material is held back for nothing more."""
+    session passes on the user's answer to its question: a candidate the reviewer rejected as withheld (the user's
+    typed words, or the reviewer's mistake: the user decides), and a change of an earlier memory's status that rests
+    neither on the user's typed words nor on the agent's message to the user. The observer does not judge
+    confidentiality: a project marked as handling sensitive material is held back for nothing more."""
     reasons = []
+    if withheld_review(event):
+        reasons.append("withheld_review")
     if status_change(event["body"]) and event["review"].get("status_authority") not in STATUS_AUTHORITY:
         reasons.append("status_change")
     return reasons
@@ -298,13 +308,39 @@ def _resolve_marks(marks, tasks, opened):
     return groups
 
 
-def compose(event, db, allowed=None, opened=None):
+def _stamped_after(failure_at, at):
+    """True when the failure's marker time is later than the decision's: a link points back in time only (the linter's
+    rule), so such a pair is not linked."""
+    if not (re.fullmatch(record_format.ISO, failure_at or "") and re.fullmatch(record_format.ISO, at or "")):
+        return False
+    return record_format.sort_key(failure_at) > record_format.sort_key(at)
+
+
+def _link_because(marker, candidate, because):
+    """Write `because=<the failure's comment id>` into the parsed marker of a decision drafted with a failure of its pass
+    (candidate["because_with"]), once that failure is posted (`because`). True when the marker changed. Nothing is
+    written when the failure is gone, when the id is there already or four ids are, or when the failure is stamped
+    after the decision."""
+    if not because or not candidate.get("because_with") or candidate["kind"] != "decision":
+        return False
+    current = marker.get("because", "")
+    kept = current.split(",") if current and record_format.LINK_VALUE.fullmatch(current) else []
+    wanted = str(because["comment"])
+    if wanted in kept or len(kept) >= 4 or _stamped_after(because.get("at"), marker.get("at")):
+        return False
+    marker["because"] = ",".join(kept + [wanted])
+    return True
+
+
+def compose(event, db, allowed=None, opened=None, because=None):
     """The body an event is posted with: the reviewed candidate's body with its eventkey, and its structured marks and
     plan links written into the marker by code (spec 4.6). A pure function of the reviewed candidate, the index `db`
-    (read for the tasks the marks name; None when no mark names a task of the index), the accounts `allowed` and
-    `opened` (the steps memory of the task a task-0 mark is about: {"comment", "steps"}), so the same inputs give the
-    same bytes. The model wrote no checks=, against=, done= or dropped= (a body that holds one is refused), and a plan
-    link joins a checks= a body held before 1.5.0, and an against= written by a model is refused. Raises PublishError with mark_kind (marks on a kind that carries
+    (read for the tasks the marks name; None when no mark names a task of the index), the accounts `allowed`,
+    `opened` (the steps memory of the task a task-0 mark is about: {"comment", "steps"}) and `because` (the failure a
+    decision was drafted with, once posted: {"comment", "at"}; code writes `because=<comment>` from it, the model
+    never does), so the same inputs give the same bytes. The model wrote no checks=, against=, done= or dropped= (a body
+    that holds one is refused), and a plan link joins a checks= a body held before 1.5.0, and an against= written by a
+    model is refused. Raises PublishError with mark_kind (marks on a kind that carries
     none), mark_binding (a mark that points at no open step) or part_binding (a plan link a kind may not carry, or more
     than four ids in one key)."""
     candidate = event["candidate"]
@@ -315,7 +351,8 @@ def compose(event, db, allowed=None, opened=None):
     marks, links = candidate.get("marks", []), candidate.get("links", [])
     if "against" in marker:
         raise PublishError("part_binding")   # only code writes it, from the candidate's links
-    if not marks and not links:
+    linked = _link_because(marker, candidate, because)
+    if not marks and not links and not linked:
         return base
     if marks and candidate["kind"] not in MARK_KINDS:
         raise PublishError("mark_kind")
@@ -385,6 +422,26 @@ def _opened(store, event):
     raise Waiting("depends", defer=found["state"] == "deferred")
 
 
+def _because(store, event):
+    """What a decision's because link resolves against: {"comment", "at"} of the failure it was drafted with, once that
+    failure is posted; None when the event carries no such link, or the failure is gone (dropped, or left to the main
+    session, which recorded its own): the decision then stands alone, as any decision does. A failure still on its way
+    makes this one wait (Waiting), as a mark waits for its task; a held one makes it leave the ready list."""
+    key = event["candidate"].get("because_with")
+    found = store.event(key) if key else None
+    if found is None:
+        return None
+    if found["state"] == "verified":
+        comment = found["receipt"].get("comment_id")
+        if type(comment) is not int or comment < 1:
+            return None
+        marker = record_format.parse_marker(record_format.first_lines(found["body"])[0]) or {}
+        return {"comment": comment, "at": marker.get("at", "")}
+    if found["state"] in ("rejected", "ignored") or (found["state"] == "deferred" and found["reason"] == "main_session"):
+        return None
+    raise Waiting("depends", defer=found["state"] == "deferred")
+
+
 def _issue_of(store, event):
     """The issue the event is posted on: the candidate's, else (a checkpoint on the task its pass opened) the one it
     was resolved to; 0 while there is none, and for a steps memory that opens a task, which names no issue yet."""
@@ -401,6 +458,7 @@ def _composed(store, event):
     PublishError as compose and _opened do."""
     candidate = event["candidate"]
     opened = _opened(store, event)
+    linked = _because(store, event)
     db = None
     allowed = recortex.allowed_users(store.repo)
     try:
@@ -409,7 +467,7 @@ def _composed(store, event):
             db = index.connect(store.repo, create=False)
             if db is None:
                 raise PublishError("index_unavailable")
-        return compose(event, db, allowed, opened), opened
+        return compose(event, db, allowed, opened, linked), opened
     finally:
         if db is not None:
             db.close()
@@ -448,13 +506,24 @@ def release_dependents(store, opener, opened):
         if event["reason"] != "depends":
             continue
         wanted = event["candidate"].get("with")
-        if wanted is not None and wanted != opener["source_id"]:
-            continue
+        if (wanted is not None and wanted != opener["source_id"]) or (wanted is None and "because_with" in event["candidate"]):
+            continue   # a decision that waits for a failure (release_because) waits for no task
         if opened:
             store.transition(event["eventkey"], "ready")
         else:
             store.transition(event["eventkey"], "rejected", reason="mark_binding")
         moved.append(event["eventkey"])
+    return moved
+
+
+def release_because(store, failure):
+    """After a failure is posted or dropped, the decisions drafted with it (candidate["because_with"]) go on: ready again.
+    A posted failure gives them their link; a dropped one leaves each to stand alone. Returns the keys moved."""
+    moved = []
+    for event in store.events(states=["deferred"], limit=1000):
+        if event["reason"] == "depends" and event["candidate"].get("because_with") == failure["eventkey"]:
+            store.transition(event["eventkey"], "ready")
+            moved.append(event["eventkey"])
     return moved
 
 
@@ -467,7 +536,7 @@ def _level(settings, event, main_session):
     if level == "notes" and (candidate["kind"] == "steps" or candidate.get("marks")):
         raise PublishError("level")
     if level == "assistant" and opens_task(candidate):
-        answered = main_session and event["state"] == "deferred" and event["reason"] == "level_ask"
+        answered = main_session and event["state"] == "deferred" and event["reason"] in observer_store.TASK_ASKS
         if not answered:
             raise PublishError("level_ask")
 
@@ -557,9 +626,19 @@ def _after_verified(store, event, receipt):
         else:
             store.add_act("memory", issue=candidate["issue"], comment=receipt["comment_id"])
     except (observer_store.StoreError, ValueError, TypeError):
-        pass
+        _note_act_failed(store)   # the post stands; the failure is counted and told (notice, status, --doctor)
     if opens_task(candidate):
         release_dependents(store, event, True)
+    if candidate["kind"] == "failure":
+        release_because(store, event)
+
+
+def _note_act_failed(store):
+    """Count a write of the acts log that failed (Store.note_act_failure). Nothing here can fail the post."""
+    try:
+        store.note_act_failure()
+    except Exception:  # noqa: BLE001 - a log that cannot say it failed is the log's problem, never the post's
+        pass
 
 
 def _daily_cap(store, settings):
@@ -589,8 +668,9 @@ def _payload_bound(event):
 
 def _bound(event, store):
     _payload_bound(event)
-    if event["review"].get("accepted") is not True or event["review"].get("candidate_hash") != candidate_hash(event["candidate"]):
-        raise PublishError("review_changed")
+    if (event["review"].get("accepted") is not True and not withheld_review(event)) \
+            or event["review"].get("candidate_hash") != candidate_hash(event["candidate"]):
+        raise PublishError("review_changed")   # a withheld review passes here only for a post the user's answer allows
     if not store.review_valid(event):
         raise PublishError("review_changed")
 

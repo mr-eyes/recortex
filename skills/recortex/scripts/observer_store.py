@@ -29,6 +29,10 @@ except ImportError:
 COUNT_MAX = 10 ** 9   # a token count the store keeps; anything else is stored as 0
 COMMENT_MAX = 2 ** 53   # a comment number on GitHub (about 7 * 10 ** 9 in 2026) is far above COUNT_MAX
 USAGE_DAYS = 35       # how long a call's token counts are kept
+ACTS_FAILED = "acts_failed"            # control: {"n": acts the log could not take, "day": UTC day of the last, YYYY-MM-DD}
+ACTS_FAILED_TOLD = "acts_failed_told"  # control: the UTC day the session-start notice for it was last shown
+ACTS_FAILED_DAYS = 7  # a failure older than this is not "still failing": no notice, and the count starts again
+DAY_FORM = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 MODEL = re.compile(r"[A-Za-z0-9_.:-]{1,100}")
 DEFAULT_BYTES = 128 * 1024 * 1024
 DEFAULT_PENDING = 10000
@@ -107,6 +111,8 @@ BACKUP = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")  # the name of a file i
 STATUS_KEYS = ("replaces", "instead", "checks")  # the links that change an earlier memory's status
 # Reasons an earlier queue kept an event for that are no longer given: back-filled as held.
 EARLIER_HELD = ("sensitive_project", "confidentiality", "sheet_not_approved")
+# The reasons for which a steps memory that opens a task waits as a task to open ("Open it") and not as a held memory.
+TASK_ASKS = ("level_ask", "withheld_review")
 
 
 class StoreError(RuntimeError):
@@ -121,6 +127,11 @@ def canonical(value):
 
 def candidate_hash(candidate):
     return hashlib.sha256(canonical(candidate).encode("utf-8")).hexdigest()
+
+
+def day_of(moment):
+    """The UTC day of a time, as YYYY-MM-DD."""
+    return time.strftime("%Y-%m-%d", time.gmtime(moment))
 
 
 def _count(value):
@@ -284,7 +295,7 @@ def description(kind, body):
 
 
 CANDIDATE_KEYS = frozenset(("kind", "issue", "body", "sources", "excerpts", "task_title", "topic", "marks", "links",
-                            "with"))
+                            "with", "because_with"))
 NEW_TASK_KINDS = ("steps", "checkpoint")   # the kinds that may name issue 0: the task a steps memory of the pass opens
 LINK_PARTS = ("checks", "against")         # the keys a plan link may take
 TASK_TITLE = 120
@@ -295,7 +306,8 @@ def _check_extras(candidate, issue):
     composes the marker from them): task_title and topic only for a steps memory that opens a task (issue 0, or the
     to-do task's own items carry neither); marks, a list of {"task", "steps"} (task 0 is the task a steps memory of the
     same pass opens); links, a list of {"key", "part"} naming plan parts by comment id; with, the first source of the
-    candidate that opens the task a mark of task 0 is about. Anything else raises invalid_candidate."""
+    candidate that opens the task a mark of task 0 is about; because_with (1.5.1, a decision only), the key of the event
+    of the failure of the same pass that the decision was made because of. Anything else raises invalid_candidate."""
     def whole(value, low, high):
         return type(value) is int and low <= value <= high
     opens = issue == 0 and candidate["kind"] == "steps"
@@ -321,6 +333,11 @@ def _check_extras(candidate, issue):
     for link in links:
         if (not isinstance(link, dict) or set(link) != {"key", "part"} or link["key"] not in LINK_PARTS
                 or not whole(link["part"], 1, 10 ** 18)):
+            raise StoreError("invalid_candidate")
+    if "because_with" in candidate:
+        # The failure of the same pass that a decision was made because of: its event's key. Code writes the link.
+        key = candidate["because_with"]
+        if candidate["kind"] != "decision" or not isinstance(key, str) or not EVENT_KEY.fullmatch(key):
             raise StoreError("invalid_candidate")
     if "with" in candidate:
         _id(candidate["with"])
@@ -351,6 +368,7 @@ class Store:
             raise StoreError("invalid_repository")
         self.repo = repo.lower()
         self.readonly = readonly
+        self.offered_again = 0   # the sources the last update_holds offered to the sort again (a release)
         create = create and not readonly
         self.config = recortex.load_config() if config is None else config
         self.max_bytes = min(DEFAULT_BYTES, max(1, int(max_bytes)))
@@ -771,7 +789,11 @@ class Store:
                    and type(post.get("at")) in (int, float) and post["at"] >= since
                    for post in self.get_control("main_posts", []))
 
-    def review_complete(self, source_id, candidate, review):
+    def review_complete(self, source_id, candidate, review, hold=None):
+        """Store a reviewed candidate as a ready event and return its key (None when the review did not accept it, or
+        when its sources already belong to another event). With `hold` (a reason of observer_holds.ANSWER_REASONS) the
+        reviewer's refusal `withheld` is kept instead: the candidate becomes an event deferred and held for that reason,
+        which waits for the user's answer, Post or Drop (waiting), and posts on no other path."""
         _id(source_id)
         if not isinstance(candidate, dict) or set(candidate) - CANDIDATE_KEYS:
             raise StoreError("invalid_candidate")
@@ -800,9 +822,14 @@ class Store:
             raise StoreError("restricted")
         if not isinstance(review, dict) or review.get("candidate_hash") != candidate_hash(candidate):
             raise StoreError("review_changed")
-        if review.get("accepted") is not True:
+        if hold is not None:
+            if (hold not in observer_holds.ANSWER_REASONS or review.get("accepted") is not False
+                    or review.get("reason") != "withheld"):
+                raise StoreError("invalid_review")
+        elif review.get("accepted") is not True:
             self.mark_handled(source_id, "rejected")
             return None
+        state, reason = ("deferred", hold) if hold else ("ready", "")
         key = event_key(self.repo, sources)
         posted_body = _with_key(body, key)
         now = time.time()
@@ -817,21 +844,32 @@ class Store:
                     return key
                 self._overlap(source_id)
                 return None
-            overlap = self.db.execute("SELECT eventkey FROM event_sources WHERE source_id IN (%s)" % ",".join("?" * len(sources)), sources).fetchone()
+            # A decision drafted because of a failure of the same pass may rest on messages that failure rests on: the user's
+            # one message holds both. Those stay the failure's rows; the decision's own sources (it may have none) are its.
+            shared = set()
+            if "because_with" in candidate:
+                parent = self.event(candidate["because_with"])
+                if parent is None or parent["candidate"]["kind"] != "failure" or parent["eventkey"] == key:
+                    raise StoreError("invalid_candidate")
+                shared = {row[0] for row in self.db.execute("SELECT source_id FROM event_sources WHERE eventkey=?",
+                                                            (parent["eventkey"],))}
+            own = [source for source in sources if source not in shared]
+            overlap = own and self.db.execute("SELECT eventkey FROM event_sources WHERE source_id IN (%s)" % ",".join("?" * len(own)), own).fetchone()
             if overlap:
                 self._overlap(source_id)
                 return None
             body_hash, words_hash = copy_digests(candidate["kind"], body)
-            self.db.execute("INSERT INTO events(eventkey,source_id,candidate,review,body,payload_hash,state,created,updated,"
-                            "body_hash,words_hash) VALUES (?,?,?,?,?,?,'ready',?,?,?,?)",
+            self.db.execute("INSERT INTO events(eventkey,source_id,candidate,review,body,payload_hash,state,reason,created,"
+                            "updated,body_hash,words_hash,held) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                             (key, source_id, canonical(candidate), canonical(review), posted_body,
-                             hashlib.sha256(posted_body.encode("utf-8")).hexdigest(), now, now, body_hash, words_hash))
-            self.db.executemany("INSERT INTO event_sources VALUES (?,?)", [(source, key) for source in sources])
+                             hashlib.sha256(posted_body.encode("utf-8")).hexdigest(), state, reason, now, now, body_hash,
+                             words_hash, int(bool(hold))))
+            self.db.executemany("INSERT INTO event_sources VALUES (?,?)", [(source, key) for source in own])
             self._store_targets(key, body)
-            for state in ("candidate", "reviewed", "ready"):
-                self.db.execute("INSERT INTO transitions VALUES (?,?,?)", (key, state, now))
-            for source in sources:
-                self._observation_state(source, "ready")
+            for step in ("candidate", "reviewed", state):
+                self.db.execute("INSERT INTO transitions VALUES (?,?,?)", (key, step, now))
+            for source in own:
+                self._observation_state(source, state, reason)
         return key
 
     def event(self, key):
@@ -1046,6 +1084,26 @@ class Store:
                                    (time.time() if at is None else float(at), kind, issue, comment,
                                     canonical(list(numbers)), backup)).lastrowid
 
+    def note_act_failure(self, now=None):
+        """Count one write of the acts log that failed (the post it was for stands): the control `acts_failed` holds a whole
+        count and the UTC day of the last failure, nothing else. The count starts again at 1 when the last failure is
+        more than ACTS_FAILED_DAYS days old. The session-start notice, `observer.py status` and `hooks.py --doctor` read
+        it."""
+        now = time.time() if now is None else now
+        today = day_of(now)
+        found = self.acts_failed()
+        count = found["n"] if found and found["day"] >= day_of(now - ACTS_FAILED_DAYS * 86400) else 0
+        self.set_control(ACTS_FAILED, {"n": min(count + 1, COUNT_MAX), "day": today})
+
+    def acts_failed(self):
+        """{"n": whole count, "day": "YYYY-MM-DD"} of the failed writes of the acts log, or None when there is none or the
+        control is not in that form."""
+        found = self.get_control(ACTS_FAILED, None)
+        if (isinstance(found, dict) and type(found.get("n")) is int and 1 <= found["n"] <= COUNT_MAX
+                and isinstance(found.get("day"), str) and DAY_FORM.fullmatch(found["day"])):
+            return {"n": found["n"], "day": found["day"]}
+        return None
+
     def acts(self, days=7, kinds=None):
         """The acts of the last `days` days (1 to 35), newest first, as dicts with their numbers as a list."""
         since = time.time() - max(1, min(USAGE_DAYS, int(days))) * 86400
@@ -1216,8 +1274,9 @@ class Store:
                             "issue": row["issue"]})
         for event in self.waiting_for_answer():
             candidate = event["candidate"]
-            if event.get("reason") == "level_ask" and candidate.get("kind") == "steps" and candidate.get("issue") == 0:
-                # A task to open, held at the level Assistant: "Task <short>: open a task ..." (observer_publisher).
+            if event.get("reason") in TASK_ASKS and candidate.get("kind") == "steps" and candidate.get("issue") == 0:
+                # A task to open, held at the level Assistant or kept off the record by the reviewer (withheld_review):
+                # "Task <short>: open a task ..." (observer_publisher).
                 if self.put_off_until(event["eventkey"][:8]) > now:
                     continue
                 out.append({"kind": "task_open", "key": event["eventkey"], "short": event["eventkey"][:8],
@@ -1248,13 +1307,37 @@ class Store:
                           and isinstance(hold.get("command"), str)})
         storage.write_file(os.path.join(self.folder, COMMAND_HOLDS), json.dumps(digests))
 
+    def _offer_again(self, before, changed):
+        """The sources that an active "publish" hold of `before`, released or gone in `changed`, kept off the record
+        (deferred as withheld) and that no hold still active in `changed` covers, go back to observed: the next pass
+        sorts them again, under its usual caps and gates. A source another hold covers stays withheld. Runs inside the
+        transaction of update_holds, so that a release never leaves them behind. Returns how many were offered."""
+        alive = {hold.get("id") for hold in changed if isinstance(hold, dict) and hold.get("state") == "active"}
+        freed = [hold for hold in before if isinstance(hold, dict) and hold.get("state") == "active"
+                 and hold.get("action") == "publish" and hold.get("id") not in alive]
+        if not freed:
+            return 0
+        offered = 0
+        for source_id, metadata in self.db.execute("SELECT source_id,metadata FROM observations WHERE state='deferred' "
+                                                   "AND reason='withheld'").fetchall():
+            session = json.loads(metadata).get("session_id")
+            if (observer_holds.publication_withheld(freed, self.repo, {session})
+                    and not observer_holds.publication_withheld(changed, self.repo, {session})):
+                self.db.execute("UPDATE observations SET state='observed',reason='',updated=? WHERE source_id=?",
+                                (time.time(), source_id))
+                offered += 1
+        return offered
+
     def update_holds(self, transform):
+        """Replace the holds by what `transform` makes of them. A hold of the record's publication that this releases
+        offers again the sources it withheld (_offer_again, counted in `offered_again`)."""
         with self.transaction():
             before = self.holds()
             changed = transform(before)
             if not isinstance(changed, list) or len(canonical(changed).encode("utf-8")) > 1024 * 1024:
                 raise StoreError("invalid_holds")
             self.db.execute("INSERT OR REPLACE INTO controls VALUES ('holds',?)", (canonical(changed),))
+            self.offered_again = self._offer_again(before, changed)
             # Before the commit: the held commands of the old and the new holds together, so that the file never
             # holds fewer than the queue, whether the commit happens or not. A write that fails aborts the update.
             self._write_held(before + changed)

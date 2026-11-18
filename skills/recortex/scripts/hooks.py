@@ -941,6 +941,22 @@ def top_note(path):
         else ""
 
 
+def observer_log_lines(repo, config):
+    """For --doctor: one line when the observer's log of what it did could not take a post (observer_store.note_act_failure):
+    fixed words, the count and the UTC day of the last failure, never text. Nothing when there is no failure, no
+    observer store, or one that cannot be read."""
+    try:
+        import observer_store
+        with observer_store.Store(repo, create=False, readonly=True, config=config) as store:
+            failed = store.acts_failed()
+    except Exception:  # noqa: BLE001 - --doctor says what it can
+        return []
+    if failed is None:
+        return []
+    return ["observer log: the log of what the observer did could not be written %d time(s), the last on %s (UTC); the "
+            "comments it posted stand in GitHub. observer.py status shows the count." % (failed["n"], failed["day"])]
+
+
 def doctor():
     """Print what the hooks depend on. Returns 1 when something keeps the brief from being shown."""
     problems = []
@@ -1010,6 +1026,8 @@ def doctor():
     if observer_paused(repo, config):
         import observer_runtime
         print(observer_runtime.PAUSED)
+    for line in observer_log_lines(repo, config):
+        print(line)
     reason = usage.problem(repo)
     print("usage: %s" % ("usage.db can be written (the hooks' estimates and the plugin's subagents are counted there)"
                          if not reason else "usage.db cannot be written (%s); the usage view will miss what the hooks and "
