@@ -5,7 +5,7 @@
 # blocks anything: it prints nothing and exits 0.
 input="$(cat)" || exit 0
 case "$input" in
-  *recortex:ask* | *observer*) ;;
+  *recortex:ask* | *observer* | *setup.py*) ;;
   *) exit 0 ;;
 esac
 src="${BASH_SOURCE[0]}"

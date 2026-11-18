@@ -130,6 +130,62 @@ class CommandTests(unittest.TestCase):
         self.assertIsNotNone(pretool_guard.ask_decision(data))
 
 
+OBSERVER = os.path.join(ts.SCRIPTS, "observer.py")
+SETUP = os.path.join(ts.SCRIPTS, "setup.py")
+THROUGH_A_TERMINAL = (
+    'script -qc "python3 %s later ab12cd34" /dev/null' % OBSERVER,
+    "unbuffer python3 %s enable --level everything --model sonnet --yes" % OBSERVER,
+    "expect -c 'spawn python3 %s undo 3; send \"undo\\r\"'" % OBSERVER,
+    'python3 -c "import pty; pty.spawn([\'python3\', \'%s\', \'discard\', \'x\'])"' % OBSERVER,
+    "python3 -m pty python3 %s observer --level notes --yes" % SETUP,
+    'socat - EXEC:"python3 %s disable",pty' % OBSERVER,
+    "faketty python3 %s drafts drop ab12cd34" % OBSERVER,
+    "echo undo | script -qec 'python3 %s undo 4' /dev/null" % OBSERVER,
+)
+NOT_THROUGH_A_TERMINAL = (
+    "python3 %s status" % OBSERVER,
+    "python3 %s pending --waiting --json" % OBSERVER,
+    "cat script.sh; python3 %s status" % OBSERVER,
+    "python3 %s observer --level notes --dry-run" % SETUP,
+    "ls %s" % ts.SCRIPTS,
+    "script -qc 'ls' /dev/null",   # a terminal for another command is not this check's business
+    "FOO=script python3 %s status" % OBSERVER,
+)
+
+
+class TerminalTests(unittest.TestCase):
+    """A terminal a session makes is not the user's: observer.py and setup.py are not run through a program that makes one."""
+
+    def test_each_helper_of_the_list_is_caught_in_each_way_of_writing_it(self):
+        for command in THROUGH_A_TERMINAL:
+            out = pretool_guard.decide(json.dumps(call(command, agent=None)))
+            self.assertEqual(pretool_guard.TERMINAL_DENIAL, out["hookSpecificOutput"]["permissionDecisionReason"], command)
+        for helper in pretool_guard.PTY_HELPERS:
+            command = "%s python3 %s status" % (helper, OBSERVER)
+            self.assertIsNotNone(pretool_guard.terminal_decision(call(command, agent=None)), helper)
+
+    def test_the_same_commands_without_a_terminal_helper_go_on(self):
+        for command in NOT_THROUGH_A_TERMINAL:
+            self.assertIsNone(pretool_guard.terminal_decision(call(command, agent=None)), command)
+            self.assertIsNone(pretool_guard.decide(json.dumps(call(command, agent=None))), command)
+
+    def test_a_subagent_is_stopped_too_and_the_denial_is_fixed_words(self):
+        out = pretool_guard.decide(json.dumps(call(THROUGH_A_TERMINAL[0], agent="general-purpose")))
+        self.assertEqual(pretool_guard.TERMINAL_DENIAL, out["hookSpecificOutput"]["permissionDecisionReason"])
+        self.assertNotIn("ab12cd34", json.dumps(out))
+        self.assertIn("their own terminal", pretool_guard.TERMINAL_DENIAL)
+
+    def test_the_hook_script_denies_them_in_every_project_and_leaves_the_rest(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        env = {"PATH": os.environ["PATH"], "HOME": folder.name, "XDG_STATE_HOME": os.path.join(folder.name, "state")}
+        for command in THROUGH_A_TERMINAL:
+            code, out = run_script(call(command, agent=None), env)
+            self.assertEqual((0, pretool_guard.TERMINAL_DENIAL), (code, reason(out)), command)
+        for command in NOT_THROUGH_A_TERMINAL:
+            self.assertEqual((0, ""), run_script(call(command, agent=None), env), command)
+
+
 class ScriptTests(unittest.TestCase):
     """The hook as Claude Code runs it, in a shell, with a clean environment: no project, no approval, no observer."""
 

@@ -6,7 +6,9 @@ only for a Bash call whose input mentions the ask agent or the observer).
    because this check stops every Bash command of its that is not exactly
    `python3 <this scripts folder>/index.py query (find|recall|timeline|tasks|plan) ...` with no shell operator. The check
    fails closed: an input it cannot read, for that agent, is a denial. Any other input is left alone.
-2. A Bash call that turns the observer on or changes its level or its stronger model (`observer.py enable`, `setup.py
+2. A Bash call that runs observer.py or setup.py through a pseudo-terminal helper (script, unbuffer, expect, ...) is denied:
+   a terminal that a session makes is not the user's.
+3. A Bash call that turns the observer on or changes its level or its stronger model (`observer.py enable`, `setup.py
    observer`, `setup.py apply`): when the user answered the session's question about it, a one-time grant is recorded
    (observer_grants) for the level or the model the user chose. Nothing is printed for it.
 
@@ -31,6 +33,27 @@ DENIAL = ("recortex: the ask agent only reads the record. Run exactly one comman
           "and no other command.")
 UNREADABLE = ("recortex: the ask agent only reads the record, and this command could not be checked, so it is stopped. "
               "Run python3 index.py query find, recall, timeline, tasks or plan, and nothing else.")
+
+
+# A program that gives a command a terminal of its own, which a session can use to look like the user's: one list, so that the
+# check and its tests name the same helpers. A word of the command line only counts as a helper at the start of a command
+# or after a space, a quote or an operator, and when a space, a quote or an operator follows (so `script.sh` is not one).
+PTY_HELPERS = ("script", "unbuffer", "expect", "socat", "faketty", "pty", "openpty", "forkpty")
+PTY_HELPER = re.compile(r"(?:^|[\s;&|(\'\"])(?:%s)(?=[\s;&|)\'\"]|$)" % "|".join(PTY_HELPERS))
+USERS_COMMAND = re.compile(r"(?:observer|setup)\.py")
+TERMINAL_DENIAL = ("recortex: observer.py and setup.py are not run through a pseudo-terminal helper (script, unbuffer, expect, "
+                   "socat, faketty, pty): what they ask for is the user's own answer. Ask the user to run the command in "
+                   "their own terminal, outside Claude Code.")
+
+
+def terminal_decision(data):
+    """The denial for a Bash call that runs observer.py or setup.py through a pseudo-terminal helper, or None."""
+    tool_input = data.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if (data.get("tool_name") in ("Bash", "bash") and isinstance(command, str) and USERS_COMMAND.search(command)
+            and PTY_HELPER.search(command)):
+        return deny(TERMINAL_DENIAL)
+    return None
 
 
 def deny(reason):
@@ -79,6 +102,9 @@ def decide(raw, scripts=HERE):
         return deny(UNREADABLE) if ASK in raw else None
     if data.get("agent_type") == ASK:
         return ask_decision(data, scripts)
+    found = terminal_decision(data)
+    if found:
+        return found
     record_enable_grant(data)
     return None
 
