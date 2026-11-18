@@ -1670,7 +1670,7 @@ class SetupQuestionDocsTests(unittest.TestCase):
     def test_the_contributing_rule_and_the_last_command(self):
         text = self.read("CONTRIBUTING.md")
         self.assertIn("python3 -m unittest discover -s tests -p test_setup_questions.py", text)
-        self.assertIn("The fifteen commands", text)
+        self.assertIn("The sixteen commands", text)
         self.assertIn("A new setup question", text)
 
     def test_the_upgrading_page_has_a_section_above_130(self):
