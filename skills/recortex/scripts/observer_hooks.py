@@ -402,7 +402,7 @@ stopped as when they cannot be read (fail_closed).
         return {}
     decision = {}
     try:
-        return _handle(event, data, config, repo, decision)
+        return _counted(event, repo, _handle(event, data, config, repo, decision))
     except TimeoutError:
         if event != "PreToolUse":
             return _output(event, notices=[] if event in TOOL_EVENTS else ["capture"])  # out of time: say so
@@ -411,6 +411,24 @@ stopped as when they cannot be read (fail_closed).
         if "held" in decision:
             return _output(event, denial=decision["held"])
         return _output(event, denial=decision.get("early") or _unchecked(data))
+
+
+# What the usage view calls the context each observer event can add (usage.INJECTED).
+COUNTED = {"SessionStart": "observer-session-start", "SubagentStart": "observer-subagent-start",
+           "UserPromptSubmit": "observer-prompt-submit", "PreToolUse": "observer-pre-tool"}
+
+
+def _counted(event, repo, result):
+    """`result` as it is. The characters of its context go to the usage view, an estimate that never raises and waits at most
+    50 ms (usage.py)."""
+    try:
+        context = result.get("hookSpecificOutput", {}).get("additionalContext") if isinstance(result, dict) else None
+        if isinstance(context, str) and context and event in COUNTED and recortex.valid_repo(repo):
+            import usage
+            usage.note_injected(repo, COUNTED[event], len(context))
+    except Exception:  # noqa: BLE001
+        pass
+    return result
 
 
 def fail_closed(data):

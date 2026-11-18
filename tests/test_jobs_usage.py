@@ -578,6 +578,24 @@ class InjectedCountTests(UsageBox):
         self.assertEqual(first.stdout, second.stdout)   # a count that cannot be written changes nothing the user sees
         self.assertEqual(0, second.returncode)
 
+    def test_the_observers_context_is_counted_and_its_result_is_not_changed(self):
+        import observer_hooks
+        result = {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "x" * 123}}
+        self.assertIs(result, observer_hooks._counted("SessionStart", ts.REPO, result))
+        observer_hooks._counted("PreToolUse", ts.REPO, {"hookSpecificOutput": {"permissionDecision": "deny"}})
+        observer_hooks._counted("Stop", ts.REPO, {"hookSpecificOutput": {"additionalContext": "not counted"}})
+        observer_hooks._counted("SessionStart", "not a repo", result)
+        observer_hooks._counted("SessionStart", ts.REPO, {})
+        observer_hooks._counted("SessionStart", ts.REPO, None)
+        self.assertEqual([("observer-session-start", 123)], [(row[1], row[2]) for row in self.rows("injected")])
+
+    def test_the_observers_handler_counts_what_it_adds(self):
+        import observer_hooks
+        with mock.patch.object(observer_hooks, "_handle", return_value={"hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit", "additionalContext": "y" * 40}}):
+            observer_hooks.handle("prompt-submit", {}, {"repo": ts.REPO}, ts.REPO)
+        self.assertEqual([("observer-prompt-submit", 40)], [(row[1], row[2]) for row in self.rows("injected")])
+
     def test_the_doctor_says_whether_the_file_can_be_written(self):
         self.ready()
         done = self.tool("hooks.py", "--doctor")
