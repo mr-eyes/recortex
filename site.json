@@ -4,6 +4,6 @@
   "base": "/recortex/",
   "version": "1.5.1",
   "plugin_repo": "recortex/recortex",
-  "plugin_ref": "main",
+  "plugin_ref": "cf02936c407c3415cc93980daf3561385a1cd07c",
   "copyright": "Copyright 2026 Mohamed Abuelanin. All rights reserved."
 }
