@@ -394,6 +394,9 @@ def open_task(repo, directory, dry_run=False, config=None):
                                 assessed, recortex.stamp(now(), config))
     key = hashlib.sha256(json.dumps([repo.lower(), title, topic, recortex.normalize(memory)]).encode("utf-8")).hexdigest()[:16]
     folder = scratch(repo, key)
+    earlier = os.path.join(folder, "task.md")
+    if os.path.isfile(earlier):
+        body = recortex.read_text(earlier)   # a rerun keeps the body the issue was created with, so create_issues.py adopts it
     write(folder, "steps.md", memory)
     write(folder, "task.md", body)
     manifest = write(folder, "manifest.json", json.dumps({

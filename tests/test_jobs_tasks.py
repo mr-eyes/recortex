@@ -976,6 +976,24 @@ class OpenAndMarkTests(TaskBox):
         number, _ = self.newest_issue()
         self.assertEqual(1, len(self.comments_on(number)))
 
+    def test_a_rerun_minutes_later_adopts_the_issue_the_interrupted_open_created(self):
+        """open_task writes an opening stamp into the body; a rerun in a later minute keeps the first body (the folder's
+        task.md), so create_issues.py adopts the issue GitHub already has."""
+        import datetime
+        from unittest import mock
+        self.in_process(extra={"CLAUDE_PROJECT_DIR": self.project})
+        import tasks as tasks_module
+        folder = self.task_drafts(name="open6", title="Task: write the third note")
+        with mock.patch.dict(os.environ, {"FAKE_GH_FAIL_AFTER": "issue create"}), self.assertRaises(recortex.GhError):
+            tasks_module.open_task(ts.REPO, folder, config=self.config)   # the issue exists on GitHub; the answer never came back
+        self.assertEqual(1, len([i for i in self.repo()["issues"].values() if i["title"] == "Task: write the third note"]))
+        later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=7)
+        with mock.patch.object(tasks_module, "now", return_value=later):
+            out = tasks_module.open_task(ts.REPO, folder, config=self.config)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(1, len([i for i in self.repo()["issues"].values() if i["title"] == "Task: write the third note"]))
+        self.assertEqual(1, len(self.comments_on(out["issue"])))
+
     def test_open_refuses_drafts_that_are_not_in_form(self):
         folder = self.task_drafts(name="open3")
         with open(os.path.join(folder, "task.json"), "w") as handle:

@@ -2,6 +2,7 @@
 the task another event opens, opening a task, the caps and the levels. Nothing here reaches GitHub; the scripts run
 against tests/fake_gh.py. (The format and the rules of tasks are in test_jobs_tasks.py, which this file builds on.)"""
 
+import datetime
 import hashlib
 import json
 import os
@@ -22,6 +23,7 @@ import observer_runtime as runtime  # noqa: E402
 import observer_sources  # noqa: E402
 import observer_store as store  # noqa: E402
 import record_format  # noqa: E402
+import tasks  # noqa: E402
 
 REPO = ts.REPO
 STEPS2 = 9120   # a second steps memory on the task (#7), after the first (9108) and the result (9109)
@@ -372,6 +374,21 @@ class OpenTaskTests(PublisherBox):
         again = publisher.reconcile(REPO, key, self.pcfg)
         self.assertEqual("verified", again["state"])
         self.assertEqual(1, len(self.titled("Task: write the second note")))
+
+    def test_an_interrupted_open_taken_up_again_minutes_later_opens_no_second_task(self):
+        """The opening stamp in the body is a clock reading: a rerun in a later minute must keep the body the issue was
+        created with, or create_issues.py finds no live issue with that body and opens another."""
+        key, _ = self.task_event(title="Task: write the third note")
+        with mock.patch.dict(os.environ, {"FAKE_GH_FAIL_AFTER": "issue create"}):
+            out = self.pub(key)
+        self.assertEqual("uncertain", out["state"], out)
+        self.assertEqual(1, len(self.titled("Task: write the third note")))
+        later = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=7)
+        with mock.patch.object(tasks, "now", return_value=later):
+            out = self.pub(key)
+        self.assertEqual("verified", out["state"], out)
+        self.assertEqual(1, len(self.titled("Task: write the third note")))
+        self.assertEqual(1, len(self.comments_on(out["receipt"]["issue"])))
 
     def test_a_task_with_no_topic_is_only_the_standing_to_do_list(self):
         key, _ = self.task_event(title="Task: no topic", topic=0)
