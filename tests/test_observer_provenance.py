@@ -16,6 +16,9 @@ import observer_worker as worker
 class ObserverProvenanceTests(unittest.TestCase):
     setUp = fixtures.WorkerTests.setUp
     invoke = fixtures.WorkerTests.invoke
+    sorting = fixtures.WorkerTests.sorting
+    drafted = fixtures.WorkerTests.drafted
+    number = fixtures.WorkerTests.number
     run_worker = fixtures.WorkerTests.run_worker
 
     def turn(self, output="Observed benchmark output TOOL-OUTPUT", report="I ran the benchmark: 5 runs, median 1.31 s."):
@@ -35,6 +38,7 @@ class ObserverProvenanceTests(unittest.TestCase):
         rows, _ = sources.scan(self.hook, self.project)
         with store.Store(fixtures.REPO, config=self.config) as db:
             db.capture(rows)
+        self.texts.update({row["source_id"]: sources.resolve(row, self.project)["text"] for row in rows})
         return rows
 
     def result(self, sids):
@@ -57,7 +61,7 @@ class ObserverProvenanceTests(unittest.TestCase):
             return delegate(payload, schema, purpose, options)
 
         report = self.run_worker(inspect)
-        self.assertEqual(["extract", "review"], [purpose for purpose, _ in self.calls])
+        self.assertEqual(["sort", "draft", "review"], [purpose for purpose, _ in self.calls])
         self.assertEqual(1, len(report["ready"]))
         for text in seen:
             for hidden in ("TOOL-OUTPUT", "TOOL-ARGS", "THINKING-TEXT", "notes.md", "tool_results"):
@@ -69,7 +73,7 @@ class ObserverProvenanceTests(unittest.TestCase):
         rows = self.turn()
         report = self.run_worker(self.invoke(self.result([rows[0]["source_id"]])))  # the user's prompt only
         self.assertEqual([], report["ready"])
-        self.assertEqual(["extract"], [purpose for purpose, _ in self.calls])
+        self.assertEqual(["sort", "draft"], [purpose for purpose, _ in self.calls])
         with store.Store(fixtures.REPO, config=self.config) as db:
             self.assertEqual("agent_account", db.observation(rows[0]["source_id"])["reason"])
 

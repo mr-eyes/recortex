@@ -68,7 +68,8 @@ class Replay:
         self.model_calls, self.daily = [], []
         self.decisions = {}
         self.context_available = True
-        self.fail_extract, self.fail_review = False, False
+        self.fail_extract, self.fail_review = False, False   # the sort call fails; the review call fails
+        self.by_text = {}
         self.project = self.base / "project"
         self.project.mkdir(mode=0o700)
         self.remote = self.base / "fake-github.json"
@@ -167,6 +168,7 @@ class Replay:
             handle.write(json.dumps(record) + "\n")
         path.chmod(0o600)
         self.labels[identity] = {"label": label, "domain": domain, "text": text, "day": self.day}
+        self.by_text.setdefault(text, self.labels[identity])
         self.records[identity] = record
         data = {"session_id": session, "hook_event_name": "SubagentStop" if subagent else "Stop",
                 "agent_transcript_path" if subagent else "transcript_path": str(path)}
@@ -192,8 +194,7 @@ class Replay:
         elapsed = (time.perf_counter_ns() - started) / 1e6
         (self.hook_ms if hooks else self.capture_ms).append(elapsed)
 
-    def candidate(self, source):
-        entry = self.labels[source["message_id"]]
+    def candidate(self, entry):
         label, domain, text = entry["label"], entry["domain"], entry["text"]
         stamp = self.start + datetime.timedelta(days=entry["day"] - 1)
         iso, title = stamp.strftime("%Y-%m-%dT12:00:00Z"), stamp.strftime("%Y-%m-%d 12:00 UTC")
@@ -216,29 +217,35 @@ class Replay:
                     "**State:** " + text + "\n\n**Done since the last checkpoint:** Reviewed the current task.\n\n"
                     "**In progress:** Validation remains open.\n\n**Next actions:** Project lead reviews remaining checks.\n\n"
                     "**Open questions:** Whether the remaining checks pass.\n")
-        selected = [source["id"]]
-        if source.get("invocation_source_id"):
-            selected.append(source["invocation_source_id"])
-        return {"kind": kind, "issue": 3, "body": marker + body, "sources": selected, "excerpts": [text]}
+        return {"kind": kind, "issue": 3, "task_title": "", "topic": 0, "body": marker + body, "excerpts": [text],
+                "marks": [], "links": []}
 
     def invoke(self, payload, schema, purpose, options):
         self.model_calls.append({"day": self.day, "purpose": purpose})
-        if purpose == "extract":
+        if purpose == "sort":
             if self.fail_extract:
                 self.fail_extract = False
                 return {"ok": False, "code": "simulated-interruption"}
-            candidates, ignored = [], []
-            for source in payload["sources"]:
-                label = self.labels[source["message_id"]]["label"]
+            labels, ignored = [], []
+            for view in payload["sources"]:
+                label = self.by_text[view["text"]]["label"]
                 if label in ("routine", "control", "tool_invocation"):
-                    ignored.append(source["id"])
-                elif len(candidates) < options["max_candidates"]:
-                    candidates.append(self.candidate(source))
-            return {"ok": True, "structured": {"candidates": candidates, "ignored": ignored}}
+                    ignored.append(view["n"])
+                else:
+                    kind = "decision" if label in ("decision", "replacement") else "failure" if label == "failure" else "idea"
+                    labels.append({"job": "memory", "kind": kind, "sources": [view["n"]], "task": 0, "steps": [], "parts": []})
+            return {"ok": True, "structured": {"labels": labels, "ignored": ignored}}
+        if purpose == "draft":
+            candidates = []
+            for label in payload["labels"]:
+                if len(candidates) < options["max_candidates"]:
+                    view = next(view for view in payload["sources"] if view["n"] == label["sources"][0])
+                    candidates.append(dict(self.candidate(self.by_text[view["text"]]), sources=[view["n"]]))
+            return {"ok": True, "structured": {"candidates": candidates}}
         if self.fail_review:
             self.fail_review = False
             return {"ok": False, "code": "simulated-interruption"}
-        entry = self.labels[payload["sources"][0]["message_id"]]
+        entry = self.by_text[payload["sources"][0]["text"]]
         accepted = entry["label"] != "unsupported"
         return {"ok": True, "structured": {"candidate_hash": payload["candidate_hash"], "accepted": accepted,
                                             "reason": "supported" if accepted else "unsupported"}}
@@ -365,7 +372,7 @@ class Replay:
                     self.capture(data)
             if self.day == schedule["budget_day"]:
                 with self.store() as store:
-                    while store.reserve_invocation("simulated_failed_attempt") is not None:
+                    while store.reserve_invocation("sort") is not None:   # failed sort calls count, as the others do
                         pass
                 calls = len(self.model_calls)
                 result = self.work()[0]
@@ -381,7 +388,7 @@ class Replay:
             if self.day == 1:
                 self.publish_initial_decisions()
             if self.day == schedule["extract_interrupt_day"]:
-                self.check(any(row["reason"] == "extract_failed" for row in self.observations()),
+                self.check(any(row["reason"] == "sort_failed" for row in self.observations()),
                            "interrupted extraction leaves its sources pending for a later pass")
             if self.day == schedule["review_interrupt_day"]:
                 interrupted = [row for row in self.observations() if row["reason"] == "review_failed"]
@@ -403,7 +410,7 @@ class Replay:
                    "unsupported scripted claims remain unrecorded after independent rejection")
         self.check(any(row["reason"] == "source_unavailable" for row in self.observations()),
                    "mutated source pointer cannot be reread as the original evidence")
-        transient = {"budget", "extract_failed", "review_failed", "record_unavailable", "worker_budget", "candidate_limit"}
+        transient = {"budget", "sort_failed", "draft_failed", "review_failed", "record_unavailable", "worker_budget", "candidate_limit"}
         self.check(not any(row["reason"] in transient for row in self.observations()),
                    "interrupted extraction, review, stale context and budget backlogs eventually drain")
         outcome_counts = {"routine_or_control": 0, "supported": 0, "supporting_invocations": 0,
@@ -445,9 +452,11 @@ class Replay:
             self.check(all(e["review"].get("accepted") for e in events), "every retained event has an accepted review")
             self.check(any(e["state"] == "ready" and e["created"] < self.now - 7 * 86400 and e["candidate"].get("excerpts") for e in events),
                        "pending reviewed excerpts survive beyond seven simulated days")
-            reservations = [row[0] for row in store.db.execute("SELECT created FROM invocations ORDER BY created")]
-            maximum = max(sum(t - 86400 < other <= t for other in reservations) for t in set(reservations))
-            self.check(maximum <= 70, "all rolling simulated 24-hour windows stay within 70 invocations")
+            for tier, cap in (("sort", 80), ("middle", 70)):
+                reservations = [row[0] for row in store.db.execute(
+                    "SELECT created FROM invocations WHERE tier=? ORDER BY created", (tier,))]
+                maximum = max([sum(t - 86400 < other <= t for other in reservations) for t in set(reservations)] or [0])
+                self.check(maximum <= cap, "all rolling simulated 24-hour windows stay within %d %s calls" % (cap, tier))
             status = store.status()
         return {"days": self.fixture["simulated_days"], "domains": sorted(self.fixture["domains"]),
                 "native_sessions": len({row["metadata"]["session_id"] for row in self.observations()}),

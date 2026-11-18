@@ -191,7 +191,7 @@ class ObserverLongSessionStressTests(unittest.TestCase):
         data, _ = replay.append("read-claim", text, "failure", role="assistant")
         replay.capture(data)
         self.assertEqual(1, len(replay.work()[0]["ready"]))
-        self.assertEqual(["extract", "review"], [call["purpose"] for call in replay.model_calls])
+        self.assertEqual(["sort", "draft", "review"], [call["purpose"] for call in replay.model_calls])
 
     def test_untrusted_real_ancestry_prevents_the_full_hook_benchmark(self):
         denied = {"ready": False, "code": "source-owner", "boundary": "ancestor"}

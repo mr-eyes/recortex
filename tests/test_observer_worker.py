@@ -86,18 +86,44 @@ class WorkerTests(unittest.TestCase):
         p=patch.object(worker,'refresh_record',return_value=True);p.start();self.addCleanup(p.stop)
         p=patch.object(worker,'ENOUGH',1);p.start();self.addCleanup(p.stop)  # the wait for a stretch has its own test
         self.calls=[]
+        self.texts={}
     def capture(self,text=QUOTE,role='user'):
         with self.path.open('a') as f:f.write(json.dumps({'type':role,'userType':'external','message':{'role':role,'content':text},'timestamp':'2026-03-01T12:00:00Z'})+'\n')
         rows,cursor=sources.scan(self.hook,self.project)
         with store.Store(REPO,config=self.config) as db:db.capture(rows)
+        self.texts[rows[-1]['source_id']]=text
         return rows[-1]['source_id']
     def candidate(self,sid,**changes):
         return dict({'kind':'decision','issue':2,'body':BODY,'sources':[sid],'excerpts':[QUOTE]},**changes)
-    def invoke(self,candidate,accepted=True,bad_hash=False):
+    def sid_of(self,view):
+        """The captured source a model was shown, found by its text: the models see numbers, never ids."""
+        return next((sid for sid,text in self.texts.items() if text==view['text']),None)
+    def shown(self,payload):
+        return [self.sid_of(view) for view in payload['sources']]
+    def number(self,sid,payload):
+        """The number the payload gives a captured source (one past the stretch for a source it does not hold)."""
+        found=[view['n'] for view in payload['sources'] if view['text']==self.texts.get(sid)]
+        return found[0] if found else len(payload['sources'])+1
+    def sorting(self,candidates,payload,label=None):
+        """What a sorter that finds exactly these candidates answers: one memory label for each, citing its messages."""
+        labels=[]
+        for c in candidates:
+            if not c:continue
+            cited=[self.number(s,payload) for s in c['sources'] if s in self.texts]
+            kind=label or (c['kind'] if c['kind'] in worker.LABEL_KINDS else 'none')
+            if cited:labels.append({'job':'memory','kind':kind,'sources':cited,'task':0,'steps':[],'parts':[]})
+        return {'labels':labels,'ignored':[]}
+    def drafted(self,c,payload):
+        """A candidate as the drafter returns it: the messages by their numbers."""
+        return {'kind':c['kind'],'issue':c['issue'],'task_title':c.get('task_title',''),'topic':c.get('topic',0),'body':c['body'],
+                'sources':[self.number(s,payload) for s in c['sources']],'excerpts':c['excerpts'],
+                'marks':c.get('marks',[]),'links':c.get('links',[])}
+    def invoke(self,*candidates,accepted=True,bad_hash=False,reason=None,label=None):
         def call(payload,schema,purpose,config):
             self.calls.append((purpose,payload))
-            if purpose=='extract':return {'ok':True,'structured':{'candidates':[candidate],'ignored':[]}}
-            return {'ok':True,'structured':{'candidate_hash':'0'*64 if bad_hash else payload['candidate_hash'],'accepted':accepted,'reason':'supported' if accepted else 'unsupported'}}
+            if purpose=='sort':return {'ok':True,'structured':self.sorting(candidates,payload,label)}
+            if purpose=='draft':return {'ok':True,'structured':{'candidates':[self.drafted(c,payload) for c in candidates if c]}}
+            return {'ok':True,'structured':{'candidate_hash':'0'*64 if bad_hash else payload['candidate_hash'],'accepted':accepted,'reason':reason or ('supported' if accepted else 'unsupported')}}
         return call
     def test_a_status_change_rests_on_the_users_words_or_the_agents_message(self):
         # The observer takes notes of the conversation: a change of an earlier memory's status rests on the user's
@@ -145,7 +171,7 @@ class WorkerTests(unittest.TestCase):
             body = BODY.replace('**Effect:** Strict quoting remains the default.',
                                 '**Effect:** Strict quoting remains the default. ' + extra)
             self.run_worker(self.invoke(self.candidate(sid, body=body)))
-            self.assertEqual(['extract'], [x[0] for x in self.calls], reason)
+            self.assertEqual(['sort', 'draft'], [x[0] for x in self.calls], reason)
             with store.Store(REPO, config=self.config) as db:
                 self.assertEqual(reason, db.observation(sid)['reason'])
     def status_case(self, kind, body, sids, excerpts):
@@ -153,7 +179,7 @@ class WorkerTests(unittest.TestCase):
         with patch.object(worker, 'record_context', return_value=dict(CONTEXT, memories=[{'id': 123}])):
             report = self.run_worker(self.invoke(self.candidate(sids[-1], kind=kind, body=body, sources=sids,
                                                                excerpts=excerpts)))
-        self.assertEqual(['extract', 'review'], [x[0] for x in self.calls], kind)
+        self.assertEqual(['sort', 'draft', 'review'], [x[0] for x in self.calls], kind)
         with store.Store(REPO, config=self.config) as db:
             return db.event(report['ready'][0])
     def test_a_change_of_status_posts_on_its_own_only_on_what_was_said(self):
@@ -198,7 +224,7 @@ class WorkerTests(unittest.TestCase):
         with store.Store(REPO, config=self.config) as db:
             self.assertEqual([], db.register_main(2, 'decision', 9200))
         report = self.run_worker(self.invoke(self.candidate(before)))
-        self.assertEqual(['extract'], [x[0] for x in self.calls])
+        self.assertEqual(['sort', 'draft'], [x[0] for x in self.calls])
         self.assertEqual((1, []), (report['ignored'], report['ready']))
         with store.Store(REPO, config=self.config) as db:
             self.assertEqual(('ignored', 'main_session'), (db.observation(before)['state'], db.observation(before)['reason']))
@@ -209,15 +235,13 @@ class WorkerTests(unittest.TestCase):
         # The reviewer has a reason of its own for a moment the user asked not to post or record, and the selector is
         # told to skip such a moment.
         self.assertIn('withheld',worker.REVIEW['properties']['reason']['enum'])
-        self.assertIn('not to post or record',runtime.PROMPTS['extract'])
-        self.assertIn('withholds nothing',runtime.PROMPTS['extract'])
+        self.assertIn('not to post or record',runtime.PROMPTS['sort'])
+        self.assertIn('not to post or record',runtime.PROMPTS['draft'])
+        self.assertIn('withholds nothing',runtime.PROMPTS['review'])
         self.assertIn('reason withheld',runtime.PROMPTS['review'])
-        self.assertNotIn('even when the user asked',runtime.PROMPTS['extract'])
+        for purpose in ('sort','draft'):self.assertNotIn('even when the user asked',runtime.PROMPTS[purpose])
         sid=self.capture()
-        def call(payload,schema,purpose,config):
-            self.calls.append((purpose,payload))
-            if purpose=='extract':return {'ok':True,'structured':{'candidates':[self.candidate(sid)],'ignored':[]}}
-            return {'ok':True,'structured':{'candidate_hash':payload['candidate_hash'],'accepted':False,'reason':'withheld'}}
+        call=self.invoke(self.candidate(sid),accepted=False,reason='withheld')
         self.assertEqual([],self.run_worker(call)['ready'])
         with store.Store(REPO,config=self.config) as db:
             self.assertEqual(('deferred','withheld'),(db.observation(sid)['state'],db.observation(sid)['reason']))
@@ -232,8 +256,10 @@ class WorkerTests(unittest.TestCase):
         sid = self.capture()
         self.run_worker(self.invoke(self.candidate(sid)))
         review = [payload for purpose, payload in self.calls if purpose == 'review'][0]
-        self.assertEqual([sid], [item['id'] for item in review['sources']])
-        self.assertEqual([asked, told], [item['id'] for item in review['context']])
+        self.assertEqual([QUOTE], [item['text'] for item in review['sources']])
+        self.assertEqual([self.texts[asked], self.texts[told]], [item['text'] for item in review['context']])
+        self.assertEqual([3], review['candidate']['sources'])   # the messages are cited by number, never by id
+        self.assertNotRegex(json.dumps(dict(review, candidate_hash='')), '[0-9a-f]{64}')
         self.assertIn('the other messages of the same stretch', runtime.PROMPTS['review'])
         self.assertIn("the agent's account of such a request withholds nothing", runtime.PROMPTS['review'])
     def test_no_field_sheet_mark_or_pattern_reaches_the_models(self):
@@ -245,7 +271,7 @@ class WorkerTests(unittest.TestCase):
         import field_sheet
         with patch.object(field_sheet, 'state', return_value=sheet):
             ready = self.run_worker(self.invoke(self.candidate(sid)))['ready']
-        self.assertEqual(['extract', 'review'], [purpose for purpose, _ in self.calls])
+        self.assertEqual(['sort', 'draft', 'review'], [purpose for purpose, _ in self.calls])
         for purpose, payload in self.calls:
             text = json.dumps(payload)
             for absent in ('never_write_down', 'names of client sites', 'restricted_patterns', 'ST-', 'confidential',
@@ -312,7 +338,7 @@ class WorkerTests(unittest.TestCase):
         runtime.approve(REPO, self.config)
         with patch.object(observer_publisher, 'publish', side_effect=observer_publisher.PublishError('withheld')):
             ready = self.run_worker(self.invoke(self.candidate(other)))['ready']
-        self.assertEqual(['extract', 'review'], [purpose for purpose, _ in self.calls])
+        self.assertEqual(['sort', 'draft', 'review'], [purpose for purpose, _ in self.calls])
         with store.Store(REPO, config=self.config) as db:
             self.assertEqual(('deferred', 'withheld'), (db.event(ready[0])['state'], db.event(ready[0])['reason']))
             self.assertFalse(db.get_control('worker_degraded'))
@@ -339,7 +365,8 @@ class WorkerTests(unittest.TestCase):
             self.run_worker(self.invoke(self.candidate(sid)))
         payloads = dict(self.calls)
         self.assertEqual(recent[2], payloads['review']['recent_on_issue'])
-        self.assertNotIn('recent_on_issue', payloads['extract'])
+        self.assertNotIn('recent_on_issue', payloads['sort'])
+        self.assertNotIn('recent_on_issue', payloads['draft'])
         self.assertIn('recent_on_issue lists the newest memories', runtime.PROMPTS['review'])
         self.calls = []
         sid = self.capture(QUOTE + ' Once more.')
@@ -366,7 +393,7 @@ class WorkerTests(unittest.TestCase):
             self.calls = []
             sid = self.capture(QUOTE + ' Unbound %d.' % n)
             self.run_worker(self.invoke(self.candidate(sid, **change)))
-            self.assertEqual(['extract'], [x[0] for x in self.calls], reason)
+            self.assertEqual(['sort', 'draft'], [x[0] for x in self.calls], reason)
             with store.Store(REPO, config=self.config) as db:
                 self.assertEqual(reason, db.observation(sid)['reason'])
     def test_one_failing_event_does_not_stop_the_queue(self):
@@ -374,10 +401,7 @@ class WorkerTests(unittest.TestCase):
         self.config['observer']['mode'] = 'automatic'
         runtime.approve(REPO, self.config)
         first, second = self.capture(), self.capture(QUOTE + ' Again.')
-        def call(payload, schema, purpose, config):
-            if purpose == 'extract':
-                return {'ok': True, 'structured': {'candidates': [self.candidate(first), self.candidate(second)], 'ignored': []}}
-            return {'ok': True, 'structured': {'candidate_hash': payload['candidate_hash'], 'accepted': True, 'reason': 'supported'}}
+        call = self.invoke(self.candidate(first), self.candidate(second))
         with patch.object(observer_publisher, 'publish', side_effect=[observer_publisher.PublishError('lint_failed'),
                                                                      {'state': 'verified'}]) as publish:
             ready = self.run_worker(call)['ready']
@@ -390,10 +414,7 @@ class WorkerTests(unittest.TestCase):
         self.config['observer']['mode'] = 'automatic'
         runtime.approve(REPO, self.config)
         first, second = self.capture(), self.capture(QUOTE + ' Again.')
-        def call(payload, schema, purpose, config):
-            if purpose == 'extract':
-                return {'ok': True, 'structured': {'candidates': [self.candidate(first), self.candidate(second)], 'ignored': []}}
-            return {'ok': True, 'structured': {'candidate_hash': payload['candidate_hash'], 'accepted': True, 'reason': 'supported'}}
+        call = self.invoke(self.candidate(first), self.candidate(second))
         with patch.object(observer_publisher, 'publish', side_effect=observer_publisher.PublishError('daily_cap')) as publish:
             ready = self.run_worker(call)['ready']
         self.assertEqual(1, publish.call_count)
@@ -404,16 +425,13 @@ class WorkerTests(unittest.TestCase):
         sid=self.capture();candidate=self.candidate(sid)
         report=self.run_worker(self.invoke(candidate))
         self.assertEqual('ok',report['code']);self.assertEqual(1,len(report['ready']))
-        self.assertEqual(['extract','review'],[x[0] for x in self.calls])
+        self.assertEqual(['sort','draft','review'],[x[0] for x in self.calls])
         with store.Store(REPO,config=self.config) as db:
             event=db.event(report['ready'][0]);self.assertTrue(db.review_valid(event));self.assertEqual('ready',event['state'])
-            self.assertEqual(2,db.status()['invocations_24h'])
+            self.assertEqual(3,db.status()['invocations_24h'])
     def test_overlapping_candidates_never_demote_ready_source(self):
-        sid=self.capture();candidate=self.candidate(sid);delegate=self.invoke(candidate)
-        def call(payload,schema,purpose,config):
-            if purpose=='extract':return {'ok':True,'structured':{'candidates':[candidate,candidate],'ignored':[]}}
-            return delegate(payload,schema,purpose,config)
-        report=self.run_worker(call)
+        sid=self.capture();candidate=self.candidate(sid)
+        report=self.run_worker(self.invoke(candidate,candidate))
         self.assertEqual(1,len(report['ready']))
         with store.Store(REPO,config=self.config) as db:self.assertEqual('ready',db.observation(sid)['state'])
     def test_wrong_review_hash_and_rejection_never_persist_raw_draft(self):
@@ -424,23 +442,22 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual('review_failed',db.observation(sid)['reason'])
     def test_assistant_quote_cannot_create_user_decision(self):
         sid=self.capture(role='assistant')
-        self.run_worker(self.invoke(self.candidate(sid)))
-        self.assertEqual(['extract'],[x[0] for x in self.calls])
+        self.run_worker(self.invoke(self.candidate(sid),label='idea'))   # a sorter that mislabels the moment as an idea
+        self.assertEqual(['sort','draft'],[x[0] for x in self.calls])
         with store.Store(REPO,config=self.config) as db:self.assertEqual('decision_authority',db.observation(sid)['reason'])
     def test_model_cannot_bind_unseen_source_or_destination(self):
         sid=self.capture();bad=self.candidate(sid,sources=[sid,'f'*64])
-        self.run_worker(self.invoke(bad));self.assertEqual(1,len(self.calls))
+        self.run_worker(self.invoke(bad));self.assertEqual(['sort','draft'],[x[0] for x in self.calls])
         with store.Store(REPO,config=self.config) as db:self.assertEqual([],db.events())
     def test_secret_source_never_reaches_model(self):
         sid=self.capture('token ghp_'+'A'*36)
         self.run_worker(self.invoke(self.candidate(sid)))
         self.assertEqual([],self.calls)
         with store.Store(REPO,config=self.config) as db:self.assertEqual('privacy',db.observation(sid)['reason'])
-    def test_budget_counts_failed_extractor_and_queued_data_survives(self):
-        sid=self.capture();self.config['observer']['max_invocations']=1
-        runtime.approve(REPO,self.config)
+    def test_budget_counts_failed_sorter_and_queued_data_survives(self):
+        sid=self.capture()
         def failed(*args):return {'ok':False,'structured':None}
-        self.assertEqual('extract-failed',self.run_worker(failed)['code'])
+        self.assertEqual('sort-failed',self.run_worker(failed)['code'])
         with store.Store(REPO,config=self.config) as db:
             self.assertEqual(1,db.status()['invocations_24h']);self.assertEqual('deferred',db.observation(sid)['state'])
     def test_permanent_deferred_sources_do_not_starve_new_work(self):
@@ -450,11 +467,11 @@ class WorkerTests(unittest.TestCase):
         sid=self.capture()
         self.assertEqual(1,len(self.run_worker(self.invoke(self.candidate(sid)))['ready']))
     def offered(self,ignore=()):
-        """A selector that cites nothing and sets aside only `ignore`; returns the ids each pass was shown."""
+        """A sorter that labels nothing and sets aside only `ignore`; returns the ids each pass was shown."""
         shown=[]
         def call(payload,schema,purpose,config):
-            shown.append([item['id'] for item in payload['sources']])
-            return {'ok':True,'structured':{'candidates':[],'ignored':[i for i in shown[-1] if i in ignore]}}
+            shown.append(self.shown(payload))
+            return {'ok':True,'structured':{'labels':[],'ignored':[v['n'] for v,i in zip(payload['sources'],shown[-1]) if i in ignore]}}
         return shown,call
     def state(self,sid):
         with store.Store(REPO,config=self.config) as db:
@@ -493,6 +510,7 @@ class WorkerTests(unittest.TestCase):
         rows,_=sources.scan(self.hook,self.project)
         with store.Store(REPO,config=self.config) as db:db.capture(rows)
         sids=[row['source_id'] for row in rows]
+        self.texts.update({sid:'Note %d. '%n+'x'*5000 for n,sid in enumerate(sids)})
         self.assertNotEqual(sids,sorted(sids))
         shown,call=self.offered(ignore=sids)
         self.run_worker(call)
@@ -515,13 +533,7 @@ class WorkerTests(unittest.TestCase):
         decided = self.capture()
         first = self.candidate(decided, sources=[decided, told], excerpts=[QUOTE])
         second = {'kind': 'idea', 'issue': 2, 'body': idea, 'sources': [said, told], 'excerpts': []}
-        def call(payload, schema, purpose, config):
-            self.calls.append((purpose, payload))
-            if purpose == 'extract':
-                return {'ok': True, 'structured': {'candidates': [first, second], 'ignored': []}}
-            return {'ok': True, 'structured': {'candidate_hash': payload['candidate_hash'], 'accepted': True,
-                                               'reason': 'supported'}}
-        report = self.run_worker(call)
+        report = self.run_worker(self.invoke(first, second))
         self.assertEqual(2, len(report['ready']))
         with store.Store(REPO, config=self.config) as db:
             events = [db.event(key) for key in report['ready']]
@@ -534,14 +546,14 @@ class WorkerTests(unittest.TestCase):
         self.calls=[];self.run_worker(self.invoke(self.candidate(sid,issue=99)))
         self.assertEqual(('deferred','destination_2'),self.state(sid))
         self.calls=[];self.capture(QUOTE+' And on.');self.run_worker(self.invoke(self.candidate(sid,issue=99)))
-        self.assertNotIn(sid,[item['id'] for purpose,payload in self.calls for item in payload['sources']])
+        self.assertNotIn(sid,[s_ for purpose,payload in self.calls for s_ in self.shown(payload)])
     def test_a_long_source_is_shown_by_its_start_and_its_end(self):
         text='START '+'y'*20000+' END'
         sid=self.capture(text)
         shown=[]
         def call(payload,schema,purpose,config):
             shown.append(payload['sources'][0]['text'])
-            return {'ok':True,'structured':{'candidates':[],'ignored':[sid]}}
+            return {'ok':True,'structured':{'labels':[],'ignored':[1]}}
         self.run_worker(call)
         self.assertTrue(shown[0].startswith('START '));self.assertTrue(shown[0].endswith(' END'))
         self.assertLessEqual(len(shown[0]),worker.SOURCE_TEXT+100);self.assertIn('characters left out',shown[0])
@@ -554,9 +566,9 @@ class WorkerTests(unittest.TestCase):
         poison=self.capture('POISON message the model cannot answer for.',role='assistant')
         calls=[]
         def call(payload,schema,purpose,config):
-            ids=[item['id'] for item in payload['sources']];calls.append(ids)
+            ids=self.shown(payload);calls.append(ids)
             if poison in ids:return {'ok':False,'code':'invalid-output','structured':None}
-            return {'ok':True,'structured':{'candidates':[],'ignored':ids}}
+            return {'ok':True,'structured':{'labels':[],'ignored':[v['n'] for v in payload['sources']]}}
         ordinary=[]
         for n in range(24):
             ordinary+=[self.capture('Ordinary note %d one.'%n,role='assistant'),self.capture('Ordinary note %d two.'%n,role='assistant')]
@@ -565,7 +577,7 @@ class WorkerTests(unittest.TestCase):
             self.run_worker(call);self.age(301)
         with store.Store(REPO,config=self.config) as db:
             states=[db.observation(sid)['state'] for sid in ordinary]
-            self.assertEqual(('deferred','extract_failed_3'),(db.observation(poison)['state'],db.observation(poison)['reason']))
+            self.assertEqual(('deferred','sort_failed_3'),(db.observation(poison)['state'],db.observation(poison)['reason']))
         self.assertGreaterEqual(states.count('ignored'),40)
         self.assertLessEqual(len(calls),40)
         self.assertEqual(2,sum(ids==[poison] for ids in calls))  # three attempts: in its batch, then twice alone
@@ -575,7 +587,7 @@ class WorkerTests(unittest.TestCase):
         calls=[]
         def call(payload,schema,purpose,config):
             calls.append(len(payload['sources']))
-            return {'ok':True,'structured':{'candidates':[],'ignored':[item['id'] for item in payload['sources']]}}
+            return {'ok':True,'structured':{'labels':[],'ignored':[v['n'] for v in payload['sources']]}}
         with patch.object(worker,'ENOUGH',8):
             for turn in range(40):
                 self.capture('Turn %d: please run the tests.'%turn)
