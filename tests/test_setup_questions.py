@@ -277,9 +277,15 @@ class Box(ts.RecordSandbox):
     def settings_file(self, value=None, raw=None):
         return put_json(self.settings, value, raw=raw)
 
-    def approval(self, root=None, raw=None, mode=0o600):
+    def approval(self, root=None, raw=None, mode=0o600, level=None, **settings):
+        """The observer's approvals file: with a `level` the form 2 entry of 1.5.0 (the keys in `settings` are added to its
+        settings), without one the form 1 entry that 1.4.0 wrote, which holds no level."""
         path = os.path.join(self.dir, "xdg-state", "recortex", "private", "observer-approvals.json")
-        value = {"form": 1, "folders": {os.path.realpath(root or self.project): {"repo": self.repo_name.lower()}}}
+        entry = {"repo": self.repo_name.lower(), "settings": dict({"enabled": True, "mode": "shadow", "model": "sonnet"},
+                                                                  **settings)}
+        if level:
+            entry["settings"]["level"] = level
+        value = {"form": 2 if level else 1, "folders": {os.path.realpath(root or self.project): entry}}
         return put_json(path, value, mode=mode, raw=raw)
 
     def touch(self, *names):
@@ -329,7 +335,7 @@ class PayloadMixin:
 
 class SoftwarePayloadTests(PayloadMixin, Box):
     def answer_everything(self):
-        self.put_state(machine={"status-line": self.entry("no")}, repos={REPO: {"observer": self.entry("no")}})
+        self.put_state(machine={"status-line": self.entry("no")}, repos={REPO: {"observer-level": self.entry("no")}})
 
 
 class PaperPayloadTests(PayloadMixin, Box):
@@ -337,7 +343,7 @@ class PaperPayloadTests(PayloadMixin, Box):
 
     def answer_everything(self):
         self.put_state(machine={"status-line": self.entry("no")},
-                       repos={PAPER.lower(): {"observer": self.entry("no"), "labels": self.entry("yes")}})
+                       repos={PAPER.lower(): {"observer-level": self.entry("no"), "labels": self.entry("yes")}})
         self.project_file(own_manuscript=False)
         done = self.tool("setup.py", "writing", "set", "--mode", "off", "--yes")
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
@@ -575,18 +581,18 @@ class ReminderTests(Box):
         self.assertIn("setup questions run note %s is mode 644" % self.run_path(), doctor)
 
     def test_no_reminder_when_no_question_is_open(self):
-        self.put_state(machine={"status-line": self.kept("no")}, repos={REPO: {"observer": self.kept("no")}})
+        self.put_state(machine={"status-line": self.kept("no")}, repos={REPO: {"observer-level": self.kept("no")}})
         self.start(session="s")
         self.assertEqual([[], [], [], []], self.asked("s", 4))
         self.assertNotIn("reminded", self.marks("s"))
 
     def test_a_question_that_opens_during_the_session_is_reminded_and_one_that_is_answered_stops_it(self):
-        self.put_state(machine={"status-line": self.kept("no")}, repos={REPO: {"observer": self.kept("no")}})
+        self.put_state(machine={"status-line": self.kept("no")}, repos={REPO: {"observer-level": self.kept("no")}})
         self.start(session="s")
         self.prompt("s")
         self.put_state(machine={"status-line": self.kept("no")})   # the observer's answer is gone: it is open again
         self.assertEqual([[brief.SETUP_REMINDER % (1, "")]], self.asked("s", 1))
-        self.put_state(machine={"status-line": self.kept("no")}, repos={REPO: {"observer": self.kept("no")}})
+        self.put_state(machine={"status-line": self.kept("no")}, repos={REPO: {"observer-level": self.kept("no")}})
         self.assertEqual([[], [], []], self.asked("s", 3))   # answered since: nothing to remind of
 
     def test_the_switches_stop_it(self):
@@ -752,7 +758,7 @@ class ProfileYesTests(Box):
     def test_yes_to_the_profile_records_nothing_for_the_status_line_and_the_observer(self):
         self.touch("paper/main.tex")
         found = json.loads(self.tool("setup.py", "questions", "--json").stdout)
-        self.assertEqual(["manuscript-profile", "status-line", "observer"], [q["id"] for q in found["open"]])
+        self.assertEqual(["manuscript-profile", "status-line", "observer-level"], [q["id"] for q in found["open"]])
         answers = next(q["answers_file"] for q in found["open"] if q["id"] == "manuscript-profile")
         self.assertNotIn("status_line", answers)
         self.assertNotIn("observer", answers)
@@ -761,7 +767,7 @@ class ProfileYesTests(Box):
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
         self.assertNotIn("status-line no", done.stdout)
         self.assertNotIn("observer no", done.stdout)
-        self.assertEqual(["status-line", "observer"], self.open_ids())   # still the user's to answer
+        self.assertEqual(["status-line", "observer-level"], self.open_ids())   # still the user's to answer
 
     def test_an_answer_the_user_gave_is_still_recorded(self):
         path = self.write("answers.json", json.dumps({"repo": REPO, "deliverables": [{"kind": "paper"}], "status_line": False,
@@ -769,7 +775,7 @@ class ProfileYesTests(Box):
         done = self.tool("setup.py", "apply", "--answers", path, "--yes")
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
         self.assertNotIn("status-line", self.open_ids())
-        self.assertNotIn("observer", self.open_ids())
+        self.assertNotIn("observer-level", self.open_ids())
 
 
 # ---------------------------------------------------------------- the checks, one state at a time
@@ -821,32 +827,46 @@ class StatusLineTests(Box):
 
 
 class ObserverCheckTests(Box):
-    def test_an_approval_of_this_folder_answers_the_question(self):
-        self.assertIn("observer", self.groups()["open"])
+    def test_an_approval_of_this_folder_with_a_level_answers_the_question(self):
+        self.assertIn("observer-level", self.groups()["open"])
+        self.approval(level="notes")
+        self.assertIn("observer-level", self.groups()["answered"])
+        self.assertNotIn("observer-level", self.open_ids())
+
+    def test_an_approval_of_1_4_0_holds_no_level_so_the_question_stays_open(self):
+        # The observer enabled before 1.5.0 is paused until the user chooses: the question is asked, and counted.
         self.approval()
-        self.assertIn("observer", self.groups()["answered"])
-        self.assertNotIn("observer", self.open_ids())
+        self.assertIn("observer-level", self.groups()["open"])
+        self.assertIn("observer-level", self.open_ids())
 
     def test_an_approval_of_another_folder_does_not(self):
-        self.approval(root=os.path.join(self.dir, "other-folder"))
-        self.assertIn("observer", self.groups()["open"])
+        self.approval(root=os.path.join(self.dir, "other-folder"), level="everything")
+        self.assertIn("observer-level", self.groups()["open"])
+
+    def test_an_approval_for_another_repository_does_not(self):
+        path = self.approval(level="everything")
+        data = load_json(path)
+        for entry in data["folders"].values():
+            entry["repo"] = "octo-org/other-repo"
+        put_json(path, data)
+        self.assertIn("observer-level", self.groups()["open"])
 
     def test_a_project_file_that_switches_the_observer_off_means_it_is_not_asked(self):
         for value in (False, {"enabled": False}):
             self.project_file(observer=value)
             found = self.groups()
-            self.assertNotIn("observer", found["open"], value)
-            self.assertIn("observer", found["not-asked"], value)
-            self.assertNotIn("observer", self.open_ids(), value)
+            self.assertNotIn("observer-level", found["open"], value)
+            self.assertIn("observer-level", found["not-asked"], value)
+            self.assertNotIn("observer-level", self.open_ids(), value)
         self.project_file(observer={"enabled": True})   # the project file can switch it off and nothing else
-        self.assertIn("observer", self.groups()["open"])
+        self.assertIn("observer-level", self.groups()["open"])
 
     def test_approvals_that_cannot_be_read_are_not_asked(self):
         for name, kwargs in {"not JSON": dict(raw="{nope"), "wrong form": dict(raw=json.dumps({"form": 2})),
                              "loose mode": dict(mode=0o644)}.items():
             self.approval(**kwargs)
-            self.assertNotIn("observer", self.groups().get("open", []), name)
-            self.assertNotIn("observer", self.open_ids(), name)
+            self.assertNotIn("observer-level", self.groups().get("open", []), name)
+            self.assertNotIn("observer-level", self.open_ids(), name)
 
 
 class ProfileCheckTests(Box):
@@ -938,7 +958,7 @@ class LabelCheckTests(Box):
         self.assertIn("setup_labels.py", done.stdout)
         self.assertIn("--dry-run", done.stdout)
         self.assertNotIn("--update", done.stdout)
-        self.assertEqual(["labels", "status-line", "observer"], self.open_ids())
+        self.assertEqual(["labels", "status-line", "observer-level"], self.open_ids())
 
     def test_the_hook_makes_no_github_call_for_the_questions(self):
         self.missing("ms:introduction")
@@ -955,9 +975,9 @@ class LabelCheckTests(Box):
 
     def test_every_label_present_closes_the_question_with_a_note_and_lists_nothing(self):
         self.assertFalse(os.path.exists(self.config_private))
-        self.assertEqual(["status-line", "observer"], self.open_ids())
+        self.assertEqual(["status-line", "observer-level"], self.open_ids())
         self.assertEqual({"answer": "yes", "day": day(0)}, self.stored()["repos"][PAPER.lower()]["labels"])
-        self.assertEqual(["status-line", "observer"], self.open_ids())   # the second run asks GitHub nothing
+        self.assertEqual(["status-line", "observer-level"], self.open_ids())   # the second run asks GitHub nothing
         calls = [c for c in self.repo()["log"] if c[:2] == ["label", "list"]]
         self.assertEqual(1, len(calls))
         self.assertEqual(0o600, stat.S_IMODE(os.stat(self.answers_file).st_mode))
@@ -971,7 +991,7 @@ class LabelCheckTests(Box):
         self.assertIn("2 setup questions open", done.stdout)   # the other questions are listed
         self.assertNotIn("question labels", done.stdout)
         self.assertFalse(os.path.exists(self.answers_file))
-        self.assertEqual(["status-line", "observer"], self.open_ids(gh="false"))
+        self.assertEqual(["status-line", "observer-level"], self.open_ids(gh="false"))
 
     def test_the_questions_read_nothing_else_from_github_and_write_nothing_else(self):
         self.missing("ms:introduction")
@@ -982,7 +1002,7 @@ class LabelCheckTests(Box):
     def test_a_stored_answer_means_github_is_not_asked(self):
         self.missing("ms:introduction")
         self.put_state(repos={PAPER.lower(): {"labels": self.entry("no")}})
-        self.assertEqual(["status-line", "observer"], self.open_ids())
+        self.assertEqual(["status-line", "observer-level"], self.open_ids())
         self.assertEqual([], [c for c in self.repo()["log"] if c[:2] == ["label", "list"]])
 
     def test_the_labels_are_asked_only_when_the_manuscript_profile_is_there(self):
@@ -1006,7 +1026,7 @@ class WritingCheckTests(Box):
         found = self.groups()
         self.assertIn("writing-mode", found["open"])
         self.assertIn("own-paper", found["open"])
-        self.assertEqual(["writing-mode", "own-paper", "status-line", "observer"], self.open_ids())
+        self.assertEqual(["writing-mode", "own-paper", "status-line", "observer-level"], self.open_ids())
 
     def test_a_chosen_mode_answers_the_writing_question_only(self):
         self.assertEqual(0, self.tool("setup.py", "writing", "set", "--mode", "off", "--yes").returncode)
@@ -1033,7 +1053,7 @@ class WritingCheckTests(Box):
             found = self.groups()
             self.assertNotIn("writing-mode", found.get("open", []), name)
             self.assertNotIn("own-paper", found.get("open", []), name)
-            self.assertEqual(["status-line", "observer"], self.open_ids(), name)
+            self.assertEqual(["status-line", "observer-level"], self.open_ids(), name)
 
     def test_the_old_question_is_in_the_batch_and_not_in_the_brief(self):
         out = self.start()
@@ -1064,7 +1084,7 @@ class NoPlanTests(Box):
         found = self.groups()
         self.assertNotIn("writing-mode", found["open"])
         self.assertNotIn("own-paper", found["open"])
-        self.assertEqual(["status-line", "observer"], self.open_ids())
+        self.assertEqual(["status-line", "observer-level"], self.open_ids())
 
     def drop_labels(self, *names):
         data = self.repo()
@@ -1080,17 +1100,17 @@ class NoPlanTests(Box):
 
     def test_the_older_hub_with_two_labels_missing_lists_labels_the_status_line_and_the_observer_then_the_plan_adds_two(self):
         self.drop_labels("ms:introduction", "ms:discussion")
-        self.assertEqual(["labels", "status-line", "observer"], self.open_ids())
+        self.assertEqual(["labels", "status-line", "observer-level"], self.open_ids())
         self.adopt_the_plan()
         self.drop_labels("ms:introduction", "ms:discussion")
-        self.assertEqual(["writing-mode", "own-paper", "labels", "status-line", "observer"], self.open_ids())
+        self.assertEqual(["writing-mode", "own-paper", "labels", "status-line", "observer-level"], self.open_ids())
 
     def test_a_collaborator_on_a_new_machine_is_asked_only_what_the_project_file_does_not_answer(self):
         self.project_file(own_manuscript=False)
         elsewhere = {"XDG_CONFIG_HOME": os.path.join(self.dir, "second-machine"), "CLAUDE_CONFIG_DIR": os.path.join(
             self.dir, "second-claude")}
         done = self.tool("setup.py", "questions", "--json", env=elsewhere)
-        self.assertEqual(["status-line", "observer"], [q["id"] for q in json.loads(done.stdout)["open"]])
+        self.assertEqual(["status-line", "observer-level"], [q["id"] for q in json.loads(done.stdout)["open"]])
         self.assertFalse(os.path.exists(self.answers_file))   # the first machine's file is not touched
 
     def test_with_a_plan_the_collaborator_is_also_asked_the_writing_mode_which_is_the_machines_own(self):
@@ -1098,7 +1118,7 @@ class NoPlanTests(Box):
         self.project_file(own_manuscript=False)
         elsewhere = {"XDG_CONFIG_HOME": os.path.join(self.dir, "second-machine")}
         done = self.tool("setup.py", "questions", "--json", env=elsewhere)
-        self.assertEqual(["writing-mode", "status-line", "observer"], [q["id"] for q in json.loads(done.stdout)["open"]])
+        self.assertEqual(["writing-mode", "status-line", "observer-level"], [q["id"] for q in json.loads(done.stdout)["open"]])
 
 
 class OlderProjectTests(Box):
@@ -1108,14 +1128,14 @@ class OlderProjectTests(Box):
                  "catch_up": False, "read_transcripts": False, "restricted_patterns": [], "banned_words": []}
         self.write_config(older)
         self.touch("paper/main.tex", "paper/refs.bib")
-        self.assertEqual(["manuscript-profile", "status-line", "observer"], self.open_ids())
+        self.assertEqual(["manuscript-profile", "status-line", "observer-level"], self.open_ids())
         self.assertEqual(1, len(self.lines(self.start())))
 
     def test_planted_answer_like_keys_in_the_project_file_change_nothing(self):
-        self.project_file(setup_answers={"status-line": "no"}, answers={"observer": "no"}, answered=["status-line", "observer"],
-                          declined=["observer"], setup={"status-line": {"answer": "yes", "day": day(0)}},
+        self.project_file(setup_answers={"status-line": "no"}, answers={"observer": "no"}, answered=["status-line", "observer-level"],
+                          declined=["observer-level"], setup={"status-line": {"answer": "yes", "day": day(0)}},
                           setup_questions=False, status_line=True, observer={"mode": "off"})
-        self.assertEqual(["status-line", "observer"], self.open_ids())
+        self.assertEqual(["status-line", "observer-level"], self.open_ids())
         self.assertEqual(1, len(self.lines(self.start())))
 
 
@@ -1123,7 +1143,7 @@ class OlderProjectTests(Box):
 
 class StateFileTests(Box):
     def test_a_missing_file_is_empty_state_and_nothing_is_made_by_reading(self):
-        self.assertEqual(["status-line", "observer"], self.open_ids())
+        self.assertEqual(["status-line", "observer-level"], self.open_ids())
         self.assertFalse(os.path.exists(os.path.join(self.dir, "xdg-config")))
         self.start()
         self.groups()
@@ -1161,7 +1181,7 @@ class StateFileTests(Box):
                 self.assertNotIn("HOSTILE-MARKER", out)
                 again = self.start(session="again")
                 self.assertIn(brief.SETUP_UNREADABLE, again)   # at every session start
-                done = self.tool("setup.py", "answer", "--id", "observer", "--answer", "no")
+                done = self.tool("setup.py", "answer", "--id", "observer-level", "--answer", "no")
                 self.assertNotEqual(0, done.returncode, name)
                 self.assertNotIn("HOSTILE-MARKER", done.stdout + done.stderr)
                 self.assertEqual(before, (read_bytes(path), os.stat(path).st_ino, stat.S_IMODE(os.stat(path).st_mode)))
@@ -1177,7 +1197,7 @@ class StateFileTests(Box):
         os.makedirs(self.config_private, mode=0o700)
         os.symlink(target, self.answers_file)
         self.assertIn(brief.SETUP_UNREADABLE, self.start())
-        self.assertNotEqual(0, self.tool("setup.py", "answer", "--id", "observer", "--answer", "no").returncode)
+        self.assertNotEqual(0, self.tool("setup.py", "answer", "--id", "observer-level", "--answer", "no").returncode)
         self.assertTrue(os.path.islink(self.answers_file))
         self.assertEqual({"form": 1, "machine": {}, "repos": {}}, load_json(target))
 
@@ -1189,11 +1209,11 @@ class StateFileTests(Box):
 
     def test_the_file_is_private_and_holds_the_form_the_spec_names(self):
         self.assertEqual(0, self.tool("setup.py", "answer", "--id", "status-line", "--answer", "later").returncode)
-        self.assertEqual(0, self.tool("setup.py", "answer", "--id", "observer", "--answer", "no").returncode)
+        self.assertEqual(0, self.tool("setup.py", "answer", "--id", "observer-level", "--answer", "no").returncode)
         self.assertEqual(0o600, stat.S_IMODE(os.stat(self.answers_file).st_mode))
         self.assertEqual(0o700, stat.S_IMODE(os.stat(self.config_private).st_mode))
         self.assertEqual({"form": 1, "machine": {"status-line": {"answer": "later", "day": day(0)}},
-                          "repos": {REPO: {"observer": {"answer": "no", "day": day(0)}}}}, self.stored())
+                          "repos": {REPO: {"observer-level": {"answer": "no", "day": day(0)}}}}, self.stored())
         self.assertEqual("setup-answers.json", os.path.basename(setup_questions.path()))
 
     def test_an_id_this_version_does_not_know_is_kept_across_a_write(self):
@@ -1203,22 +1223,22 @@ class StateFileTests(Box):
         self.assertEqual(self.entry("no"), stored["machine"]["future-question"])
         self.assertEqual(self.entry("later", 1), stored["repos"][REPO]["another-new-one"])
         self.assertEqual(self.entry("no"), stored["machine"]["status-line"])
-        self.assertEqual(["observer"], self.open_ids())
+        self.assertEqual(["observer-level"], self.open_ids())
 
     def test_answer_refuses_an_unknown_id_and_an_unknown_answer(self):
-        for args in (("--id", "no-such-question", "--answer", "no"), ("--id", "observer", "--answer", "perhaps"),
+        for args in (("--id", "no-such-question", "--answer", "no"), ("--id", "observer-level", "--answer", "perhaps"),
                      ("--id", "Observer", "--answer", "no")):
             self.assertNotEqual(0, self.tool("setup.py", "answer", *args).returncode, args)
         self.assertFalse(os.path.exists(self.answers_file))
 
     def test_other_repositories_answers_stay(self):
         self.put_state(repos={"octo-org/other-repo": {"observer": self.entry("no")}})
-        self.assertEqual(0, self.tool("setup.py", "answer", "--id", "observer", "--answer", "later").returncode)
+        self.assertEqual(0, self.tool("setup.py", "answer", "--id", "observer-level", "--answer", "later").returncode)
         self.assertEqual(self.entry("no"), self.stored()["repos"]["octo-org/other-repo"]["observer"])
-        self.assertEqual("later", self.stored()["repos"][REPO]["observer"]["answer"])
+        self.assertEqual("later", self.stored()["repos"][REPO]["observer-level"]["answer"])
 
     def test_two_answers_started_together_both_land(self):
-        ids = ("status-line", "observer", "own-paper", "writing-mode", "labels", "manuscript-profile")
+        ids = ("status-line", "observer-level", "own-paper", "writing-mode", "labels", "manuscript-profile")
         for _ in range(3):
             self.fixture.reset()
             command = [sys.executable, os.path.join(ts.SCRIPTS, "setup.py"), "answer", "--answer", "no", "--id"]
@@ -1245,7 +1265,7 @@ class StateFileTests(Box):
         def worker(barrier, repo, results, number):
             try:
                 barrier.wait(timeout=30)
-                setup_questions.record(repo, "observer", "no")
+                setup_questions.record(repo, "observer-level", "no")
                 results[number] = 1
             except BaseException:   # noqa: BLE001 - reported through the result
                 results[number] = 2
@@ -1392,31 +1412,32 @@ class StepCommandTests(Box):
 
     def test_the_observer_dry_run_prints_the_steps_and_runs_none(self):
         before = self.tree(self.dir)
-        dry = self.tool("setup.py", "observer", "--mode", "automatic", "--model", "sonnet", "--dry-run")
+        dry = self.tool("setup.py", "observer", "--level", "everything", "--dry-run")
         self.assertEqual(0, dry.returncode, dry.stdout + dry.stderr)
         self.assertEqual(3, dry.stdout.count("would run: "))
-        self.assertIn("enable --mode shadow --model sonnet --yes", dry.stdout)
-        self.assertIn("enable --mode automatic --model sonnet --yes", dry.stdout)
-        shadow = self.tool("setup.py", "observer", "--mode", "shadow", "--model", "haiku", "--dry-run")
+        self.assertIn("enable --mode shadow --model sonnet --sort-model haiku --level everything --yes", dry.stdout)
+        self.assertIn("enable --mode automatic --model sonnet --sort-model haiku --level everything --yes", dry.stdout)
+        shadow = self.tool("setup.py", "observer", "--level", "notes", "--mode", "shadow", "--model", "haiku", "--dry-run")
         self.assertEqual(2, shadow.stdout.count("would run: "))
         self.assertEqual(before, self.tree(self.dir))
         self.assertFalse(os.path.exists(os.path.join(self.dir, "xdg-state", "recortex", "private", "observer-approvals.json")))
 
     def test_the_observer_command_checks_its_words(self):
-        for args in (("--mode", "off", "--model", "sonnet", "--dry-run"), ("--mode", "shadow", "--model", "x y", "--dry-run"),
-                     ("--mode", "shadow", "--dry-run"), ("--mode", "shadow", "--model", "sonnet")):
+        for args in (("--level", "notes", "--mode", "off", "--dry-run"), ("--level", "notes", "--model", "x y", "--dry-run"),
+                     ("--level", "most", "--dry-run"), ("--mode", "shadow", "--dry-run"), ("--level", "notes", "--mode", "shadow"),
+                     ("--strong", "opus", "--dry-run")):   # the last: no level was chosen first
             self.assertNotEqual(0, self.tool("setup.py", "observer", *args).returncode, args)
 
     def test_the_commands_of_every_option_are_the_ones_the_session_can_run(self):
         self.touch("paper/main.tex")
         done = self.tool("setup.py", "questions", "--json")
         found = {q["id"]: q for q in json.loads(done.stdout)["open"]}
-        self.assertEqual(["manuscript-profile", "status-line", "observer"], list(found))
-        observer = found["observer"]
-        self.assertEqual(["Automatic with sonnet", "Shadow with sonnet", "No", "Later"], [o["label"] for o in observer["options"]])
+        self.assertEqual(["manuscript-profile", "status-line", "observer-level"], list(found))
+        observer = found["observer-level"]
+        self.assertEqual(["Everything (Recommended)", "Assistant", "Notes only", "Later"], [o["label"] for o in observer["options"]])
         self.assertTrue(observer["options"][0]["recommended"])
         self.assertIn("usage", observer["question"])
-        self.assertIn("at most 60 a day", observer["question"])
+        self.assertIn("at most 80 quick sorting calls, 70 note-taking calls and 8 paper-text calls a day", observer["question"])
         for question in found.values():
             self.assertTrue(question["record"].endswith("answer --id %s --answer yes|no|later" % question["id"]))
             for option in question["options"]:
@@ -1438,8 +1459,8 @@ class StepCommandTests(Box):
         self.assertRegex(done.stdout, r"- Yes \(recommended\): python3 \S+/setup\.py status-line --dry-run ; then python3 "
                                       r"\S+/setup\.py status-line --yes ; then python3 \S+/setup\.py answer --id status-line --answer yes")
         self.assertIn("question status-line (added in 1.2.0; the answer is kept for: this machine)", lines[0])
-        self.assertIn("question observer (added in 1.1.0; the answer is kept for: this machine and this folder)", done.stdout)
-        self.put_state(machine={"status-line": self.entry("no")}, repos={REPO: {"observer": self.entry("no")}})
+        self.assertIn("question observer-level (added in 1.5.0; the answer is kept for: this machine and this folder)", done.stdout)
+        self.put_state(machine={"status-line": self.entry("no")}, repos={REPO: {"observer-level": self.entry("no")}})
         self.assertEqual("no setup question is open\n", self.tool("setup.py", "questions").stdout)
         self.assertEqual({"open": [], "unread": [], "count": 0, "run_noted": True},
                          json.loads(self.tool("setup.py", "questions", "--json").stdout))
@@ -1482,9 +1503,9 @@ class WizardTests(ts.Sandbox):
         path = self.answers_for()
         done = self.script("setup.py", "apply", "--answers", path, "--root", self.root, "--yes")
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
-        self.assertIn("recorded as answered on this machine: labels yes, status-line no, observer no", done.stdout)
+        self.assertIn("recorded as answered on this machine: labels yes, status-line no, observer-level no", done.stdout)
         self.assertEqual({"form": 1, "machine": {"status-line": {"answer": "no", "day": day(0)}}, "repos": {REPO: {
-            "labels": {"answer": "yes", "day": day(0)}, "observer": {"answer": "no", "day": day(0)}}}}, self.stored())
+            "labels": {"answer": "yes", "day": day(0)}, "observer-level": {"answer": "no", "day": day(0)}}}}, self.stored())
         shown = self.script("setup.py", "questions")
         self.assertEqual("no setup question is open\n", shown.stdout, shown.stderr)
         out = self.hook_start()
@@ -1502,12 +1523,12 @@ class WizardTests(ts.Sandbox):
         return done.stdout
 
     def test_a_fresh_apply_that_says_yes_to_the_status_line_and_the_observer_records_no_no_for_them(self):
-        path = self.answers_for(status_line=True, observer={"mode": "shadow", "model": "sonnet"})
+        path = self.answers_for(status_line=True, observer={"mode": "shadow", "model": "sonnet", "level": "notes"})
         done = self.script("setup.py", "apply", "--answers", path, "--root", self.root, "--yes")
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
         stored = self.stored()
         self.assertEqual({}, stored["machine"])
-        self.assertNotIn("observer", stored["repos"][REPO])
+        self.assertNotIn("observer-level", stored["repos"][REPO])
         self.assertIn("statusLine", load_json(os.path.join(self.claude, "settings.json")))
 
     def test_the_dry_run_records_nothing_and_says_what_it_would(self):
@@ -1515,7 +1536,7 @@ class WizardTests(ts.Sandbox):
         path = self.answers_for()
         done = self.script("setup.py", "apply", "--answers", path, "--root", self.root, "--dry-run")
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
-        self.assertIn("would record as answered on this machine: labels yes, status-line no, observer no", done.stdout)
+        self.assertIn("would record as answered on this machine: labels yes, status-line no, observer-level no", done.stdout)
         self.assertEqual(before, self.tree())
         self.assertFalse(os.path.exists(os.path.join(self.config_private, "setup-answers.json")))
         self.assertFalse(os.path.exists(os.path.join(self.claude, "settings.json")))
@@ -1543,7 +1564,7 @@ class WizardTests(ts.Sandbox):
         self.assertEqual(0, explicit.returncode, explicit.stdout + explicit.stderr)
         stored = self.stored()
         self.assertEqual("no", stored["machine"]["status-line"]["answer"])
-        self.assertEqual("no", stored["repos"][REPO]["observer"]["answer"])
+        self.assertEqual("no", stored["repos"][REPO]["observer-level"]["answer"])
         self.assertNotIn("manuscript-profile", stored["repos"][REPO])   # the wizard did not ask it on a rerun
 
     def test_a_refused_write_prints_one_line_and_the_setup_stays_done(self):
@@ -1634,9 +1655,11 @@ class SetupQuestionDocsTests(unittest.TestCase):
             self.assertNotIn("end of the reply that completes", self.read("skills", "recortex", "references", name))
 
     def test_the_registry_is_in_the_order_of_the_spec_with_the_scopes_it_names(self):
-        self.assertEqual(("writing-mode", "own-paper", "manuscript-profile", "labels", "status-line", "observer"),
-                         setup_questions.IDS)
-        self.assertEqual(["1.3.0", "1.3.0", "1.3.0", "1.2.0", "1.2.0", "1.1.0"], [q.since for q in setup_questions.QUESTIONS])
+        self.assertEqual(("writing-mode", "own-paper", "manuscript-profile", "labels", "status-line", "observer-level",
+                          "paper-proposals"), setup_questions.IDS)
+        self.assertEqual(["1.3.0", "1.3.0", "1.3.0", "1.2.0", "1.2.0", "1.5.0", "1.5.0"],
+                         [q.since for q in setup_questions.QUESTIONS])
+        self.assertEqual({"observer": "observer-level"}, setup_questions.RETIRED)
         self.assertEqual({"status-line": "machine"}, {q.id: q.scope for q in setup_questions.QUESTIONS if q.scope == "machine"})
         for question in setup_questions.QUESTIONS:
             self.assertTrue(question.options[-1].answer == "later", question.id)

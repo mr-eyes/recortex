@@ -70,6 +70,8 @@ REASONS = {
     "no-paper-files": "no paper or manuscript files",
     "settings-unusable": "the Claude Code settings file is a symlink, too large or not a JSON object",
     "observer-off": "the project file switches the observer off",
+    "writing-not-on": "the writing mode is not review or autonomous",
+    "no-level": "the observer has no level of Assistant or Everything for this folder",
     "approvals-unreadable": "the approvals of the observer cannot be read",
     "check-failed": "the check could not be made",
 }
@@ -149,10 +151,16 @@ def read():
 
 
 def entry_of(data, question, repo):
-    """The stored answer of `question` for `repo` on this machine, or None."""
-    if question.scope == "machine":
-        return data["machine"].get(question.id)
-    return data["repos"].get(repo.lower(), {}).get(question.id)
+    """The stored answer of `question` for `repo` on this machine, or None. An answer kept under a retired id counts for
+    the question that replaced it only when it is "no" or "later": a 1.4.0 "yes" to the old observer question said yes to
+    1.4.0's observer, and the new one asks the user again."""
+    where = data["machine"] if question.scope == "machine" else data["repos"].get(repo.lower(), {})
+    if question.id in where:
+        return where[question.id]
+    for old, new in RETIRED.items():
+        if new == question.id and old in where and where[old]["answer"] in ("no", "later"):
+            return where[old]
+    return None
 
 
 def record(repo, question_id, answer, day=None):
@@ -167,9 +175,12 @@ def record(repo, question_id, answer, day=None):
         data = load(create=True)
         where = data["machine"] if question.scope == "machine" else data["repos"].setdefault(repo.lower(), {})
         if answer == "reset":
-            if question.id not in where:
+            kept = [key for key in (question.id,) + tuple(old for old, new in RETIRED.items() if new == question.id)
+                    if key in where]
+            if not kept:
                 return day   # nothing was kept: the file is left as it is
-            del where[question.id]
+            for key in kept:   # an answer kept under a retired id goes with it
+                del where[key]
         else:
             where[question.id] = {"answer": answer, "day": day}
         data["repos"] = {key: value for key, value in data["repos"].items() if value}
@@ -285,15 +296,52 @@ def check_status_line(ctx):
     return (SETTLED if "statusLine" in data else OPEN), "", None
 
 
-def check_observer(ctx):
+def observer_entry(ctx):
+    """(state, reason, settings): the observer's stored settings for this folder and repository, completed with the
+    defaults of the keys 1.5.0 added (a 1.4.0 approval has no level). `settings` is {} when there is no approval for this
+    repository here; state is NOT_ASKED with a reason when the project file switches the observer off or the approvals
+    cannot be read, else OPEN, which only says that the settings were read."""
     import observer_runtime
     if observer_runtime.project_off(ctx.config):
-        return NOT_ASKED, "observer-off", None
+        return NOT_ASKED, "observer-off", {}
     try:
         approval = observer_runtime.stored_approval(ctx.root)
     except (storage.StorageError, ValueError, OSError):
-        return NOT_ASKED, "approvals-unreadable", None
-    return (SETTLED if approval is not None else OPEN), "", None
+        return NOT_ASKED, "approvals-unreadable", {}
+    if not isinstance(approval, dict) or approval.get("repo") != ctx.repo.lower() \
+            or not isinstance(approval.get("settings"), dict):
+        return OPEN, "", {}
+    return OPEN, "", observer_runtime.complete(approval["settings"])
+
+
+def check_observer_level(ctx):
+    """Settled when this folder's approval holds a chosen level. A folder enabled before 1.5.0 has an approval with none,
+    so the question is open for it, and the observer stays paused until the user answers (observer_runtime.paused)."""
+    import observer_runtime
+    state, reason, found = observer_entry(ctx)
+    if state == NOT_ASKED:
+        return state, reason, None
+    return (SETTLED if found.get("level") in observer_runtime.LEVELS else OPEN), "", None
+
+
+def check_paper_proposals(ctx):
+    """Asked only when the plan issue is usable, the writing mode is review or autonomous, the observer's level is
+    Assistant or Everything and no strong model is set; settled once one is."""
+    import observer_runtime
+    why = ctx.plan_gate()
+    if why:
+        return NOT_ASKED, why, None
+    found = writing.read(ctx.repo)
+    if found["state"] == "unreadable":
+        return NOT_ASKED, "writing-unreadable", None
+    if found["state"] != "chosen" or found["mode"] not in ("review", "autonomous"):
+        return NOT_ASKED, "writing-not-on", None
+    state, reason, stored = observer_entry(ctx)
+    if state == NOT_ASKED:
+        return state, reason, None
+    if stored.get("level") not in ("assistant", "everything"):
+        return NOT_ASKED, "no-level", None
+    return (SETTLED if stored.get("strong_model") else OPEN), "", None
 
 
 # ---------------------------------------------------------------- the registry
@@ -317,9 +365,11 @@ def dry_then_real(*words):
     return (tuple(words) + ("--dry-run",), tuple(words) + ("--yes",))
 
 
-def observer_options(mode, label, recommended):
-    return Option(label, "yes", dry_then_real("setup.py", "observer", "--mode", mode, "--model", "sonnet"),
-                  recommended, "Other: the user names another model, and it replaces sonnet in both commands.")
+def level_option(level, label, recommended):
+    return Option(label, "yes", dry_then_real("setup.py", "observer", "--level", level), recommended,
+                  "Other: \"no\" is recorded as no for good; \"shadow\" turns it on at Notes only without posting "
+                  "(--level notes --mode shadow); the user may name other models (--model for the note-taking calls, "
+                  "--sort-model for the sorting calls).")
 
 
 QUESTIONS = (
@@ -366,21 +416,42 @@ QUESTIONS = (
          Option("No", "no"),
          Option("Later", "later"))),
     Question(
-        "observer", "1.1.0", "repo", "this machine and this folder", check_observer,
-        "Turn on the observer (experimental)? It takes notes of the conversation (the prompts you type and the agent's "
-        "messages to you) and posts reviewed memories on its own. Automatic: it posts them. Shadow: it reviews them, "
-        "after a one-call check of its background calls, and keeps them on this machine. Its calls run under your "
-        "Claude sign-in and count against your usage, at most 60 a day for the project (with an API key or another "
-        "provider set, they are billed to it instead), and it needs the repository in your trusted list.",
-        (observer_options("automatic", "Automatic with sonnet", True),
-         observer_options("shadow", "Shadow with sonnet", False),
+        "observer-level", "1.5.0", "repo", "this machine and this folder", check_observer_level,
+        "Turn on the observer (experimental)? It takes notes of the conversation (the prompts you type, the agent's "
+        "messages to you, and the plans and questions you answered in a dialog) and sorts them in the background. "
+        "Choose what it may do. Notes only: it keeps memories and the status summary, and asks you before it posts a "
+        "memory it holds. Assistant: it also keeps a to-do list with checkmarks, checks off steps the agent reports as "
+        "done and keeps the task lists current, and asks you before it opens or closes a task. Everything: it also "
+        "opens and closes tasks and keeps the board and the sub-issue links. At every level it never writes the "
+        "paper's text on its own: a draft waits for your yes. Its calls run under your Claude sign-in and count against "
+        "your usage, at most {sort} quick sorting calls, {middle} note-taking calls and {strong} paper-text calls a day "
+        "for the project (with an API key or another provider set, they are billed to it instead), and it needs the "
+        "repository in your trusted list. An observer you turned on with an earlier version stays paused until you "
+        "choose.",
+        (level_option("everything", "Everything (Recommended)", True),
+         level_option("assistant", "Assistant", False),
+         level_option("notes", "Notes only", False),
+         Option("Later", "later"))),
+    Question(
+        "paper-proposals", "1.5.0", "repo", "this machine and this folder", check_paper_proposals,
+        "May recortex draft a change of the paper's text in the background when something notable changes for a part, "
+        "and ask you before anything is written? It uses a stronger model (opus), at most {strong} calls a day, and "
+        "proposes at most {proposals} changes a day.",
+        (Option("Yes (Recommended)", "yes", dry_then_real("setup.py", "observer", "--strong", "opus"), True,
+                "Other: the user names another model, and it replaces opus in both commands."),
          Option("No", "no"),
          Option("Later", "later"))),
 )
 IDS = tuple(question.id for question in QUESTIONS)
+# A question that a later version replaced: its id is still accepted by `setup.py answer`, and an answers file from an
+# earlier version that holds it still loads. The 1.4.0 `observer` question became `observer-level` in 1.5.0.
+RETIRED = {"observer": "observer-level"}
+ACCEPTED = IDS + tuple(RETIRED)
 
 
 def find(question_id):
+    """The question with this id; a retired id finds the question that replaced it."""
+    question_id = RETIRED.get(question_id, question_id)
     return next((question for question in QUESTIONS if question.id == question_id), None)
 
 
@@ -658,6 +729,11 @@ def question_text(result, repo):
     text = result.question.text
     if "{consent}" in text:
         text = text.replace("{consent}", " ".join(writing.consent_lines(repo)))
+    if "{sort}" in text or "{strong}" in text:
+        import observer_runtime
+        text = text.format(sort=observer_runtime.DEFAULTS["max_sort"], middle=observer_runtime.DEFAULTS["max_invocations"],
+                           strong=observer_runtime.DEFAULTS["max_strong"],
+                           proposals=observer_runtime.DEFAULTS["max_proposals"])
     if "{evidence}" in text:
         text = text.replace("{evidence}", ", ".join(result.detail or []) or "see setup.py detect")
     if "{missing}" in text:

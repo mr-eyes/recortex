@@ -5643,8 +5643,8 @@ class SetupTests(Sandbox):
             return real.stdout, json.loads(checked.stdout.strip().splitlines()[-1])
         out, found = apply(automatic, failing)
         self.assertIn("observer: taking notes in shadow mode, but reviewing and posting nothing yet (the check failed). "
-                      "Run observer.py runtime-check; then observer.py enable --model sonnet --sort-model haiku --level "
-                      "everything --mode automatic --yes.\n", out)
+                      "Run observer.py runtime-check; then observer.py enable --mode automatic --model sonnet --sort-model "
+                      "haiku --level everything --yes.\n", out)
         self.assertNotIn("isolation", out)
         self.assertEqual((True, "shadow", False), (found["approved"], found["settings"]["mode"], found["runtime_ready"]))
         out, found = apply(shadow, failing)

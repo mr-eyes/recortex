@@ -25,7 +25,9 @@ questions  The setup questions an update added that this project and this machin
         reads GitHub once at most (the labels) and writes only the note that no label is missing and the time it ran.
 answer  `--id ID --answer yes|no|later|reset`: records the user's answer to one setup question on this machine.
 status-line, observer  The two steps of the wizard, as commands of their own for the setup questions:
-        `status-line --dry-run|--yes` and `observer --mode automatic|shadow --model M --dry-run|--yes`.
+        `status-line --dry-run|--yes` and `observer --level notes|assistant|everything [--mode automatic|shadow]
+        [--model M] [--sort-model M] --dry-run|--yes`; `observer --strong M --dry-run|--yes` adds the stronger model
+        that drafts the paper's text for the user to accept, and keeps the level.
 fields  The field sheet (references/fields.md), local only: `show` prints its
         state and the sheet; `set --answers <file>` writes the "fields" entry of
         the answers and records the user's approval (--dry-run, or --yes;
@@ -46,8 +48,9 @@ Answers file (JSON):
    "prompt_hook": {"enabled": true, "every": 10},
    "trust": true,                          true: the user agreed to add the repository to their trusted list
    "status_line": false,                   true: the user agreed to show recortex in the status line; see references/setup.md
-   "observer": {"mode": "automatic", "model": "sonnet"},   optional: "automatic", "shadow" or "off" (the default),
-                                           and the Claude model of its background calls; see references/observer.md
+   "observer": {"mode": "automatic", "model": "sonnet", "level": "everything"},   optional: "automatic", "shadow"
+                                           or "off" (the default), the Claude model of its note-taking calls and the
+                                           level the user chose (notes, assistant or everything); see references/observer.md
    "fields": {"names": [...], "sensitive": [...], "brief": {...}, "checks": [...], "words": "...",
               "restricted": [{"name": ..., "pattern": ..., "example": ...}]}}   optional; see references/fields.md
 
@@ -102,6 +105,7 @@ import storage  # noqa: E402
 import field_sheet  # noqa: E402
 import board_api  # noqa: E402
 import setup_questions  # noqa: E402
+import observer_runtime  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(HERE, "..", "templates")
@@ -412,13 +416,20 @@ def check_answers(answers):
     else:
         raise AnswerError("board must be \"no\", \"new\" or {\"existing\": <the board's number>}")
     observer = answers.get("observer", {"mode": "off"})
-    if not isinstance(observer, dict) or set(observer) - {"mode", "model"} or \
+    if not isinstance(observer, dict) or set(observer) - {"mode", "model", "level", "sort_model"} or \
             observer.get("mode") not in ("automatic", "shadow", "off"):
-        raise AnswerError('observer must be {"mode": "automatic" | "shadow" | "off", "model": "<a Claude model>"}')
+        raise AnswerError('observer must be {"mode": "automatic" | "shadow" | "off", "model": "<a Claude model>", '
+                          '"level": "notes" | "assistant" | "everything"}')
     model = observer.get("model")
     if observer["mode"] != "off" and not (isinstance(model, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", model)):
         raise AnswerError("observer.model must be a Claude alias or model ID, such as sonnet")
-    out["observer"] = None if observer["mode"] == "off" else {"mode": observer["mode"], "model": model}
+    if observer["mode"] != "off" and observer.get("level") not in observer_runtime.LEVELS:
+        raise AnswerError("observer.level must be notes, assistant or everything: the user chooses what the observer may do")
+    sort_model = observer.get("sort_model", SORT_MODEL)
+    if not (isinstance(sort_model, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", sort_model)):
+        raise AnswerError("observer.sort_model must be a Claude alias or model ID, such as haiku")
+    out["observer"] = None if observer["mode"] == "off" else {
+        "mode": observer["mode"], "model": model, "level": observer["level"], "sort_model": sort_model}
     status_line = answers.get("status_line", False)
     if not isinstance(status_line, bool):
         raise AnswerError("status_line must be true or false")
@@ -1210,6 +1221,7 @@ def board_step(board, root, python, dry):
         print("board: not filled yet; run `board.py apply` when the reason above is dealt with.")
 
 
+SORT_MODEL = "haiku"   # the model that sorts each stretch, unless the user names another
 OBSERVER_REASONS = {"runtime-unavailable": "claude was not found", "runtime-failed": "the check failed",
                     "isolation": "the check found tools, servers or skills loaded", "terminal-required":
                     "the holds of another repository apply here", "budget": "the day's call budget is used"}
@@ -1303,19 +1315,25 @@ def observer_reason(code):
 
 
 def observer_step(answers, root, python, dry):
-    """Turn on the observer as the user answered in the wizard: shadow mode for this folder and the runtime check,
-    without which it reviews nothing, and for automatic mode then automatic mode. The answer is the approval, recorded
-    here as the field sheet's is; nothing asks on a terminal. A step that does not pass leaves what is on, and one
-    line says what to run."""
+    """Turn on the observer as the user answered (the wizard's, or a setup question's): shadow mode for this folder at the
+    chosen level, the runtime check of every model it uses (without which it reviews nothing), and for automatic mode then
+    automatic mode. A `strong` model, when the answer holds one, is the stronger model that drafts the paper's text for
+    the user to accept; it is checked with the others. The answer is the approval, recorded here as the field sheet's is;
+    nothing asks on a terminal. A step that does not pass leaves what is on, and one line says what to run."""
     script = os.path.join(HERE, "observer.py")
-    repo, mode, model = answers["repo"], answers["observer"]["mode"], answers["observer"]["model"]
-    steps = [([python, script, "--repo", repo, "enable", "--mode", "shadow", "--model", model, "--yes"],
-              "turn on the observer for this folder in shadow mode: it takes notes and posts none"),
+    given = answers["observer"]
+    repo, mode, model, level = answers["repo"], given["mode"], given["model"], given["level"]
+    sort_model, strong = given.get("sort_model") or SORT_MODEL, given.get("strong") or ""
+    options = ["--model", model, "--sort-model", sort_model, "--level", level] + (["--strong-model", strong] if strong else [])
+    models = ", ".join(sorted({model, sort_model} | ({strong} if strong else set())))
+    enable = [python, script, "--repo", repo, "enable"]
+    steps = [(enable + ["--mode", "shadow"] + options + ["--yes"],
+              "turn on the observer for this folder in shadow mode at the level %s: it takes notes and posts none"
+              % observer_runtime.LEVEL_LABELS[level]),
              ([python, script, "--repo", repo, "runtime-check"],
-              "check that its background calls run isolated, with %s (one call); it reviews nothing before" % model)]
+              "check that its background calls run isolated, with %s (one call a model); it reviews nothing before" % models)]
     if mode == "automatic":
-        steps += [([python, script, "--repo", repo, "enable", "--mode", "automatic", "--model", model, "--yes"],
-                   "let it post reviewed memories on its own")]
+        steps += [(enable + ["--mode", "automatic"] + options + ["--yes"], "let it post reviewed memories on its own")]
     if dry:
         for command, what in steps:
             print("would run: %s   # %s" % (" ".join(command), what))
@@ -1325,7 +1343,9 @@ def observer_step(answers, root, python, dry):
               % repo)
         return
     environment = dict(os.environ, CLAUDE_PROJECT_DIR=root)  # the folder its entry is for
-    then = (" then observer.py enable --mode automatic --model %s --yes" % model) if mode == "automatic" else ""
+    again = " ".join(["observer.py", "enable"] + options)
+    automatic = " ".join(["observer.py", "enable", "--mode", "automatic"] + options)
+    then = (" then %s --yes" % automatic) if mode == "automatic" else ""
     for number, (command, what) in enumerate(steps):
         print("run: %s   # %s" % (" ".join(command), what))
         try:
@@ -1338,21 +1358,20 @@ def observer_step(answers, root, python, dry):
         if done is None or done.returncode:
             code = code if isinstance(code, str) and re.fullmatch(r"[a-z][a-z_-]{0,39}", code) else "failed"
             if number == 0:
-                print("observer: not turned on (%s); run observer.py status, then observer.py enable --model %s --yes"
-                      % (observer_reason(code), model))
+                print("observer: not turned on (%s); run observer.py status, then %s --yes" % (observer_reason(code), again))
             elif number == 1:
                 print("observer: taking notes in shadow mode, but reviewing and posting nothing yet (%s). Run "
                       "observer.py runtime-check%s." % (observer_reason(code), ";" + then if then else ""))
             else:
-                print("observer: reviewing in shadow mode, but not posting on its own yet (%s). Run observer.py enable "
-                      "--mode automatic --model %s --yes." % (observer_reason(code), model))
+                print("observer: reviewing in shadow mode, but not posting on its own yet (%s). Run %s --yes."
+                      % (observer_reason(code), automatic))
             return
         billing = value.get("billing") if number == 0 and isinstance(value, dict) else None
         if isinstance(billing, str) and billing.startswith("These variables are set: ") and len(billing) <= 600:
             print("observer: " + billing)  # what enable and status say: the calls are not counted as usage
-    print("observer: on in %s mode, with %s: it %s" % (mode, model, "posts reviewed memories on its own"
-                                                      if mode == "automatic" else "reviews memories and keeps them on "
-                                                      "this machine"))
+    print("observer: on at the level %s in %s mode, with %s%s: it %s" % (
+        observer_runtime.LEVEL_LABELS[level], mode, model, " and %s for the paper's text" % strong if strong else "",
+        "posts reviewed memories on its own" if mode == "automatic" else "reviews memories and keeps them on this machine"))
 
 
 def settle_questions(answers, had_file, config, root, dry):
@@ -1365,13 +1384,13 @@ def settle_questions(answers, had_file, config, root, dry):
     wanted = ["labels"]
     if not had_file:
         wanted += [item for item, asked in (("status-line", not answers["status_line"]),
-                                            ("observer", not answers["observer"]), ("manuscript-profile", True)) if asked]
+                                            ("observer-level", not answers["observer"]), ("manuscript-profile", True)) if asked]
     else:
         given = answers.get("given", {})
         if given.get("status_line") and not answers["status_line"]:
             wanted.append("status-line")
         if given.get("observer_off"):
-            wanted.append("observer")
+            wanted.append("observer-level")
     try:
         context = setup_questions.Context(repo, config, os.path.realpath(root))
         chosen = [("labels", "yes")]
@@ -1715,6 +1734,7 @@ def answer_command(args):
     config, repo, line = questions_project()
     if config is None:
         sys.exit("error: %s" % line.split(": ", 1)[1])
+    args.id = setup_questions.RETIRED.get(args.id, args.id)   # an answer to a retired question is kept under its successor
     found = setup_questions.read()
     if found["state"] == "unreadable":
         sys.exit("error: the answers of this machine cannot be read (%s); the file %s is not replaced. Move it aside by "
@@ -1743,15 +1763,45 @@ def status_line_command(args):
     return 0
 
 
+def stored_observer(repo, root):
+    """This folder's stored observer settings for `repo`, completed with the defaults of the keys 1.5.0 added, or {} when
+    there is none (or it cannot be read, or it names another repository)."""
+    try:
+        entry = observer_runtime.stored_approval(root)
+    except (OSError, ValueError, storage.StorageError):
+        return {}
+    if not isinstance(entry, dict) or entry.get("repo") != repo.lower() or not isinstance(entry.get("settings"), dict):
+        return {}
+    return observer_runtime.complete(entry["settings"])
+
+
 def observer_command(args):
-    """setup.py observer --mode M --model MODEL --dry-run|--yes: the wizard's observer step, for the setup questions."""
+    """setup.py observer --level L [--mode M] [--model M] [--sort-model M] --dry-run|--yes: the observer's level question.
+    setup.py observer --strong M --dry-run|--yes: the paper-proposals question. Both are the wizard's observer step, run
+    for the setup questions: shadow mode at the level, the runtime check of every model, then automatic mode. A folder
+    that is in shadow mode stays in shadow mode. --strong keeps the level, the models and the mode the user chose."""
     config, repo, line = questions_project()
     if config is None:
         sys.exit("error: %s" % line.split(": ", 1)[1])
-    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", args.model):
-        sys.exit("error: the model must be a Claude alias or model ID, such as sonnet")
-    observer_step({"repo": repo, "observer": {"mode": args.mode, "model": args.model}},
-                  os.path.abspath(recortex.project_root()), sys.executable, args.dry_run)
+    root = os.path.abspath(recortex.project_root())
+    for value in (args.model, args.sort_model, args.strong):
+        if value is not None and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", value):
+            sys.exit("error: a model must be a Claude alias or model ID, such as sonnet")
+    if args.level is None and args.strong is None:
+        sys.exit("error: say what the observer may do with --level notes, assistant or everything, or give --strong MODEL")
+    stored = stored_observer(repo, root)
+    mode = args.mode or (stored.get("mode") if stored.get("enabled") else None) or "automatic"
+    if args.level is None:
+        # the paper-proposals step changes the stronger model only: the level and the models stay as the user chose them
+        if stored.get("level") not in ("assistant", "everything") or not stored.get("model"):
+            sys.exit("error: choose the observer's level first (setup.py observer --level assistant or everything), then "
+                     "paper proposals")
+        level, model, sort_model = stored["level"], args.model or stored["model"], args.sort_model or stored["sort_model"]
+    else:
+        level, model, sort_model = args.level, args.model or "sonnet", args.sort_model or SORT_MODEL
+    strong = args.strong or ("" if level == "notes" else stored.get("strong_model", ""))   # a lower level drops it
+    observer_step({"repo": repo, "observer": {"mode": mode, "model": model, "level": level, "sort_model": sort_model,
+                                              "strong": strong}}, root, sys.executable, args.dry_run)
     return 0
 
 
@@ -1762,15 +1812,20 @@ def main(argv=None):
                        "most, for the labels)")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("answer", help="record the user's answer to one setup question on this machine")
-    p.add_argument("--id", required=True, choices=setup_questions.IDS)
+    p.add_argument("--id", required=True, choices=setup_questions.ACCEPTED)
     p.add_argument("--answer", required=True, choices=setup_questions.ANSWERS + ("reset",))
     p = sub.add_parser("status-line", help="show recortex in the status line (the wizard's step, for the setup questions)")
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true", help="print every change; write nothing")
     mode.add_argument("--yes", action="store_true", help="the user agreed")
-    p = sub.add_parser("observer", help="turn on the observer (the wizard's step, for the setup questions)")
-    p.add_argument("--mode", required=True, choices=("automatic", "shadow"))
-    p.add_argument("--model", required=True, help="a Claude alias or model ID, such as sonnet")
+    p = sub.add_parser("observer", help="turn on the observer at a level, or add the stronger model for paper proposals "
+                       "(the wizard's step, for the setup questions)")
+    p.add_argument("--level", choices=observer_runtime.LEVELS, help="what the observer may do: notes, assistant or everything")
+    p.add_argument("--strong", metavar="MODEL", help="the stronger model that drafts the paper's text for the user to accept "
+                    "(keeps the level)")
+    p.add_argument("--mode", choices=("automatic", "shadow"), help="default: the mode this folder has, else automatic")
+    p.add_argument("--model", help="the Claude model of the note-taking calls (default sonnet)")
+    p.add_argument("--sort-model", help="the Claude model of the sorting calls (default haiku)")
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true", help="print every step; run none")
     mode.add_argument("--yes", action="store_true", help="the user agreed")
