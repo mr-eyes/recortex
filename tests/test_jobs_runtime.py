@@ -845,6 +845,18 @@ class CliTests(Box):
         settings = self.stored()["settings"]
         self.assertEqual((40, 2, 70), (settings["max_sort"], settings["max_strong"], settings["max_invocations"]))
 
+    def test_the_caps_of_a_1_4_0_approval_are_its_defaults_and_give_way_to_the_new_ones(self):
+        root = runtime.folder_key(self.folder)
+        old = dict(OLD_SETTINGS, publisher_id=runtime.publisher_id(create=True))
+        self.assertEqual(60, old["max_invocations"])   # what 1.4.0 stored for every folder: its default, never a choice
+        entry = {"repo": REPO, "settings": old, "publisher_id": old["publisher_id"], "root": root,
+                 "approved_at": 1794900000.0, "given": "terminal"}
+        storage.write_file(os.path.join(runtime.approvals_folder(create=True), runtime.APPROVALS),
+                           json.dumps({"form": 1, "folders": {root: entry}}))
+        code, value = self.run_cli("enable", "--model", "sonnet", "--level", "notes", "--yes")
+        self.assertEqual((0, True), (code, value["approved"]))
+        self.assertEqual(70, self.stored()["settings"]["max_invocations"])
+
     def test_status_says_a_1_4_0_approval_is_paused_until_a_level_is_chosen(self):
         root = runtime.folder_key(self.folder)
         old = dict(OLD_SETTINGS, publisher_id=runtime.publisher_id(create=True))

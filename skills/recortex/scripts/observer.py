@@ -171,7 +171,8 @@ def enable(repo, config, mode, yes=False, model=None, root=None, confirm=None, g
     if strong_model:
         raw["strong_model"] = strong_model
     caps = set(runtime.CALL_CAPS.values()) | set(runtime.TOKEN_BUDGETS.values())
-    raw.update({key: stored[key] for key in caps if key in stored})
+    if stored.get("level") in runtime.LEVELS:   # an entry of 1.4.0 holds that version's defaults, never the user's choice
+        raw.update({key: stored[key] for key in caps if key in stored})
     options = runtime.settings({"observer": raw})
     try:
         identity = runtime.publisher_id(create=False)
