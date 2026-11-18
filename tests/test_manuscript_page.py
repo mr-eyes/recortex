@@ -2011,10 +2011,40 @@ class FixRoundTests(Steps):
         part = view[view.index('id="p-5-0"'):view.index('id="p-4-2"')]
         note = part[part.index('<div class="mn pnote"'):]
         note = note[:note.index('</div></div>')]
-        self.assertEqual(1, note.count('<div class="sts">'))
+        self.assertEqual(1, note.count('<details class="stmore"'))   # six states: the first in view, the other five in the fold's own group
+        self.assertEqual(2, note.count('class="sts"'))
         self.assertEqual(1, note.count('class="plinks"'))
         links = note[note.index('class="plinks"'):]
         self.assertRegex(links, r'<span class="lc">Last changed [A-Za-z]+ [0-9]+[^<]*</span>.*History \([0-9]+\).*How we got here')
+
+    def test_a_part_with_more_than_two_states_keeps_the_first_in_view_and_folds_the_rest_built_open(self):
+        import mind
+        self.history()
+        model = self.model()
+        text = self.page()
+        view = self.sheet_of(text)
+        counts = [len([m for m in p["marks"] if m["k"] in mind.MARK_KINDS]) for s in model["sheet"]["sections"] for p in s["parts"]]
+        self.assertEqual(1, mind.NOTE_STATES)
+        self.assertTrue([n for n in counts if n > 2] and [n for n in counts if n <= 2])   # the record has both kinds of part
+        folds = re.findall(r'<details class="stmore" open="open"><summary>([0-9]+ more states?)</summary><div class="sts">(.*?)</div></details>', view)
+        self.assertEqual(sorted("%d more states" % (n - 1) for n in counts if n > 2), sorted(label for label, _ in folds))
+        for label, inside in folds:
+            self.assertEqual(int(label.split()[0]), inside.count('<span class="st '))   # the states it names are the ones inside
+        # the first state is outside the fold, before it; a part of two states or fewer has no fold
+        at = view.index('<details class="stmore"')
+        self.assertRegex(view[at - 400:at], r'<div class="sts"><span class="st st-[a-z]+">')
+        self.assertEqual(len([n for n in counts if n > 2]), view.count('<details class="stmore"'))
+        self.assertEqual([], ts.page_problems(text))
+
+    def test_the_script_shuts_the_folds_of_the_notes_and_lays_the_notes_out_again_when_one_is_toggled(self):
+        script = ScriptTests.script(None)
+        self.assertIn("$$('.stmore', paper).forEach(function (d) { d.open = false; });", script)
+        self.assertIn("paper.addEventListener('toggle', function () { sideNotes(); }, true);", script)
+        with open(os.path.join(PAGE, "mind.css"), encoding="utf-8") as handle:
+            style = handle.read()
+        self.assertIn(".stmore{flex:1 0 100%}", style)
+        self.assertIn(".stmore>summary{display:list-item;cursor:pointer;", style)
+        self.assertIn(".stmore>summary:focus-visible{outline:2px solid var(--thread);outline-offset:2px}", style)
 
     def test_the_two_buttons_of_the_bar_carry_a_title_and_the_bar_says_a_plain_text_is_plain_in_its_own_line(self):
         self.history()

@@ -405,6 +405,8 @@
   if (paper) {
     $$('.histbox', paper).forEach(function (box) { box.hidden = true; });
     if (narrow()) { $$('.legend', paper).forEach(function (d) { d.open = false; }); }
+    // the longer lists of states in a part's note start folded, so that a note stays short at the margin; they are built open
+    $$('.stmore', paper).forEach(function (d) { d.open = false; });
     var pick = $('#pick');
     if (pick) {
       pick.addEventListener('change', function () {
@@ -459,6 +461,8 @@
     }
     barPad();
     sideNotes();
+    // a fold opened or shut changes the height of a note: lay the notes out again (the event does not bubble, so it is caught on the way down)
+    paper.addEventListener('toggle', function () { sideNotes(); }, true);
     // a link to a history box opens it (the boxes were shut above, after the first route)
     if (/^#hist-[0-9]+-[0-9]+$/.test(location.hash)) { route(); }
   }

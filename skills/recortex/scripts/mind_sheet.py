@@ -84,6 +84,7 @@ PHRASES = {
     "mark.see": "See the finding",
     "sec.plan": "%d of %d planned parts backed", "sec.none": "Nothing is planned for it", "sec.link": "The plan for the %s",
     "part.changed": "Last changed %s", "part.how": "How we got here", "part.history": "History (%d)", "part.history.days": "History",
+    "part.more": ("1 more state", "%d more states"),
     # a part against a version
     "since.same": "Same as version %d", "since.new": "New since version %d",
     "since.unfetched": "The text of version %d has not been fetched yet; build the page again with mind.py --versions.",

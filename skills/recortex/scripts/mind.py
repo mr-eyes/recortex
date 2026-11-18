@@ -395,6 +395,7 @@ SHEET_MODES = ("changes", "clean", "plain")
 ROW_KINDS = ("added", "reworded", "changed")                 # what a version can mark on a block of the text
 SINCE_STATES = ("same", "marked", "new", "unfetched", "unchecked", "before", "long", "budget", "none")
 MARK_KINDS = ("backed", "against", "moved", "planned", "now", "open", "failures")
+NOTE_STATES = 1   # the states of a part's note that stay in view; a note with more than one beyond them folds the rest
 WHO_KEYS = ("auto", "chat", "merged", "restored", "hand", "handnow", "kept", "before")
 MAX_MATH_NODES, MAX_MATH_DEPTH = 300, 8
 MATH_TOKENS = frozenset(("mi", "mn", "mo", "mtext"))
@@ -1573,6 +1574,11 @@ class Page:
             sign = self.sheet_mark(kind, words, mark.get("explain"))
             states.append(J(sign, " ", E("a", {"class": "lk", "href": anchor("m-%d" % m), "data-m": m}, mind_model.PHRASES["mark.see"]))
                           if kind == "against" and m in self.m else sign)
+        if len(states) > NOTE_STATES + 1:
+            # a longer list keeps its first states and folds the rest into the note: built open, so that without the script the
+            # note is as it was; the script shuts the fold, so that a note stays about eight lines tall at the margin's width
+            states = states[:NOTE_STATES] + [E("details", {"class": "stmore", "open": "open"}, E("summary", None, plural(
+                len(states) - NOTE_STATES, *mind_model.PHRASES["part.more"])), E("div", {"class": "sts"}, *states[NOTE_STATES:]))]
         out = [E("div", {"class": "sts"}, *states)] if states else []
         since = part.get("since") if isinstance(part.get("since"), list) else []
         out += [line for line in (self.sheet_since_note(g) for g in since if isinstance(g, dict)) if line != ""]
