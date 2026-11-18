@@ -662,8 +662,9 @@ def _view(source, n):
         text = text[:4000] + "\n[... %d characters left out ...]\n" % (len(text) - 5500) + text[-1500:]
     view = {"n": n, "role": source["role"], "via": source.get("via") or "", "direct_user": source.get("direct_user") is True,
             "at": source.get("at"), "text": text}
-    if source.get("hold_released") is True:
-        view["hold_released"] = True   # only on a source a hold the user released offered again
+    lifted = observer_store.clean_quote(source.get("hold_released"), observer_store.QUOTES_MAX)
+    if lifted:
+        view["hold_released"] = lifted   # only on a source a hold of this session the user released offered again: its words
     return view
 
 
@@ -798,7 +799,7 @@ def _process(repo, config, project_root=None, invoke_fn=None):
         queued = kept
         if not half and len(queued) < ENOUGH and all(time.time() - item["created"] < PATIENCE for item in queued):
             return dict(report, code="no-sources")  # wait for a stretch of the session
-        released = store.released_sources()   # offered again after the user released a hold: the models are told so
+        released = store.released_sources()   # {source: the request the user lifted}: the models are told it, and it only
         for item in queued:
             sid, previous = item["source_id"], item["reason"] if item["state"] == "deferred" else ""
             meta = item["metadata"]
@@ -821,7 +822,7 @@ def _process(repo, config, project_root=None, invoke_fn=None):
             if source_privacy_problem(source, config):
                 store.defer(sid, "privacy"); report["deferred"] += 1
                 continue
-            supplied[sid] = dict(source, hold_released=True) if sid in released else source
+            supplied[sid] = dict(source, hold_released=released[sid]) if sid in released else source
             offered.append(item)
         if not offered:
             return dict(report, code="no-sources")

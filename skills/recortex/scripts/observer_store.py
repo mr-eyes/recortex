@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 import time
+import unicodedata
 from urllib.parse import quote
 
 import observer_holds
@@ -108,8 +109,9 @@ DRAFT_STATES = ("waiting", "refused", "stale", "applied", "dropped", "later")
 DRAFT_ID = re.compile(r"[0-9a-f]{8}")
 BATCH = re.compile(r"[0-9a-f]{32}")
 BACKUP = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")  # the name of a file in the private folder, never a path
-RELEASED = "hold_released"   # the control that lists the sources a released hold offered again, until each is handled
+RELEASED = "hold_released"   # the control: the requests the user lifted, per source, until the source is handled
 RELEASED_MAX = 1000
+QUOTE_MAX, QUOTES_MAX, QUOTES_JOIN = 120, 300, " | "
 STATUS_KEYS = ("replaces", "instead", "checks")  # the links that change an earlier memory's status
 # Reasons an earlier queue kept an event for that are no longer given: back-filled as held.
 EARLIER_HELD = ("sensitive_project", "confidentiality", "sheet_not_approved")
@@ -151,6 +153,28 @@ def _reason(value):
     if not isinstance(value, str) or not KEY.fullmatch(value):
         raise StoreError("invalid_reason")
     return value
+
+
+def clean_quote(text, limit=QUOTE_MAX):
+    """The typed words of a hold, as data for a model: one line, no control or format character, at most `limit`
+    characters (QUOTE_MAX for one hold's words). "" for anything that is not a string or holds no word."""
+    if not isinstance(text, str):
+        return ""
+    kept = "".join(" " if char.isspace() else char for char in text if unicodedata.category(char) not in ("Cc", "Cf", "Cs", "Zl", "Zp") or char.isspace())
+    return " ".join(kept.split())[:limit].strip()
+
+
+def _lifted(value):
+    """{source id: [quotes]} of a stored RELEASED control, with whatever is not in that form left out."""
+    if not isinstance(value, dict):
+        return {}
+    out = {}
+    for sid, quotes in value.items():
+        if isinstance(sid, str) and isinstance(quotes, list):
+            cleaned = [clean_quote(words) for words in quotes[:8]]
+            if any(cleaned):
+                out[sid] = [words for words in cleaned if words]
+    return out
 
 
 def event_key(repo, sources):
@@ -1325,40 +1349,54 @@ class Store:
         """The sources that an active "publish" hold of `before`, released or gone in `changed`, kept off the record
         (deferred as withheld) and that no hold still active in `changed` covers, go back to observed: the next pass
         sorts them again, under its usual caps and gates. A source another hold covers stays withheld. Runs inside the
-        transaction of update_holds, so that a release never leaves them behind. Returns how many were offered."""
+        transaction of update_holds, so that a release never leaves them behind. Returns how many were offered.
+
+        Each hold that is lifted lifts its own typed request and no other: the quote of a freed hold of this session is
+        kept for the sources it covered, offered now or still withheld by another hold (RELEASED, one list of quotes per
+        source), and the models are told that request, and that one only, no longer applies (released_sources). A hold of
+        the whole repository frees a source and leaves it unmarked: its words say nothing about what this session typed."""
         alive = {hold.get("id") for hold in changed if isinstance(hold, dict) and hold.get("state") == "active"}
         freed = [hold for hold in before if isinstance(hold, dict) and hold.get("state") == "active"
                  and hold.get("action") == "publish" and hold.get("id") not in alive]
         if not freed:
             return 0
+        row = self.db.execute("SELECT value FROM controls WHERE key=?", (RELEASED,)).fetchone()
+        lifted = _lifted(json.loads(row[0]) if row else {})
         offered = []
         for source_id, metadata in self.db.execute("SELECT source_id,metadata FROM observations WHERE state='deferred' "
                                                    "AND reason='withheld'").fetchall():
             session = json.loads(metadata).get("session_id")
-            if (observer_holds.publication_withheld(freed, self.repo, {session})
-                    and not observer_holds.publication_withheld(changed, self.repo, {session})):
+            covering = [hold for hold in freed if observer_holds.publication_withheld([hold], self.repo, {session})]
+            if not covering:
+                continue
+            quotes = lifted.get(source_id, [])
+            for hold in covering:
+                scope = hold.get("scope")
+                words = clean_quote(hold.get("quote"))
+                if words and isinstance(scope, dict) and scope.get("session_id") == session and words not in quotes:
+                    quotes.append(words)
+            if quotes:
+                lifted[source_id] = quotes
+            if not observer_holds.publication_withheld(changed, self.repo, {session}):
                 self.db.execute("UPDATE observations SET state='observed',reason='',updated=? WHERE source_id=?",
                                 (time.time(), source_id))
                 offered.append(source_id)
-        if offered:
-            # Marked, until each is handled: a request not to post that the user typed in such a source was lifted by
-            # the user themselves, and the models are told so (released_sources). A control, not a column: no schema change.
-            row = self.db.execute("SELECT value FROM controls WHERE key=?", (RELEASED,)).fetchone()
-            kept = json.loads(row[0]) if row else []
-            kept = [sid for sid in kept if isinstance(sid, str) and sid not in offered] if isinstance(kept, list) else []
-            self.db.execute("INSERT OR REPLACE INTO controls VALUES (?,?)", (RELEASED, canonical((kept + offered)[-RELEASED_MAX:])))
+        if lifted:
+            self.db.execute("INSERT OR REPLACE INTO controls VALUES (?,?)",
+                            (RELEASED, canonical(dict(list(lifted.items())[-RELEASED_MAX:]))))
         return len(offered)
 
     def released_sources(self):
-        """The ids of the sources a hold the user released offered again that are still waiting to be sorted (observed, or
-        deferred for another try): what the models are told, as hold_released, of those sources. A source that is handled
-        (an event, set aside, rejected) leaves the list; this prunes it."""
-        found = self.get_control(RELEASED, [])
-        found = [sid for sid in found if isinstance(sid, str)] if isinstance(found, list) else []
-        pending = [sid for sid in found if (self.observation(sid) or {}).get("state") in ("observed", "deferred")]
+        """{source id: the requests the user lifted} of the sources still waiting to be sorted (observed, or deferred for
+        another try) whose hold the user released: the quotes of the holds, joined, which the models are told, as
+        hold_released, of that source. A source that is handled (an event, set aside, rejected) leaves the list; this
+        prunes it. A source a hold of the whole repository freed has no entry."""
+        found = _lifted(self.get_control(RELEASED, {}))
+        pending = {sid: quotes for sid, quotes in found.items()
+                   if (self.observation(sid) or {}).get("state") in ("observed", "deferred")}
         if pending != found and not self.readonly:
             self.set_control(RELEASED, pending)
-        return set(pending)
+        return {sid: QUOTES_JOIN.join(quotes)[:QUOTES_MAX] for sid, quotes in pending.items()}
 
     def update_holds(self, transform):
         """Replace the holds by what `transform` makes of them. A hold of the record's publication that this releases

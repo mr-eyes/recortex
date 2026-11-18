@@ -409,23 +409,25 @@ class PairTests(LiveBox):
 class ReleasedTests(LiveBox):
     """A session the user kept off the record by a typed request, and then released in their own terminal
     (tests/fixtures/observer-stretches/u03.json: the first message says "Don't post this" about a result, a failure follows).
-    Releasing the hold offers every source it withheld to the sort again, each marked hold_released in what the sorter, the
-    drafter and the reviewer are shown: the request typed in a source no longer applies, and the moment is judged on its own.
-    Without the mark the sorter set the result aside and the reviewer rejected it as withheld, as the recorded answers of the
-    fixture were made with it. A hold still active, and a request typed after the release, keep the session off the record."""
+    Releasing a hold offers the sources it withheld to the sort again, each marked hold_released with the quoted words of
+    that hold in what the sorter, the drafter and the reviewer are shown: that request no longer applies, and the moment is
+    judged on its own; any other request not to post still keeps a moment off the record. Without the mark the sorter set
+    the result aside and the reviewer rejected it as withheld; the recorded answers of the fixture were made with it. A hold
+    still active, and a request typed after the release, keep the session off the record."""
 
     fixture, session = RELEASED, "sess-u03"
+    QUOTE = "don't post"   # what the hook keeps of the first message: the phrase
 
     def setUp(self):
         super().setUp()
         self.ids = [s["id"] for s in self.data["sources"]]
 
-    def hold(self, text=None, sid=None):
+    def hold(self, text=None, sid=None, session="own"):
         """The hold the hook makes of a message that says it: the phrase, as the hook passes it, of this session."""
         text = text or self.data["sources"][0]["text"]
+        scope = {"session_id": self.session if session == "own" else session} if session else None
         return observer_holds.make_hold({"source_id": sid or self.ids[0], "role": "user", "direct_user": True,
-                                         "text": observer_holds.withheld(text)}, REPO, "publish",
-                                        {"session_id": self.session}, None)
+                                         "text": observer_holds.withheld(text)}, REPO, "publish", scope, None)
 
     def keep(self, *holds):
         with store.Store(REPO, config=self.pcfg) as db:
@@ -453,23 +455,43 @@ class ReleasedTests(LiveBox):
     def model_calls(self, calls):
         return [(purpose, payload) for purpose, payload in calls if purpose in ("sort", "draft", "review")]
 
+    def typed_later(self, ident, text):
+        """A message typed in this session after the others, as the hook leaves it."""
+        extra = {"at": "2026-11-18T15:54:00.000Z", "dialog_user": False, "direct_user": True, "id": ident * 64, "role": "user",
+                 "session_id": self.session, "text": text, "via": None}
+        self.data["sources"].append(extra)
+        self.by_id[extra["id"]] = dict(extra, subagent=False, sidechain=False, control_user=False, message_id=None)
+        return extra["id"]
+
+    def another_session(self, session="sess-other", ids=("other-1", "other-2")):
+        """Sources of another session, which the pass never needs to read while a hold covers them."""
+        rows = [{"source_id": sid, "session_id": session, "role": "user", "event_type": "Stop", "path": "/example/other.jsonl",
+                 "offset": n * 1000, "end": n * 1000 + 900, "sha256": "0" * 64, "content_sha256": "%064x" % (n + 1),
+                 "observed_at": time.time() - 90 + n} for n, sid in enumerate(ids)]
+        with store.Store(REPO, config=self.pcfg) as db:
+            db.capture(rows)
+        return list(ids)
+
+    def views(self, calls, purpose="sort"):
+        return dict((view["n"], view) for view in next(p for name, p in calls if name == purpose)["sources"])
+
     def test_a_released_session_is_offered_again_marked_sorted_and_posted_once(self):
         hold = self.hold()
         self.keep(hold)
         report, purposes, calls = self.run_pass()
         self.assertEqual(([], []), (self.model_calls(calls), report["ready"]))   # the active hold is checked before any call
         self.assertEqual([("deferred", "withheld")] * 8, self.states())
-        self.assertEqual(set(), self.marked())                                   # nothing is marked while the hold stands
+        self.assertEqual({}, self.marked())                                      # nothing is marked while the hold stands
         self.assertEqual(8, self.release(hold))
         self.assertEqual([("observed", "")] * 8, self.states())
-        self.assertEqual(set(self.ids), self.marked())
+        self.assertEqual({sid: self.QUOTE for sid in self.ids}, self.marked())
         report, purposes, calls = self.run_pass()
         self.assertEqual(["sort", "draft", "review", "review"], [p for p in purposes if p != "summary"][:4])
         self.assertEqual(["result", "failure"], self.kinds())
-        for purpose, payload in self.model_calls(calls):   # every source of every call carries the mark
+        for purpose, payload in self.model_calls(calls):   # every source of every call carries the quoted request
             views = payload["sources"] + payload.get("context", [])
-            self.assertTrue(views and all(view.get("hold_released") is True for view in views), purpose)
-        self.assertEqual(set(), self.marked())            # handled: the marks are gone
+            self.assertTrue(views and all(view.get("hold_released") == self.QUOTE for view in views), purpose)
+        self.assertEqual({}, self.marked())               # handled: the marks are gone
         again, purposes, calls = self.run_pass()
         self.assertEqual(([], ["result", "failure"]), ([p for p in purposes if p != "summary"], self.kinds()))
 
@@ -478,7 +500,7 @@ class ReleasedTests(LiveBox):
         for _ in range(2):
             report, purposes, calls = self.run_pass()
             self.assertEqual(([], []), (self.model_calls(calls), self.posted()))
-        self.assertEqual(([("deferred", "withheld")] * 8, set()), (self.states(), self.marked()))
+        self.assertEqual(([("deferred", "withheld")] * 8, {}), (self.states(), self.marked()))
 
     def test_a_request_typed_after_the_release_keeps_the_session_off_the_record_again(self):
         first = self.hold()
@@ -486,36 +508,88 @@ class ReleasedTests(LiveBox):
         self.run_pass()
         self.assertEqual(8, self.release(first))
         text = "Keep this off the record from now on."
-        extra = {"at": "2026-11-18T15:54:00.000Z", "dialog_user": False, "direct_user": True, "id": "f" * 64, "role": "user",
-                 "session_id": self.session, "text": text, "via": None}
-        self.data["sources"].append(extra)
-        self.by_id[extra["id"]] = dict(extra, subagent=False, sidechain=False, control_user=False, message_id=None)
-        second = self.hold(text, extra["id"])   # the hook's hold for the new request, which is not marked
+        extra = self.typed_later("f", text)
+        second = self.hold(text, extra)   # the hook's hold for the new request, which is not the one that was lifted
         self.keep(second)
         report, purposes, calls = self.run_pass()
         self.assertEqual(([], [], []), (self.model_calls(calls), self.posted(), report["ready"]))
-        self.assertEqual([("deferred", "withheld")] * 9, self.states(self.ids + [extra["id"]]))
+        self.assertEqual([("deferred", "withheld")] * 9, self.states(self.ids + [extra]))
 
     def test_the_mark_is_on_the_sources_a_release_offered_again_and_on_no_other(self):
         hold = self.hold()
         self.keep(hold)
         self.run_pass()
         self.release(hold)
-        extra = {"at": "2026-11-18T15:54:00.000Z", "dialog_user": False, "direct_user": True, "id": "e" * 64, "role": "user",
-                 "session_id": self.session, "text": "ok, thanks", "via": None}
-        self.data["sources"].append(extra)   # typed after the release: no hold ever covered it
-        self.by_id[extra["id"]] = dict(extra, subagent=False, sidechain=False, control_user=False, message_id=None)
+        self.typed_later("e", "ok, thanks")   # typed after the release: no hold ever covered it
         report, purposes, calls = self.run_pass()
-        views = dict((view["n"], view) for view in next(p for purpose, p in calls if purpose == "sort")["sources"])
-        self.assertEqual([True] * 8, [views[n].get("hold_released") for n in range(1, 9)])
-        self.assertNotIn("hold_released", views[9])   # the key is absent, not false
+        views = self.views(calls)
+        self.assertEqual([self.QUOTE] * 8, [views[n].get("hold_released") for n in range(1, 9)])
+        self.assertNotIn("hold_released", views[9])   # the key is absent, not false or empty
         self.assertEqual("ok, thanks", views[9]["text"])
+
+    def test_only_the_hold_that_was_released_offers_its_sources_and_lends_its_words(self):
+        # Two sessions, two typed requests: lifting one lifts that one only, and the other session stays off the record.
+        mine = self.hold()
+        theirs = self.hold("Please do not record this one.", "z" * 64, session="sess-other")
+        others = self.another_session()
+        self.keep(mine, theirs)
+        self.run_pass()
+        self.assertEqual([("deferred", "withheld")] * 10, self.states(self.ids + others))
+        legacy = self.another_session("sess-legacy", ("legacy-1",))   # withheld by a verdict of 1.5.0: no hold covers it
+        with store.Store(REPO, config=self.pcfg) as db:
+            db.defer(legacy[0], "withheld")
+        self.assertEqual(8, self.release(mine))
+        self.assertEqual({sid: self.QUOTE for sid in self.ids}, self.marked())   # the other sessions have no mark
+        self.assertEqual([("deferred", "withheld")] * 3, self.states(others + legacy))
+        report, purposes, calls = self.run_pass()
+        self.assertEqual(8, len(next(p for name, p in calls if name == "sort")["sources"]))   # none of the other session's
+        self.assertEqual(["result", "failure"], self.kinds())
+        self.assertEqual([("deferred", "withheld")] * 2, self.states(others))
+        self.assertEqual(2, self.release(theirs))
+        self.assertEqual({sid: "do not record" for sid in others}, self.marked())   # its own words, not the first request's
+
+    def test_two_requests_in_one_session_are_lifted_one_release_at_a_time_and_both_are_told(self):
+        first = self.hold()
+        text = "Keep this off the record: the 2 MB run took 0.1 s."
+        later = self.typed_later("d", text)
+        second = self.hold(text, later)
+        self.keep(first, second)
+        self.run_pass()
+        self.assertEqual(0, self.release(first))   # the second request still covers the session: nothing is offered
+        self.assertEqual([("deferred", "withheld")] * 9, self.states(self.ids + [later]))
+        report, purposes, calls = self.run_pass()
+        self.assertEqual(([], []), (self.model_calls(calls), self.posted()))
+        self.assertEqual(9, self.release(second))
+        self.assertEqual({sid: self.QUOTE + " | off the record" for sid in self.ids + [later]}, self.marked())
+        report, purposes, calls = self.run_pass()
+        self.assertEqual(["result", "failure"], self.kinds())
+        self.assertEqual({self.QUOTE + " | off the record"}, {view["hold_released"] for view in self.views(calls).values()})
+
+    def test_a_hold_of_the_whole_repository_frees_its_sources_and_marks_none(self):
+        wide = self.hold(session=None)
+        self.keep(wide)
+        self.run_pass()
+        self.assertEqual(8, self.release(wide))
+        self.assertEqual({}, self.marked())   # its words say nothing about what this session typed
+        report, purposes, calls = self.run_pass()
+        self.assertEqual(["result", "failure"], self.kinds())   # (the models' answers are the recorded ones)
+        sort = self.views(calls)
+        self.assertEqual(8, len(sort))
+        self.assertTrue(all("hold_released" not in view for view in sort.values()))
+
+    def test_the_words_of_a_session_hold_survive_the_release_of_a_repository_hold_that_still_covered_it(self):
+        mine, wide = self.hold(), self.hold("do not post", "y" * 64, session=None)
+        self.keep(mine, wide)
+        self.run_pass()
+        self.assertEqual(0, self.release(mine))
+        self.assertEqual(8, self.release(wide))
+        self.assertEqual({sid: self.QUOTE for sid in self.ids}, self.marked())   # the first request was lifted, the second hold had none
 
     def test_a_release_that_offers_nothing_marks_nothing(self):
         other = observer_holds.make_hold({"source_id": self.ids[0], "role": "user", "direct_user": True, "text": "do not post"},
                                          REPO, "publish", {"session_id": "sess-else"}, None)
         self.keep(other)
-        self.assertEqual((0, set()), (self.release(other), self.marked()))
+        self.assertEqual((0, {}), (self.release(other), self.marked()))
 
     def test_a_marked_source_stays_marked_until_it_is_handled_and_a_hold_that_covers_it_again_keeps_it_withheld(self):
         hold = self.hold()
@@ -526,18 +600,36 @@ class ReleasedTests(LiveBox):
             db.defer(self.ids[0], "uncertain")        # tried again later: still waiting for its turn
             db.mark_handled(self.ids[1])              # set aside
             db.defer(self.ids[2], "withheld")         # covered by a hold again
-        self.assertEqual(set(self.ids) - {self.ids[1]}, self.marked())
+        self.assertEqual(set(self.ids) - {self.ids[1]}, set(self.marked()))
         with store.Store(REPO, config=self.pcfg) as db:
             for sid in self.ids[3:]:
                 db.mark_handled(sid)
-        self.assertEqual({self.ids[0], self.ids[2]}, self.marked())
+        self.assertEqual({self.ids[0], self.ids[2]}, set(self.marked()))
 
-    def test_only_a_true_mark_reaches_a_view(self):
+    def test_the_quoted_words_are_one_clean_line_of_bounded_length(self):
+        # A hold is valid only when its quote makes it again (one of the phrases), so the words are short already; what the
+        # control holds is still read as data: a form it does not know is left out, the rest is cleaned and capped.
+        self.capture()   # the sources are in the queue, observed
+        wide = "don't\u202e post\n\x00 now " + "x" * 500
+        with store.Store(REPO, config=self.pcfg) as db:
+            db.set_control(store.RELEASED, {self.ids[0]: [wide, 5, None, "second"], self.ids[1]: "text", self.ids[2]: [],
+                                            self.ids[3]: ["", " \n "], "no-such-source": ["x"]})
+            found = db.released_sources()
+        self.assertEqual([self.ids[0]], list(found))
+        self.assertEqual("don't post now " + "x" * (store.QUOTE_MAX - len("don't post now ")) + " | second", found[self.ids[0]])
+        self.assertLessEqual(len(found[self.ids[0]]), store.QUOTES_MAX)
+        self.assertEqual("", store.clean_quote(None))
+        self.assertEqual("", store.clean_quote(True))
+        self.assertEqual("", store.clean_quote(" \n\t\x00 "))
+        self.assertEqual("a b", store.clean_quote("a\x07  b"))
+
+    def test_only_a_quoted_request_reaches_a_view(self):
         source = {"role": "user", "text": "t", "direct_user": True, "via": None, "at": "x"}
         self.assertNotIn("hold_released", worker._view(source, 1))
-        for odd in (False, "true", 1, None):
+        for odd in (True, False, 1, None, "", "  ", "\x00", ["don't post"]):
             self.assertNotIn("hold_released", worker._view(dict(source, hold_released=odd), 1), repr(odd))
-        self.assertTrue(worker._view(dict(source, hold_released=True), 1)["hold_released"])
+        self.assertEqual("don't post", worker._view(dict(source, hold_released="don't post"), 1)["hold_released"])
+        self.assertEqual("a b", worker._view(dict(source, hold_released="a\n\u202e b"), 1)["hold_released"])
 
 
 class BecauseSchemaTests(tp.PublisherBox):
@@ -820,13 +912,18 @@ class PromptTests(unittest.TestCase):
         self.assertIn("reject with unsupported when they do not", review)
 
     def test_the_three_wordings_say_what_a_source_marked_hold_released_is(self):
-        # Without it the sorter set the result aside after the user lifted the hold, and the reviewer rejected it as withheld.
+        # Without it the sorter set the result aside after the user lifted the hold, and the reviewer rejected it as withheld;
+        # and only the request the field quotes is lifted: any other request not to post still keeps a moment off the record.
         for purpose in ("sort", "draft", "review"):
-            text = runtime.PROMPTS[purpose]
-            self.assertIn("a source with hold_released true was kept off the record by a hold that the user lifted themselves, in their terminal"
-                          if purpose != "review" else "A source with hold_released true was kept off the record by a hold that the user lifted themselves, in their terminal", text, purpose)
-            self.assertIn("a request not to post in it no longer applies", text, purpose)
-            self.assertIn("a request typed in a source without hold_released still", text, purpose)
+            flat = " ".join(runtime.PROMPTS[purpose].split())
+            self.assertIn(("a source" if purpose == "sort" else "A source")
+                          + " with a hold_released field was kept off the record by a hold that the user lifted themselves, "
+                          "in their terminal, and the field quotes that request: ", flat, purpose)
+            self.assertIn("that request no longer applies, so write the moments it covered like any other" if purpose == "draft"
+                          else "only the quoted request no longer applies", flat, purpose)
+            for words in ("any other request not to post", "worded differently from the quote", "in that source or another",
+                          "even when it is typed in a source that carries the quote"):
+                self.assertIn(words, flat, purpose)
 
     def test_the_sorter_leaves_a_moment_the_agent_says_it_just_recorded(self):
         self.assertIn("a moment that an agent message in the stretch says it has just recorded, with the address of its comment",
