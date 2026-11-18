@@ -2121,7 +2121,8 @@ def tasks(db, allowed, closed_days=None, now=None):
             by = items.get(step["by"]) if step["by"] is not None else None
             step["by"] = None if by is None else {"id": by["id"], "kind": by["kind"], "plain": by["plain"],
                                                   "url": urls.get(by["id"]) or ""}
-        out.append({"issue": number, "title": issue["title"], "title_told": title_told(db, issue, counts),
+        told = title_told(db, issue, counts)
+        out.append({"issue": number, "title": issue["title"] if told else None, "title_told": told,
                     "state": "open" if opened else "closed", "closed_at": issue["closed_at"], "todo": number == todo,
                     "steps": assessed, "counts": task_rules.counts(assessed), "blocked": bool(failures) and opened,
                     "hand": opened and task_rules.hand_changed(issue["body"]),
