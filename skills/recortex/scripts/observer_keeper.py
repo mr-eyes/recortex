@@ -38,6 +38,7 @@ import writing
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 LEVELS = ("assistant", "everything")
 SEEN, NONCES, FAILED = "keeper_seen", "keeper_nonces", "keeper_failed"   # store controls
+FIGURES = "keeper_figures"   # store control: {"n": planned figures and tables not in the text, "at": when counted}
 NONCES_KEPT = 64
 RETRY_AFTER = 3600         # seconds before a topic whose call failed for a transient reason is tried again
 STEP_SECONDS = 180         # one write.py call
@@ -295,6 +296,9 @@ def _consider(repo, config, store, options, invoke, now, session_started, projec
         if state is None:
             return {"code": "no_plan"}
         report = keeper_rules.notable(gather(db, config, allowed, state))
+        # N3's "line only": the count of planned figures and tables that exist and are in no text, for the session-start
+        # line (the hook reads this integer and nothing else; it computes nothing from the plan itself).
+        store.set_control(FIGURES, {"n": report["figures"], "at": now})
         topics = report["topics"]
         seen = keeper_rules.settle(store.get_control(SEEN, {}), {row["topic"]: row["key"] for row in topics}, now)
         store.set_control(SEEN, seen)

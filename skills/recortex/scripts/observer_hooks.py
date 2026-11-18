@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 
+import datetime
 import keeper_rules
 import names
 import observer_holds
@@ -39,29 +40,188 @@ NOTICES = {
     "control-refused": "recortex observer: an explicit control could not be stored safely; that control is not active. Run observer.py status.",
     "cap": "recortex observer: today's limit of automatic comments is reached; reviewed memories wait in the queue. Run observer.py pending.",
     "release-refused": "recortex observer: nothing in a session releases a hold; run observer.py release HOLD_ID in a separate terminal, outside Claude Code. Run observer.py holds.",
-    "held": "recortex observer: reviewed memories wait for your answer; the session asks you about each. observer.py pending --held lists them.",
+    "held": "recortex observer: items wait for your answer; the session asks you about each. observer.py pending --waiting lists them.",
 }
-# At session start, for the main session, while reviewed memories wait for the user's answer (the number is the only
-# value in it).
-WAITING = ("recortex observer: %s for the user's answer. %s the status of an earlier memory without the user's "
-           "words or your message to the user. Load the recortex skill first (its session protocol, step 6). %s Run "
-           "observer.py pending --held, and ask the user with the multiple-choice question tool, one question per "
-           "memory from the skill's template, which names its short id and quotes its line exactly as pending --held "
-           "gives it, with the options Post and Drop. For each Post, run post_verified.py comment --eventkey KEY right "
-           "after, one --eventkey per command; for each Drop, observer.py discard KEY.")
+# At session start, for the main session, while anything waits for the user's answer (the number is the only value in
+# it): a held memory, a task to open or close, a draft of the paper's text. The session loads the skill, which gives the
+# scripts folder, and asks each item from the template `observer.py pending --waiting` prints.
+WAITING = ("recortex observer: %s for the user's answer. Load the recortex skill first, run its observer.py pending "
+           "--waiting, and ask each as one multiple-choice question from the template it prints. Do not offer them in "
+           "prose.")
+# On a later prompt of the same session, while items wait and `pending --waiting` has not run in the session: 1.4.0's live
+# runs showed that Sonnet and Haiku act on a reminder at the next prompt, not on the line at session start alone.
+REMINDER = ("recortex observer: %s for the user's answer. Before this reply ends, load the recortex skill, run its "
+            "observer.py pending --waiting and ask each as a multiple-choice question.")
+# The bookkeeping is setup_questions.reminder's (a test holds the numbers equal): at most REMIND_MAX reminders to one
+# session, the first with its REMIND_FROM-th prompt, REMIND_GAP prompts apart, none once `pending --waiting` ran.
+REMIND_MAX, REMIND_FROM, REMIND_GAP = 3, 2, 3
+REMIND = "waiting_remind"   # store control: {session hash: {"count", "reminded", "at", "ran"}}, the 50 newest sessions
+# At session start: what the observer did on its own since the last time this line was shown (fixed words and integers
+# only), at most once in ACTS_HOURS per session.
+ACTS = "recortex observer: since %s it %s. observer.py log lists them."
+ACTS_HOURS = 6
+ACTS_TOLD = "acts_told"     # store control: {"at": when the line was last shown for the folder, "sessions": {hash: at}}
+ACTS_DAYS = 7               # the line looks back this far at most
+TASKS_CAP = ("recortex observer: today's limit of automatic tasks is reached; a task waits in the queue. Run "
+             "observer.py pending.")
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
-# A scripts folder named in a payload: an absolute path of plain characters that ends in the skill's own folder.
-SCRIPTS_PATH = re.compile(r"/(?:[A-Za-z0-9_.@+-]+/){0,30}skills/recortex/scripts")
 
 
-def waiting_line(count, scripts=None):
-    """WAITING for `count` memories: the number, in the singular for one, and the scripts folder when it matches
-    SCRIPTS_PATH (no .. part), are its only values."""
-    scripts = SCRIPTS if scripts is None else scripts
-    where = ("Its scripts are in %s." % scripts if SCRIPTS_PATH.fullmatch(scripts) and "/../" not in scripts + "/"
-             and "/./" not in scripts + "/" else "Its scripts are in the recortex skill's scripts folder.")
-    return WAITING % (("1 reviewed memory waits", "It changes", where) if count == 1 else
-                      ("%d reviewed memories wait" % count, "Each changes", where))
+def _items(count):
+    return "1 item waits" if count == 1 else "%d items wait" % count
+
+
+def waiting_line(count):
+    """WAITING for `count` items: the number, in the singular for one, is its only value."""
+    return WAITING % _items(count)
+
+
+def reminder_line(count):
+    """REMINDER for `count` items still waiting."""
+    return REMINDER % ("1 item still waits" if count == 1 else "%d items still wait" % count)
+
+
+def _joined(parts):
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
+def acts_text(acts):
+    """What the acts say, in fixed words and whole numbers: posted N memories, checked N steps, opened N tasks, closed
+    task #14 ..., or "" when there is nothing to say. `acts` are the rows of Store.acts (undone ones are left out)."""
+    def count(kind):
+        return [row for row in acts if row["kind"] == kind and not row["undone"]]
+    parts = []
+
+    def plural(n, one, many):
+        return "%d %s" % (n, one if n == 1 else many)
+    if count("memory"):
+        parts.append("posted " + plural(len(count("memory")), "memory", "memories"))
+    steps = sum(n for row in count("step_marked") for n in row["numbers"][:1])
+    if steps:
+        parts.append("checked " + plural(steps, "step", "steps"))
+    if count("task_opened"):
+        parts.append("opened " + plural(len(count("task_opened")), "task", "tasks"))
+    closed = count("task_closed")
+    if closed:
+        parts.append("closed task #%d" % closed[0]["issue"] if len(closed) == 1 and closed[0]["issue"]
+                     else "closed " + plural(len(closed), "task", "tasks"))
+    if count("task_rendered"):
+        parts.append("rendered " + plural(len(count("task_rendered")), "task list", "task lists"))
+    if count("hub_rendered"):
+        parts.append("rendered the hub's active issues")
+    if count("board"):
+        parts.append("updated the board")
+    return _joined(parts[:6]) if parts else ""
+
+
+def _acts_line(store, data, config):
+    """The acts line, or "": at a session start, when the observer did something since the line was last shown here, and
+    not more than once in ACTS_HOURS for a session. The stamp comes from the record's own zone (recortex.stamp)."""
+    session = data.get("session_id", "")
+    if not isinstance(session, str) or not observer_sources.SESSION.fullmatch(session):
+        return ""
+    key = hashlib.sha256(session.encode()).hexdigest()[:24]
+    now = time.time()
+    told = store.get_control(ACTS_TOLD, {})
+    told = told if isinstance(told, dict) else {}
+    sessions = told.get("sessions") if isinstance(told.get("sessions"), dict) else {}
+    last = sessions.get(key)
+    if type(last) in (int, float) and now - last < ACTS_HOURS * 3600:
+        return ""
+    since = told.get("at")
+    since = float(since) if type(since) in (int, float) and math.isfinite(since) and since > 0 else 0.0
+    since = max(since, now - ACTS_DAYS * 86400)
+    text = acts_text([row for row in store.acts(days=ACTS_DAYS) if row["at"] > since])
+    if not text:
+        return ""
+    sessions[key] = now
+    store.set_control(ACTS_TOLD, {"at": now, "sessions": dict(sorted(sessions.items(), key=lambda pair: pair[1])[-50:])})
+    moment = datetime.datetime.fromtimestamp(since, datetime.timezone.utc)
+    return ACTS % (recortex.stamp(moment, config), text)
+
+
+FIGURES_DAYS = 3   # a count the keeper made longer ago than this is not told
+
+
+def _figures_line(store):
+    """keeper_rules.figures_line for the count the keeper left in the store (an integer and its time), while it is recent;
+    else "". Nothing is computed from the plan here."""
+    found = store.get_control("keeper_figures", {})
+    if not isinstance(found, dict) or type(found.get("n")) is not int or type(found.get("at")) not in (int, float):
+        return ""
+    if not 0 < found["n"] <= 10 ** 6 or time.time() - found["at"] > FIGURES_DAYS * 86400:
+        return ""
+    return keeper_rules.figures_line(found["n"])
+
+
+def _tasks_cap_line(store):
+    """TASKS_CAP once for each time the publisher met the daily cap of tasks (the store control it sets), else ""."""
+    at, told = store.get_control("task_cap_at", 0), store.get_control("task_cap_told", 0)
+    if type(at) in (int, float) and math.isfinite(at) and at > 0 and not (type(told) in (int, float) and told >= at):
+        store.set_control("task_cap_told", at)
+        return TASKS_CAP
+    return ""
+
+
+def _ran_waiting(data):
+    """True for a Bash call that runs `observer.py pending --waiting` or `status.py --waiting`, read as the shell splits it."""
+    command = (data.get("tool_input") or {}).get("command") if isinstance(data.get("tool_input"), dict) else None
+    if data.get("tool_name") not in ("Bash", "bash") or not isinstance(command, str) or "--waiting" not in command:
+        return False
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    names_ = [os.path.basename(word) for word in words]
+    return "--waiting" in words and ("observer.py" in names_ and "pending" in words or "status.py" in names_)
+
+
+def _session_state(store, data):
+    """(key, the session's entry of the REMIND control as a dict, the whole control) or (None, None, None)."""
+    session = data.get("session_id", "")
+    if not isinstance(session, str) or not observer_sources.SESSION.fullmatch(session):
+        return None, None, None
+    key = hashlib.sha256(session.encode()).hexdigest()[:24]
+    control = store.get_control(REMIND, {})
+    control = control if isinstance(control, dict) else {}
+    entry = control.get(key) if isinstance(control.get(key), dict) else {}
+    entry = {"count": entry.get("count") if type(entry.get("count")) is int else 0,
+             "reminded": entry.get("reminded") if type(entry.get("reminded")) is int else 0,
+             "at": entry.get("at") if type(entry.get("at")) is int else 0,
+             "ran": entry.get("ran") is True, "time": time.time()}
+    return key, entry, control
+
+
+def _save_state(store, key, entry, control):
+    control[key] = entry
+    store.set_control(REMIND, dict(sorted(control.items(), key=lambda pair: pair[1].get("time", 0))[-50:]))
+
+
+def _note_ran(store, data):
+    """Note that `pending --waiting` ran in this session (the Bash call that runs it), so that no reminder follows."""
+    key, entry, control = _session_state(store, data)
+    if key is not None and not entry["ran"]:
+        entry["ran"] = True
+        _save_state(store, key, entry, control)
+
+
+def _reminder(store, data):
+    """The reminder line for this prompt, or "": counts the session's prompts, and gives REMINDER while items wait, the
+    session's `pending --waiting` has not run, fewer than REMIND_MAX were given, from the REMIND_FROM-th prompt and
+    REMIND_GAP prompts apart. Nothing is read from the store but the count of what waits."""
+    key, entry, control = _session_state(store, data)
+    if key is None:
+        return ""
+    entry["count"] += 1
+    line = ""
+    if (not entry["ran"] and entry["count"] >= REMIND_FROM and entry["reminded"] < REMIND_MAX
+            and (not entry["reminded"] or entry["count"] - entry["at"] >= REMIND_GAP)):
+        waiting = len(store.waiting())
+        if waiting:
+            line = reminder_line(waiting)
+            entry["reminded"], entry["at"] = entry["reminded"] + 1, entry["count"]
+    _save_state(store, key, entry, control)
+    return line
 
 
 # Once, at the next session start after a session switched automatic mode on (the date is the only value in it).
@@ -317,6 +477,43 @@ def _grant_draft(store, data, project_root):
         store.grant_answer(keeper_rules.grant_key(short, content), answer)
 
 
+def _acted(data):
+    """The short id of a Bash call that runs `observer.py act SHORT`, read as the shell splits it, or None."""
+    command = (data.get("tool_input") or {}).get("command") if isinstance(data.get("tool_input"), dict) else None
+    if data.get("tool_name") not in ("Bash", "bash") or not isinstance(command, str) or "act" not in command:
+        return None
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    if not any(os.path.basename(word) == "observer.py" for word in words):
+        return None
+    for n, word in enumerate(words[:-1]):
+        if word == "act" and observer_store.DRAFT_ID.fullmatch(words[n + 1]):
+            return words[n + 1]
+    return None
+
+
+def _grant_act(store, data, project_root):
+    """Before observer.py act SHORT: when SHORT is a task the session was to open or close and the user answered the
+    label of that item ("Open it" or "Close it") to the session's question naming its short id and quoting its line
+    (observer_waiting.line; observer_sources.answered), a one-time grant for the item's key, which `act` consumes
+    (the publisher for a task to open, observer_waiting.act for one to close). Without the answer `act` is refused. An
+    answer to another item's question, to a question the session worded itself, or "Not now" or "Drop it", grants
+    nothing."""
+    short = _acted(data)
+    if short is None:
+        return
+    import observer_waiting
+    for item in store.waiting():
+        if item["short"] == short and item["kind"] in ("task_open", "task_close"):
+            answer = observer_sources.answered(data, project_root, short, observer_waiting.line(item),
+                                               label=observer_waiting.LABELS[item["kind"]])
+            if answer:
+                store.grant_answer(item["key"], answer)
+            return
+
+
 def _entry_repo():
     """The repository whose holds apply here: the one this folder's private entry names, never the project file's,
     which a single edit could change. None without an entry; False when the approvals cannot be read or the entry
@@ -433,6 +630,20 @@ def _context(store, event, data, repo, allowed):
     return packet["text"]
 
 
+def _budget_reached(settings, used, tiers):
+    """True when a tier that runs has used its calls or its tokens of the day (the caps of observer_runtime.CALL_CAPS and
+    TOKEN_BUDGETS; a tier that is not configured does not count). `used` is Store.status()["tiers_24h"]."""
+    if not isinstance(used, dict):
+        return False
+    for tier, row in used.items():
+        if tier not in observer_runtime.TIERS or not isinstance(row, dict) or not tiers.get(tier, {}).get("configured"):
+            continue
+        calls, tokens = row.get("calls", 0), row.get("input_tokens", 0) + row.get("output_tokens", 0)
+        if calls >= settings[observer_runtime.CALL_CAPS[tier]] or tokens >= settings[observer_runtime.TOKEN_BUDGETS[tier]]:
+            return True
+    return False
+
+
 def handle(event, data, config, repo):
     """Return hook JSON. Empty means no observer decision, never tool approval.
 
@@ -512,6 +723,9 @@ def _handle(event, data, config, repo, decision):
         if not observer_runtime.approval_valid(repo, config):
             # This machine's entry for the folder does not hold (another repository or machine key, or settings
             # that no longer validate). Nothing is created, and the line shows at session start only.
+            if observer_runtime.paused(repo, config):
+                # A 1.4.0 approval holds no level: the observer waits for the user's answer to the level question.
+                return _output(event, lines=[observer_runtime.PAUSED] if event == "SessionStart" else [], denial=held)
             return _output(event, notices=["approval"] if event == "SessionStart" else [], denial=held)
         if event == "PreToolUse" and not checked:
             denial = decision["early"] = _held(repo, data)
@@ -569,6 +783,9 @@ def _handle(event, data, config, repo, decision):
                     try:
                         _grant(store, data, project_root)
                         _grant_draft(store, data, project_root)
+                        _grant_act(store, data, project_root)
+                        if _ran_waiting(data):
+                            _note_ran(store, data)
                     except TimeoutError:
                         raise
                     except (observer_sources.SourceError, observer_store.StoreError, storage.StorageError, OSError,
@@ -581,14 +798,36 @@ def _handle(event, data, config, repo, decision):
             except Exception:
                 notices.append("context")
             if event == "SessionStart":
-                waiting = len(store.waiting_for_answer())
-                if waiting:
+                items = store.waiting()
+                if items:
                     notices.append("held")
-                    context = waiting_line(waiting)  # every session start, compaction included: the context is new
+                    # Every session start, compaction included: the context is new. The count is every item that waits
+                    # (the drafts too); the draft line beside it names the topics, and is the keeper's own pointer to the
+                    # skill's "Drafts that wait" section.
+                    context = waiting_line(len(items))
+                    drafts = [item["draft"]["topic"] for item in items if item["kind"] == "draft"]
+                    if drafts:
+                        context += "\n" + keeper_rules.draft_line(len(drafts), drafts)
+                figures = _figures_line(store)
+                if figures:
+                    context = (context + "\n" if context else "") + figures   # a line only: nothing is drafted for it
                 switched = _switched(store)
                 if switched:
                     lines.append(switched)
-            runtime_ready = observer_runtime.gate_valid(store.get_control("runtime_gate"), settings)
+                acts = _acts_line(store, data, config)
+                if acts:
+                    lines.append(acts)
+            if event in ("SessionStart", "UserPromptSubmit"):
+                cap = _tasks_cap_line(store)
+                if cap:
+                    lines.append(cap)
+            if event == "UserPromptSubmit":
+                reminded = _reminder(store, data)
+                if reminded:
+                    context = (context + "\n" if context else "") + reminded
+            tiers = observer_runtime.tier_state(settings, store)
+            # A pass needs the sort tier and the middle tier; a strong tier whose proof is not valid stops the keeper only.
+            runtime_ready = tiers["sort"]["gate"] and tiers["middle"]["gate"]
             if not runtime_ready:
                 notices.append("runtime")
             status = store.status()
@@ -608,7 +847,7 @@ def _handle(event, data, config, repo, decision):
                     notices.append("worker")
             if store.get_control("hook_degraded") and not any(code in notices for code in ("source", "capture")):
                 notices.append("capture")
-            if status["invocations_24h"] >= settings["max_invocations"]:
+            if _budget_reached(settings, status.get("tiers_24h"), tiers):
                 notices.append("budget")
             # Pending work is worth a line only when the worker cannot take it up (a degraded worker), or when new
             # captured work has waited longer than STALE; ordinary backlog at a stop is not. Once per session.

@@ -1,6 +1,7 @@
 """Native source capture and immediate local control checks; no model/network."""
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -225,25 +226,22 @@ class ObserverHookTests(unittest.TestCase):
             self.assertEqual(["%032x" % 0, "%032x" % 1], [event["eventkey"] for event in store.waiting_for_answer()])
         first = start()
         self.assertEqual(hooks.waiting_line(2), first["hookSpecificOutput"]["additionalContext"])
-        self.assertTrue(hooks.waiting_line(2).startswith("recortex observer: 2 reviewed memories wait for "))
-        # The session loads the skill first, and finds the scripts at a path checked against a strict pattern.
-        self.assertIn("Load the recortex skill first", hooks.waiting_line(2))
-        self.assertIn("Its scripts are in %s." % hooks.SCRIPTS, hooks.waiting_line(2))
-        self.assertIn("Its scripts are in /opt/tools/skills/recortex/scripts.",
-                      hooks.waiting_line(1, "/opt/tools/skills/recortex/scripts"))
-        for odd in ("/opt/my tools/skills/recortex/scripts", "/opt/a/../skills/recortex/scripts",
-                    "relative/skills/recortex/scripts", "/opt/x\n/skills/recortex/scripts", "/opt/other/scripts",
-                    "/opt/'x'/skills/recortex/scripts", "/opt/./skills/recortex/scripts"):
-            line = hooks.waiting_line(1, odd)
-            self.assertIn("Its scripts are in the recortex skill's scripts folder.", line, odd)
-            self.assertNotIn(odd, line)
+        self.assertTrue(hooks.waiting_line(2).startswith("recortex observer: 2 items wait for the user's answer. "))
+        # The session loads the skill first, which gives it the scripts folder: the line names no path, and no value but
+        # the number, so nothing from the machine or the record can reach it.
+        self.assertIn("Load the recortex skill first, run its observer.py pending --waiting", hooks.waiting_line(2))
+        for count in (1, 2, 9):
+            line = hooks.waiting_line(count)
+            self.assertNotIn("/", line)
+            self.assertEqual(count, int(re.search(r"observer: ([0-9]+) item", line).group(1)))
+        self.assertTrue(hooks.waiting_line(1).startswith("recortex observer: 1 item waits for the user's answer. "))
         self.assertIn(hooks.NOTICES["held"], first["systemMessage"])
         again = start()
         self.assertEqual(hooks.waiting_line(2), again["hookSpecificOutput"]["additionalContext"])  # after a compaction too
         with Store(REPO) as store:
             store.transition("%032x" % 1, "rejected", reason="discarded")
         self.assertTrue(start()["hookSpecificOutput"]["additionalContext"].startswith(
-            "recortex observer: 1 reviewed memory waits for the user's answer. It changes "))
+            "recortex observer: 1 item waits for the user's answer. "))
         self.assertNotIn(hooks.NOTICES["held"], again.get("systemMessage", ""))
         self.assertNotIn("additionalContext", json.dumps(hooks.handle("stop", self.data, self.config, REPO)))
 
