@@ -138,8 +138,8 @@ class JobsDeadlineTests(tjj.JobsBox):
 
     def test_with_no_time_left_no_step_runs_and_nothing_is_written(self):
         steps = self.run_jobs(worker.Clock(-1, now=Fake()))
-        self.assertEqual({"sync": "ok", "render": "time", "close": "time", "hub": "time", "links": "time", "board": "time"},
-                         steps)
+        self.assertEqual({"sync": "ok", "keeper": "time", "render": "time", "close": "time", "hub": "time", "links": "time",
+                          "board": "time"}, steps)   # keeper: the cleanup of 1.5.1, a step like the others
         self.assertEqual([], self.writes())
 
     def test_a_step_that_runs_past_the_deadline_stops_the_ones_after_it(self):

@@ -44,7 +44,8 @@ and controls, `private/`, with mode 0700:
   every read and write.
 
 Files are written to a fresh temporary file with mode 0600 and moved into place,
-and read without following symlinks. A per-user key in the state folder lets the
+and read without following symlinks. remove_file and remove_folder (below) take away what the plugin made, through the
+open folder and with the same checks, never through a link. A per-user key in the state folder lets the
 plugin recognize the index files it created; an index without the right mark is
 not read, so a swapped folder or a forged index is refused.
 """
@@ -361,3 +362,123 @@ def read_cached(repo, parts, name):
 def write_cached(repo, parts, name, text):
     """Write <index folder>/<parts>/<name> through a fresh temporary file with mode 0600."""
     write_file(os.path.join(cache_folder(repo, *parts), name), text)
+
+
+# ---------------------------------------------------------------- removing what the plugin made
+
+REMOVE_MAX = 200   # the files a folder may hold for remove_folder to take it away: more is not what the plugin made
+
+
+def _plain_name(name):
+    """`name` when it is one plain name inside a folder (no separator, not "." or ".."), else a StorageError."""
+    if not isinstance(name, str) or not name or name in (".", "..") or "/" in name or "\\" in name or "\0" in name:
+        raise StorageError("%r is not a plain name inside a private folder" % (name,), "name")
+    return name
+
+
+def _can_remove_without_links():
+    return (hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW") and os.open in os.supports_dir_fd
+            and os.stat in os.supports_dir_fd and os.unlink in os.supports_dir_fd and os.rmdir in os.supports_dir_fd
+            and os.listdir in os.supports_fd)
+
+
+def _check_entry(label, info, kind):
+    """The rules of check_path for an entry that was read through its folder's open descriptor (an os.stat result that
+    did not follow a link): real, of the kind, owned by the user, no permissions for group or others."""
+    if stat.S_ISLNK(info.st_mode):
+        raise StorageError("%s is a symlink; the plugin does not follow symlinks in its storage" % label, "symlink")
+    if kind == "folder" and not stat.S_ISDIR(info.st_mode) or kind == "file" and not stat.S_ISREG(info.st_mode):
+        raise StorageError("%s is not a %s" % (label, kind), "not-folder")
+    uid = _uid()
+    if uid is not None and info.st_uid != uid:
+        raise StorageError("%s is not owned by the current user" % label, "owner")
+    if info.st_mode & 0o077:
+        raise StorageError("%s has permissions for group or others (mode %o); nothing was removed"
+                           % (label, info.st_mode & 0o777), "permissions")
+
+
+def _open_private_folder(path):
+    """The descriptor of the private folder `path`, opened without following a link and checked against the folder
+    check_path saw (its device and inode), or None when there is no such folder. The caller closes the descriptor."""
+    before = check_path(path)
+    if not before:
+        return None
+    if not _can_remove_without_links():
+        raise StorageError("this system cannot remove files without following links, so nothing was removed", "refused")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        raise StorageError("%s could not be opened without following a link" % path,
+                           "symlink" if os.path.islink(path) else "not-folder")
+    opened = os.fstat(descriptor)
+    if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+        os.close(descriptor)
+        raise StorageError("%s changed while it was being opened; nothing was removed" % path, "changed")
+    return descriptor
+
+
+def remove_file(parent, name):
+    """Remove the regular file `name` of the private folder `parent`. True when it was removed, False when there was none.
+
+    The folder is opened without following a link, and the file is looked at and removed through that descriptor, so
+    nothing is removed through a link at either place. A file that is a link, is not a regular file, belongs to another
+    user or can be read by others is refused (StorageError) and stays."""
+    descriptor = _open_private_folder(parent)
+    if descriptor is None:
+        return False
+    try:
+        name = _plain_name(name)
+        try:
+            info = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        _check_entry(os.path.join(parent, name), info, "file")
+        os.unlink(name, dir_fd=descriptor)
+        return True
+    finally:
+        os.close(descriptor)
+
+
+def remove_folder(parent, name):
+    """Remove the private folder `name` of the private folder `parent`, with the regular files in it. True when it was
+    removed, False when there was none.
+
+    Everything is looked at before the first file goes: the folder must be a real folder of the user's with no
+    permissions for group or others, and holds only regular files of the user's (at most REMOVE_MAX), never a link, a
+    folder or another kind of file. If anything else is in it, StorageError is raised and nothing is removed. Nothing is
+    followed or removed through a link: the two folders are opened without following one and every name is looked at and
+    removed through the descriptor of its folder. Never recurses."""
+    outer = _open_private_folder(parent)
+    if outer is None:
+        return False
+    try:
+        name = _plain_name(name)
+        path = os.path.join(parent, name)
+        try:
+            before = os.stat(name, dir_fd=outer, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        _check_entry(path, before, "folder")
+        try:
+            inner = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=outer)
+        except OSError:
+            raise StorageError("%s could not be opened without following a link" % path, "not-folder")
+        try:
+            opened = os.fstat(inner)
+            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                raise StorageError("%s changed while it was being opened; nothing was removed" % path, "changed")
+            entries = os.listdir(inner)
+            if len(entries) > REMOVE_MAX:
+                raise StorageError("%s holds more than %d entries, which the plugin did not put there" % (path, REMOVE_MAX),
+                                   "refused")
+            for entry in entries:
+                _check_entry(os.path.join(path, entry), os.stat(_plain_name(entry), dir_fd=inner, follow_symlinks=False),
+                             "file")
+            for entry in entries:
+                os.unlink(entry, dir_fd=inner)
+        finally:
+            os.close(inner)
+        os.rmdir(name, dir_fd=outer)
+        return True
+    finally:
+        os.close(outer)

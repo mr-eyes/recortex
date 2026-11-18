@@ -13,6 +13,8 @@ reverses where it can) and stops only itself when it fails: the reason is one fi
 5. links   sub_issues.py apply, for tasks the observer opened (Everything).
 6. board   board.apply_for, when this machine has a board for the project (Everything).
 Steps 2 to 4 need the level Assistant or Everything; Notes only runs none of 2 to 6. In shadow mode nothing runs at all.
+Once a day, before step 1, one more step takes away the manuscript keeper's old working folders (clean_keeper): a plain
+local cleanup of the plugin's own private files, no act, counted in `jobs_last`.
 Text from the record reaches a page of GitHub here only as a title told by an allowed account, cleaned to one line.
 """
 import contextlib
@@ -35,7 +37,7 @@ import tasks
 DAY = 86400
 RENDER_ACTS = ("task_rendered", "task_closed", "hub_rendered", "board")   # what the day's max_renders counts
 JOBS_DAY = "jobs_day"       # store control: when the daily run last happened
-JOBS_LAST = "jobs_last"     # store control: {"at", "steps": {step: fixed word}} for observer.py status
+JOBS_LAST = "jobs_last"     # store control: {"at", "steps": {step: fixed word}, "cleaned": integer}
 LINKS_LAST = "links_last"   # store control: when sub_issues apply last ran
 CODES = ("ok", "nothing", "waiting", "asked", "failed", "level", "sync", "no_section", "shadow", "skipped", "by_hand")
 HUB_HEADING = "Active issues"
@@ -43,6 +45,11 @@ HUB_HEAD = ["| Issue | Work in development | Destination topic |", "|---|---|---
 NOT_TOLD = "(title not told)"
 TITLE_CAP = 120
 HUB_ROWS = 60
+KEEPER = "keeper"            # the folder of the keeper's working folders, beside the index: <repo>/keeper/<token>
+KEEPER_FAILED = "keeper_failed"   # store control of the keeper (observer_keeper.FAILED): {topic: {"key", "at"}}
+KEEPER_DAYS = 14             # a working folder goes this long after its last change, whatever the state of its draft
+KEEPER_GONE = ("applied", "dropped", "stale", "refused")   # the states of a draft whose folder is no longer wanted
+KEEPER_NAME = re.compile(r"[0-9a-f]{16}|[0-9a-f]{8}-approved")   # what the keeper makes: its token, a draft's approved copy
 
 
 def spent(store, now):
@@ -207,6 +214,73 @@ def board_step(repo, config, store, now):
     return "failed"
 
 
+def _keeper_failed_at(store):
+    """The newest time the keeper recorded a failed attempt (observer_keeper._failed), or 0."""
+    found = store.get_control(KEEPER_FAILED, {})
+    times = [row.get("at") for row in found.values() if isinstance(row, dict)] if isinstance(found, dict) else []
+    return max([at for at in times if type(at) in (int, float) and at == at and abs(at) < 1e12], default=0)
+
+
+def clean_keeper(repo, store, now):
+    """Take away the keeper's working folders that nothing needs any more. Returns (fixed word, how many were removed).
+
+    Only the folders of <private folder of this repository>/keeper that are named as the keeper names them (16 hex digits,
+    or 8 and "-approved") are looked at, and each is removed through storage.remove_folder, which follows no link and
+    refuses a folder that holds anything but the user's own regular files. A folder goes when
+    - its draft is applied, dropped, stale or refused (a draft that waits or is put off keeps it), or
+    - 14 days have passed since the draft was last changed or the folder was last written, whatever the state; a draft
+      that still waited is then made stale, since its files are gone, or
+    - it has no draft (an attempt that never recorded one), and either 14 days have passed or the keeper recorded a failed
+      attempt after the folder was last written.
+    A folder that cannot be removed is counted and the rest go on: the word is "failed"."""
+    try:
+        parent = storage.cache_folder(repo, KEEPER, create=False)
+        names = sorted(os.listdir(parent)) if parent else []
+    except (storage.StorageError, OSError):
+        return "failed", 0
+    names = [name for name in names if KEEPER_NAME.fullmatch(name)]
+    if not names:
+        return "nothing", 0
+    owners = {}
+    for draft in store.drafts():
+        folder = os.path.basename(str(draft["folder"]))
+        for name in (folder, draft["id"] + "-approved"):
+            if KEEPER_NAME.fullmatch(name):
+                owners.setdefault(name, []).append(draft)
+    failed_at, removed, failed = _keeper_failed_at(store), 0, 0
+    for name in names:
+        try:
+            info = os.lstat(os.path.join(parent, name))
+        except FileNotFoundError:
+            continue
+        except OSError:
+            failed += 1
+            continue
+        drafts = owners.get(name, [])
+        changed = max([info.st_mtime] + [draft["updated"] for draft in drafts])
+        old = now - changed >= KEEPER_DAYS * DAY
+        if drafts:
+            due = old or all(draft["state"] in KEEPER_GONE for draft in drafts)
+        else:
+            due = old or failed_at >= info.st_mtime
+        if not due:
+            continue
+        try:
+            if not storage.remove_folder(parent, name):
+                continue
+        except (storage.StorageError, OSError):
+            failed += 1
+            continue
+        removed += 1
+        for draft in drafts:
+            if draft["state"] in ("waiting", "later"):
+                try:
+                    store.set_draft(draft["id"], "stale", reason="stale")
+                except Exception:  # noqa: BLE001 - the files are gone; the next answer finds that out
+                    pass
+    return ("failed" if failed else "ok" if removed else "nothing"), removed
+
+
 # ---------------------------------------------------------------- the run
 
 def run(repo, config, store, options, refresh=None, posted=False, now=None, clock=None):
@@ -224,7 +298,13 @@ def run(repo, config, store, options, refresh=None, posted=False, now=None, cloc
         return {"code": "not_due"}
     if daily:
         store.set_control(JOBS_DAY, now)
-    steps = {"sync": "skipped"}
+    steps = {"sync": "skipped", "keeper": "skipped"}
+    cleaned = 0
+    if daily:   # local files only: no GitHub, no level, and no hold on it but the gates the worker applied before the jobs
+        if clock is not None and clock.remaining() <= 0:
+            steps["keeper"] = "time"
+        else:
+            steps["keeper"], cleaned = _guard(clean_keeper, repo, store, now)
 
     def go(function, *args):
         if clock is not None and clock.remaining() <= 0:
@@ -238,10 +318,10 @@ def run(repo, config, store, options, refresh=None, posted=False, now=None, cloc
             steps["sync"] = "failed"
     if steps["sync"] == "failed":
         steps.update(render="sync", close="sync", hub="sync", links="sync", board="sync")
-        return _keep(store, steps, now)
+        return _keep(store, steps, now, cleaned)
     if level == "notes":
         steps.update(render="level", close="level", hub="level", links="level", board="level")
-        return _keep(store, steps, now)
+        return _keep(store, steps, now, cleaned)
     room = max(0, options.get("max_renders", 30) - spent(store, now))
     try:
         db = index.connect(repo, create=False, tighten=False)
@@ -273,7 +353,7 @@ def run(repo, config, store, options, refresh=None, posted=False, now=None, cloc
         steps["board"] = go(board_step, repo, config, store, now)
     else:
         steps["links"] = steps["board"] = "level"
-    return _keep(store, steps, now)
+    return _keep(store, steps, now, cleaned)
 
 
 def _guard(function, *args):
@@ -281,15 +361,17 @@ def _guard(function, *args):
     try:
         return function(*args)
     except Exception:  # noqa: BLE001 - fixed word only, never an exception string
-        return {render_step: ("failed", 0, 0), close_step: ("failed", 0)}.get(function, "failed")
+        shapes = {render_step: ("failed", 0, 0), close_step: ("failed", 0), clean_keeper: ("failed", 0)}
+        return shapes.get(function, "failed")
 
 
 def _number(value):
     return float(value) if type(value) in (int, float) and value == value and abs(value) < 1e12 else 0.0
 
 
-def _keep(store, steps, now):
-    store.set_control(JOBS_LAST, {"at": now, "steps": steps})
+def _keep(store, steps, now, cleaned=0):
+    # `cleaned`: the keeper's folders this run removed
+    store.set_control(JOBS_LAST, {"at": now, "steps": steps, "cleaned": cleaned})
     return steps
 
 

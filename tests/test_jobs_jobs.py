@@ -152,7 +152,7 @@ class JobsRunTests(JobsBox):
         with store_module.Store(REPO, config=self.pcfg) as db:
             steps = jobs.run(REPO, self.pcfg, db, options, refresh=lambda: False, posted=True)
         self.assertEqual("failed", steps["sync"])
-        self.assertEqual({"sync", "render", "close", "hub", "links", "board"}, set(steps))
+        self.assertEqual({"sync", "keeper", "render", "close", "hub", "links", "board"}, set(steps))   # keeper: 1.5.1's cleanup
         self.assertEqual({"sync"}, {steps[name] for name in ("render", "close", "hub", "links", "board")})
         self.assertEqual([], self.writes())
 
@@ -160,7 +160,7 @@ class JobsRunTests(JobsBox):
         self.jobs()
         with store_module.Store(REPO, config=self.pcfg) as db:
             last = db.get_control(jobs.JOBS_LAST)
-        self.assertEqual({"at", "steps"}, set(last))
+        self.assertEqual({"at", "steps", "cleaned"}, set(last))   # cleaned: the keeper's folders removed (1.5.1)
         self.assertTrue(all(word in jobs.CODES for word in last["steps"].values()), last)
 
 
