@@ -44,6 +44,10 @@ TIER_OF = {"sort": "sort", "draft": "middle", "review": "middle", "summary": "mi
            "text": "strong", "text_review": "strong"}
 INPUT_CAPS = {"sort": SORT_INPUT, "middle": MAX_INPUT, "strong": STRONG_INPUT}
 TIMEOUTS = {"sort": 90, "middle": 90, "strong": 300}
+# What a call cut short may have used, in tokens, when nothing says what it did: a third of the input cap's characters in,
+# and the longest answer its schema allows out. The claude program has no flag for the answer's length, so this is a bound
+# the code sets (the keeper charges it to the strong tier's budget; see worst_case_usage).
+OUTPUT_TOKENS = {"sort": 4000, "middle": 8000, "strong": 40000}
 # What a reservation counts as when the caller names a purpose that has no prompt of its own.
 OTHER_TIER = {"reviewer": "middle", "runtime_check": "middle"}
 # The job of each purpose, as the usage view groups them.
@@ -312,6 +316,12 @@ def input_cap(config, tier):
     return cap
 
 
+def worst_case_usage(config, tier):
+    """The usage to charge a call of `tier` that was cut short (its time ran out, or the worker's alarm went off) and so
+    reported none: its whole room, so that the day's token budget sees at least what it may have cost."""
+    return {"input_tokens": input_cap(config, tier) // 3, "output_tokens": OUTPUT_TOKENS[tier]}
+
+
 def call_timeout(config, tier):
     """Seconds for one call. Sort and middle calls never exceed 90 s; the strong tier's drafts are long, so it has 300 s
     unless the user lowered the setting."""
@@ -556,6 +566,8 @@ def invoke(payload, schema, purpose, config, tier=None):
         usage = result.get("usage", {})
         safe_usage = {k: v for k, v in usage.items() if isinstance(k, str) and type(v) in (int, float) and math.isfinite(v)} if isinstance(usage, dict) else {}
         return dict(summary, ok=True, code="ok", structured=structured, usage=safe_usage)
+    except TimeoutError:   # the worker's alarm went off while the call ran: it is cut, and what it used is not known
+        return dict(base, code="interrupted", elapsed=round(time.monotonic() - started, 3))
     except (OSError, ValueError, TypeError, storage.StorageError, subprocess.SubprocessError):
         return dict(base, code="runtime-failed", elapsed=round(time.monotonic() - started, 3))
 

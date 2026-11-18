@@ -137,6 +137,17 @@ def _read(folder, name):
 
 # ---------------------------------------------------------------- the draft
 
+CUT = ("timeout", "interrupted")   # the codes of a call whose time ran out or that the worker's alarm cut
+
+
+def _used(result, options):
+    """The usage to record for a strong call: what it reported, or when it was cut short and reported none, its whole room
+    (runtime.worst_case_usage), so that the day's budget sees what it may have cost."""
+    if result.get("code") in CUT and not result.get("usage"):
+        return runtime.worst_case_usage(options, "strong")
+    return result.get("usage")
+
+
 def run_draft(repo, config, store, options, invoke, entry, state, now, project_root):
     """Draft one topic's change and leave it waiting or refused. `entry` is one of keeper_rules.notable's topics.
     Returns {"code": "drafted", "draft": short id} for a draft that waits, {"code": "refused", "reason": ..., "draft":
@@ -180,7 +191,7 @@ def run_draft(repo, config, store, options, invoke, entry, state, now, project_r
     result = invoke(payload, KEEPER_DRAFT, "text", options)
     valid = result.get("ok") is True and runtime.validate(result.get("structured"), KEEPER_DRAFT)
     store.complete_invocation(reservation, valid, runtime.candidate_hash(result["structured"]) if valid else "",
-                              usage=result.get("usage"), model=result.get("model") or "")
+                              usage=_used(result, options), model=result.get("model") or "")
     if not valid:
         if result.get("code") in ("input-limit", "invalid-output"):
             return refuse(result["code"].replace("-", "_"))
@@ -201,7 +212,7 @@ def run_draft(repo, config, store, options, invoke, entry, state, now, project_r
     answer = invoke(review, KEEPER_REVIEW, "text_review", options)
     judged = answer.get("ok") is True and runtime.validate(answer.get("structured"), KEEPER_REVIEW)
     store.complete_invocation(reservation, judged, runtime.candidate_hash(answer["structured"]) if judged else "",
-                              usage=answer.get("usage"), model=answer.get("model") or "")
+                              usage=_used(answer, options), model=answer.get("model") or "")
     if not judged:
         if answer.get("code") in ("input-limit", "invalid-output"):
             return refuse("review_" + answer["code"].replace("-", "_"))
@@ -249,22 +260,23 @@ def _held_after_failure(store, topic, key, now):
 
 # ---------------------------------------------------------------- the entry point
 
-def consider(repo, config, store, options, invoke_fn=None, now=None, session_started=False, project_root=None):
+def consider(repo, config, store, options, invoke_fn=None, now=None, session_started=False, project_root=None, clock=None):
     """Consider the paper's text once, after the worker's pass. `config` is the effective configuration, `options` the
     observer's settings (runtime.settings(config)), `store` the open observer store (the worker holds its lock) and
     `invoke_fn` the model call (default runtime.invoke); `session_started` says a session just started (the keeper
     may then draft without waiting for ten quiet minutes). Returns {"code": ...} and, when a draft was made, {"draft":
     its short id}; it never raises. Codes: mode, level, paused, no_strong, strong_gate, writing, no_plan, not_trusted,
     no_index, nothing (nothing notable), one of keeper_rules.REASONS for a topic that waits or is held off, and the
-    codes of run_draft."""
+    codes of run_draft. `clock` is the worker's lifetime (observer_worker.Clock): with less left than a draft and its review
+    may take (two strong calls and a minute), the code is "time" and the next pass looks again."""
     try:
         return _consider(repo, config, store, options, invoke_fn or runtime.invoke,
-                         time.time() if now is None else now, session_started, project_root)
+                         time.time() if now is None else now, session_started, project_root, clock)
     except Exception:  # noqa: BLE001 - the keeper must never stop the worker; the next pass looks again
         return {"code": "error"}
 
 
-def _consider(repo, config, store, options, invoke, now, session_started, project_root):
+def _consider(repo, config, store, options, invoke, now, session_started, project_root, clock=None):
     if names.env(runtime.GUARD) == "1" or not options.get("enabled") or options.get("mode") != "automatic":
         return {"code": "mode"}   # shadow mode proposes nothing either
     if options.get("level") not in LEVELS:
@@ -321,6 +333,8 @@ def _consider(repo, config, store, options, invoke, now, session_started, projec
                 why = "busy"
             if why:
                 continue
+            if clock is not None and clock.remaining() < 2 * runtime.call_timeout(options, "strong") + 60:
+                return {"code": "time"}   # a strong call cut by the worker's alarm costs the budget and makes no draft
             outcome = run_draft(repo, config, store, options, invoke, entry, state, now, root)
             return dict(outcome, topic=topic)
         return {"code": why}

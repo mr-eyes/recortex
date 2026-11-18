@@ -744,9 +744,9 @@ def main(argv=None):
         if args.command in ("run-worker", "record"):
             import observer_worker
             previous = signal.signal(signal.SIGALRM, _alarm)
-            signal.setitimer(signal.ITIMER_REAL, 250)
+            clock = observer_worker.Clock(observer_worker.lifetime(options), armed=True)   # sets the alarm
             try:
-                emit(observer_worker.run_once(repo, config, settle_first=args.command == "run-worker"))
+                emit(observer_worker.run_once(repo, config, settle_first=args.command == "run-worker", clock=clock))
             finally:
                 signal.setitimer(signal.ITIMER_REAL, 0); signal.signal(signal.SIGALRM, previous)
             return 0

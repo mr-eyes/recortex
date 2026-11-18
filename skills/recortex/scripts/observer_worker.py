@@ -10,6 +10,7 @@ import datetime
 import json
 import os
 import re
+import signal
 import sqlite3
 import subprocess
 import time
@@ -585,7 +586,7 @@ RETRY_LATER = ("budget", "sort_failed", "draft_failed", "extract_failed", "revie
 # offered again in halves, so that a source the model cannot answer for is found in a few calls and stops there.
 RETRY_COUNTED = dict(RETRY_SOON, sort_failed=3, draft_failed=3, extract_failed=3, review_failed=3)
 # Failures of a call that say nothing about its input: the batch is kept whole and tried again after five minutes.
-TRANSIENT = frozenset(("timeout", "runtime-unavailable", "runtime-gate", "recursion", "model-changed", "isolation",
+TRANSIENT = frozenset(("timeout", "interrupted", "runtime-unavailable", "runtime-gate", "recursion", "model-changed", "isolation",
                        "level"))
 # A pass waits for at least this many sources, or for one that has waited ten minutes, so that a call sees a stretch
 # of the session and the day's calls last a working day.
@@ -1389,9 +1390,40 @@ def settle(store, repo, config, project_root, seconds=SETTLE_SECONDS, quiet=SETT
     return read
 
 
-def run_once(repo, config, project_root=None, invoke_fn=None, settle_first=False):
+WORKER_SECONDS = 250   # what a worker may take for the pass, the summary and the publisher
+JOBS_SECONDS = 120     # and what the housekeeping jobs may take after the keeper, whatever came before
+
+
+class Clock:
+    """The worker's lifetime. `remaining()` is what is left; `arm(seconds)` sets what is left from now on, and with `armed`
+    the alarm (SIGALRM) that observer.py's run-worker relies on is set again to it. A fake `now` makes it testable. With no
+    `seconds` it is unlimited and sets no alarm."""
+
+    def __init__(self, seconds=None, armed=False, now=time.monotonic):
+        self.now, self.armed, self.end = now, armed, None
+        if seconds is not None:
+            self.arm(seconds)
+
+    def remaining(self):
+        return float("inf") if self.end is None else self.end - self.now()
+
+    def arm(self, seconds):
+        self.end = self.now() + seconds
+        if self.armed:
+            signal.setitimer(signal.ITIMER_REAL, seconds)
+
+
+def lifetime(options):
+    """How long a worker may live: the pass's time, and with a stronger model set the room of the keeper's two calls."""
+    return WORKER_SECONDS + (2 * runtime.call_timeout(options, "strong") + 60 if options.get("strong_model") else 0)
+
+
+def run_once(repo, config, project_root=None, invoke_fn=None, settle_first=False, clock=None):
     """One locked finite pass; existing ready events survive restarts and capture pauses. With settle_first (the
-    worker a hook starts), the known transcripts are captured again first (settle)."""
+    worker a hook starts), the known transcripts are captured again first (settle). `clock` is the worker's lifetime
+    (Clock); the keeper is left for the next pass when too little of it is left for a strong call, and the housekeeping
+    jobs get a deadline of their own."""
+    clock = clock or Clock()
     options = runtime.settings(config)
     if names.env(runtime.GUARD) == "1" or not options["enabled"] or not recortex.allowed_users(repo):
         return {"code": "disabled", "ready": []}
@@ -1455,11 +1487,13 @@ def run_once(repo, config, project_root=None, invoke_fn=None, settle_first=False
                     # and never writes the paper's text, it only leaves a draft that waits for the user's answer.
                     observer_keeper.consider(repo, config, store, options, invoke_fn or runtime.invoke,
                                              session_started=settle_first,
-                                             project_root=project_root or recortex.project_root())
+                                             project_root=project_root or recortex.project_root(), clock=clock)
                     # The housekeeping jobs (spec 8.2): after a pass that posted something, and once a day. No model call.
+                    # They have their own deadline: an alarm that a cut call swallowed is spent, so it is set again.
+                    clock.arm(JOBS_SECONDS)
                     try:
                         observer_jobs.run(repo, config, store, options, posted=posted,
-                                          refresh=lambda: refresh_record(repo, config, store, options))
+                                          refresh=lambda: refresh_record(repo, config, store, options), clock=clock)
                     except (OSError, ValueError, sqlite3.Error, recortex.GhError, observer_store.StoreError,
                             subprocess.TimeoutExpired):
                         store.set_control("jobs_last", {"at": time.time(), "steps": {"run": "failed"}})

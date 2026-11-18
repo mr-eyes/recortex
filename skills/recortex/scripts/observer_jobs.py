@@ -209,11 +209,12 @@ def board_step(repo, config, store, now):
 
 # ---------------------------------------------------------------- the run
 
-def run(repo, config, store, options, refresh=None, posted=False, now=None):
+def run(repo, config, store, options, refresh=None, posted=False, now=None, clock=None):
     """The jobs of one worker run, as {step: fixed word}. Nothing runs unless the settings hold a level and the mode is
     automatic, and then only after a pass that posted something or when a day has passed since the last run. `refresh`
     is the worker's own refresh of the index (a callable returning True when the record was read); without it the index
-    is taken as it is."""
+    is taken as it is. `clock` is the worker's lifetime (observer_worker.Clock): a step that would start with none left is
+    skipped ("time"), so that a slow step cannot take the jobs past it."""
     level = options.get("level")
     if level not in runtime.LEVELS or options.get("mode") != "automatic":
         return {"code": "shadow" if options.get("mode") != "automatic" else "level"}
@@ -224,6 +225,12 @@ def run(repo, config, store, options, refresh=None, posted=False, now=None):
     if daily:
         store.set_control(JOBS_DAY, now)
     steps = {"sync": "skipped"}
+
+    def go(function, *args):
+        if clock is not None and clock.remaining() <= 0:
+            return {render_step: ("time", 0, 0), close_step: ("time", 0)}.get(function, "time")
+        return _guard(function, *args)
+
     if refresh is not None:
         try:
             steps["sync"] = "ok" if refresh() else "failed"
@@ -254,16 +261,16 @@ def run(repo, config, store, options, refresh=None, posted=False, now=None):
         steps.update(render="failed", close="failed", hub="failed")
     else:
         try:
-            steps["render"], rendered, _ = _guard(render_step, repo, config, store, report, texts, room, now)
+            steps["render"], rendered, _ = go(render_step, repo, config, store, report, texts, room, now)
             room -= rendered
-            steps["close"], closed = _guard(close_step, repo, config, store, options, report, room, now)
+            steps["close"], closed = go(close_step, repo, config, store, options, report, room, now)
             room -= closed
-            steps["hub"] = _guard(hub_step, repo, config, store, db, report, room, now)
+            steps["hub"] = go(hub_step, repo, config, store, db, report, room, now)
         finally:
             db.close()
     if level == "everything":
-        steps["links"] = _guard(links_step, repo, config, store, now)
-        steps["board"] = _guard(board_step, repo, config, store, now)
+        steps["links"] = go(links_step, repo, config, store, now)
+        steps["board"] = go(board_step, repo, config, store, now)
     else:
         steps["links"] = steps["board"] = "level"
     return _keep(store, steps, now)
