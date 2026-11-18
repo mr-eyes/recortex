@@ -325,8 +325,15 @@ def _identity(session, role, raw, record, subagent=False):
     return hashlib.sha256((session + "\n" + role + "\n").encode() + raw).hexdigest()
 
 
-def scan(data, project_root, cursor=0, max_bytes=MAX_READ):
-    """Return (metadata-only observations, next byte cursor). Store both in one transaction."""
+def scan(data, project_root, cursor=0, max_bytes=MAX_READ, calls=None, stats=None):
+    """Return (metadata-only observations, next byte cursor). Store both in one transaction.
+
+    The plan and question dialogs of the main session (see DIALOG_SHAPES) give descriptors too. `calls` is the dict of
+    the dialog calls kept for this transcript (load_calls, save_calls); scan reads it, adds the calls it sees, and a
+    result whose call it does not hold is looked for in the last FIND_BYTES of the transcript. `stats` is a dict in
+    which scan counts "dialogs_unread" (add_unread keeps it)."""
+    calls = {} if calls is None else calls
+    stats = {} if stats is None else stats
     session = data.get("session_id")
     event = data.get("hook_event_name", "Stop")
     if event not in EVENTS:
@@ -372,6 +379,8 @@ def scan(data, project_root, cursor=0, max_bytes=MAX_READ):
             rows.append({"source_id": _identity(session, role, line, record, subagent), "session_id": session, "role": role,
                          "event_type": event, "path": path, "offset": position, "end": end,
                          "sha256": digest, "content_sha256": _content_hash(record, role, subagent), "observed_at": stamp})
+        if isinstance(record, dict) and not subagent:  # the dialogs of the main conversation, never a subagent's
+            rows.extend(_dialog_rows(session, event, path, record, line, position, end, stamp, calls, stats))
         position = end
         remainder = remainder[len(line):]
     if remainder and position == cursor and len(remainder) >= limit:
@@ -577,6 +586,304 @@ def answered(data, project_root, short, line, label="Post", max_bytes=ANSWER_BYT
     return found
 
 
+# ---------------------------------------------------------------- the two dialogs the user saw and answered
+# The plan the agent showed in plan mode (ExitPlanMode) with the user's answer, and a question the agent asked
+# (AskUserQuestion) with the option the user chose. Both come from the main session's transcript only, as four
+# sources: the plan (assistant, via plan_dialog), the answer to it (user, plan_dialog), the question (assistant,
+# question_dialog) and the chosen option (user, question_dialog). One exact shape per Claude Code wording is accepted;
+# anything else is dropped and counted (dialogs_unread). A free-text answer, a rejected plan's typed feedback and the
+# plan file are never read, and the plugin's own questions are never sources.
+PLAN_TOOL, QUESTION_TOOL = "ExitPlanMode", "AskUserQuestion"
+VIA_OF = {PLAN_TOOL: "plan_dialog", QUESTION_TOOL: "question_dialog"}
+VIAS = ("plan_dialog", "question_dialog")
+DIALOG_SHAPES = {
+    # the assistant record's tool_use block: its name, and the input keys it may hold
+    "plan_call": {"seen": "2.1.327", "tool": PLAN_TOOL, "input": frozenset(("plan", "planFilePath"))},
+    # a tool_result of an approved plan: no is_error, the fixed opening sentence, and toolUseResult with exactly these keys
+    "plan_approved": {"seen": "2.1.327", "content": "User has approved your plan.",
+                      "result": frozenset(("plan", "isAgent", "filePath"))},
+    # a rejected plan, with or without typed feedback: is_error, the fixed opening sentence, toolUseResult a string and
+    # the record's toolDenialKind "user-rejected". What follows the opening sentence is never read.
+    "plan_rejected": {"seen": "2.1.327", "content": "The user doesn't want to proceed with this tool use.",
+                      "denial": "user-rejected"},
+    "question_call": {"seen": "2.1.327", "tool": QUESTION_TOOL, "input": frozenset(("questions",))},
+    # the answer: no is_error, one of the two opening sentences Claude Code has used, and toolUseResult with exactly
+    # these keys, the answers as {question: label}. Only that structured answer is read, never the sentence.
+    "question_answered": {"seen": "2.1.327", "content": ("Your questions have been answered: ",
+                                                         "User has answered your questions: "),
+                          "result": frozenset(("questions", "answers", "annotations"))},
+}
+# The plugin's own questions: the held memory, the task, the draft and the setup questions' templates, and any question
+# that holds the word recortex. The observer must not record the user's answers about the observer.
+OWN_DIALOG = re.compile(r"(?i:recortex)|\A\s*Memory [0-9a-f]{8} \([a-z]+\) on #[0-9]+: |"
+                        r"\A\s*Task [0-9a-f]{8}: (?:open a task |every step of #[0-9]+ is done)|"
+                        r"\A\s*Draft [0-9a-f]{8}: update the ")
+CALL_ID = re.compile(r"([A-Za-z0-9_-]{1,128})(?:\.([0-3]))?")
+QUESTIONS_MAX, OPTIONS_MAX, QUESTION_CHARS, LABEL_CHARS = 4, 4, 2000, 300
+FIND_BYTES = 2 * 1024 * 1024  # how far back in the transcript the call of a result is looked for when it is not known
+FIND_SECONDS = 0.5
+CALLS_CONTROL, UNREAD_CONTROL, CALLS_KEPT, STREAMS_KEPT = "dialog_calls", "dialogs_unread", 64, 32
+
+
+def _flat(text):
+    return " ".join(text.split())
+
+
+def _call_blocks(record):
+    """[(tool name, call id, input)] of the dialog calls of a main-session assistant record; a block that names a
+    dialog tool but is not of an accepted shape comes back with a call id of None, so that it is counted."""
+    if not _main_record(record, "assistant"):
+        return []
+    out = []
+    for block in record["message"]["content"]:
+        if (isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") in VIA_OF):
+            ident = block.get("id")
+            ok = isinstance(ident, str) and TOOL_ID.fullmatch(ident) and isinstance(block.get("input"), dict)
+            out.append((block["name"], ident if ok else None, block.get("input") if ok else {}))
+    return out
+
+
+def _questions(tool_input):
+    """[(question, header, [labels], multi)] of an AskUserQuestion input, or None when it is not of the accepted shape
+    (1 to 4 questions of text, a header and 1 to 4 labeled options, within the size limits)."""
+    shape = DIALOG_SHAPES["question_call"]["input"]
+    items = tool_input.get("questions")
+    if set(tool_input) - shape or not isinstance(items, list) or not 1 <= len(items) <= QUESTIONS_MAX:
+        return None
+    out = []
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("question"), str) or not item["question"].strip() \
+                or len(item["question"]) > QUESTION_CHARS or not isinstance(item.get("options"), list) \
+                or not 1 <= len(item["options"]) <= OPTIONS_MAX:
+            return None
+        labels = [o.get("label") for o in item["options"] if isinstance(o, dict)]
+        if len(labels) != len(item["options"]) or not all(isinstance(x, str) and x.strip() and len(x) <= LABEL_CHARS
+                                                          for x in labels):
+            return None
+        header = item.get("header")
+        out.append((item["question"], header if isinstance(header, str) else "", labels, item.get("multiSelect") is True))
+    return out
+
+
+def _outcome(record, block):
+    """(outcome, answers) of one tool_result block of a user record in a shape of DIALOG_SHAPES: "approved",
+    "rejected" or "answered" (with the {question: label} answers), else (None, None)."""
+    content, result = block.get("content"), record.get("toolUseResult")
+    if not isinstance(content, str):
+        return None, None
+    approved, rejected = DIALOG_SHAPES["plan_approved"], DIALOG_SHAPES["plan_rejected"]
+    answered_shape = DIALOG_SHAPES["question_answered"]
+    if not block.get("is_error"):
+        if (content.startswith(approved["content"]) and isinstance(result, dict) and set(result) == approved["result"]
+                and result["isAgent"] is False and isinstance(result["plan"], str)):
+            return "approved", None
+        if (content.startswith(answered_shape["content"]) and isinstance(result, dict)
+                and set(result) == answered_shape["result"] and isinstance(result["answers"], dict)
+                and all(isinstance(k, str) and isinstance(v, str) for k, v in result["answers"].items())):
+            return "answered", dict(result["answers"])
+        return None, None
+    if (block.get("is_error") is True and content.startswith(rejected["content"]) and isinstance(result, str)
+            and record.get("toolDenialKind") == rejected["denial"]):
+        return "rejected", None
+    return None, None
+
+
+def _dialog(record):
+    """The dialog parts of one transcript record, [] for anything else (a sidechain, a record Claude Code adds, a
+    record with no dialog in it).
+
+    An assistant record gives one part per call (a plan) or per question (a question): {side "call", name, via,
+    tool_id, key (the call id, with ".n" for the nth question), text (the built source text, None when the plan call
+    holds no plan or the question is the plugin's own or not single-choice), own, question, labels}. A call of a shape
+    that is not accepted comes back as {side "call", unread True}. A user record gives one part per tool result:
+    {side "result", tool_id, outcome, answers}; the outcome is None for a result that is not of an accepted shape."""
+    if not isinstance(record, dict):
+        return []
+    parts = []
+    for name, ident, tool_input in _call_blocks(record):
+        if ident is None:
+            parts.append({"side": "call", "unread": True})
+        elif name == PLAN_TOOL:
+            if set(tool_input) - DIALOG_SHAPES["plan_call"]["input"]:
+                parts.append({"side": "call", "unread": True})
+                continue
+            plan = tool_input.get("plan")
+            parts.append({"side": "call", "name": name, "via": "plan_dialog", "tool_id": ident, "key": ident,
+                          "text": plan if isinstance(plan, str) and plan.strip() else None, "own": False,
+                          "question": None, "labels": None})
+        else:
+            found = _questions(tool_input)
+            if found is None:
+                parts.append({"side": "call", "unread": True})
+                continue
+            for number, (question, header, labels, multi) in enumerate(found):
+                own = bool(OWN_DIALOG.search("\n".join([question, header] + labels)))
+                text = None
+                if not own and not multi:
+                    text = 'Asked: "%s" Options: %s' % (_flat(question), "; ".join('"%s"' % _flat(x) for x in labels))
+                elif multi and not own:
+                    parts.append({"side": "call", "unread": True})
+                parts.append({"side": "call", "name": name, "via": "question_dialog", "tool_id": ident,
+                              "key": "%s.%d" % (ident, number), "text": text, "own": own, "question": question,
+                              "labels": labels})
+    if _main_record(record, "user"):
+        for block in record["message"]["content"]:
+            if (isinstance(block, dict) and block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str)
+                    and TOOL_ID.fullmatch(block["tool_use_id"])):
+                outcome, answers = _outcome(record, block)
+                parts.append({"side": "result", "tool_id": block["tool_use_id"], "outcome": outcome, "answers": answers})
+    return parts
+
+
+def _dialog_id(session, role, raw, record, key):
+    return hashlib.sha256((_identity(session, role, raw, record) + "\ndialog\n" + key + "\n" + role).encode()).hexdigest()
+
+
+def _dialog_hash(record, role, key, via):
+    content = (record.get("message") or {}).get("content")
+    canonical = json.dumps([role, via, key, content], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _line_calls(path, call):
+    """The dialog call parts of the record a call was seen in, read again through its frozen range and checked against
+    its digest; None when the range is gone or changed or holds no such call."""
+    try:
+        raw = _read(path, call["offset"], call["end"] - call["offset"])
+        if hashlib.sha256(raw).hexdigest() != call["sha256"]:
+            return None
+        parts = [p for p in _dialog(json.loads(raw)) if p["side"] == "call" and not p.get("unread")]
+    except (SourceError, OSError, ValueError, UnicodeError, RecursionError, KeyError, TypeError):
+        return None
+    return parts or None
+
+
+def _find_call(path, tool_id, before):
+    """{name, offset, end, sha256} of the newest main-session dialog call with this id before byte `before`, looked for
+    in the last FIND_BYTES of the transcript (a call the capture of an earlier scan saw, when the caller does not keep
+    the calls), or None."""
+    needle = tool_id.encode()
+    start = max(0, before - FIND_BYTES)
+    until = time.monotonic() + FIND_SECONDS
+    position, buffer, buffer_start, found = start, b"", start, None
+    skip = start > 0 and _read(path, start - 1, 1) != b"\n"
+    while position < before:
+        if time.monotonic() > until:
+            return None
+        chunk = _read(path, position, min(MAX_READ, before - position))
+        if not chunk:
+            break
+        position += len(chunk)
+        buffer += chunk
+        while True:
+            newline = buffer.find(b"\n")
+            if newline < 0:
+                break
+            line, line_start = buffer[:newline + 1], buffer_start
+            buffer, buffer_start = buffer[newline + 1:], buffer_start + newline + 1
+            if skip:
+                skip = False
+                continue
+            if needle in line and b"tool_use" in line:
+                try:
+                    parts = [p for p in _dialog(json.loads(line)) if p["side"] == "call" and not p.get("unread")]
+                except (ValueError, UnicodeError, RecursionError):
+                    continue
+                if any(p["tool_id"] == tool_id for p in parts):
+                    found = {"name": parts[0]["name"], "offset": line_start, "end": line_start + len(line),
+                             "sha256": hashlib.sha256(line).hexdigest()}
+        if len(buffer) > MAX_READ:
+            skip, buffer_start, buffer = True, buffer_start + len(buffer), b""
+    return found
+
+
+def _dialog_row(session, role, raw, record, path, offset, end, event, stamp, part_key, via, pair=None):
+    row = {"source_id": _dialog_id(session, role, raw, record, part_key), "session_id": session, "role": role,
+           "event_type": event, "path": path, "offset": offset, "end": end, "sha256": hashlib.sha256(raw).hexdigest(),
+           "content_sha256": _dialog_hash(record, role, part_key, via), "observed_at": stamp, "via": via,
+           "call_id": part_key}
+    if pair:
+        row.update(pair_offset=pair["offset"], pair_end=pair["end"], pair_sha256=pair["sha256"])
+    return row
+
+
+def _dialog_rows(session, event, path, record, raw, offset, end, stamp, calls, stats):
+    """The descriptors of the dialog sources one record holds. `calls` (call id -> where its record is) is read and
+    kept up to date; `stats` counts the dialogs that were not of an accepted shape."""
+    out = []
+    for part in _dialog(record):
+        if part["side"] == "call":
+            if part.get("unread"):
+                stats["dialogs_unread"] = stats.get("dialogs_unread", 0) + 1
+                continue
+            calls[part["tool_id"]] = {"name": part["name"], "offset": offset, "end": end,
+                                      "sha256": hashlib.sha256(raw).hexdigest()}
+            if part["text"] and not part["own"]:
+                out.append(_dialog_row(session, "assistant", raw, record, path, offset, end, event, stamp, part["key"],
+                                       part["via"]))
+            continue
+        call = calls.get(part["tool_id"])
+        if call is None and part["outcome"] is not None:
+            call = _find_call(path, part["tool_id"], offset)
+        if call is None:
+            continue  # a result of some other tool, or a dialog whose call this transcript does not hold
+        calls[part["tool_id"]] = call
+        wanted = {"plan": {"approved", "rejected"}, "question": {"answered"}}
+        kind = "plan" if call["name"] == PLAN_TOOL else "question"
+        asked = _line_calls(path, call)
+        if part["outcome"] not in wanted[kind] or asked is None:
+            stats["dialogs_unread"] = stats.get("dialogs_unread", 0) + 1
+            continue
+        for ask in asked:
+            if ask["tool_id"] != part["tool_id"] or ask["own"]:
+                continue
+            if kind == "question":
+                label = (part["answers"] or {}).get(ask["question"])
+                if ask["text"] is None or label not in ask["labels"]:
+                    continue  # a free-text answer, or a label the call did not offer, is not a source
+            out.append(_dialog_row(session, "user", raw, record, path, offset, end, event, stamp, ask["key"],
+                                   ask["via"], pair=call))
+    return out
+
+
+def _kept_calls(store):
+    kept = store.get_control(CALLS_CONTROL, [])
+    return [item for item in kept if isinstance(item, dict) and isinstance(item.get("stream"), str)
+            and isinstance(item.get("calls"), list)] if isinstance(kept, list) else []
+
+
+def load_calls(store, stream):
+    """The dialog calls kept for one transcript (`stream` is capture's name for it), as scan takes them."""
+    try:
+        entry = next((item for item in _kept_calls(store) if item["stream"] == stream), None)
+        return {item["id"]: {"name": item["name"], "offset": item["offset"], "end": item["end"], "sha256": item["sha256"]}
+                for item in (entry["calls"] if entry else []) if TOOL_ID.fullmatch(item["id"]) and item["name"] in VIA_OF
+                and type(item["offset"]) is int and type(item["end"]) is int
+                and re.fullmatch(r"[0-9a-f]{64}", item["sha256"])}
+    except (KeyError, TypeError, ValueError):
+        return {}
+
+
+def save_calls(store, stream, calls):
+    """Keep the newest CALLS_KEPT calls of a transcript, and the newest STREAMS_KEPT transcripts (the control is a list,
+    newest last, since the store writes its values with sorted keys)."""
+    kept = [item for item in _kept_calls(store) if item["stream"] != stream]
+    newest = sorted(calls.items(), key=lambda item: item[1]["offset"])[-CALLS_KEPT:]
+    kept.append({"stream": stream, "calls": [dict(id=ident, **call) for ident, call in newest]})
+    store.set_control(CALLS_CONTROL, kept[-STREAMS_KEPT:])
+
+
+def add_unread(store, count):
+    """Add `count` to the number of dialogs left out because their shape was not one of DIALOG_SHAPES."""
+    if count:
+        store.set_control(UNREAD_CONTROL, unread(store) + count)
+
+
+def unread(store):
+    value = store.get_control(UNREAD_CONTROL, 0)
+    return value if type(value) is int and value >= 0 else 0
+
+
 def capture_descriptors(data, project_root, event_type=None):
     """Compatibility helper for a bounded tail; scan+atomic cursor is preferred by hooks."""
     selected = dict(data)
@@ -589,6 +896,8 @@ def resolve(descriptor, project_root):
     """Resolve one frozen byte range and its digest. A model never supplies a source path."""
     if descriptor.get("event_type") == "source_gap":
         raise SourceError("source-gap")
+    if descriptor.get("via"):
+        return _resolve_dialog(descriptor, project_root)
     path = approved_path(descriptor.get("path"), project_root, descriptor.get("session_id"))
     subagent = os.sep + "subagents" + os.sep in path
     start, end = descriptor.get("offset"), descriptor.get("end")
@@ -613,4 +922,71 @@ def resolve(descriptor, project_root):
             "session_id": descriptor["session_id"],
             "at": record.get("timestamp") if isinstance(record.get("timestamp"), str) else datetime.datetime.fromtimestamp(descriptor["observed_at"], datetime.timezone.utc).isoformat(),
             "sha256": descriptor["sha256"], "message_id": record.get("uuid"), "subagent": subagent,
-            "sidechain": bool(record.get("isSidechain"))}
+            "sidechain": bool(record.get("isSidechain")), "via": "", "dialog_user": False}
+
+
+PLAN_ANSWERS = {"approved": "Approved the plan in the plan dialog.", "rejected": "Rejected the plan in the plan dialog."}
+
+
+def _resolve_dialog(descriptor, project_root):
+    """Resolve one dialog source: the frozen range of its own record, and for the user's answer the range of the record
+    that holds its call, both checked against their digests; the ids must match and both must be records of the main
+    session. The text is built from fixed words and what the call offered, never from a free-text answer or from
+    feedback typed with a rejected plan. A mismatch is "source-identity"."""
+    session, role, via, key = (descriptor.get(name) for name in ("session_id", "role", "via", "call_id"))
+    path = approved_path(descriptor.get("path"), project_root, session)
+    if (os.sep + "subagents" + os.sep in path or os.path.basename(path) != session + ".jsonl" or via not in VIAS
+            or role not in ("user", "assistant") or not isinstance(key, str) or not CALL_ID.fullmatch(key)):
+        raise SourceError("source-identity")
+    start, end = descriptor.get("offset"), descriptor.get("end")
+    if type(start) is not int or type(end) is not int or end <= start:
+        raise SourceError("source-range")
+    raw = _read(path, start, end - start)
+    if hashlib.sha256(raw).hexdigest() != descriptor.get("sha256"):
+        raise SourceError("source-changed")
+    try:
+        record = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise SourceError("source-format")
+    tool_id = CALL_ID.fullmatch(key).group(1)
+    if (not _main_record(record, role) or _dialog_id(session, role, raw, record, key) != descriptor.get("source_id")
+            or descriptor.get("content_sha256") != _dialog_hash(record, role, key, via)):
+        raise SourceError("source-identity")
+    if role == "assistant":
+        match = [p for p in _dialog(record) if p["side"] == "call" and not p.get("unread") and p["key"] == key]
+        if len(match) != 1 or match[0]["via"] != via or not match[0]["text"] or match[0]["own"]:
+            raise SourceError("source-identity")
+        text = match[0]["text"]
+    else:
+        pair_start, pair_end, pair_sha = (descriptor.get(name) for name in ("pair_offset", "pair_end", "pair_sha256"))
+        if type(pair_start) is not int or type(pair_end) is not int or pair_end <= pair_start or pair_start >= start \
+                or not isinstance(pair_sha, str):
+            raise SourceError("source-identity")
+        paired = _read(path, pair_start, pair_end - pair_start)
+        if hashlib.sha256(paired).hexdigest() != pair_sha:
+            raise SourceError("source-identity")
+        try:
+            call_record = json.loads(paired)
+        except (ValueError, UnicodeError):
+            raise SourceError("source-identity")
+        results = [p for p in _dialog(record) if p["side"] == "result" and p["tool_id"] == tool_id]
+        asked = [p for p in _dialog(call_record) if p["side"] == "call" and not p.get("unread") and p["key"] == key]
+        if len(results) != 1 or len(asked) != 1 or asked[0]["tool_id"] != tool_id or asked[0]["via"] != via \
+                or asked[0]["own"]:
+            raise SourceError("source-identity")
+        outcome = results[0]["outcome"]
+        if via == "plan_dialog":
+            if asked[0]["name"] != PLAN_TOOL or outcome not in PLAN_ANSWERS:
+                raise SourceError("source-identity")
+            text = PLAN_ANSWERS[outcome]
+        else:
+            label = (results[0]["answers"] or {}).get(asked[0]["question"])
+            if outcome != "answered" or asked[0]["text"] is None or label not in asked[0]["labels"]:
+                raise SourceError("source-identity")
+            text = 'Chose "%s" when asked "%s"' % (_flat(label), _flat(asked[0]["question"]))
+    return {"id": descriptor["source_id"], "source_id": descriptor["source_id"], "role": role, "origin": role,
+            "text": text, "direct_user": False, "control_user": False, "session_id": session,
+            "at": record.get("timestamp") if isinstance(record.get("timestamp"), str) else datetime.datetime.fromtimestamp(
+                descriptor["observed_at"], datetime.timezone.utc).isoformat(),
+            "sha256": descriptor["sha256"], "message_id": record.get("uuid"), "subagent": False, "sidechain": False,
+            "via": via, "call_id": key, "dialog_user": role == "user"}
