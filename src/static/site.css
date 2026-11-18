@@ -414,3 +414,4 @@ table.plain td{font-family:var(--serif);line-height:1.45}
 @media (max-width:760px){.does{grid-template-columns:1fr}}
 .rules.three{grid-template-columns:repeat(3,minmax(0,1fr));max-width:none}
 @media (max-width:760px){.rules.three{grid-template-columns:1fr}}
+.fine.control{margin:0 auto 4px;text-align:center}

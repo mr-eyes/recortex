@@ -4,6 +4,7 @@
 <p class="sub">recortex sees what matters in your Claude Code sessions, records it in your project's GitHub issues with its evidence, recalls it the moment it's needed, and acts on it: answers with sources, a warning before a known dead end, a hold until your yes, and a brief for every new session.</p>
 <p class="nameline">recortex is <b>record + cortex</b>: a record of your project, and a brain that works from it.</p>
 <p class="acts"><a class="btn primary" href="#install">Install in two commands</a><a class="btn" href="/how-it-works/">How it works</a></p>
+<p class="fine center control">You choose how much it does on its own, and it does nothing until you choose.</p>
 
 <div class="flow" role="group" aria-label="The three parts: the observer sees the session, the record keeps what matters on GitHub, and the cortex recalls it and acts">
 <div class="step">
@@ -11,12 +12,12 @@
 <h3>It sees the session</h3>
 <div class="bubble me"><span class="lab">You</span>Retry failed charges with backoff.</div>
 <div class="bubble"><span class="lab">Claude</span>Done. In staging, failed charges fell from 2.1% to 0.4%.</div>
-<p class="quiet">Nobody said "record this". The observer noticed a result and sorted it.</p>
+<p class="quiet">Nobody said "record this". The observer noticed a result and sorted it. You set how much it may post on its own.</p>
 </div>
 <div class="arrow" aria-hidden="true"></div>
 <p class="conn ph">then</p>
 <div class="step">
-<span class="part">The record <span class="body">&middot; the "re"</span></span>
+<span class="part">The record <span class="body">&middot; the "re" in recortex</span></span>
 <h3>It records it</h3>
 <p class="issue">GitHub issues of octo-org/billing-service</p>
 <ul class="mini">
@@ -47,7 +48,7 @@
 <ul class="does">
 <li><b><span class="mk k-question" aria-hidden="true"></span>Answers with sources</b><span class="t">Ask why something was decided or what was tried. The answer starts with "From the record:" and names each note it used.</span><a href="/how-it-works/#the-cortex">The cortex</a></li>
 <li><b><span class="mk k-failure" aria-hidden="true"></span>Warns before a dead end</b><span class="t">The session reads the thread before it works on it, and says what already failed there, with the reason.</span><a href="/how-it-works/#the-record">The record</a></li>
-<li><b><span class="mk k-decision" aria-hidden="true"></span>Holds until your yes</b><span class="t">A hold stops a push or a tag until you lift it. Anything the observer is unsure of waits for your answer.</span><a href="/how-it-works/#yes">What waits for your yes</a></li>
+<li><b><span class="mk k-decision" aria-hidden="true"></span>Holds until your yes</b><span class="t">A hold stops a push or a tag until you lift it. A note the observer is unsure of waits for your answer.</span><a href="/how-it-works/#yes">What waits for your yes</a></li>
 <li><b><span class="mk k-checkpoint" aria-hidden="true"></span>Briefs every new session</b><span class="t">A short brief opens each session and each helper agent: the focus, the open tasks, the next step.</span><a href="/how-it-works/#the-cortex">The cortex</a></li>
 </ul>
 
@@ -123,7 +124,7 @@ claude plugin install recortex@recortex
 </div>
 <div class="ipanel">
 <h3>What did recortex use?</h3>
-<p class="quiet">Today, on this machine. Tokens and calls, not money.</p>
+<p class="quiet">Model calls made today on this machine, against each daily limit. Tokens and calls, not money.</p>
 <div class="meter"><span>Sorting (Haiku)</span><span class="bar"><i class="w15"></i></span><span>12 of 80 calls</span></div>
 <div class="meter"><span>Notes (Sonnet)</span><span class="bar"><i class="w13"></i></span><span>9 of 70 calls</span></div>
 <div class="meter"><span>Paper text (Opus)</span><span class="bar"><i class="w0"></i></span><span>off</span></div>
@@ -133,7 +134,7 @@ claude plugin install recortex@recortex
 </div>
 
 <h2 id="for">Who it is for</h2>
-<p class="forline">Software teams and solo developers who build with Claude Code and already live in GitHub. It also fits data and research work: a report or a paper is kept the same way, and its text is only ever proposed to you.</p>
+<p class="forline">Software teams and solo developers who build with Claude Code and already live in GitHub. If your project also has a report or a paper, its text is kept the same way and only ever proposed to you.</p>
 
 <h2 id="doors">Where are you starting from?</h2>
 <ul class="doors">
