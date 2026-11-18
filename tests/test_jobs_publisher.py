@@ -622,6 +622,141 @@ class CapTests(PublisherBox):
         self.assertEqual("verified", self.pub(second, main_session=True)["state"])
 
 
+class TitleTests(PublisherBox):
+    """The title of a task is the model's text too, and reaches GitHub apart from the body: it gets the body's checks, and
+    nothing is created or posted when it fails them."""
+
+    def writes(self):
+        """The writes the fake saw: an issue created, edited or commented on, or a GraphQL mutation (a sub-issue link)."""
+        return [call for call in self.repo().get("log", [])
+                if " ".join(call[:2]) in ("issue create", "issue comment", "issue edit")
+                or (call[:2] == ["api", "graphql"] and "mutation" in " ".join(call))]
+
+    def refused(self, title, reason, cap=None, patch=None):
+        """Queue a task with this title (the store's own cap lifted when `cap` is given, so that the publisher's guard is
+        the one that is tried), publish it and expect `reason`; the event stays ready and nothing was written."""
+        with mock.patch.object(store, "TASK_TITLE", cap or store.TASK_TITLE):
+            key, _ = self.task_event(title=title)
+        before = self.writes()
+        with (patch or mock.patch.object(publisher, "TITLE_CAP", publisher.TITLE_CAP)):
+            with self.assertRaises(publisher.PublishError) as caught:
+                self.pub(key)
+        self.assertEqual(reason, caught.exception.reason, title)
+        self.assertEqual(before, self.writes(), title)
+        self.assertEqual("ready", self.event(key)["state"])
+        self.assertEqual([], self.titled(title))
+
+    def test_a_secret_in_the_title_is_refused(self):
+        self.refused("Task: rotate ghp_" + "a1B2c3D4e5" * 4, "title_restricted")
+
+    def test_a_restricted_pattern_in_the_title_is_refused(self):
+        self.pcfg["restricted_patterns"] = ["PARTICIPANT-[0-9]+"]
+        self.refused("Task: recheck PARTICIPANT-0042", "title_restricted")
+
+    def test_a_banned_word_in_the_title_is_refused(self):
+        self.pcfg["banned_words"] = ["draftword"]
+        self.refused("Task: write the Draftword note", "title_restricted")
+
+    def test_a_local_path_or_this_machines_user_in_the_title_is_refused(self):
+        with mock.patch.object(publisher, "local_names", return_value=({"/home/octo-dev"}, {"octo-dev"})):
+            self.refused("Task: fix /home/octo-dev/work/reader.py", "outbound_local")
+            self.refused("Task: ask octo-dev to rerun", "outbound_local")
+        self.refused("Task: mail octo.dev@example.test", "outbound_local")
+
+    def test_markup_a_mention_an_address_and_an_outside_reference_in_the_title_are_refused(self):
+        self.refused("Task: ![x](https://collector.example.test/p.png)", "outbound_markup")
+        self.refused("Task: ask @hubot to rerun", "outbound_mention")
+        self.refused("Task: read https://collector.example.test/p", "outbound_address")
+        self.refused("Task: see other-org/other-repo#12", "outbound_reference")
+
+    def test_a_control_character_in_the_title_is_refused(self):
+        self.refused("Task: write the\x07 note", "title_form")
+        self.refused("Task: write the\x1b[31m note", "title_form")
+        self.refused("Task: write the\r note", "title_form")
+        self.refused("Task: write the\ttable", "title_form")
+
+    def test_a_bidirectional_or_invisible_character_in_the_title_is_refused(self):
+        for char in ("\u202e", "\u2066", "\u200b", "\u200f", "\ufeff", "\u2028", "\u00a0"):
+            self.refused("Task: write the %snote" % char, "title_form")
+
+    def test_an_over_long_title_is_refused_by_the_publisher_even_if_the_queue_took_it(self):
+        self.refused("Task: " + "note " * 30, "title_form", cap=500)
+        self.refused("x" * 121, "title_form", cap=500)
+
+    def test_the_queue_refuses_an_over_long_or_multi_line_title_itself(self):
+        for title in ("x" * 121, "Task: a\nb"):
+            with self.assertRaisesRegex(store.StoreError, "invalid_candidate"):
+                self.task_event(title=title)
+
+    def test_a_title_of_exactly_the_cap_and_an_ordinary_one_pass(self):
+        title = "Task: " + "n" * (publisher.TITLE_CAP - 6)
+        self.assertEqual(publisher.TITLE_CAP, len(title))
+        self.assertIsNone(publisher.title_problem(title, REPO, self.pcfg))
+        self.assertIsNone(publisher.title_problem("Task: write the benchmark note (v2)", REPO, self.pcfg))
+        key, _ = self.task_event()
+        self.assertEqual("verified", self.pub(key)["state"])
+
+    def test_a_dry_run_names_what_is_wrong_with_the_title(self):
+        with mock.patch.object(store, "TASK_TITLE", 500):
+            key, _ = self.task_event(title="x" * 130)
+        self.assertEqual("title_form", self.pub(key, dry_run=True)["title"])
+        self.assertEqual([], self.writes())
+
+    def test_the_main_session_cannot_post_a_title_the_gate_refused(self):
+        with mock.patch.object(store, "TASK_TITLE", 500):
+            key, _ = self.task_event(title="Task: write the\x07 note")
+        with store.Store(REPO, config=self.pcfg) as db:
+            db.transition(key, "deferred", reason="main_session")
+        with self.assertRaisesRegex(publisher.PublishError, "title_form"):
+            self.pub(key, main_session=True)
+        self.assertEqual([], self.writes())
+
+
+class OtherFieldsTests(PublisherBox):
+    """The other model-written fields the publisher sends: what the marker may hold, and the labels."""
+
+    def test_a_marker_value_that_is_not_a_number_is_refused_before_anything_is_posted(self):
+        for mark in (" because=javascript:alert(1)", " because=https://collector.example.test/x", " checks=9104,abc",
+                     " because=9104,abc", " because=9104,9105,9106,9107,9108", " because=0", " replaces=9104;9105", " source=file:@hubot", " recorded=2026-03-12T10:00-08:00",
+                     " eventkey=" + "0" * 32 + " x=1", " extra=1"):
+            try:   # with the status authority a change of status would have, so that the value itself is what is judged
+                key, _ = self.queue("result", 5, tj.with_mark(tj.result_text(), mark), review={"status_authority": "agent"})
+            except store.StoreError:
+                continue   # the queue itself refused the body
+            with self.assertRaises(publisher.PublishError, msg=mark):
+                self.pub(key)
+        self.assertEqual([], self.log("issue comment"))
+
+    def test_the_marks_and_links_the_publisher_composes_are_whole_numbers_only(self):
+        key, _ = self.result(marks=[{"task": 7, "steps": [2]}], links=[{"key": "checks", "part": 9104}])
+        event = self.event(key)
+        import index
+        db = index.connect(REPO, create=False)
+        try:
+            body = publisher.compose(event, db, {"octocat"})
+        finally:
+            db.close()
+        marker = self.marker(body)
+        for name in ("checks", "against", "done", "dropped"):
+            if name in marker:
+                self.assertRegex(marker[name], r"^[0-9,;:]+$")
+        self.assertEqual(1, body.split("\n")[0].count("<!--"))
+
+    def test_a_task_is_always_labeled_active_and_nothing_else(self):
+        key, _ = self.task_event(title="Task: label check")
+        self.assertEqual("verified", self.pub(key)["state"])
+        self.assertEqual(["active"], self.repo()["issues"][str(self.titled("Task: label check")[0])]["labels"])
+
+    def test_the_body_of_a_new_task_is_made_by_code_from_the_checked_memory(self):
+        key, _ = self.task_event(title="Task: body check")
+        out = self.pub(key)
+        issue = self.repo()["issues"][str(out["receipt"]["issue"])]
+        body = issue["body"].replace("\r\n", "\n")
+        self.assertIn("## Plan\n\n- [ ] 1. Run the benchmark\n- [ ] 2. Write the table", body)
+        text = "\n".join(line for line in body.split("\n") if not line.startswith("<!-- ghim:list"))
+        self.assertIsNone(publisher.outbound_problem(text, REPO, status_ok=True))   # the plugin's own list mark aside
+
+
 class RegisterMainTests(PublisherBox):
     """The main session's own steps memories are registered like its other memories, so nothing is posted twice."""
 

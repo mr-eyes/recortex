@@ -15,6 +15,7 @@ import posixpath
 import re
 import sqlite3
 import time
+import unicodedata
 from urllib.parse import unquote, urljoin, urlsplit
 
 import lint_drafts
@@ -53,6 +54,7 @@ TASK_CLOSE_OPTIONS = ("Close it", "Not now")
 MARK_KINDS = record_format.MARK_RULES["done"]   # the kinds of memory that may carry the steps they check off
 PLAN_LINK_KINDS = {"checks": ("result", "failure"), "against": ("result",)}
 FOLLOW_WINDOW = 1800   # without a `with`, a task-0 mark follows the task opened this many seconds before it, at most
+TITLE_CAP = 120        # the longest title of a task the publisher opens
 
 
 # Checked on the raw body, code included: GitHub's own rules for code spans (backslash escapes, backtick runs of equal
@@ -87,7 +89,8 @@ STATUS_AUTHORITY = ("user", "agent")  # the user's typed words, or the agent's m
 # keeps an event from posting on its own is one (observer_holds.HELD_REASONS); the queue marks such an event held.
 EVENT_PROBLEMS = frozenset(("lint_failed", "invalid_target", "outbound_markup", "outbound_mention", "outbound_address",
                             "outbound_reference", "outbound_local", "payload_changed", "review_changed", "mark_binding",
-                            "mark_kind", "part_binding", "level")) | frozenset(observer_holds.HELD_REASONS)
+                            "mark_kind", "part_binding", "level", "title_form",
+                            "title_restricted")) | frozenset(observer_holds.HELD_REASONS)
 
 
 def off_repository(target, repo):
@@ -482,6 +485,26 @@ def _note_task(store):
                                           if type(at) in (int, float) and 0 <= now - at < 86400] + [now])
 
 
+def title_problem(title, repo, config):
+    """Why a task's title may not go to GitHub, or None. The title is a model's text that reaches GitHub apart from the
+    body, so it gets the body's checks. Its form: one line of at most TITLE_CAP characters, with no control character,
+    no format character (the bidirectional controls and zero-width ones are format characters), no line or paragraph
+    separator and no space but the plain one: title_form. Then the outbound checks (no markup, mention, address, outside
+    reference, nothing of this machine: outbound_problem) and the project's own (a secret, a restricted pattern, a
+    banned word, a placeholder or an unfilled template field: title_restricted)."""
+    if (not isinstance(title, str) or not title.strip() or len(title) > TITLE_CAP
+            or any(unicodedata.category(char)[0] == "C" or unicodedata.category(char) in ("Zl", "Zp")
+                   or (char.isspace() and char != " ") for char in title)):
+        return "title_form"
+    problem = outbound_problem(title, repo, status_ok=True)
+    if problem:
+        return problem
+    import lint_drafts as lint
+    if any(f.level == "error" for f in lint.lint_text(title, kind="generic", config=config)):
+        return "title_restricted"
+    return None
+
+
 def _task_command(repo, event):
     return ["issue", "create", "--repo", repo, "--title", event["candidate"]["task_title"], "--body-file", "-"]
 
@@ -687,7 +710,7 @@ def _reconcile_locked(store, event, config=None):
         return _uncertain(store, event["eventkey"], getattr(error, "reason", "remote_unavailable"))
 
 
-def _dry_run(repo, store, event):
+def _dry_run(repo, store, event, config):
     """What publish would send, without network and without writing: the command and the hash of the body composed now."""
     candidate = event["candidate"]
     command = _task_command(repo, event) if opens_task(candidate) else _command(repo, event, _issue_of(store, event))
@@ -695,6 +718,10 @@ def _dry_run(repo, store, event):
             else "frozen reviewed body from stdin")
     out = {"eventkey": event["eventkey"], "state": event["state"], "dry_run": True,
            "command": recortex.show_command(command, note), "payload_hash": event["payload_hash"]}
+    if opens_task(candidate):
+        problem = title_problem(candidate["task_title"], repo, config)
+        if problem:
+            out["title"] = problem
     if event["state"] in ("ready", "deferred"):
         try:
             body, _ = _composed(store, event)
@@ -721,7 +748,7 @@ def publish(repo, eventkey, config, dry_run=False, main_session=False):
         if event is None:
             raise PublishError("missing_event")
         if dry_run:
-            return _dry_run(repo, store, event)
+            return _dry_run(repo, store, event, config)
         with store.publication_lock():
             settings = _gate(store, config, main_session)
             event = store.event(eventkey)
@@ -751,9 +778,12 @@ def publish(repo, eventkey, config, dry_run=False, main_session=False):
                                        event["review"].get("status_authority") in STATUS_AUTHORITY)
             if problem:
                 raise PublishError(problem)
+            candidate, opens = event["candidate"], opens_task(event["candidate"])
+            problem = title_problem(candidate["task_title"], repo, config) if opens else None
+            if problem:
+                raise PublishError(problem)   # the title is the model's text too: nothing is created
             _hold(store, event, main_session)
             me = _account(repo)
-            candidate, opens = event["candidate"], opens_task(event["candidate"])
             issue = candidate["topic"] if opens else _issue_of(store, event)
             if opens and not issue and not task_rules_todo(candidate["task_title"]):
                 raise PublishError("invalid_target")   # a task with no topic is the standing "To do" list only
