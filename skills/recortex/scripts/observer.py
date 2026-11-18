@@ -34,6 +34,10 @@ def parser():
     pending.add_argument("--show-body", action="store_true", help="explicitly display the reviewed comment for this event key")
     pending.add_argument("--held", action="store_true",
                          help="list the reviewed memories that wait for the user's answer: post each, or drop it")
+    pending.add_argument("--waiting", action="store_true",
+                         help="everything that waits for the user's answer: held memories, tasks to open or close, "
+                              "drafts of the paper's text, each with its question")
+    pending.add_argument("--json", action="store_true", help="with --waiting: JSON instead of text")
     enable = sub.add_parser("enable", help="preview this machine's settings for this folder; --yes approves and saves them")
     enable.add_argument("--mode", choices=("shadow", "automatic"), default="shadow")
     enable.add_argument("--model", help="required: the Claude model alias or ID for the middle tier (drafts, reviews, summaries)")
@@ -62,6 +66,14 @@ def parser():
     release = sub.add_parser("release", help="release a hold; run it yourself in a separate terminal, which asks you "
                                              "to confirm there")
     release.add_argument("hold_id")
+    for name, text in (("act", "carry out the user's yes to a task that waits: open it, or close the finished one"),
+                       ("later", "put a task that waits off for a day (the user's Not now)")):
+        command = sub.add_parser(name, help=text)
+        command.add_argument("short", metavar="SHORT", help="the item's short id, as pending --waiting lists it")
+    log = sub.add_parser("log", help="what the observer did on its own, with the address of each act")
+    log.add_argument("--days", type=int, default=7, help="how many days back (1 to 35, default 7)")
+    undo = sub.add_parser("undo", help="reverse an act where it can be reversed (see observer.py log for the numbers)")
+    undo.add_argument("act", type=int, metavar="ACT")
     discard = sub.add_parser("discard", help="drop a reviewed event that will not be posted; its excerpts then expire")
     discard.add_argument("eventkey")
     drafts = sub.add_parser("drafts", help="the drafts of the paper's text that wait for the user's answer: list them, "
@@ -427,6 +439,33 @@ def runtime_check(repo, options, store):
     return ok, out
 
 
+def _acts(args, store, repo, config, options):
+    """act, later, log and undo: what the observer waits to be told, and what it did. The "yes" of act and the writes of
+    undo need an approved folder in automatic mode; the grant an act needs is the user's recorded answer (the hook
+    records it, observer_hooks)."""
+    import observer_jobs
+    import observer_waiting
+    if args.command == "log":
+        for text in observer_jobs.log_lines(store, repo, config, max(1, min(35, args.days))) or ["No act in this period."]:
+            print(text)
+        return 0
+    if args.command == "later":
+        result = observer_waiting.later(store, args.short, time.time())
+        emit(result)
+        return int(result["code"] != "later")
+    if not runtime.approval_valid(repo, config) or options["mode"] != "automatic":
+        emit({"code": "approval", "note": "Only an approved folder in automatic mode acts."}); return 1
+    if args.command == "act":
+        import tasks
+        close = lambda issue: observer_jobs.quiet(tasks.close_task, repo, config, issue)[0]   # its words are not the JSON
+        result = observer_waiting.act(store, repo, config, args.short, close)
+        emit(result)
+        return int(result["code"] not in ("opened", "closed"))
+    result = observer_jobs.undo(store, repo, config, args.act)
+    emit(result)
+    return int(result["code"] not in ("restored", "reopened", "closed_not_planned"))
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
     if args.command == "hook":
@@ -506,13 +545,17 @@ def main(argv=None):
         if args.command == "runtime-check" and not runtime.approval_valid(repo, config):
             emit({"code": "approval", "note": "Run observer.py enable --model MODEL --level LEVEL --yes first; the check is "
                                               "bound to the models chosen there."}); return 1
-        readonly = (args.command in ("status", "pending", "holds") or getattr(args, "dry_run", False)
+        readonly = (args.command in ("status", "pending", "holds", "log") or getattr(args, "dry_run", False)
                     or (args.command == "drafts" and args.action is None and not args.show))
         try:
             opened = observer_store.Store(repo, create=not readonly, readonly=readonly,
                          max_bytes=options["max_pending_bytes"], max_pending=options["max_pending_observations"], config=config)
         except observer_store.StoreError as error:
             if readonly and error.reason == "missing":
+                if args.command == "pending" and args.waiting:
+                    import index
+                    import observer_waiting
+                    return observer_waiting.print_listing(None, args.json, emit, index.clean, index.DATA_HEADER)
                 if args.command == "status":
                     emit(_status(repo, config, loaded, None, options, args.source_details)); return 0
                 emit({"code": "empty", "action": args.command, "dry_run": getattr(args, "dry_run", False), "queue": {}, "capture_preflight": observer_sources.preflight(recortex.project_root(), details=getattr(args, "source_details", False))}); return 0
@@ -521,6 +564,10 @@ def main(argv=None):
             if args.command == "status":
                 emit(_status(repo, config, loaded, store, options, args.source_details)); return 0
             if args.command == "pending":
+                if args.waiting:
+                    import index
+                    import observer_waiting
+                    return observer_waiting.print_listing(store, args.json, emit, index.clean, index.DATA_HEADER)
                 if args.held:
                     import record_format
                     emit({"held": [{"eventkey": event["eventkey"], "short": event["eventkey"][:8],
@@ -560,9 +607,14 @@ def main(argv=None):
                 # Dropping an event posts nothing; one that was held stays marked so, and its copies stay refused.
                 store.transition(args.eventkey, "rejected", reason="discarded",
                                  held=observer_publisher.kept(store, event, config))
+                if observer_publisher.opens_task(event["candidate"]):
+                    # The task will not be opened: the marks that waited for it have nothing to mark.
+                    observer_publisher.release_dependents(store, event, False)
                 emit({"action": "discard", "eventkey": args.eventkey}); return 0
             if args.command == "holds":
                 emit({"holds": store.holds()}); return 0
+            if args.command in ("act", "later", "log", "undo"):
+                return _acts(args, store, repo, config, options)
             if args.command == "drafts":
                 import observer_drafts
                 if args.show or args.action is None:
