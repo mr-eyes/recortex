@@ -272,6 +272,25 @@ class DroppedTests(DialogBox):
             self.resolve(forged)
         self.assertEqual("Approved the plan in the plan dialog.", self.resolve(answer[0])["text"])
 
+    def test_a_result_naming_a_label_the_call_did_not_offer_is_refused_at_resolve(self):
+        """Capture drops such an answer, so only a descriptor made by hand reaches resolve: the call is changed to offer
+        other labels and the hashes of the pair are made again, so that nothing but the offered-label check is left."""
+        import hashlib
+        call, result = own(QUESTION, labels=("LF", "CR"))
+        self.write(call, result)
+        rows, _ = self.scan()
+        answer = [row for row in rows if row["role"] == "user"]
+        self.assertEqual(1, len(answer))
+        self.assertEqual('Chose "LF" when asked "%s"' % QUESTION, self.resolve(answer[0])["text"])
+        other, _ = own(QUESTION, labels=("CRLF", "CR"))   # the same call, offering no "LF"
+        other["uuid"] = call["uuid"]
+        self.write(other, result)
+        lines = self.path.read_bytes().splitlines(keepends=True)
+        forged = dict(answer[0], pair_offset=0, pair_end=len(lines[0]), pair_sha256=hashlib.sha256(lines[0]).hexdigest(),
+                      offset=len(lines[0]), end=len(lines[0]) + len(lines[1]), sha256=hashlib.sha256(lines[1]).hexdigest())
+        with self.assertRaisesRegex(sources.SourceError, "source-identity"):
+            self.resolve(forged)
+
     def test_an_unknown_wording_is_dropped_and_counted(self):
         call, result = records("plan-approved.jsonl")
         result["message"]["content"][0]["content"] = "The plan was accepted by the user."
@@ -371,6 +390,17 @@ class DroppedTests(DialogBox):
             rows, got = self.sources_of(call, result)
             self.assertEqual([], rows, question)
         self.assertEqual({}, self.stats)
+
+    def test_every_setup_question_of_the_plugin_is_its_own_dialog(self):
+        """The user's answer to a setup question is about the plugin, never a source; a question added later that does not
+        say recortex (or match a template) would make the observer record the user's answers about the observer."""
+        import setup_questions
+        self.assertTrue(setup_questions.QUESTIONS)
+        for question in setup_questions.QUESTIONS:
+            self.assertIsNotNone(sources.OWN_DIALOG.search(question.text), question.id)
+            call, result = own(question.text)
+            rows, got = self.sources_of(call, result)
+            self.assertEqual([], rows, question.id)
 
     def test_a_question_that_only_resembles_the_templates_is_a_source(self):
         call, result = own("Memory leaks: which tool should the tests use?")

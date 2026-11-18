@@ -394,7 +394,7 @@ QUESTIONS = (
          Option("Later", "later"))),
     Question(
         "manuscript-profile", "1.3.0", "repo", "the project file", check_manuscript_profile,
-        "Paper or manuscript files now exist in this project ({evidence}), and its setup has no manuscript profile. Add "
+        "recortex: paper or manuscript files now exist in this project ({evidence}), and its setup has no manuscript profile. Add "
         "it? That adds the profile and its labels to the project file, with the plan of the paper and the writing of "
         "its text to follow; the deliverables the project has stay as they are.",
         (Option("Yes", "yes", dry_then_real("setup.py", "apply", "--answers", "<the answers file below>"), True),
@@ -402,7 +402,7 @@ QUESTIONS = (
          Option("Later", "later"))),
     Question(
         "labels", "1.2.0", "repo", "GitHub, noted on this machine", check_labels,
-        "Labels that this project's profiles use are missing on GitHub ({missing}). Create them? setup_labels.py "
+        "recortex: labels that this project's profiles use are missing on GitHub ({missing}). Create them? setup_labels.py "
         "creates only the missing ones and never changes or deletes an existing label.",
         (Option("Yes", "yes", (("setup_labels.py", "--dry-run"), ("setup_labels.py",)), True),
          Option("No", "no"),
@@ -417,7 +417,7 @@ QUESTIONS = (
          Option("Later", "later"))),
     Question(
         "observer-level", "1.5.0", "repo", "this machine and this folder", check_observer_level,
-        "Turn on the observer (experimental)? It takes notes of the conversation (the prompts you type, the agent's "
+        "Turn on the recortex observer (experimental)? It takes notes of the conversation (the prompts you type, the agent's "
         "messages to you, and the plans and questions you answered in a dialog) and sorts them in the background. "
         "Choose what it may do. Notes only: it keeps memories and the status summary, and asks you before it posts a "
         "memory it holds. Assistant: it also keeps a to-do list with checkmarks, checks off steps the agent reports as "
