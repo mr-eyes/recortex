@@ -22,7 +22,7 @@ apply   Makes every change, from an answers file written after the user's final
         and labels and never removes what is there.
 questions  The setup questions an update added that this project and this machine have not answered yet
         (references/setup.md, "Questions added after setup"): each with its exact commands, and nothing else. It
-        reads GitHub once at most (the labels) and writes only the note that no label is missing.
+        reads GitHub once at most (the labels) and writes only the note that no label is missing and the time it ran.
 answer  `--id ID --answer yes|no|later|reset`: records the user's answer to one setup question on this machine.
 status-line, observer  The two steps of the wizard, as commands of their own for the setup questions:
         `status-line --dry-run|--yes` and `observer --mode automatic|shadow --model M --dry-run|--yes`.
@@ -1655,11 +1655,15 @@ def questions_results(config, repo, data):
 
 def questions_command(args):
     """setup.py questions [--json]: the open setup questions with their exact commands. It reads GitHub once at most, for
-    the labels, and writes only the note that none is missing."""
+    the labels, and writes only the note that none is missing and the time it ran (the prompt hook's reminder reads it)."""
     config, repo, line = questions_project()
     if config is None:
         print(line)
         return 0
+    try:
+        setup_questions.note_run(repo)   # the prompt hook then stops reminding this session; a refusal never stops the command
+    except (OSError, ValueError, storage.StorageError):
+        pass
     found = setup_questions.read()
     if found["state"] == "unreadable":
         print("setup questions: the answers of this machine cannot be read (%s), so no question is asked. Run hooks.py "

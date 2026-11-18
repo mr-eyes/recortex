@@ -71,7 +71,7 @@ Run `python3 ${CLAUDE_SKILL_DIR}/scripts/setup.py preflight` first. When it fail
 
 ### Setup questions
 
-When the brief says setup questions are to check, wait for the first pause (at once if the first prompt is a greeting, an open question or about recortex), then run `python3 ${CLAUDE_SKILL_DIR}/scripts/setup.py questions`. If nothing is open, say nothing. Otherwise ask with the multiple-choice tool, at most four per prompt, in the order printed. For each answer run the option's commands (the dry run first, shown), then `setup.py answer`; a dismissed question is `later`. After `apply` for the manuscript profile, do not add the hub rows it prints. See [references/setup.md](references/setup.md).
+When the brief says setup questions are to check, ask at the end of the reply that completes the user's first request (at once if the first prompt is a greeting, an open question or about recortex): run `python3 ${CLAUDE_SKILL_DIR}/scripts/setup.py questions`. If nothing is open, say nothing. Otherwise ask with the multiple-choice tool, at most four per prompt, in the order printed. A later prompt may carry a reminder line with the count; follow it the same way. For each answer run the option's commands: run the dry run alone and show it, run the real command only after the user's answer, never chained with `&&` or `;` in one shell command; then `setup.py answer`. A dismissed question is `later`. After `apply` for the manuscript profile, do not add the hub rows it prints. See [references/setup.md](references/setup.md).
 
 ### Bootstrap by hand
 

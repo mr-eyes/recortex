@@ -18,13 +18,18 @@ the project file holds is read as an answer.
 The hook (hooks.py, session start only) counts the open questions from local files alone and prints one fixed line
 once per session; it makes no GitHub call and prints nothing it read. `setup.py questions` is what the session then
 runs: it reads GitHub once at most (the labels), prints each open question with the exact commands of its options,
-and writes nothing but the note that no label is missing. `setup.py answer` records one answer. The hooks only read
-the file. A file that cannot be read (a symlink, loose permissions, not JSON, not of the form, too large) is never
+and writes nothing but the note that no label is missing and the time it ran. `setup.py answer` records one answer. The hooks
+only read the file. A file that cannot be read (a symlink, loose permissions, not JSON, not of the form, too large) is never
 replaced and is reported in one fixed line that points to hooks.py --doctor.
 
+A session that does not ask at the end of its first reply is reminded once or twice: the prompt-submit hook (hooks.py) adds one
+fixed line with the count (reminder below) to a later prompt, while questions are open and `setup.py questions` has not run since
+the session started. The time of the session's start is in the prompt state, and the time `setup.py questions` last ran is a small
+file beside it (storage.py, names.SETUP_RUN); both are numbers, and nothing read from them is printed.
+
 Switched off with RECORTEX_SETUP_QUESTIONS set to 0, off, no or false, or "setup_questions": false in the user's
-settings.json of the plugin (recortex.settings_file). The switch stops the hook's line; `setup.py questions` still
-answers when it is asked.
+settings.json of the plugin (recortex.settings_file). The switch stops the hook's line and its reminder; `setup.py questions`
+still answers when it is asked.
 """
 
 import datetime
@@ -512,6 +517,80 @@ def mark_asked(repo, session, state_io=None):
     state[session] = entry
     save_state(repo, state)
     return True
+
+
+# ---------------------------------------------------------------- the reminder of the prompt hook
+
+REMIND_MAX = 2     # reminders to one session
+REMIND_FROM = 2    # the prompt of the session (counted by the prompt hook) that may carry the first
+REMIND_GAP = 3     # prompts between one reminder and the next
+
+
+def run_path(repo):
+    """Where `setup.py questions` notes when it ran, in the repository's folder of the hook state (the folder that holds
+    prompt-state.json, through storage.py)."""
+    return os.path.join(storage.folder(storage.state_top(), storage.repo_folder(repo)), names.SETUP_RUN)
+
+
+def note_run(repo, now=None):
+    """Note that `setup.py questions` ran just now: {"ran": seconds} in a private file written through storage.py. Raises what
+    storage raises; the caller does not let a failure stop the command."""
+    storage.write_file(run_path(repo), json.dumps({"ran": time.time() if now is None else now}))
+
+
+def number(value):
+    """value when it is a finite positive number that is no bool, else None."""
+    if type(value) in (int, float) and 0 < value < 1e12:
+        return float(value)
+    return None
+
+
+def last_run(repo):
+    """When `setup.py questions` last ran for the repository, in seconds, or None when it never did or the file does not hold
+    exactly that. Raises storage.StorageError for an unsafe file (the reminder then stays out)."""
+    text = storage.read_file(run_path(repo))
+    try:
+        data = json.loads(text) if text else None
+    except (ValueError, RecursionError):
+        return None
+    return number(data.get("ran")) if isinstance(data, dict) and set(data) == {"ran"} else None
+
+
+def reminder(repo, config, record, entry, room, now=None):
+    """The one fixed line that reminds a session of the setup questions on a later prompt, or "". `entry` is the session's entry of
+    the prompt state (hooks.load_state): `start` (when the session's first start was seen), `count` (its prompts), `reminded` and
+    `reminded_at`. The line is given only when the questions are not switched off, the session has a start and has had REMIND_FROM
+    prompts, fewer than REMIND_MAX reminders (REMIND_GAP prompts apart), `setup.py questions` has not run since the session started,
+    a question is open now (counted from local files, as the session start counts them) and the line fits `room`. When it is
+    given, `reminded` and `reminded_at` are set in `entry`, which the caller then saves. It holds fixed words and a number, and
+    makes no GitHub call. Cheap checks come first, so that most prompts read nothing."""
+    import brief
+    now = time.time() if now is None else now
+    start, prompts = number(entry.get("start")), entry.get("count")
+    reminded, at = entry.get("reminded", 0), entry.get("reminded_at", 0)
+    if start is None or start > now + 60 or type(prompts) is not int or prompts < REMIND_FROM:
+        return ""
+    if type(reminded) is not int or not 0 <= reminded < REMIND_MAX or type(at) is not int:
+        return ""
+    if reminded and prompts - at < REMIND_GAP:
+        return ""
+    if off():
+        return ""
+    ran = last_run(repo)
+    if ran is not None and ran >= start:
+        return ""
+    found = read()
+    if found["state"] == "unreadable":
+        return ""
+    results = evaluate(Context(repo, config, os.path.realpath(recortex.project_root()), record), found["data"])
+    count = sum(1 for r in results if r.status == "open")
+    if not count:
+        return ""
+    line = brief.SETUP_REMINDER % (count, "" if count == 1 else "s")
+    if len(line) + 1 > room:
+        return ""
+    entry["reminded"], entry["reminded_at"] = reminded + 1, prompts
+    return line
 
 
 def doctor_lines(repo, config, record):

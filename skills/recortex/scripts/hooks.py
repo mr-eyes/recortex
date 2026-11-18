@@ -32,8 +32,9 @@ machine, that offers to set the field.
 
 At session start the brief may also carry one fixed line, once per session, saying how many setup questions an update
 added that this project and this machine have not answered yet (setup_questions.py); it holds a number and fixed words,
-reads only local files and makes no GitHub call. Off with RECORTEX_SETUP_QUESTIONS=0 or "setup_questions": false in the
-settings file of the plugin.
+reads only local files and makes no GitHub call. If the session has not run `setup.py questions` by its second prompt, one
+more fixed line with the count is added to a later prompt (prompt-submit), at most twice a session and only while the prompt
+hook is on. Off with RECORTEX_SETUP_QUESTIONS=0 or "setup_questions": false in the settings file of the plugin.
 
 --print shows the four payloads and their sizes, for the user to check.
 --doctor says why a brief is not shown: configuration, trust, whether gh is
@@ -383,6 +384,20 @@ def setup_line(repo, config, record, session, room):
         return "", set()
 
 
+def setup_reminder(repo, config, record, entry, session, room):
+    """The reminder about the setup questions for a later prompt (setup_questions.reminder): one fixed line with a number, at most
+    twice a session, and only while questions are open and `setup.py questions` has not run since the session started. It has
+    to fit `room`, the rest of the cap of the prompt payload, so that it adds to no payload that is already full. Never raises:
+    any failure gives no line, and the prompt's payload is as it was."""
+    if not session:
+        return ""
+    try:
+        import setup_questions
+        return setup_questions.reminder(repo, config, record, entry, room)
+    except Exception:  # noqa: BLE001 - the line is optional; the prompt hook does not depend on it
+        return ""
+
+
 def field_offer(repo, record, room):
     """The offer to set the field: one fixed line, once per project and machine, in a project with no fields entry.
     It is remembered before it is returned. The line is optional: any failure (refused storage, an unreadable file)
@@ -544,6 +559,7 @@ def produce(event, data, budget, config, repo, hub):
             # also when the one-line reminder is switched off. Build the text first, then record that it was given.
             text = brief.session_payload(record, None)
             entry.update(brief=True, key=key)
+            entry.setdefault("start", entry["seen"])
             state[session] = entry
             save_state(repo, state)
             return text
@@ -561,9 +577,12 @@ def produce(event, data, budget, config, repo, hub):
                 and not observer_refreshes(repo, config):
             entry["summary_nudge"] = time.time()   # at most once in six hours for this session
             nudge = line
-        state[session] = entry
+        parts = [part for part in (brief.prompt_payload(record) if show else "", nudge) if part]
+        used = len("\n".join(parts)) + (1 if parts else 0)
+        asked = setup_reminder(repo, config, record, entry, session, brief.CAPS["prompt-submit"] - used)
+        state[session] = entry   # the reminder is marked in the entry before it is returned
         save_state(repo, state)
-        return "\n".join(part for part in (brief.prompt_payload(record) if show else "", nudge) if part)
+        return "\n".join(parts + [asked] if asked else parts)
     finally:
         db.close()
 
@@ -590,6 +609,7 @@ def remember(repo, session, key, brief):
         if brief:
             entry["key"] = key
         entry["seen"] = time.time()
+        entry.setdefault("start", entry["seen"])   # when this session was first seen, for the reminder of the setup questions
         state[session] = entry
         save_state(repo, state)
     except (OSError, storage.StorageError):

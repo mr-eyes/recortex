@@ -29,6 +29,8 @@ WRITING_MODES = "writing-modes.json"
 OWN_PAPER = "own-paper.json"
 # 1.4.0: the answers of this machine to the setup questions an update adds (private folder of the configuration top).
 SETUP_ANSWERS = "setup-answers.json"
+# 1.4.0: when `setup.py questions` last ran for a repository, in its folder of the hook state (the prompt hook's reminder reads it).
+SETUP_RUN = "setup-questions-run.json"
 MANUSCRIPT_BRANCH = "recortex-manuscript"
 # The plugin's environment variables, without the prefix. The three before the last are read only by the tests.
 # LINK_PAUSE is the seconds create_issues.py waits after each sub-issue link it writes (default 1, at most 10);
