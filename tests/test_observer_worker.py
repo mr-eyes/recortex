@@ -231,9 +231,9 @@ class WorkerTests(unittest.TestCase):
         self.calls = []
         later = self.capture(QUOTE + ' Later.')  # what happens after the main session's post is the observer's again
         self.assertEqual(1, len(self.run_worker(self.invoke(self.candidate(later)))['ready']))
-    def test_a_moment_the_user_withheld_is_rejected_and_never_offered_again(self):
+    def test_a_moment_the_user_withheld_is_not_posted_on_its_own_and_not_offered_to_the_models_again(self):
         # The reviewer has a reason of its own for a moment the user asked not to post or record, and the selector is
-        # told to skip such a moment.
+        # told to skip such a moment. Since 1.5.1 the candidate is kept for the user's answer (Post or Drop), not lost.
         self.assertIn('withheld',worker.REVIEW['properties']['reason']['enum'])
         self.assertIn('not to post or record',runtime.PROMPTS['sort'])
         self.assertIn('not to post or record',runtime.PROMPTS['draft'])
@@ -244,8 +244,9 @@ class WorkerTests(unittest.TestCase):
         call=self.invoke(self.candidate(sid),accepted=False,reason='withheld')
         self.assertEqual([],self.run_worker(call)['ready'])
         with store.Store(REPO,config=self.config) as db:
-            self.assertEqual(('deferred','withheld'),(db.observation(sid)['state'],db.observation(sid)['reason']))
-            self.assertEqual([],db.events())
+            self.assertEqual(('deferred','withheld_review'),(db.observation(sid)['state'],db.observation(sid)['reason']))
+            [event]=db.events()   # kept for the user's answer: deferred and held, never ready
+            self.assertEqual(('deferred','withheld_review',1),(event['state'],event['reason'],event['held']))
         self.calls=[];self.run_worker(call);self.assertEqual([],self.calls)
     def test_the_reviewer_sees_the_rest_of_the_stretch_as_context(self):
         # The cited messages are the evidence; what else was said around them in the session is context, so that a

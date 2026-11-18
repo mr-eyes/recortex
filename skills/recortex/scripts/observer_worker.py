@@ -1052,8 +1052,16 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 handled.add(primary)
                 continue
             if not answer["accepted"] or answer["reason"] != "supported":
-                # "withheld": the user asked that this not be posted or recorded; it is never offered again.
-                store.defer(primary, "withheld" if answer["reason"] == "withheld" else "review_rejected")
+                if answer["reason"] == "withheld":
+                    # The reviewer read the moment as kept off the record: by the user's typed words, or by mistake. Either
+                    # way nothing is lost: the candidate waits as a held memory for the user's Post or Drop, and posts on
+                    # no other path (a hold of the session still blocks even that, until the user releases it).
+                    kept = {"accepted": False, "reason": "withheld", "candidate_hash": digest, "reservation_id": review_id}
+                    if store.review_complete(primary, candidate, kept, hold="withheld_review") is not None:
+                        handled.update(candidate["sources"])
+                        used.update(candidate["sources"])
+                else:
+                    store.defer(primary, "review_rejected")
                 report["deferred"] += 1
                 handled.add(primary)
                 continue

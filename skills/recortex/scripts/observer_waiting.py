@@ -50,11 +50,15 @@ def line(item):
     return keeper_rules.question_line(draft["headings"], draft["topic"])
 
 
+KEPT_OFF = " (the reviewer kept it off the record, as you may have asked)"
+
+
 def changes(event):
-    """What a held memory would change, in words: the earlier memories its marker names."""
+    """What a held memory would change, in words: the earlier memories its marker names. A memory the reviewer kept
+    off the record (withheld_review) says so, in fixed words, so that the user knows why it is asked."""
     marker = record_format.parse_marker(record_format.first_lines(event["body"])[0]) or {}
     found = ["%s %s" % (key, marker[key]) for key in ("replaces", "instead", "checks") if key in marker]
-    return ", ".join(found) if found else "nothing else"
+    return (", ".join(found) if found else "nothing else") + (KEPT_OFF if event.get("reason") == "withheld_review" else "")
 
 
 def commands(item):
