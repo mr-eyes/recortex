@@ -37,11 +37,12 @@ PHRASES.update(WITHHOLD)
 # - explicit_hold: a /recortex hold covers the comment (check_action);
 # - withheld: the user kept that session off the record (publication_withheld);
 # - status_change: a change of an earlier memory's status that rests on neither the user's typed words nor the
-#   agent's message to the user.
+#   agent's message to the user;
+# - level_ask: at the level Assistant, a task the observer would open waits for the user's answer ("Open it").
 # The value says who lifts it: "user", the user's own act (a release); "answer", the user's answer to the question the
 # main session asks at the next session start or pause (post it, or drop it), through --eventkey.
 # The observer does not judge confidentiality, so no reason is about a marked project.
-HELD_REASONS = {"explicit_hold": "user", "withheld": "user", "status_change": "answer"}
+HELD_REASONS = {"explicit_hold": "user", "withheld": "user", "status_change": "answer", "level_ask": "answer"}
 ANSWER_REASONS = tuple(sorted(reason for reason, who in HELD_REASONS.items() if who == "answer"))
 
 WITHHELD = re.compile(r"(?<![A-Za-z0-9])(?:(?:do not|don't|dont|never)[ \t]+(?:post|record|publish)|off the record)"

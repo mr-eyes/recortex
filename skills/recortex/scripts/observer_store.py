@@ -278,6 +278,53 @@ def description(kind, body):
     return " ".join(line.split())
 
 
+CANDIDATE_KEYS = frozenset(("kind", "issue", "body", "sources", "excerpts", "task_title", "topic", "marks", "links",
+                            "with"))
+NEW_TASK_KINDS = ("steps", "checkpoint")   # the kinds that may name issue 0: the task a steps memory of the pass opens
+LINK_PARTS = ("checks", "against")         # the keys a plan link may take
+TASK_TITLE = 120
+
+
+def _check_extras(candidate, issue):
+    """The fields 1.5.0 added to a reviewed candidate, in their strict forms (the worker writes them, the publisher
+    composes the marker from them): task_title and topic only for a steps memory that opens a task (issue 0, or the
+    to-do task's own items carry neither); marks, a list of {"task", "steps"} (task 0 is the task a steps memory of the
+    same pass opens); links, a list of {"key", "part"} naming plan parts by comment id; with, the first source of the
+    candidate that opens the task a mark of task 0 is about. Anything else raises invalid_candidate."""
+    def whole(value, low, high):
+        return type(value) is int and low <= value <= high
+    opens = issue == 0 and candidate["kind"] == "steps"
+    if ("task_title" in candidate or "topic" in candidate) and not opens:
+        raise StoreError("invalid_candidate")
+    if opens:
+        title = candidate.get("task_title")
+        if (not isinstance(title, str) or not title.strip() or len(title) > TASK_TITLE or "\n" in title
+                or not whole(candidate.get("topic"), 0, COUNT_MAX)):
+            raise StoreError("invalid_candidate")
+    marks = candidate.get("marks", [])
+    if not isinstance(marks, list) or len(marks) > 6:
+        raise StoreError("invalid_candidate")
+    for mark in marks:
+        if (not isinstance(mark, dict) or set(mark) != {"task", "steps"} or not whole(mark["task"], 0, 100000)
+                or not isinstance(mark["steps"], list) or not 1 <= len(mark["steps"]) <= 20
+                or not all(whole(number, 1, 20) for number in mark["steps"])
+                or len(set(mark["steps"])) != len(mark["steps"])):
+            raise StoreError("invalid_candidate")
+    links = candidate.get("links", [])
+    if not isinstance(links, list) or len(links) > 4:
+        raise StoreError("invalid_candidate")
+    for link in links:
+        if (not isinstance(link, dict) or set(link) != {"key", "part"} or link["key"] not in LINK_PARTS
+                or not whole(link["part"], 1, 10 ** 18)):
+            raise StoreError("invalid_candidate")
+    if "with" in candidate:
+        _id(candidate["with"])
+        if not any(mark["task"] == 0 for mark in marks) and not (issue == 0 and candidate["kind"] == "checkpoint"):
+            raise StoreError("invalid_candidate")
+    if issue == 0 and candidate["kind"] == "checkpoint" and not any(mark["task"] == 0 for mark in marks):
+        raise StoreError("invalid_candidate")
+
+
 def _with_key(body, key):
     lines = body.splitlines(keepends=True)
     first = next((n for n, line in enumerate(lines) if line.strip()), None)
@@ -721,7 +768,7 @@ class Store:
 
     def review_complete(self, source_id, candidate, review):
         _id(source_id)
-        if not isinstance(candidate, dict) or set(candidate) - {"kind", "issue", "body", "sources", "excerpts"}:
+        if not isinstance(candidate, dict) or set(candidate) - CANDIDATE_KEYS:
             raise StoreError("invalid_candidate")
         sources = candidate.get("sources")
         if not isinstance(sources, list) or not sources or len(sources) > 64:
@@ -732,8 +779,10 @@ class Store:
         if candidate.get("kind") not in record_format.OBSERVED_TYPES:
             raise StoreError("invalid_candidate")
         issue = candidate.get("issue")
-        if isinstance(issue, bool) or not isinstance(issue, int) or issue < 1:
-            raise StoreError("invalid_candidate")
+        if isinstance(issue, bool) or not isinstance(issue, int) or issue < 0 or (
+                issue == 0 and candidate["kind"] not in NEW_TASK_KINDS):
+            raise StoreError("invalid_candidate")   # 0 is for a new task: its steps memory, and a checkpoint on it
+        _check_extras(candidate, issue)
         body = candidate.get("body")
         if not isinstance(body, str) or len(body) > recortex.BODY_LIMIT:
             raise StoreError("invalid_candidate")
@@ -790,6 +839,40 @@ class Store:
         for name in ("candidate", "review", "receipt"):
             value[name] = json.loads(value[name])
         return value
+
+    def recompose(self, key, body):
+        """Replace the frozen body of a ready or deferred event by the body the publisher composed from its reviewed
+        candidate (observer_publisher.compose: the marks and plan links resolved into the marker). The eventkey and the
+        type in the marker must be the event's; the digests its copies are looked up by and the memories it changes the
+        status of follow the new body. An event already sending, uncertain or verified keeps the body it was sent with."""
+        with self.transaction():
+            event = self.event(key)
+            if event is None or event["state"] not in ("ready", "deferred"):
+                raise StoreError("invalid_transition")
+            marker = record_format.parse_marker(record_format.first_lines(body)[0]) or {}
+            if (not isinstance(body, str) or len(body) > recortex.BODY_LIMIT or marker.get("eventkey") != key
+                    or marker.get("type") != event["candidate"]["kind"]):
+                raise StoreError("invalid_candidate")
+            if body == event["body"]:
+                return False
+            body_hash, words_hash = copy_digests(event["candidate"]["kind"], body)
+            self.db.execute("UPDATE events SET body=?,payload_hash=?,body_hash=?,words_hash=?,updated=? WHERE eventkey=?",
+                            (body, hashlib.sha256(body.encode("utf-8")).hexdigest(), body_hash, words_hash,
+                             time.time(), key))
+            self.db.execute("DELETE FROM event_targets WHERE eventkey=?", (key,))
+            self._store_targets(key, body)
+            return True
+
+    def event_by_source(self, source_id):
+        """The event whose first source is `source_id` (events.source_id), or None."""
+        row = self.db.execute("SELECT eventkey FROM events WHERE source_id=?", (_id(source_id),)).fetchone()
+        return self.event(row[0]) if row else None
+
+    def recent_events(self, since, limit=200):
+        """The events created after `since`, newest first (at most `limit`)."""
+        rows = self.db.execute("SELECT eventkey FROM events WHERE created>? ORDER BY created DESC,eventkey LIMIT ?",
+                               (float(since), max(1, min(1000, int(limit)))))
+        return [self.event(row[0]) for row in rows.fetchall()]
 
     def review_valid(self, event):
         review = event.get("review", {})
@@ -1067,10 +1150,18 @@ class Store:
     def waiting(self):
         """The one list of what needs the user's answer, oldest first, each as {"kind", "key", "short", "created", ...}:
         a held memory (kind "held", key its event key) and a draft of the paper's text that waits (kind "draft", key its
-        short id; one put off with "later" waits again when its time has passed). The kinds that open or close a task
-        join this list with the publisher's level gate."""
+        short id; one put off with "later" waits again when its time has passed), and a task the level Assistant holds
+        for the user's answer (kind "task_open", key its event key, with its title and its number of steps). The kind
+        that asks to close a task joins this list with the jobs."""
         out = []
         for event in self.waiting_for_answer():
+            candidate = event["candidate"]
+            if event.get("reason") == "level_ask" and candidate.get("kind") == "steps" and candidate.get("issue") == 0:
+                # A task to open, held at the level Assistant: "Task <short>: open a task ..." (observer_publisher).
+                out.append({"kind": "task_open", "key": event["eventkey"], "short": event["eventkey"][:8],
+                            "created": event["created"], "event": event, "title": candidate["task_title"],
+                            "steps": len(record_format.steps_list(candidate["body"]))})
+                continue
             out.append({"kind": "held", "key": event["eventkey"], "short": event["eventkey"][:8],
                         "created": event["created"], "event": event})
         now = time.time()
