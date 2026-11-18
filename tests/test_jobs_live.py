@@ -310,6 +310,14 @@ class PairTests(LiveBox):
             self.assertEqual([], publisher.release_dependents(db, db.event(opener), True))
         self.assertEqual(("deferred", "depends"), (self.event(decision)["state"], self.event(decision)["reason"]))
 
+    def test_the_decision_may_stand_on_another_topic_than_its_failure(self):
+        apart = copy.deepcopy(self.data["draft"])
+        apart[1]["issue"] = 5
+        report, purposes, calls = self.run_pass(draft=apart)
+        posted = self.comments()
+        self.assertEqual([(6, "failure"), (5, "decision")], [(issue, self.marker(body)["type"]) for _, issue, body in posted])
+        self.assertEqual(str(posted[0][0]), self.marker(posted[1][2])["because"])
+
     def test_a_decision_the_drafter_wrote_first_still_follows_its_failure(self):
         swapped = [copy.deepcopy(self.data["draft"][1]), copy.deepcopy(self.data["draft"][0])]
         swapped[0]["because"] = 2   # the failure is the second of the draft: it is still queued, and reviewed, first
