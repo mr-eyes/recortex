@@ -2143,9 +2143,10 @@ class WholeBuildTests(Steps):
 
 
 class VersionRaiseTests(unittest.TestCase):
-    def test_the_version_is_1_4_0_and_the_upgrade_notes_name_it_above_1_3_0(self):
+    def test_the_version_is_1_4_0_or_later_and_the_upgrade_notes_name_1_4_0_above_1_3_0(self):
         with open(os.path.join(ROOT, ".claude-plugin", "plugin.json"), encoding="utf-8") as handle:
-            self.assertEqual("1.4.0", json.load(handle)["version"])
+            version = json.load(handle)["version"]
+        self.assertGreaterEqual(tuple(int(part) for part in version.split(".")), (1, 4, 0))   # 1.5.0 has its own test (test_jobs_docs)
         with open(os.path.join(ROOT, "skills", "recortex", "references", "upgrading.md"), encoding="utf-8") as handle:
             notes = handle.read()
         self.assertIn("## Version 1.4.0: the manuscript page, and setup questions after an update", notes)
