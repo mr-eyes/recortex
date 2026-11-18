@@ -68,8 +68,11 @@ import storage  # noqa: E402
 import field_sheet  # noqa: E402
 import board_api  # noqa: E402
 import board_rules  # noqa: E402
+import usage  # noqa: E402
 
 EVENTS = ("session-start", "subagent-start", "prompt-submit", "pre-compact")
+STOP_EVENT = "subagent-stop"   # prints nothing; see subagent_stop()
+STOP_AGENTS = re.compile(r"recortex:(?:record-auditor|record-drafter|record-reviewer|record-planner|record-planner-session|ask)")
 # Why recortex is not working for a project folder, as the fixed words of the line at session start. The status line
 # (statusline.py) has its own short words for the same codes; a test holds the two sets of codes equal.
 STATUS_REASONS = {
@@ -205,13 +208,14 @@ def refresh_statusline():
         pass
 
 
-def write_status(state, reason="", repo="", synced=""):
+def write_status(state, reason="", repo="", synced="", observer=""):
     """The state of the record for this project folder, for the status line: {"v", "state", "reason", "repo",
-    "synced_at"} and nothing else, written through storage.write_file. A hook never fails over it."""
+    "synced_at", "observer"} and nothing else, written through storage.write_file. `observer` is "paused" while an
+    observer approved before 1.5.0 waits for the user to choose a level, else "". A hook never fails over it."""
     try:
         path = storage.status_path(recortex.project_root())
         storage.write_file(path, json.dumps({"v": 1, "state": state, "reason": reason, "repo": repo,
-                                             "synced_at": synced}))
+                                             "synced_at": synced, "observer": observer}))
     except (OSError, ValueError, storage.StorageError):
         pass
 
@@ -271,7 +275,8 @@ def run(event, data, budget):
         text = produce(event, data, budget, config, repo, hub)
         if event in ("session-start", "prompt-submit"):
             building = LAST.get("building") is True
-            write_status("building" if building else "on", "", repo, LAST.get("synced_at") or "")
+            write_status("building" if building else "on", "", repo, LAST.get("synced_at") or "",
+                         "paused" if observer_paused(repo, config) else "")
             LAST["state"] = "building" if building else "on"
         return text
     except Unavailable as error:
@@ -291,6 +296,46 @@ def run(event, data, budget):
     if event == "subagent-start":
         return json.dumps({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": line}})
     return ""
+
+
+def subagent_stop(data):
+    """SubagentStop: keep what one of the plugin's own subagents used, as four whole numbers and its model name, in
+    usage.db. Prints nothing and returns no context. Nothing is done unless the project is set up and trusted, `agent_type`
+    is one of the plugin's subagents (an anchored match, so another plugin's agent called "ask" is not), and the transcript
+    path is this project's own native subagent transcript (observer_sources.approved_path: the session's
+    subagents/agent-*.jsonl in this project's folder, owner and mode checked, no symlink). The transcript is not complete
+    when the hook fires, so usage.measure reads it again for at most 1.5 s until the subagent's last message is there; if it
+    never is, no row is written. Only integers and a model name of a fixed form leave the transcript."""
+    found = configured()
+    if found is None or not isinstance(data, dict):
+        return
+    agent, path, session = data.get("agent_type"), data.get("agent_transcript_path"), data.get("session_id")
+    if not isinstance(agent, str) or not STOP_AGENTS.fullmatch(agent):
+        return
+    import observer_sources
+    try:
+        approved = observer_sources.approved_path(path, recortex.project_root(), session)
+        measured = usage.measure(approved)
+    except (observer_sources.SourceError, OSError, ValueError):
+        return
+    if measured is not None:
+        usage.note_agent(found[1], agent, measured[1], measured[0])
+
+
+def note_context(event, text):
+    """Count what a printed hook payload added to the context, for the usage view (an estimate): the characters of `text`,
+    or of the context in the JSON a subagent start prints. Never raises, never slow (usage.py waits at most 50 ms)."""
+    repo = LAST.get("repo")
+    if not text or not recortex.valid_repo(repo):
+        return
+    context = text
+    if event == "subagent-start":
+        try:
+            context = json.loads(text)["hookSpecificOutput"]["additionalContext"]
+        except (ValueError, KeyError, TypeError):
+            context = text
+    if isinstance(context, str):
+        usage.note_injected(repo, event, len(context))
 
 
 DISCOVERY = ("recortex is installed, and this project has no record yet. Ask to set up the record (a few "
@@ -585,6 +630,16 @@ def produce(event, data, budget, config, repo, hub):
         return "\n".join(parts + [asked] if asked else parts)
     finally:
         db.close()
+
+
+def observer_paused(repo, config):
+    """True when this folder holds an observer approval from before 1.5.0 and the user has not yet chosen a level: the
+    observer does nothing until they do (observer_runtime.paused). Any doubt is False."""
+    try:
+        import observer_runtime as runtime
+        return bool(runtime.paused(repo, config))
+    except Exception:  # noqa: BLE001 - a hook never fails over a status flag
+        return False
 
 
 def observer_refreshes(repo, config):
@@ -917,6 +972,13 @@ def doctor():
             problems.append("%s %s: %s" % (label, path, problem))
         print("  %-30s %s  %s" % (label, path, ("owner %s, mode %s%s" % (owner, mode, ", " + note if note else ""))
                                   if exists else "missing"))
+    if observer_paused(repo, config):
+        import observer_runtime
+        print(observer_runtime.PAUSED)
+    reason = usage.problem(repo)
+    print("usage: %s" % ("usage.db can be written (the hooks' estimates and the plugin's subagents are counted there)"
+                         if not reason else "usage.db cannot be written (%s); the usage view will miss what the hooks and "
+                         "the plugin's subagents used" % reason))
     try:
         db = index.connect(repo, create=False, tighten=False)
     except storage.StorageError as error:
@@ -983,7 +1045,7 @@ def doctor():
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("event", nargs="?", choices=EVENTS)
+    parser.add_argument("event", nargs="?", choices=EVENTS + (STOP_EVENT,))
     parser.add_argument("--print", action="store_true", help="show every payload and its size")
     parser.add_argument("--doctor", action="store_true", help="say why the brief is or is not shown; changes nothing")
     args = parser.parse_args(argv)
@@ -993,6 +1055,12 @@ def main(argv=None):
         return print_all()
     if not args.event:
         parser.error("name an event or pass --print")
+    if args.event == STOP_EVENT:
+        try:
+            subagent_stop(read_input())
+        except Exception:  # noqa: BLE001 - a hook never fails a session, and this one prints nothing
+            pass
+        return 0
     try:
         budget = int(names.env("HOOK_TIMEOUT", "10"))
     except ValueError:
@@ -1011,6 +1079,11 @@ def main(argv=None):
                                                                          "additionalContext": text}}))
     elif text:
         print(text)
+    try:
+        sys.stdout.flush()
+        note_context(args.event, text)
+    except Exception:  # noqa: BLE001 - an estimate for the usage view; never a failed hook
+        pass
     return 0
 
 

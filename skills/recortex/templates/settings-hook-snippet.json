@@ -89,6 +89,18 @@
           }
         ]
       }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^recortex:(record-auditor|record-drafter|record-reviewer|record-planner|record-planner-session|ask)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$HOME/.claude/skills/recortex/scripts/run_hook.sh\" subagent-stop",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

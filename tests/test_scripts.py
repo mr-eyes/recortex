@@ -12697,7 +12697,7 @@ class PackagingTests(unittest.TestCase):
         self.assertNotIn("forceRemoveDeletedPlugins", market)
         hooks = self.read_json("hooks", "hooks.json")["hooks"]
         commands = [h["command"] for entries in hooks.values() for entry in entries for h in entry["hooks"]]
-        self.assertEqual(10, len(commands))  # four brief events, and the observer on six
+        self.assertEqual(11, len(commands))  # four brief events, the observer on six, and the usage hook at a subagent's stop
         for command in commands:
             relative = re.search(r"^\"\$\{CLAUDE_PLUGIN_ROOT\}\"/(skills/recortex/scripts/[a-z_]+\.sh)( [a-z-]+)?$",
                                  command).group(1)
@@ -12813,7 +12813,7 @@ class PackagingTests(unittest.TestCase):
         hooks = self.read_json("hooks", "hooks.json")["hooks"]
         timeouts = {event: entries[0]["hooks"][0]["timeout"] for event, entries in hooks.items()}
         self.assertEqual({"SessionStart": 20, "SubagentStart": 10, "UserPromptSubmit": 5, "PreCompact": 10,
-                          "PreToolUse": 5, "Stop": 5}, timeouts)
+                          "PreToolUse": 5, "Stop": 5, "SubagentStop": 5}, timeouts)
         observer = recortex.read_text(os.path.join(SCRIPTS, "run_observer_hook.sh"))
         self.assertIn('timeout 4 python3 "$here/observer.py"', observer)
         # Without this folder's entry in this machine's observer approvals, no Python starts (about 3 ms a hook).
@@ -12821,6 +12821,7 @@ class PackagingTests(unittest.TestCase):
         runner = recortex.read_text(os.path.join(SCRIPTS, "run_hook.sh"))
         self.assertIn("session-start) hard=$((limit + 3))", runner)  # limit is at most 15, so at most 18
         self.assertIn("prompt-submit) hard=4", runner)
+        self.assertIn("subagent-stop) hard=4", runner)  # the hook's timeout is 5
         self.assertIn("*) hard=8", runner)
         self.assertIn("[ \"$limit\" -le 15 ] || limit=15", runner)
         sys.path.insert(0, SCRIPTS)
