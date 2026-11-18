@@ -47,8 +47,8 @@ def files(pattern):
     return ["discover", "-s", "tests", "-p", pattern]
 
 
-# Each shard is (name, commands). The lines of CONTRIBUTING.md, in its order, are the commands; about 2,560 seconds
-# in all, so six shards of about 430 seconds each. Notes: the command's measured seconds.
+# Each shard is (name, commands). The lines of CONTRIBUTING.md, in its order, are the commands; about 2,850 seconds
+# in all, so seven shards of 340 to 470 seconds each. Notes: the command's measured seconds, idle.
 SHARDS = [
     ("scripts-1", [
         classes("LintTests", "HelperTests", "WorkingFolderTests", "LabelTests", "CreateIssuesTests", "PostVerifiedTests",
@@ -81,11 +81,13 @@ SHARDS = [
         files("test_manuscript_page.py"),                                                             # 150
         files("test_setup_questions.py"),                                                             # 90
     ]),
-    ("jobs", [
-        files("test_jobs_[a-j]*.py"),                                                                 # 165
+    ("jobs-1", [
+        files("test_jobs_[a-j]*.py"),                                                                 # 195
         files("test_jobs_[l]*.py"),                                                                   # 205
+    ]),
+    ("jobs-2", [
         files("test_jobs_[km-r]*.py"),                                                                # 145
-        files("test_jobs_[s-z]*.py"),                                                                 # 125
+        files("test_jobs_[s-z]*.py"),                                                                 # 194
     ]),
 ]
 

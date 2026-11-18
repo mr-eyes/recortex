@@ -178,9 +178,9 @@ class ShardRunTests(unittest.TestCase):
         plan = json.loads(done.stdout)["shards"]
         self.assertEqual([(name, commands) for name, commands in ci_shards.SHARDS],
                          [(shard["name"], shard["commands"]) for shard in plan])
-        one = subprocess.run([sys.executable, os.path.join(ROOT, "tests", "ci_shards.py"), "plan", "jobs"], cwd=ROOT,
+        one = subprocess.run([sys.executable, os.path.join(ROOT, "tests", "ci_shards.py"), "plan", "jobs-1"], cwd=ROOT,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
-        self.assertEqual(["jobs"], [shard["name"] for shard in json.loads(one.stdout)["shards"]])
+        self.assertEqual(["jobs-1"], [shard["name"] for shard in json.loads(one.stdout)["shards"]])
         nothing = subprocess.run([sys.executable, os.path.join(ROOT, "tests", "ci_shards.py"), "plan", "nothing"],
                                  cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
         self.assertEqual(2, nothing.returncode)
@@ -215,9 +215,10 @@ class ShardListTests(unittest.TestCase):
             self.assertRegex(name, r"^[a-z][a-z0-9-]*$")
             self.assertGreaterEqual(len(commands), 1, name)
 
-    def test_the_jobs_shard_holds_the_four_lines_of_the_sixteenth_command(self):
-        jobs = dict(ci_shards.SHARDS)["jobs"]
-        self.assertEqual([ci_shards.files("test_jobs_%s*.py" % part) for part in ("[a-j]", "[l]", "[km-r]", "[s-z]")], jobs)
+    def test_the_two_jobs_shards_hold_the_four_lines_of_the_sixteenth_command(self):
+        shards = dict(ci_shards.SHARDS)
+        self.assertEqual([ci_shards.files("test_jobs_%s*.py" % part) for part in ("[a-j]", "[l]")], shards["jobs-1"])
+        self.assertEqual([ci_shards.files("test_jobs_%s*.py" % part) for part in ("[km-r]", "[s-z]")], shards["jobs-2"])
 
 
 class WorkflowTests(unittest.TestCase):
@@ -278,13 +279,13 @@ class ContributingCiTests(unittest.TestCase):
         text = read("CONTRIBUTING.md")
         paragraph = text.split("[CI](.github/workflows/tests.yml)", 1)[1].split("\n\n", 1)[0]
         for needed in ("tests/ci_shards.py", "python tests/ci_shards.py run", "python tests/ci_shards.py check",
-                       "tests/test_jobs_ci.py", "45 minutes", "six shards", "the sixteen commands"):
+                       "tests/test_jobs_ci.py", "45 minutes", "seven shards", "the sixteen commands"):
             self.assertIn(needed, paragraph, needed)
         for name, _ in ci_shards.SHARDS:
             self.assertIn("`%s`" % name, paragraph, name)
         self.assertIn("a new `test_*.py` file or a new class in `tests/test_scripts.py` goes into a command of a shard",
                       paragraph)
-        self.assertEqual(6, len(ci_shards.SHARDS))   # "six shards" above
+        self.assertEqual(7, len(ci_shards.SHARDS))   # "seven shards" above
         self.assertNotIn("which CI uses", text)
 
 
