@@ -55,6 +55,20 @@ The author's own words are never overwritten. `start` compares the live body wit
 
 The user reads what was written, and who wrote each paragraph, on the mind page: "Read the manuscript" shows the current text with the changes since an earlier version ([mind.md](mind.md)); to open it, run `mind.py --versions --open`.
 
+## Drafts that wait
+
+With the observer on at the level Assistant or Everything, a writing mode of review or autonomous and a stronger model chosen (the setup question `paper-proposals`), the observer drafts a change of the text in the background when something notable changes for a part: a claim became backed, or a memory the text rests on was corrected. It never writes the text. A draft that the reviewer and `write.py check` accepted only waits for the author's answer, in every mode. It proposes a topic at most once a day, at most 2 changes a day, only after the part has been unchanged for 30 minutes, and never on a topic you started writing in the last two hours.
+
+The session start and the next prompts carry one fixed line when a draft waits. Then:
+
+1. `observer.py drafts` lists the drafts that wait, each with its question and its options.
+2. `observer.py drafts --show ID` prints what would change, by paragraph, and why. Show it.
+3. Ask one multiple-choice question per draft, from the question the list gives, exactly as listed, with the options "Approve", "Not now" and "Drop it".
+4. On "Approve", run `observer.py drafts apply ID` right after the answer, alone in its command, with no second question and no dry run in between. The user's "Approve" is the approval: the hook records a one-time grant of 10 minutes from the recorded answer to that question, and without it the command is refused (`draft_unanswered`). With it, `write.py apply` does what it always does (a fresh sync, the plan's rules again, the check that the live body is still the base, the backup, the version, the `text` comment in the chat form, quoting "Approve").
+5. On "Not now", run `observer.py drafts later ID`: it asks again after 7 days. On "Drop it", run `observer.py drafts drop ID`: the part is not drafted again until what it rests on changes.
+
+If `apply` says that the text or what it rests on changed while the draft waited, nothing was written, the draft is stale and the part is considered again.
+
 ## Your own paper
 
 If the author keeps a manuscript of their own (LaTeX, Markdown, Word), recortex never changes it on its own, in any mode. It looks for no file: it learns the place when the author names it (`own_paper.py where --set PATH --yes`; "No" is `--set no`). A path inside the project goes into the project file as `"own_manuscript": {"path": "paper/paper.tex", "brought": {}}`, relative, with no `..`, naming a plain file that is not a symlink; a path outside the project is kept on this machine only (`private/own-paper.json`) and the project file holds `{"outside": true, "brought": {}}`, so a project file can never point the plugin at a file outside the project. `brought` remembers, per topic and heading, the SHA-256 of the record's section text as the author last took it.
