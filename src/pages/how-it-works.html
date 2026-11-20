@@ -1,6 +1,6 @@
 <section>
 <h1>How it works</h1>
-<p class="lede">Three parts. The observer sees the session, the record keeps what matters, and the cortex works from the record. Record + cortex: recortex.</p>
+<p class="lede">Say what happened, keep working, and ask what to do next. With the observer enabled, recortex follows that conversation. The observer captures decisions and results, the record keeps their evidence, and Claude can use it while you work.</p>
 <ol class="path" aria-label="On this page">
 <li><a href="#the-observer">The observer</a></li>
 <li><a href="#the-record">The record</a></li>
@@ -23,15 +23,16 @@
 <h3 id="levels">You choose its level</h3>
 <div class="prose"><p>One setting, for this machine and this project. A file in the project cannot set it or raise it. Nothing runs until you choose.</p></div>
 <div class="tbox"><table class="plain">
-<tr><th>Level</th><th>Does on its own</th><th>Asks you first</th></tr>
+<tr><th>Level</th><th>Does on its own in automatic mode</th><th>Asks you first</th></tr>
 <tr><td>Everything <span class="chip s-stands">Recommended</span></td><td>Notes, status, to-do items and checkmarks, opening and closing tasks, the board</td><td>Changes to a paper's text; notes it is unsure of</td></tr>
 <tr><td>Assistant</td><td>Notes, status, checkmarks, and items on a to-do list that exists</td><td>Opening or closing a task; changes to a paper's text; notes it is unsure of</td></tr>
-<tr><td>Notes only</td><td>Notes and status</td><td>Notes it is unsure of</td></tr>
+<tr><td>Notes only</td><td>Posts reviewed notes and updates status</td><td>Notes it is unsure of</td></tr>
 </table></div>
-<p class="fine">There is also a shadow mode: the observer reviews and keeps everything on your machine, and posts nothing. A wrong checkmark or task is one command to undo: <code>observer.py log</code> lists what it did, and <code>observer.py undo</code> reverses a task or a rendered list.</p>
+<p class="fine" id="shadow">In shadow mode the observer queues reviewed notes on your machine without posting to GitHub. It sends eligible conversation excerpts and selected parts of the trusted project record to Claude for sorting and review. Switching to automatic mode can publish queued notes. Using <code>/recortex:record</code> can post a note to GitHub even in shadow mode.</p>
+<p class="fine">For an incorrect task or rendered list, <a href="/faq/#wrong">undo the action from the observer's log</a>.</p>
 
 <div class="parthead"><h2 id="the-record">The record</h2><span class="chip s-stands">the "re"</span></div>
-<div class="prose"><p>The record is your project's GitHub issues. It is the one place the project's history and its current write-up live. Everything on your machine is a copy that can be rebuilt.</p></div>
+<div class="prose"><p>Your project's GitHub issues hold its published notes and current write-up. recortex can rebuild its local index from those issues. Pending notes and your observer settings live on your machine.</p></div>
 <ul class="rules">
 <li><b>One issue per topic</b><span>Its body is the current text for that part: release notes, documentation, a report.</span></li>
 <li><b>Dated notes under it</b><span>Each result with its evidence, each decision with its reason in the decider's words, each dead end with what it led to.</span></li>
@@ -50,12 +51,12 @@
 <p class="fine">A posted note is never rewritten; a correction is a new note. Every post is read back from GitHub and compared with the draft. No script deletes an issue, a comment or a label.</p>
 
 <div class="parthead"><h2 id="the-cortex">The cortex</h2><span class="chip s-stands">the brain</span></div>
-<div class="prose"><p>The cortex is what works from the record, in the session you are in and in the next one. None of it is typed by you.</p></div>
+<div class="prose"><p>When you send an ordinary request, the observer can bring relevant notes from the trusted local copy of the project record into context before Claude answers. If you revisit an approach that failed earlier in the conversation, Claude can use the note to suggest a test or ask whether the cause still applies.</p></div>
 <ul class="rules">
 <li><b>Recall</b><span>The session reads a thread before it works on it, so it can say what was decided and what failed there. Ask directly with <code>/recortex:ask</code>; an answer starts with "From the record:" and names each note it used.</span></li>
-<li><b>The brief</b><span>A few lines that open every session and every helper agent: the focus, the open tasks and the next step, what waits for a yes.</span></li>
 <li><b>The to-do list</b><span>Tasks with checkmarks, in the brief, on GitHub, on the page and with <code>/recortex:todo</code>.</span></li>
 <li><b>The status and the page</b><span>Where the project stands in two short paragraphs, kept current. And one private page on your machine, with views from "Where are we?" to "What did recortex use?".</span></li>
+<li><b>When you hand off</b><span>A new session gets the current focus, open tasks and next step. A helper agent gets a shorter brief with the repository, the hub and the issues in play.</span></li>
 </ul>
 <p class="briefline">Tasks: 1 open, 2 of 3 steps done; next: step 3 of #14.</p>
 <p class="fine">A line of a brief. Text from GitHub is shown to a session only from a repository you trust, and only as data, never as instructions. The record is the authority: a checkmark is computed from notes, and a box ticked by hand on GitHub is not believed.</p>
@@ -79,10 +80,11 @@
 <p class="fine">The session asks each as a multiple-choice question. Only your recorded answer lets the command through, once and for ten minutes.</p>
 
 <h3 id="holds">Holds</h3>
+<p>Ask Claude for the installed path to <code>skills/recortex/scripts/observer.py</code>. Substitute it for <code>/path/to/observer.py</code> below. Run these Python commands from your project folder in a separate terminal outside Claude Code.</p>
 <ul class="notes">
-<li>Say <code>/recortex hold git-push</code>, <code>/recortex hold git-tag</code> or <code>/recortex hold gh-release</code>. The hook then refuses that command in this repository.</li>
-<li>Say "off the record" and the observer posts nothing from that session.</li>
-<li>Only you lift a hold, in your own terminal, with <code>observer.py release</code>. What it kept back is then offered again, and a held note goes to the list that waits for your yes.</li>
+<li>To hold a command in this repository, type <code>/recortex hold git-push</code>, <code>/recortex hold git-tag</code> or <code>/recortex hold gh-release</code> in Claude Code.</li>
+<li>To hold this session's unpublished notes, send <code>off the record</code> as a message on its own. The hook reads the saved transcript, which can lag behind. Before sharing more, run <code>python3 "/path/to/observer.py" holds</code> and check for an active <code>publish</code> hold for this session. Earlier posts stay on GitHub.</li>
+<li>To lift a hold, copy its <code>id</code> from that listing. Run <code>python3 "/path/to/observer.py" release HOLD_ID</code> with that ID and type <code>release</code> to confirm. After you release a publication hold, the observer can review the messages it held back.</li>
 </ul>
 <p class="fine">Holds guard against mistakes. They are not a security boundary.</p>
 
@@ -93,5 +95,5 @@
 <tr><td>Notes</td><td>Sonnet</td><td>Drafts each note and reviews it with a fresh call.</td><td>70 calls, 700,000 tokens</td></tr>
 <tr><td>Paper text</td><td>Opus, off until you turn it on</td><td>Drafts a change to a paper's text, for you to accept. Only in a project with a paper.</td><td>8 calls, 320,000 tokens</td></tr>
 </table></div>
-<p class="fine">The caps are per project, in a rolling 24 hours, and you can lower each one with <code>observer.py limits</code>. Beyond them, at most 25 automatic notes, 3 opened tasks, 2 paper proposals and 4 status summaries a day. A typical day is about 36 calls. They run under your own Claude sign-in and count against your usage. <a href="/trust-and-privacy/#cost">What that means</a></p>
+<p class="fine">Caps cover 24 rolling hours. To lower the sorting cap to 40, use the <a href="#holds">installed script path</a> in <code>python3 "/path/to/observer.py" limits --sort 40</code>. Daily project limits include 25 automatic notes, 3 opened tasks, 2 paper proposals and 4 status summaries. A typical day is about 36 calls. Calls count against your Claude allowance or use the API key or provider you configured. <a href="/trust-and-privacy/#cost">What that means</a></p>
 </section>

@@ -6,8 +6,8 @@
 <details id="hooks"><summary>Does it work without the observer?</summary>
 <p>Yes. The brief at the start of each session, the commands and manual recording all work without it. The observer is optional, and it does nothing until you choose a level for a project folder on your machine.</p></details>
 
-<details id="always-on"><summary>Is something always running?</summary>
-<p>No background program stays running. Hooks collect what was said, and a short worker starts at the edges of a turn, at a stop and before compaction, does its calls and ends.</p></details>
+<details id="always-on"><summary>Does recortex follow the work throughout a conversation?</summary>
+<p>Yes. Once you enable the observer for a project, it follows the conversation as you work. It can pick up a choice or a reported failure, and Claude can use that evidence when the topic comes up. Hooks trigger short bursts of work during the session. Between them the worker is idle or exits.</p></details>
 
 <details id="public"><summary>Does it need a public repository?</summary>
 <p>No. The record can live in this repository's issues, in another one, or in a new private one. Everything in it is as visible as that repository is, so a private repository keeps it private.</p></details>
@@ -15,23 +15,25 @@
 <details id="cost"><summary>What does it cost?</summary>
 <p>Tokens and calls, never a price. Under a Claude subscription the observer's calls count against your usage limits, at most 80 sorting, 70 note-taking and 8 paper-text calls a day for a project. <code>/recortex:usage</code> shows what was used. <a href="/trust-and-privacy/#cost">More</a></p></details>
 
-<details id="stop"><summary>Can I stop it writing?</summary>
-<p>Yes, in several ways. Choose Notes only, or Later. Say "off the record" to keep one session out. Use <code>/recortex hold git-push</code> to stop a push. <code>observer.py pause publication</code> stops posting, and <code>observer.py disable</code> turns it off for the folder.</p></details>
+<details id="stop"><summary>How do I stop the observer from posting to GitHub?</summary>
+<p>For one session, send <code>off the record</code> as a separate message. Before sharing more, <a href="/how-it-works/#holds">check that the session's publication hold is active</a>. Earlier posts stay on GitHub.</p>
+<p>For the project, ask Claude for the full path to the installed <code>skills/recortex/scripts/observer.py</code>. From your project folder in a separate terminal outside Claude Code, substitute that path in <code>python3 "/path/to/observer.py" pause publication</code>. This pauses automatic posts from this machine. Capture and review can continue. To turn off the observer for this folder, run <code>python3 "/path/to/observer.py" disable</code>. If a hold applies, type <code>disable</code> to confirm.</p>
+<p>At setup, choose “Later” to leave the observer off. To try it without automatic posting, see <a href="/getting-started/#level">how to enable shadow mode</a> and <a href="/how-it-works/#shadow">what happens to queued notes</a>.</p></details>
 
 <details id="code"><summary>Does it read my code and files?</summary>
-<p>The observer reads only the conversation: what you typed, what Claude told you, the plans you approved and the options you chose. It never reads tool output, file contents, web pages or command results.</p></details>
+<p>The observer takes its evidence from what you typed, what Claude told you, the plans you approved and the options you chose. It skips tool output, file contents, web pages and command results. Its model calls can also include selected parts of the trusted project record.</p></details>
 
 <details id="wrong"><summary>What if it records something wrong?</summary>
-<p>A posted note is never rewritten. You post a correction, and the correction replaces the meaning of the earlier note. <code>observer.py log</code> lists what the observer did, and <code>observer.py undo</code> reverses a task or a rendered list.</p></details>
+<p>For a posted note, post a correction that points back to it. For a task the observer opened or closed, or a list it rendered, ask Claude for the installed path to <code>skills/recortex/scripts/observer.py</code>. From your project folder in a separate terminal outside Claude Code, run <code>python3 "/path/to/observer.py" log</code> with that path. Find the number after <code>act</code> on the line you want. Run <code>python3 "/path/to/observer.py" undo ACT</code> with that number and type <code>undo</code> to confirm.</p></details>
 
 <details id="hand"><summary>What if I edit an issue by hand?</summary>
 <p>You can. A note that anyone but an allowed account edited is not told to a session. A checkbox you tick on GitHub is not believed; the session asks whether to record it or put it back. A topic body is replaced only after the script checks that it is still the one it started from.</p></details>
 
 <details id="why-github"><summary>Why GitHub issues?</summary>
-<p>Your team already reads and writes there, with the access you already manage. The record needs no server, and it is readable with or without the plugin. Everything on your machine is a copy that can be rebuilt.</p></details>
+<p>Your team can read the published record in a browser using the access you already manage. recortex can rebuild its local index from those issues. Unpublished notes and your settings live on your machine.</p></details>
 
 <details id="not-software"><summary>Is it only for software?</summary>
-<p>Software comes first, but a report, a dataset, a prototype, a proposal, documentation or a paper are kept the same way. <a href="/reports-and-papers/">Reports and papers</a></p></details>
+<p>A research group can track why an observation was excluded, a software team can check why a rollout was held, and a designer can recover the reason for a prototype choice. Each uses the same project record. <a href="/reports-and-papers/">Reports and papers</a></p></details>
 
 <details id="team"><summary>Does it work for a team?</summary>
 <p>Yes. You name who can make decisions, and each person sets their own trust, writing mode and observer level on their own machine. <a href="/trust-and-privacy/#team">Who decides</a></p></details>

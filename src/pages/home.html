@@ -1,66 +1,94 @@
-<section class="hero">
-<p class="eyebrow">A plugin for Claude Code</p>
-<h1><span>See.</span> <span>Record.</span> <span>Recall.</span> <span class="l4">Act.</span></h1>
-<p class="sub">recortex sees what matters in your Claude Code sessions, records it in your project's GitHub issues with its evidence, recalls it the moment it's needed, and acts on it: answers with sources, a warning before a known dead end, a hold until your yes, and a brief for every new session.</p>
-<p class="nameline">recortex is <b>record + cortex</b>: a record of your project, and a brain that works from it.</p>
-<p class="acts"><a class="btn primary" href="#install">Install in two commands</a><a class="btn" href="/how-it-works/">How it works</a></p>
-<p class="fine center control">You choose how much it does on its own, and it does nothing until you choose.</p>
+<section class="hero" aria-labelledby="home-title">
+<div class="hero-intro">
+<div>
+<p class="eyebrow">Your project’s heartbeat in Claude Code</p>
+<h1 id="home-title"><span>See.</span> <span>Record.</span> <span>Recall.</span> <span class="l4">Act.</span></h1>
+<p class="sub">Once enabled, recortex follows the work as you and Claude talk. It keeps track of what you tried and why you changed course. When a request touches an earlier decision or a failed attempt, Claude can bring you the evidence before you act.</p>
+<p class="acts"><a class="btn primary" href="#install">Install in two commands</a><a class="btn" href="/getting-started/#first">Try it in a conversation</a></p>
+</div>
+<div>
+<p class="platform-note">Coming soon to Codex, Cursor, GitHub&nbsp;Copilot&nbsp;CLI, and Antigravity&nbsp;CLI</p>
+<div class="conversation">
+<h2>Retrying failed payments</h2>
+<div class="conversation-earlier">
+<p><b>You, earlier in this chat</b> “I restarted the worker in staging. The second retry ran first. Let’s keep the existing retry path.”</p>
+<p><b>Claude</b> “Understood. Your test showed that a restart changed the retry order.”</p>
+</div>
+<p class="bubble me"><span class="lab">You, a few turns later</span>Move failed charges onto a retry queue.</p>
+<p class="bubble"><span class="lab">Claude might reply</span>From the record: the last worker restart reversed the retry order in staging. Has the queue changed since then? We can rerun that test before switching.</p>
+<details class="source-note"><summary>Read the cited failure note</summary>
+<p class="issue">octo-org/billing-service &middot; Staging test</p>
+<p>The tester reported that the second retry ran first after a restart. The team kept the existing retry path.</p>
+</details>
+</div>
+</div>
+</div>
+</section>
 
-<div class="flow" role="group" aria-label="The three parts: the observer sees the session, the record keeps what matters on GitHub, and the cortex recalls it and acts">
+<section aria-labelledby="how-recorded">
+<h2 id="how-recorded">How recortex helps as you work</h2>
+<div class="flow" role="group" aria-label="How recortex helps with the retry decision">
 <div class="step">
-<span class="part">The observer <span class="body">&middot; the eyes</span></span>
-<h3>It sees the session</h3>
-<div class="bubble me"><span class="lab">You</span>Retry failed charges with backoff.</div>
-<div class="bubble"><span class="lab">Claude</span>Done. In staging, failed charges fell from 2.1% to 0.4%.</div>
-<p class="quiet">Nobody said "record this". The observer noticed a result and sorted it. You set how much it may post on its own.</p>
+<span class="part">The observer</span>
+<h3>Notices what you tried</h3>
+<p>You report the staging failure and Claude acknowledges it. The observer can record what you found while you keep working.</p>
 </div>
 <div class="arrow" aria-hidden="true"></div>
 <p class="conn ph">then</p>
 <div class="step">
-<span class="part">The record <span class="body">&middot; the "re" in recortex</span></span>
-<h3>It records it</h3>
-<p class="issue">GitHub issues of octo-org/billing-service</p>
-<ul class="mini">
-<li><span class="mk k-result" aria-hidden="true"></span><span>Found: retries with backoff cut failed charges from 2.1% to 0.4% in staging<small>with the numbers and where they came from</small></span></li>
-<li><span class="mk k-failure" aria-hidden="true"></span><span>Went wrong: a queue-based retry lost its order on restart<small>so no one tries it again</small></span></li>
-<li><span class="mk k-decision" aria-hidden="true"></span><span>Decided: an idempotency key on every charge<small>with the reason, in the decider's words</small></span></li>
-</ul>
+<span class="part">The record</span>
+<h3>Keeps the reason with the decision</h3>
+<p>recortex records the restart test and why you kept the existing retry path in the same GitHub issue. You and your teammates can check the original note.</p>
 </div>
 <div class="arrow" aria-hidden="true"></div>
 <p class="conn ph">then</p>
 <div class="step">
-<span class="part">The cortex <span class="body">&middot; the brain</span></span>
-<h3>It recalls and acts</h3>
-<p class="briefline">Tasks: 1 open, 2 of 3 steps done; next: step 3 of #14.</p>
-<ul class="todo">
-<li><span class="box done" aria-label="done"></span><span>Retry with backoff</span></li>
-<li><span class="box done" aria-label="done"></span><span>An idempotency key on every charge</span></li>
-<li><span class="box" aria-label="open"></span><span>Alert when a retry gives up</span></li>
-</ul>
-<p class="relnote">Release notes, Fixed: "Failed payments are retried safely."</p>
+<span class="part">The cortex</span>
+<h3>Brings it up when it matters</h3>
+<p>Once the note is in the project record, proposing the queue again can bring that evidence into the conversation. You decide whether to rerun the test.</p>
 </div>
 </div>
-<div class="again"><b>Now, in the same session.</b><span>You ask Claude to move the retries onto a queue. Before it starts, it tells you that a queue-based retry already lost its order on restart, and cites the note. Tomorrow's session opens with where things stand and what is next.</span></div>
+<p class="fine"><a href="/how-it-works/#the-record">How the project record works</a></p>
 </section>
 
 <h2 class="center" id="acts">What it does with the record</h2>
-<p class="lede center">The record is used while you work, not only in the next session.</p>
+<p class="lede center">Ask what happened, trace a decision, or pick up where you left off.</p>
 <ul class="does">
 <li><b><span class="mk k-question" aria-hidden="true"></span>Answers with sources</b><span class="t">Ask why something was decided or what was tried. The answer starts with "From the record:" and names each note it used.</span><a href="/how-it-works/#the-cortex">The cortex</a></li>
 <li><b><span class="mk k-failure" aria-hidden="true"></span>Warns before a dead end</b><span class="t">The session reads the thread before it works on it, and says what already failed there, with the reason.</span><a href="/how-it-works/#the-record">The record</a></li>
 <li><b><span class="mk k-decision" aria-hidden="true"></span>Holds until your yes</b><span class="t">A hold stops a push or a tag until you lift it. A note the observer is unsure of waits for your answer.</span><a href="/how-it-works/#yes">What waits for your yes</a></li>
-<li><b><span class="mk k-checkpoint" aria-hidden="true"></span>Briefs every new session</b><span class="t">A short brief opens each session and each helper agent: the focus, the open tasks, the next step.</span><a href="/how-it-works/#the-cortex">The cortex</a></li>
+<li><b><span class="mk k-checkpoint" aria-hidden="true"></span>Keeps track of progress</b><span class="t">When you approve a plan or Claude reports a step complete, the observer can update the project’s checklist at the level you chose.</span><a href="/how-it-works/#the-cortex">The cortex</a></li>
 </ul>
 
 <h2 class="center" id="differs">How it differs from a memory tool</h2>
-<p class="lede center">A memory tool helps an assistant remember. recortex keeps a record of the project for the people on it, and puts that record to work.</p>
-<div class="versus" role="table" aria-label="A typical memory tool compared with recortex">
-<div class="h q" role="columnheader"></div><div class="h a" role="columnheader">A typical memory tool</div><div class="h b" role="columnheader">recortex</div>
-<div class="q" role="rowheader">Where it lives</div><div class="a" role="cell">A private store that only the assistant reads</div><div class="b" role="cell">Your project's GitHub issues, which your team can read with or without the plugin</div>
-<div class="q" role="rowheader">What it keeps</div><div class="a" role="cell">Notes and preferences</div><div class="b" role="cell">Results with their evidence, decisions with their reasons, and dead ends, linked to each other</div>
-<div class="q" role="rowheader">What comes out</div><div class="a" role="cell">Context for the next chat</div><div class="b" role="cell">That, and a to-do list that checks itself off, a status you can ask for, a dashboard, and release notes written from the record</div>
-<div class="q" role="rowheader">Who it is for</div><div class="a" role="cell">One person and their assistant</div><div class="b" role="cell">The whole team: you name who can make decisions, and an optional task board follows the record</div>
-</div>
+<p class="lede center">recortex gives the people doing the work a shared record. Claude can use that same record to answer a question or flag a relevant failure while a decision is still open.</p>
+<table class="versus" aria-labelledby="differs">
+<thead>
+<tr><th scope="col">Feature</th><th scope="col">A typical memory tool</th><th scope="col">recortex</th></tr>
+</thead>
+<tbody>
+<tr>
+<th scope="row">Where it lives</th>
+<td>A private store that only the assistant reads</td>
+<td>Your project's GitHub issues, which your team can read with or without the plugin</td>
+</tr>
+<tr>
+<th scope="row">What it keeps</th>
+<td>Notes and preferences</td>
+<td>Results with their evidence, decisions with their reasons, and dead ends, linked to each other</td>
+</tr>
+<tr>
+<th scope="row">What comes out</th>
+<td>Context for a conversation</td>
+<td>A cited answer while you decide, a project checklist that follows progress, and a dashboard where you can inspect the sources</td>
+</tr>
+<tr>
+<th scope="row">Who it is for</th>
+<td>One person and their assistant</td>
+<td>The whole team can follow the record. You name who can make decisions and choose whether to keep a task board.</td>
+</tr>
+</tbody>
+</table>
 
 <h2 id="install">Start in two commands</h2>
 <div class="install">
@@ -75,7 +103,7 @@ claude plugin install recortex@recortex
 <li><span class="who">1</span><span>Open Claude Code in your project and say <span class="sayit">Set up the record for this project.</span></span></li>
 <li><span class="who">2</span><span>Answer a few multiple-choice questions. Nothing is written before you confirm.</span></li>
 <li><span class="who">3</span><span>Choose how much the observer does on its own: Everything, Assistant or Notes only. It does not run until you choose.</span></li>
-<li><span class="who">4</span><span>Work as usual. The record fills in as you go.</span></li>
+<li><span class="who">4</span><span>When you make your first real decision, use <code>/recortex:record</code> to post it on GitHub, even in shadow mode. This gives the observer a topic for later notes.</span></li>
 </ol>
 </div>
 <p class="fine"><a href="/getting-started/">The full steps</a></p>
@@ -92,8 +120,8 @@ claude plugin install recortex@recortex
 </ul>
 <p class="fine"><a href="/commands/">Each command, with an example</a></p>
 
-<h2 id="page">The cortex, on one page</h2>
-<p class="lede">recortex builds a private page on your machine from the record. Three of its views:</p>
+<h2 id="page">Open your project dashboard</h2>
+<p class="lede">In Claude Code, say <span class="sayit">show me the mind of this project</span>. A private page on your machine lets you follow decisions back to their sources, see open work, and check token usage. <a href="/getting-started/#first">Find your first decision</a></p>
 <div class="window">
 <div class="windowbar"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="grow">billing-service</span><span class="illnote">An illustration, with invented numbers</span></div>
 <div class="illus">
@@ -103,8 +131,9 @@ claude plugin install recortex@recortex
 <ul>
 <li class="on">Where are we?</li>
 <li>How did we get here?</li>
-<li>What is there to do?</li>
+<li>What is settled?</li>
 <li>What is still open?</li>
+<li>What is there to do?</li>
 <li>What did recortex use?</li>
 </ul>
 </div>
@@ -134,13 +163,12 @@ claude plugin install recortex@recortex
 </div>
 
 <h2 id="for">Who it is for</h2>
-<p class="forline">Software teams and solo developers who build with Claude Code and already live in GitHub. If your project also has a report or a paper, its text is kept the same way and only ever proposed to you.</p>
+<p class="forline">For people who work in Claude Code and keep a project on GitHub, on their own or with a team. A developer can find the restart test that ruled out a retry queue. A field researcher can find why the team excluded observations with missing site labels and who made that call.</p>
 
 <h2 id="doors">Where are you starting from?</h2>
 <ul class="doors">
-<li><a class="door k-result" href="/getting-started/"><span class="dt">A new project</span><span class="dd">Set up a record, pick the observer's level, and work.</span></a></li>
+<li><a class="door k-result" href="/getting-started/#first"><span class="dt">A new project</span><span class="dd">Use <code>/recortex:record</code> on your first real decision to give the observer a topic.</span></a></li>
 <li><a class="door k-idea" href="/getting-started/#existing"><span class="dt">A codebase with history</span><span class="dd">Build the record from the commits, issues and pull requests you have.</span></a></li>
 <li><a class="door k-question" href="/trust-and-privacy/#team"><span class="dt">A team</span><span class="dd">Who can make decisions, and whose notes a session may read.</span></a></li>
 <li><a class="door k-decision" href="/reports-and-papers/"><span class="dt">A report or a paper</span><span class="dd">A plan, text proposed to you, and every version kept.</span></a></li>
 </ul>
-</section>

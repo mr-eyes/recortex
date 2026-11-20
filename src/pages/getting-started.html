@@ -1,6 +1,6 @@
 <section>
 <h1>Getting started</h1>
-<p class="lede">Two commands to install, a few questions to set up, and one choice to make about the observer. Then you work as usual.</p>
+<p class="lede">Make a project decision with Claude, then use the record to check what you chose and why.</p>
 <ol class="path" aria-label="On this page">
 <li><a href="#install">Install</a></li>
 <li><a href="#setup">Set up</a></li>
@@ -10,12 +10,12 @@
 </ol>
 
 <h2 id="install">Install</h2>
-<div class="prose"><p>You need Claude Code, the GitHub CLI <code>gh</code> signed in to github.com, Python 3.8 or newer and bash. The plugin uses only the Python standard library, so nothing else is installed.</p></div>
+<div class="prose"><p>You need Claude Code, the GitHub CLI <code>gh</code> signed in to github.com, Python 3.8 or newer and bash. The plugin uses only the Python standard library.</p></div>
 {{cmd
 claude plugin marketplace add {{repo}}
 claude plugin install recortex@recortex
 }}
-<p class="fine">Start a new Claude Code session afterward. Check with <code>claude plugin list</code>: it shows <code>recortex@recortex</code>. If you installed an earlier version, see <a href="/upgrading/">Upgrading</a>.</p>
+<p class="fine">Start a new Claude Code session. Check that <code>claude plugin list</code> shows <code>recortex@recortex</code>. If you installed an earlier version, see <a href="/upgrading/">Upgrading</a>.</p>
 
 <h2 id="setup">Set up the record</h2>
 <div class="prose"><p>Open Claude Code in your project and say:</p></div>
@@ -23,33 +23,37 @@ claude plugin install recortex@recortex
 Set up the record for this project.
 }}
 <div class="prose">
-<p>Claude checks first that <code>gh</code> runs and is signed in, and that Python is new enough. If something is missing it prints one line that says what to run, and stops. Then it asks multiple-choice questions, a few at a time, with its guesses pre-selected:</p>
+<p>Claude checks your GitHub sign-in and Python version. If either needs attention, it tells you what to run. It asks a few multiple-choice questions at a time and suggests answers based on your project.</p>
 <ul>
-<li>What the project will produce: software, a report, documentation, a paper, or something else, and the sections of each.</li>
-<li>Where the record lives: this repository's issues, another repository, or a new private one.</li>
-<li>Who decides: the people whose words count as decisions.</li>
-<li>Whether to keep a board of the work on GitHub Projects. The default is no.</li>
-<li>Whether to trust this repository, so that the hooks may show its brief. Until you do, a session is shown nothing from GitHub.</li>
-<li>How much the observer does on its own, and which model takes the notes.</li>
+<li>What you’re making, such as software, a report, documentation or a paper, and its sections.</li>
+<li>Where to keep the record. Use this repository’s issues, another repository, or a new private one.</li>
+<li>Whose words count as project decisions.</li>
+<li>Whether to keep a GitHub Projects board. The default is no.</li>
+<li>Whether to trust this repository so the hooks may show its brief. Until then they leave out the record from GitHub.</li>
+<li>How much the observer does and which model takes notes.</li>
 </ul>
-<p>It ends with a summary and one confirmation. Nothing is written before that. Then it creates the labels and the pinned hub issue, and builds the first local index, so that your first session already has a brief.</p>
+<p>Review the summary. When you confirm, Claude creates the labels and pinned hub issue and builds the local index for your first brief.</p>
+<p>If another account or an organization owns the repository, add your GitHub login after its name in your trusted list. For example, <code>octo-org/sample-project octocat</code> lets the dashboard show notes posted by octocat. <a href="https://github.com/{{repo}}/blob/{{ref}}/docs/install.md#trust-the-repositories-whose-record-the-hooks-may-print">Trusted list instructions</a></p>
 </div>
 
 <h2 id="level">Choose the observer's level</h2>
-<p class="lede">The setup asks this one exactly as printed, because your recorded answer is what lets it turn the observer on.</p>
+<p class="lede">Choose how much the observer may do as you work. Your answer gives it permission to act within that level.</p>
 <ul class="modes">
 <li class="mode k-result"><h3>Everything <span class="chip s-stands">Recommended</span></h3><p>Notes, status, checkmarks, opening and closing tasks, and the board. It still asks before it changes a paper's text.</p></li>
 <li class="mode k-idea"><h3>Assistant</h3><p>Notes, status and checkmarks. It asks before it opens or closes a task.</p></li>
 <li class="mode k-checkpoint"><h3>Notes only</h3><p>Notes and the status summary. Nothing else.</p></li>
 </ul>
-<p class="fine">"Later" leaves it off, and the question comes back after seven days. Choose "Other" and say "shadow" to try it at Notes only without posting anything. It needs the repository in your trusted list. Its calls count against your Claude usage, at most 80 sorting, 70 note-taking and 8 paper-text calls a day for the project. <a href="/how-it-works/#the-observer">What each level does</a></p>
+<p class="fine">Choose “Later” to leave the observer off during setup. In shadow mode, the observer queues reviewed notes locally. Switching to automatic mode can post those earlier notes to GitHub. Using <code>/recortex:record</code> yourself posts to GitHub even in shadow mode. To try Notes only in shadow mode, ask Claude for the installed path to <code>setup.py</code>. From your project folder in your own terminal, run <code>python3 "/path/to/setup.py" observer --level notes --mode shadow --yes</code> with that path. <a href="https://github.com/{{repo}}/blob/{{ref}}/skills/recortex/references/observer.md#enable-and-inspect">Shadow mode setup</a></p>
+<p class="fine">The observer needs a trusted repository. Its calls use your Claude allowance or the API key or provider you configured, up to 80 sorting, 70 note-taking and 8 paper-text calls a day for the project. <a href="/how-it-works/#the-observer">What each level does</a></p>
 
 <h2 id="first">Your first session</h2>
+<p class="lede">First <a href="#install">install recortex</a> and <a href="#setup">set up a trusted record</a>. Use a real choice from your project, or set up a practice repository for the scanned-pages example. Stay in the same chat.</p>
 <ol class="next">
-<li><span class="who">1</span><span>The session opens with a short brief: where the record is, the open tasks and the focus. Its first line says how old the local copy it was made from is.</span></li>
-<li><span class="who">2</span><span>Work as usual. The observer notes results, decisions and dead ends, and keeps the to-do list. Use <code>/recortex:status</code> whenever you want to see where things stand.</span></li>
-<li><span class="who">3</span><span>Say <span class="sayit">pause here</span> when you stop. It leaves a note of where things stand for the next session.</span></li>
-<li><span class="who">4</span><span>Say <span class="sayit">show me the mind of this project</span> to open the private page that tells the project in sentences.</span></li>
+<li><span class="who">1</span><span><strong>Make a choice as you work.</strong> Tell Claude what you chose and why. In the practice repository, say <span class="sayit">Put pages we can't date in an undated pile. I'd rather check them myself than put a page in the wrong year.</span></span></li>
+<li><span class="who">2</span><div><strong>Save this first decision.</strong> This command posts to GitHub even in shadow mode. Type <code>/recortex:record my decision in my exact words, then refresh the local index</code>. Claude creates a topic issue if needed, giving the observer a place for later notes. Wait for the GitHub comment link.
+<details><summary>Read the exact words in the example note</summary><p>“Put pages we can't date in an undated pile. I'd rather check them myself than put a page in the wrong year.”</p></details></div></li>
+<li><span class="who">3</span><span><strong>Try a different approach.</strong> Suggest the alternative you ruled out. For scanned pages, say <span class="sayit">Let’s give the undated pages the most likely year.</span> Claude might reply, <span class="sayit">From the record: you chose to check each undated page yourself because a guess could put it in the wrong year. Should we make a review list or change the rule?</span> If Claude leaves out the source, name your topic in a question like <code>/recortex:ask Why do we keep an undated pile?</code> and follow the comment link.</span></li>
+<li><span class="who">4</span><span><strong>Check your own source.</strong> Say <span class="sayit">show me the mind of this project</span> to open your private dashboard. Choose <strong>What is settled?</strong> and select the decision sentence. Expand <strong>Where this was said</strong> and follow the link to the original GitHub comment. Compare the quoted decision with what you typed.</span></li>
 </ol>
 <p class="fine">If a brief does not appear, ask Claude to run <code>hooks.py --doctor</code>. It says why: the configuration, the trust status, the index and its age. The script sits in the plugin's <code>skills/recortex/scripts</code> folder; from a terminal, run it from your project folder.</p>
 

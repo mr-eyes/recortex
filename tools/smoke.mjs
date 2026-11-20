@@ -26,6 +26,14 @@ const ev = async (expression) => { const r = await send('Runtime.evaluate', { ex
 for (const d of ['Runtime', 'Log', 'Network', 'Page']) await send(d + '.enable');
 let failed = 0;
 const expect = (name, ok, detail = '') => { console.log((ok ? 'ok   ' : 'FAIL ') + name + (ok ? '' : '  ' + detail)); if (!ok) failed++; };
+const searchFor = async (query) => {
+  await ev("document.getElementById('searchopen').click()");
+  await ev(`var input = document.getElementById('searchinput'); input.value = ${JSON.stringify(query)}; input.dispatchEvent(new Event('input'))`);
+};
+const pressEnter = async () => {
+  for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+};
+const firstHit = "document.querySelector('#searchhits .hit')";
 
 await send('Page.navigate', { url: base + '/' }); await sleep(900);
 await ev("document.getElementById('searchopen').click()"); await sleep(150);
@@ -41,8 +49,50 @@ await ev("document.getElementById('theme').click()");
 const second = await ev("document.documentElement.getAttribute('data-theme') + ' ' + localStorage.getItem('recortex-theme')");
 expect('theme switch stores one value', first !== second && /^(light|dark) (light|dark)$/.test(first) && /^(light|dark) (light|dark)$/.test(second), first + ' / ' + second);
 expect('only the theme is stored', (await ev('localStorage.length')) === 1);
-await send('Page.navigate', { url: base + '/faq/' }); await sleep(700);
+
+const faqResultFocused = "!document.getElementById('searchbox').open && location.hash === '#why-github' && " +
+  "document.activeElement === document.querySelector('#why-github[open] > summary')";
+await searchFor('why github issues');
+await pressEnter(); await sleep(500);
+expect('Enter from the homepage focuses the selected FAQ question', await ev(faqResultFocused));
+
+await send('Page.navigate', { url: base + '/faq/#hooks' }); await sleep(700);
 expect('theme survives a page change', (await ev("document.documentElement.getAttribute('data-theme')")) === second.split(' ')[1]);
+expect('a shared FAQ fragment opens and focuses its question', await ev("document.activeElement === document.querySelector('#hooks[open] > summary')"));
+expect('each FAQ answer has its own search result', await ev(
+  "Array.from(document.querySelectorAll('.faq details[id]')).every(d => SITE_INDEX.some(r => " +
+  "r.u === location.pathname + '#' + d.id && r.h === d.querySelector('summary').textContent.trim()))"
+));
+
+await searchFor('why github issues');
+const [x, y] = await ev(`(() => { const r = ${firstHit}.querySelector('b').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 });
+expect('clicking a same-page result closes search and focuses the question', await ev(faqResultFocused));
+await ev("document.getElementById('why-github').open = false");
+await searchFor('why github issues');
+await pressEnter();
+expect('Enter reopens and focuses the result at the current address', await ev(faqResultFocused));
+
+await ev("document.getElementById('hooks').open = false; history.back()"); await sleep(200);
+expect('Back reveals the previous answer', await ev("location.hash === '#hooks' && document.getElementById('hooks').open"));
+await ev("document.getElementById('why-github').open = false; history.forward()"); await sleep(200);
+expect('Forward reveals the next answer', await ev("location.hash === '#why-github' && document.getElementById('why-github').open"));
+
+await searchFor('why github issues');
+// Observe the browser's default action without opening another tab during the smoke test.
+const passedThrough = await ev(`new Promise(resolve => {
+  document.addEventListener('click', e => { resolve(!e.defaultPrevented); e.preventDefault(); }, {once:true});
+  ${firstHit}.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, ctrlKey:true}));
+})`);
+expect('a modified click passes through and keeps search open', passedThrough && await ev("document.getElementById('searchbox').open"));
+await ev("document.getElementById('searchclose').click()");
+
+await searchFor('holds');
+await ev(firstHit + '.focus()'); await pressEnter(); await sleep(500);
+expect('Enter on a result link navigates across pages', await ev("location.pathname.endsWith('/how-it-works/') && location.hash === '#holds'"));
+await searchFor('holds');
+await ev(firstHit + '.focus()'); await pressEnter();
+expect('a same-page heading receives keyboard focus', await ev("!document.getElementById('searchbox').open && document.activeElement.id === 'holds'"));
 
 await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
 await send('Page.navigate', { url: base + '/' }); await sleep(700);

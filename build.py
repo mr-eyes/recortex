@@ -94,36 +94,47 @@ def fill_blocks(body):
 
 
 class Text(HTMLParser):
-    """Plain text of a fragment, cut into sections at each h2 and h3."""
+    """Index headings and named disclosures, keeping each answer with its summary."""
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.sections = [{"id": "", "heading": "", "text": []}]
+        self.section = self.sections[0]
+        self.details = []
         self.skip = 0
-        self.in_h2 = False
+        self.heading_tag = None
+
+    def start_section(self, section_id, tag):
+        self.section = {"id": section_id, "heading": "", "text": []}
+        self.sections.append(self.section)
+        self.heading_tag = tag
 
     def handle_starttag(self, tag, attrs):
         if tag in ("script", "style"):
             self.skip += 1
-        if tag in ("h2", "h3"):
-            attrs = dict(attrs)
-            self.sections.append({"id": attrs.get("id", ""), "heading": "", "text": []})
-            self.in_h2 = True
+        elif tag in ("h2", "h3"):
+            self.start_section(dict(attrs).get("id", ""), tag)
+        elif tag == "details":
+            self.details.append((self.section, dict(attrs).get("id")))
+        elif tag == "summary" and self.details and self.details[-1][1]:
+            self.start_section(self.details[-1][1], tag)
 
     def handle_endtag(self, tag):
         if tag in ("script", "style"):
             self.skip -= 1
-        if tag in ("h2", "h3"):
-            self.in_h2 = False
-        if tag in ("p", "li", "div", "h1", "h2", "h3", "tr", "pre"):
-            self.sections[-1]["text"].append(" ")
+        if tag == self.heading_tag:
+            self.heading_tag = None
+        if tag == "details" and self.details:
+            self.section, _ = self.details.pop()
+        if tag in ("p", "li", "div", "h1", "h2", "h3", "tr", "pre", "details", "summary"):
+            self.section["text"].append(" ")
 
     def handle_data(self, data):
         if self.skip:
             return
-        if self.in_h2:
-            self.sections[-1]["heading"] += data
-        self.sections[-1]["text"].append(data)
+        if self.heading_tag:
+            self.section["heading"] += data
+        self.section["text"].append(data)
 
 
 def plain(fragment):
