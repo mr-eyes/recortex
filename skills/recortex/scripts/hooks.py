@@ -589,7 +589,10 @@ def produce(event, data, budget, config, repo, hub):
         if event == "session-start":
             # the line about the setup questions is made first, so that the brief's lists and resume block make room for it
             questions, held = setup_line(repo, config, record, session, brief.CAPS["session-start"] // 2)
-            orientation = (guidance.hint(repo), guidance.return_pointer(db, repo, record.allowed))
+            pointer, skipped = guidance.bounded_pointer(db, repo, record.allowed, pointer_seconds(budget, event),
+                                                        "session-start")
+            LAST["pointer_skipped"] = bool(skipped)
+            orientation = (guidance.hint(repo), pointer, skipped)
             questions = "\n".join(filter(None, (*orientation, questions)))
             text = brief.session_payload(record, fresh, reserve=len(questions) + 1 if questions else 0)
             remember(repo, session, digest(record.key()), brief=True)
@@ -613,7 +616,9 @@ def produce(event, data, budget, config, repo, hub):
         if entry.get("brief") is not True:
             # The session started without a brief (first build, or no SessionStart): give the full brief once,
             # also when the one-line reminder is switched off. Build the text first, then record that it was given.
-            orientation = "\n".join(filter(None, [guidance.hint(repo), guidance.return_pointer(db, repo, record.allowed)]))
+            pointer, skipped = guidance.bounded_pointer(db, repo, record.allowed, pointer_seconds(budget, event),
+                                                        "prompt-submit")
+            orientation = "\n".join(filter(None, [guidance.hint(repo), pointer, skipped]))
             text = brief.session_payload(record, None, reserve=len(orientation) + 1 if orientation else 0)
             if orientation:
                 text += "\n" + orientation
@@ -644,6 +649,12 @@ def produce(event, data, budget, config, repo, hub):
         return "\n".join(parts + [asked] if asked else parts)
     finally:
         db.close()
+
+
+def pointer_seconds(budget, event):
+    """The time the reminder about a changed decision may take before the hook goes on without it: 2 s at a session start
+    and 1 s at a prompt, and never more than a fifth of the hook's budget (RECORTEX_HOOK_TIMEOUT)."""
+    return max(0.2, min(2.0 if event == "session-start" else 1.0, budget / 5.0))
 
 
 def observer_paused(repo, config):
@@ -1038,6 +1049,8 @@ def doctor():
         print(observer_runtime.PAUSED)
     for line in observer_log_lines(repo, config):
         print(line)
+    for line in guidance.skip_lines(repo):
+        print(line)
     reason = usage.problem(repo)
     print("usage: %s" % ("usage.db can be written (the hooks' estimates and the plugin's subagents are counted there)"
                          if not reason else "usage.db cannot be written (%s); the usage view will miss what the hooks and "
@@ -1136,6 +1149,8 @@ def main(argv=None):
     try:
         text = run(args.event, data, budget)
         line = notice(LAST, data.get("source")) if args.event == "session-start" and LAST.get("state") else ""
+        if line and LAST.get("pointer_skipped"):
+            line += "\n" + guidance.SKIPPED   # fixed words, a line of its own beside the status line
     except Exception:  # noqa: BLE001 - hooks are silent on any failure
         return 0
     if line and data.get("source") in START_SOURCES and not notice_off():

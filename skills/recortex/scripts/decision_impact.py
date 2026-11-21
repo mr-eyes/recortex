@@ -1,9 +1,13 @@
 """Read-only review of current project material after an explicitly recorded decision change."""
 
 import collections
+import contextlib
 import datetime
 import hashlib
 import re
+import signal
+import sqlite3
+import time
 
 import index
 import project_map
@@ -25,6 +29,70 @@ COMMON = set(("the and for was are but can could did does has had how its our ou
               "project record recorded repeat report require return review same should since still task team test "
               "that their them then there these they this those through under until update used using verify what "
               "when where which will with would").split())
+
+
+class TooSlow(Exception):
+    """Work that a hook began did not finish in the time the hook gave it."""
+
+
+class _Ring(BaseException):
+    """Raised by the alarm. A BaseException, so that no `except Exception` inside the work swallows it."""
+
+
+def _ring(signum, frame):
+    raise _Ring()
+
+
+@contextlib.contextmanager
+def time_limit(seconds, db=None):
+    """Stop the work inside the block with TooSlow after `seconds`. A hook cannot wait for a projection of a large record:
+    this keeps it a fraction of the hook's budget, so that the brief is not lost with it.
+
+    The alarm (SIGALRM, where the platform has it and this is the main thread) interrupts Python code; `db`'s progress
+    handler interrupts a long query, which the alarm cannot reach until the query returns. A timer that the caller already
+    set is kept: it is not given more than half of what it had left, and it is armed again, shortened by what this block
+    used, on the way out (the observer's hook runs its whole work under one)."""
+    deadline = time.monotonic() + seconds
+    armed, previous, outer = False, None, (0.0, 0.0)
+    if hasattr(signal, "setitimer"):
+        try:
+            outer = signal.getitimer(signal.ITIMER_REAL)
+            if outer[0]:
+                seconds = min(seconds, outer[0] / 2.0)
+                deadline = time.monotonic() + seconds
+            previous = signal.signal(signal.SIGALRM, _ring)
+            armed = True
+            signal.setitimer(signal.ITIMER_REAL, seconds)
+        except ValueError:  # a thread that is not the main one cannot take a signal; the progress handler still applies
+            pass
+    started, interrupted = time.monotonic(), []
+
+    def progress():
+        if time.monotonic() < deadline:
+            return 0
+        interrupted.append(True)
+        return 1  # stops the running query with sqlite3.OperationalError("interrupted")
+
+    if db is not None:
+        db.set_progress_handler(progress, 10000)
+    try:
+        yield
+        if interrupted:  # the work caught the interrupted query and went on: its result is not whole
+            raise TooSlow("out of time")
+    except _Ring:
+        raise TooSlow("out of time") from None
+    except sqlite3.OperationalError:
+        if interrupted:
+            raise TooSlow("out of time") from None
+        raise
+    finally:
+        if db is not None:
+            db.set_progress_handler(None, 0)
+        if armed:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous if previous is not None else signal.SIG_DFL)
+            if outer[0]:
+                signal.setitimer(signal.ITIMER_REAL, max(0.001, outer[0] - (time.monotonic() - started)), outer[1])
 
 
 def suggestions_enabled(repo, config, root=None):

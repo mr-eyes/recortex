@@ -33,6 +33,8 @@ NOTICES = {
     "source": "recortex observer: transcript sources are unavailable or incomplete; new holds may not be active. Run observer.py status.",
     "runtime": "recortex observer: independent checks are unavailable; captured work remains queued. Run observer.py status.",
     "context": "recortex observer: task context is unavailable; read the current record before relying on it.",
+    "pointer": "recortex observer: the reminder about a changed decision was left out: checking the record took too long. "
+               "The rest of the context is shown. Run hooks.py --doctor.",
     "paused": "recortex observer: capture is paused; earlier holds remain active. Run observer.py status.",
     "control": "recortex observer: an explicit hold was recorded. Run observer.py holds.",
     "worker": "recortex observer: the worker could not start; captured work remains queued. Run observer.py status.",
@@ -706,7 +708,12 @@ def _degraded(store, reason):
         pass  # a full queue must not prevent checking an already stored hold
 
 
-def _context(store, event, data, repo, allowed, root=None):
+POINTER_SECONDS = 1.0   # what the decision reminder may take of the hook's 3.5 s; slower, and the hook goes on without it
+
+
+def _context(store, event, data, repo, allowed, root=None, notices=None):
+    """The task context for a prompt or a subagent, or "". `notices`, when given, is a list that this adds a code to
+    when part of the context was left out for lack of time."""
     if event not in ("UserPromptSubmit", "SubagentStart", "PreToolUse"):
         return ""
     query = data.get("prompt", "")
@@ -730,9 +737,18 @@ def _context(store, event, data, repo, allowed, root=None):
         packet = observer_context.build_packet(db, repo, allowed, query=query[:48000],
                                                issue=active[0] if len(active) == 1 else None, max_chars=4000)
         if mode in ("shadow", "deliver") and query.strip():
+            import decision_impact
+            import guidance
             import observer_advisory
             try:
-                pointer = observer_advisory.change_pointer(db, repo, allowed, packet, query[:48000])
+                with decision_impact.time_limit(POINTER_SECONDS, db):
+                    pointer = observer_advisory.change_pointer(db, repo, allowed, packet, query[:48000])
+            except decision_impact.TooSlow:
+                # The packet is kept without the pointer; the user is told once a session, and --doctor says when.
+                pointer = None
+                guidance.note_skip(repo, "observer", POINTER_SECONDS)
+                if notices is not None:
+                    notices.append("pointer")
             except (ValueError, OSError, sqlite3.Error):
                 pointer = None
             if pointer:
@@ -935,7 +951,8 @@ def _handle(event, data, config, repo, decision):
                             ValueError):
                         pass  # no grant: the publisher refuses the held event (held_unanswered)
             try:
-                context = _context(store, event, data, repo, recortex.allowed_users(repo), root=project_root)
+                context = _context(store, event, data, repo, recortex.allowed_users(repo), root=project_root,
+                                   notices=notices)
             except TimeoutError:
                 raise
             except Exception:

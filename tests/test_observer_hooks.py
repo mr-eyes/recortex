@@ -1179,6 +1179,48 @@ class ObserverHookTests(unittest.TestCase):
             self.assertEqual(1, len(store.get_control("advisory_shadow")))
             self.assertEqual(2, len(store.get_control("advisory_delivered")))
 
+    def test_a_decision_reminder_that_runs_out_of_time_costs_the_reminder_and_never_the_context(self):
+        import guidance
+        import time
+
+        class Empty:
+            def execute(self, *args):
+                return []
+
+            def close(self):
+                pass
+
+            def set_progress_handler(self, *args):
+                pass
+
+        def forever(*args, **kwargs):   # a projection of a record far too large to check in a prompt hook
+            stop = time.monotonic() + 6
+            while time.monotonic() < stop:
+                time.sleep(0.01)
+                sum(range(1000))
+            raise AssertionError("nothing stopped the projection")
+
+        self._context.stop()
+        packet = {"text": "CONTEXT", "selected": [1, 2], "resume_id": None, "scope": None,
+                  "freshness": {"sync_complete": True, "age_seconds": 0}}
+        data = dict(self.data, prompt="Try the quoted input again")
+        self.config["observer"]["advisory_mode"] = "shadow"
+        with mock.patch("index.connect", return_value=Empty()), \
+                mock.patch("observer_context.build_packet", return_value=packet), \
+                mock.patch("observer_advisory.change_pointer", side_effect=forever), \
+                mock.patch.object(hooks, "POINTER_SECONDS", 0.3):
+            began = time.monotonic()
+            result = hooks.handle("prompt-submit", data, self.config, REPO)
+            self.assertLess(time.monotonic() - began, 3)
+            self.assertEqual("CONTEXT", result["hookSpecificOutput"]["additionalContext"])   # the context stays
+            self.assertIn(hooks.NOTICES["pointer"], result["systemMessage"].split("\n"))
+            # once a session, like every line of this hook
+            again = hooks.handle("prompt-submit", dict(data, prompt="Try another quoted input"), self.config, REPO)
+            self.assertNotIn("systemMessage", again)
+        line, = guidance.skip_lines(REPO)
+        self.assertIn("the observer hook left them out", line)
+        self.assertIn("longer than 0.3 s", line)
+
     def test_existing_hold_survives_capture_and_diagnostic_write_failure(self):
         self.append("/recortex hold git-push")
         self.run_hook()

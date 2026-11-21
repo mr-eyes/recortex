@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 
 import field_sheet
 import recortex
@@ -62,6 +63,59 @@ def change(repo, action, style):
                 value["offered"].append(style)
         storage.write_file(_path(repo, create=True), json.dumps(value))
     return {"style": value["style"], "offer": offer}
+
+
+SKIPPED = ("recortex: the reminder about a changed decision was left out: checking the record took too long. "
+           "The rest of the brief is shown. Run hooks.py --doctor.")
+SKIP_FILE = "decision-pointer-skipped.json"
+SKIP_SOURCES = ("session-start", "prompt-submit", "observer")
+
+
+def note_skip(repo, source, seconds):
+    """Keep, for hooks.py --doctor, when a hook last left the reminder out: whole seconds, the hook and the time. Only
+    these checked values are stored. Never raises: a note that cannot be written leaves the hook's line as it is."""
+    try:
+        folder = storage.folder(storage.state_top(), storage.repo_folder(repo.lower()))
+        if source in SKIP_SOURCES and folder:
+            storage.write_file(os.path.join(folder, SKIP_FILE),
+                               json.dumps({"at": int(time.time()), "limit": round(float(seconds), 1), "source": source}))
+    except (OSError, ValueError, TypeError, storage.StorageError):
+        pass
+
+
+def skip_lines(repo):
+    """The doctor's line about the reminder: when a hook last left it out and the time it had, or that none did. The note
+    is read back strictly; anything else is reported as unreadable, never echoed."""
+    try:
+        folder = storage.folder(storage.state_top(), storage.repo_folder(repo.lower()), create=False)
+        raw = storage.read_file(os.path.join(folder, SKIP_FILE)) if folder else None
+    except (OSError, storage.StorageError):
+        return ["decision reminders: the note of a skipped check could not be read"]
+    if raw is None:
+        return ["decision reminders: no hook has left them out for lack of time"]
+    try:
+        note = json.loads(raw)
+        at, limit, source = note["at"], note["limit"], note["source"]
+        if (set(note) != {"at", "limit", "source"} or type(at) is not int or not 0 < at < 4102444800
+                or type(limit) not in (int, float) or not 0 < limit <= 60 or source not in SKIP_SOURCES):
+            raise ValueError("note")
+    except (ValueError, KeyError, TypeError):
+        return ["decision reminders: the note of a skipped check is not in the form this version writes"]
+    return ["decision reminders: the %s hook left them out on %s UTC, because working them out took longer than %g s; the "
+            "rest of the brief was shown. Later hooks may have shown them. `index.py query impact` lists them."
+            % (source, time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(at)), limit)]
+
+
+def bounded_pointer(db, repo, allowed, seconds, source):
+    """(pointer, line): return_pointer worked out within `seconds`, or "" and the one fixed line SKIPPED when it did not fit.
+    A hook keeps its brief either way; the skip is kept for hooks.py --doctor."""
+    import decision_impact
+    try:
+        with decision_impact.time_limit(seconds, db):
+            return return_pointer(db, repo, allowed), ""
+    except decision_impact.TooSlow:
+        note_skip(repo, source, seconds)
+        return "", SKIPPED
 
 
 def return_pointer(db, repo, allowed):
