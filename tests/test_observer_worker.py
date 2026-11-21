@@ -58,6 +58,41 @@ CORRECTION='''<!-- ghim:event type=correction at=2026-03-01T12:00:00Z -->
 
 **Also updated:** Nothing else
 '''
+# A stretch of a live check at Everything (invented project words): a result the user typed and asked the agent only to
+# acknowledge, and the agent's one acknowledging reply. The sorter labeled both messages a result; the drafter of 1.6.0 returned
+# no candidate, because the scope rules that opened its prompt read "Just acknowledge it" as a limit. The body is the one that
+# the drafter wrote once the rules were limited to decisions.
+ACK_USER = ('I measured it again: the new parser reads the 10 MB file in a median of 0.13 s over 5 runs at commit 7be21c0, and '
+            'the standard library csv reader takes 0.11 s on the same file. Just acknowledge it.')
+ACK_AGENT = ('Noted. At commit 7be21c0 you measured the new parser at a median of 0.13 s over 5 runs on the 10 MB file, and the '
+             'standard library csv reader at 0.11 s on the same file. So the new parser was slower than the standard library '
+             "on that file.\n\nI've only acknowledged it, as you asked. I haven't recorded it or posted anything.")
+ACK_QUOTE = ('the new parser reads the 10 MB file in a median of 0.13 s over 5 runs at commit 7be21c0, and the standard library '
+             'csv reader takes 0.11 s on the same file')
+ACK_RESULT = '''<!-- ghim:event type=result at=2026-03-01T12:00+00:00 -->
+### Result: 2026-03-01 12:00 UTC - New parser 10 MB read time against the standard library
+
+**In plain words, we found that:** the new parser read the 10 MB file in a median of 0.13 s against 0.11 s for the standard library csv reader, as the user measured
+
+**What ran:** The user reported the run; the agent did not run it. The user measured the new parser on the 10 MB file, 5 runs, at commit 7be21c0, and the standard library csv reader on the same file. The command and output folder are not stated.
+
+**Configuration:** New parser at commit 7be21c0, 10 MB file. Python version, machine and settings not stated.
+
+**Numbers:**
+
+| Measure | Value | Denominator | Source path |
+|---|---|---|---|
+| Median read time, 10 MB, new parser | 0.13 s | 5 runs | Not stated |
+| Read time, 10 MB, standard library csv reader | 0.11 s | Not stated | Not stated |
+
+**Exclusions and failures:** Not stated
+
+**Cost:** Not measured
+
+**Not established:** Spread of the runs, the number of runs for the standard library reader, and whether the 0.02 s gap is larger than run-to-run variation are not stated. Other file sizes were not mentioned.
+
+**Next step:** Not stated, owner not stated
+'''
 REAL_REFRESH=worker.refresh_record
 CONTEXT={'targets':[{'issue':2,'title':'Parser','body':'Strict parser requirements.'}], 'memories':[], 'incomplete':False}
 
@@ -576,6 +611,33 @@ class WorkerTests(unittest.TestCase):
         with store.Store(REPO, config=self.config) as db:
             events = [db.event(key) for key in report['ready']]
         self.assertEqual([sorted([decided, told]), [said]], [sorted(e['candidate']['sources']) for e in events])
+    def test_replay_a_typed_result_that_the_user_asked_only_to_acknowledge_is_drafted_reviewed_and_ready(self):
+        said = self.capture(ACK_USER)
+        told = self.capture(ACK_AGENT, role='assistant')
+        result = {'kind': 'result', 'issue': 2, 'body': ACK_RESULT, 'sources': [said, told], 'excerpts': [ACK_QUOTE]}
+        report = self.run_worker(self.invoke(result))
+        self.assertEqual(1, len(report['ready']), report)
+        drafting = [payload for purpose, payload in self.calls if purpose == 'draft'][0]
+        # the drafter is shown both messages whole, with the user's asking to acknowledge and the agent's reply to it
+        self.assertEqual([ACK_USER, ACK_AGENT], [view['text'] for view in drafting['sources']])
+        with store.Store(REPO, config=self.config) as db:
+            [event] = [db.event(key) for key in report['ready']]
+            self.assertEqual(sorted([said, told]), sorted(event['candidate']['sources']))
+            self.assertNotEqual('deferred', db.observation(said)['state'])
+            self.assertNotEqual('deferred', db.observation(told)['state'])
+    def test_the_draft_prompt_does_not_open_with_scope_rules_and_keeps_them_to_decisions(self):
+        # Replayed with the live record, the 1.6.0 prompt (the scope rules first, for every kind) returned no candidate for
+        # the stretch above on every try, and the 1.5.1 prompt and this one returned a result every time. The rules for a
+        # decision stay, after the role and the kinds, and say what they do not apply to.
+        prompt = runtime.PROMPTS['draft']
+        self.assertTrue(prompt.startswith("You are Recortex's independent note-taker"))
+        self.assertNotIn('Read the full user message for scope. Exploration', prompt)
+        scope = prompt.index('Read the full user message for scope when you write a decision or the correction of one')
+        self.assertGreater(scope, prompt.index('A source with a hold_released field'))
+        self.assertIn('These limits are about decisions only.', prompt)
+        self.assertIn('A result or a failure is a memory whatever the user asked the agent to do next', prompt)
+        self.assertIn('or to take no action, which is not a request to keep it off the record', prompt)
+        self.assertIn('Return only the requested structured result.', prompt[scope:])
     def test_a_candidate_for_an_issue_that_is_not_a_target_is_tried_once_more(self):
         sid=self.capture()
         self.run_worker(self.invoke(self.candidate(sid,issue=99)))
