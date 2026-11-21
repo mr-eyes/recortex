@@ -674,11 +674,11 @@ class LifetimeTests(unittest.TestCase):
         thread.join(10)
         self.assertEqual(["idle"], done)
         server = self.service()
-        thread, done = self.run_in_thread(server, idle=1.0, limit=0.8)
+        thread, done = self.run_in_thread(server, idle=0.8, limit=2.0)   # busy for longer than the idle time
         headers = {"Host": server.host, "Authorization": "Bearer " + server.token}
         deadline = time.monotonic() + 10
         while not done and time.monotonic() < deadline:   # a busy user: a request every 0.1 s
-            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=1)   # one sent after the end waits
             try:
                 connection.request("GET", server.mount + "/api/state", headers=headers)
                 connection.getresponse().read()
