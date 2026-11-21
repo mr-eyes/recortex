@@ -73,7 +73,8 @@ def time_limit(seconds, db=None):
         interrupted.append(True)
         return 1  # stops the running query with sqlite3.OperationalError("interrupted")
 
-    if db is not None:
+    watched = db is not None and hasattr(db, "set_progress_handler")   # a stand-in for a connection may have no such hook
+    if watched:
         db.set_progress_handler(progress, 10000)
     try:
         yield
@@ -86,7 +87,7 @@ def time_limit(seconds, db=None):
             raise TooSlow("out of time") from None
         raise
     finally:
-        if db is not None:
+        if watched:
             db.set_progress_handler(None, 0)
         if armed:
             signal.setitimer(signal.ITIMER_REAL, 0)

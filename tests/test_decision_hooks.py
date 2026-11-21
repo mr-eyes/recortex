@@ -76,6 +76,13 @@ class TimeLimitTests(unittest.TestCase):
             self.assertLess(time.monotonic() - began, 5, swallow)
         self.assertEqual(1, db.execute("SELECT 1").fetchone()[0])   # the connection is usable, with no handler left
 
+    def test_a_stand_in_for_a_connection_with_no_progress_hook_is_left_alone(self):
+        with decision_impact.time_limit(5, object()):   # tests give the hooks bare stand-ins for the index connection
+            self.assertEqual(3, 1 + 2)
+        with self.assertRaises(decision_impact.TooSlow):
+            with decision_impact.time_limit(0.3, object()):
+                forever()
+
     def test_a_timer_the_caller_set_is_kept_and_armed_again(self):
         called = []
         theirs = lambda *args: called.append(1)  # noqa: E731
