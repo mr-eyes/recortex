@@ -14,6 +14,7 @@ import manuscript_record  # noqa: E402
 
 SCRIPTS = ts.SCRIPTS
 sys.path.insert(0, SCRIPTS)
+import index  # noqa: E402
 import plan_rules  # noqa: E402
 import record_format  # noqa: E402
 import lint_drafts  # noqa: E402
@@ -758,7 +759,7 @@ class PlanIndexTests(PaperSandbox):
         self.save(data)
         self.ready()
         self.assertEqual(base, self.plan_json()["parts"])
-        self.assertEqual("5", self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
+        self.assertEqual(index.DERIVE_VERSION, self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
         listed = [entry for entry in self.repo()["log"] if "issues/comments" in " ".join(entry)
                   and "per_page" in " ".join(entry)]
         self.assertLessEqual(len(listed), 2)  # the ordinary incremental listing; the derive read nothing again
@@ -772,7 +773,7 @@ class PlanIndexTests(PaperSandbox):
         self.ready()
         self.sql("DELETE FROM meta WHERE key = 'derive_version'")
         self.ready()
-        self.assertEqual("5", self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
+        self.assertEqual(index.DERIVE_VERSION, self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
 
     def test_a_derive_by_an_older_version_on_a_shared_index_is_derived_again(self):
         """An older version re-derives the comments it stores by its own rules and then sets mind_derived to 1 again;
@@ -801,7 +802,7 @@ class PlanIndexTests(PaperSandbox):
         self.ready()
         self.add_comment(9990, 4, "A plain remark, no marker.", "2026-12-05T10:00:00Z")
         self.ready()
-        self.assertEqual("5", self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
+        self.assertEqual(index.DERIVE_VERSION, self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
 
 
 class PlanNotesTests(PaperSandbox):

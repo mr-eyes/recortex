@@ -188,7 +188,8 @@ class PaperExportTests(tv.VersionBox):
         self.assertIn('<p class="papername">sample-project</p>', text)       # and the project's name under it
         self.assertNotIn("sample-project manuscript hub", text)             # never the hub's title
         self.assertIn('<h2 id="paper-h" class="ptitle">The manuscript</h2>', view)
-        self.assertIn('<p class="psub">sample-project</p>', view)
+        self.assertIn('<p class="psub">sample-project<span class="noprint"> · ', view)
+        self.assertIn('<a class="lk" href="#project-map">Project Map</a>', view)
         # each part is titled by its text's own first heading, as the view titles it, not by the title of its issue
         paper_parts = self.headings(text, 4)
         view_parts = self.headings(view, 4)

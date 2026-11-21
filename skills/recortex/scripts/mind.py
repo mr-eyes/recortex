@@ -41,7 +41,9 @@ import mind_model  # noqa: E402
 import mind_paper  # noqa: E402
 import mind_plan  # noqa: E402
 import mind_versions  # noqa: E402
+from project_map import branch_anchor  # noqa: E402
 import recortex  # noqa: E402
+import record_format  # noqa: E402
 import storage  # noqa: E402
 import usage  # noqa: E402
 import versions  # noqa: E402
@@ -54,6 +56,7 @@ POLICY = ("default-src 'none'; style-src %s; script-src %s; img-src data:; conne
 POLICY_FORM = re.compile(re.escape(POLICY).replace("%s", "'sha256-[A-Za-z0-9+/]{43}='"))
 VIEWPORT = "width=device-width, initial-scale=1"
 SCHEME = "https://"  # the one scheme of an address that leaves the page; E() gives such a link its rel
+HANDOFF_LINK = re.compile(re.escape(mind_model.mind_text.GITHUB) + r"""[^\s<>()"'`]+""")
 
 UNTRUSTED = ("mind: this repository is not in your trusted list, so no page is built. The page tells only the memories "
              "of accounts you allow.")
@@ -89,7 +92,7 @@ autocomplete disabled aria-label aria-labelledby aria-hidden aria-live aria-expa
 width height transform points text-anchor d rowspan colspan start display mathvariant accent src alt loading data-m data-term
 data-issue data-nav data-ask data-go data-kind data-group data-a data-b data-explain data-fold data-print
 data-mode data-for data-added data-reworded data-changed data-toggle data-copy aria-controls scope checked selected value
-preserveAspectRatio open title""".split())
+preserveAspectRatio open title data-event data-posted data-thread data-state data-catchup""".split())
 VALUE = re.compile(r"[A-Za-z0-9 _.,:;#/()'+=?-]*")
 ANCHOR = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,80}")
 KEY = re.compile(r"[a-z][a-z0-9-]{0,40}")   # a key the page made: of an explanation, of a fold
@@ -98,11 +101,12 @@ DAY = re.compile(r"(?:[A-Z][a-z]{2,8} [0-9]{1,2}(?:, [0-9]{4})?|an unknown day)"
 CLOCK = re.compile(r"[0-2][0-9]:[0-5][0-9]")
 PART_KIND = re.compile(r"[a-z][a-z-]{0,29}")   # a kind of planned part, as the plan's profile names it
 FREE = ("content", "aria-label", "placeholder", "title")   # take only the constants below (and the policy)
-CONSTANTS = frozenset((VIEWPORT, "no-referrer", "Ways into the mind", "One memory", "First visit",
+CONSTANTS = frozenset((VIEWPORT, "no-referrer", "One memory", "First visit",
                        "Words to look for", "For example: memory, quote, speed", "Map of the threads of this mind over time",
-                       "The parts of the text, in order", "The threads, by section", "The map of what we know",
+                       "The parts of the text, in order", "Project topics", "The map of what we know",
                        "Open or close every branch", "Which map to show", "How to read the text",
                        "Compare the text with which version", "Previous change", "Next change", "A table")
+                      + ("Project areas", "Within this area", "Output views", "Project branches", "Find a branch", "Filter history", "Find words in history", "Start date", "End date")
                       + tuple("Table %d" % n for n in range(1, 61)))
 MSPACE_WIDTHS = frozenset(("0.1667em", "0.2222em", "0.2778em", "-0.1667em", "1em", "2em", "0.5em"))
 
@@ -119,6 +123,11 @@ def _whole(low, high):
 
 # an attribute that only some elements may carry, and with which values: attribute -> (tags, accepts a value)
 ATTR_RULES = {
+    "data-event": (frozenset(("li",)), lambda value: value == "" or isinstance(value, str) and bool(index.ISO_UTC.fullmatch(value))),
+    "data-posted": (frozenset(("li",)), lambda value: value == "" or isinstance(value, str) and bool(index.ISO_UTC.fullmatch(value))),
+    "data-thread": (frozenset(("li",)), _whole(0, 999999999)),
+    "data-state": (frozenset(("li",)), lambda value: value in ("stands", "replaced", "aside", "answered", "tried", "taken", "open", "led", "pause", "plain")),
+    "data-catchup": (frozenset(("li",)), lambda value: value in ("yes", "no")),
     "rowspan": (frozenset(("td", "th")), _whole(1, 40)),
     "colspan": (frozenset(("td", "th")), _whole(1, 12)),
     "start": (frozenset(("ol",)), _whole(1, 9999)),
@@ -373,9 +382,6 @@ HOW_TO_READ = (
                "it. The record keeps one current version of each part; it is not marked draft or final."),
     ("A pause", EXPLAIN_TEXT["kind-checkpoint"][1]),
 )
-NAV = (("now", "Where are we?"), ("text", None), ("threads", "How did we get here?"),
-       ("settled", "What is settled?"), ("lessons", "What did we learn the hard way?"), ("open", "What is still open?"),
-       ("todo", "What is there to do?"), ("map", "Show me the whole mind"), ("ask", "Ask the mind"), ("usage", "What did recortex use?"))
 # The usage view (references/mind.md): every word on it is fixed here or is a number the page checked, a date of a fixed form or a
 # model name of a fixed form. Nothing of the record is on it.
 USAGE_LEDE = ("On this machine, as of %s. Tokens and calls, not money: under a Claude subscription these count against your "
@@ -385,7 +391,7 @@ USAGE_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 USAGE_MODEL = re.compile(r"[A-Za-z0-9_.:-]{1,100}")
 USAGE_TIERS = (("sort", "Sort"), ("middle", "Middle"), ("strong", "Strong"))
 USAGE_JOBS = {"sort": "Sorting a stretch", "memories": "Drafting and reviewing memories", "status": "The status summary",
-              "paper": "Drafts of the paper's text", "check": "Runtime checks"}
+              "paper": "Drafts of the paper's text", "check": "Runtime checks", "map": "Project Map maintenance"}
 USAGE_AGENTS = {"record-auditor": "Record auditor", "record-drafter": "Record drafter", "record-reviewer": "Record reviewer",
                 "record-planner": "Record planner", "record-planner-session": "Record planner, in a session", "ask": "Ask"}
 USAGE_EVENTS = {"session-start": "The brief at session start", "subagent-start": "The brief for a subagent",
@@ -479,6 +485,9 @@ class Page:
         self.model = model
         self.pictures = pictures if isinstance(pictures, dict) else {}
         self.repo = model["repo"] if recortex.valid_repo(model.get("repo")) else None
+        base = model.get("interactive_base", "")
+        self.action_root = base + "/actions" if model.get("interactive_actions") is True and isinstance(base, str) \
+            and (base == "" or re.fullmatch(r"/[0-9a-f]{32}", base)) else None
         self.m = {integer(m.get("id")): m for m in model.get("memories", []) if integer(m.get("id"))}
         self.threads = {integer(t.get("n")): t for t in model.get("threads", [])}
         self.words = {integer(w.get("n")): w for w in model.get("words", []) if integer(w.get("n"))}
@@ -788,9 +797,21 @@ class Page:
         return E("div", {"class": "card %s %s" % (kind_class(memory), state_class(memory))},
                  self.meta(memory, thread=thread), self.said(memory))
 
-    @staticmethod
-    def view(ident, title, lede, *children):
+    def view(self, ident, title, lede, *children):
+        local = []
+        if ident in ("todo", "open"):
+            local = [("work", "Tasks"), ("open", "Open questions and limits")]
+        elif ident in ("history", "settled", "threads", "lessons", "map"):
+            local = [("history", "Timeline"), ("settled", "Current understanding"), ("threads", "Topic stories"),
+                     ("lessons", "Lessons"), ("map", "Memory maps")]
+        elif ident == "text" and self.sheet is None:
+            local = [("outputs", "Current text and sources")]
+        alias = {"todo": "work", "text": "outputs"}.get(ident)
         return E("section", {"class": "view", "id": ident, "aria-labelledby": ident + "-h"},
+                 E("span", {"id": alias}) if alias else "",
+                 E("nav", {"class": "area-links noprint", "aria-label": "Within this area"},
+                   *[E("a", {"href": anchor(key), "class": "here" if key == (alias or ident) else ""}, label)
+                     for key, label in local]) if local else "",
                  E("h2", {"id": ident + "-h"}, title), E("p", {"class": "lede"}, lede) if lede else "", *children)
 
     @staticmethod
@@ -831,10 +852,10 @@ class Page:
         return E("img", {"src": uri, "alt": alt_text(block.get("title")), "width": width, "height": height,
                          "loading": "lazy", "class": "figpic"})
 
-    def figure_body(self, block):
+    def figure_body(self, block, embed_picture=True):
         address = github_url("picture", text_of(block.get("repo")) or self.repo, block.get("ref"), block.get("path"))
         return [E("p", {"class": "evtitle"}, text_of(block.get("title"))), E("p", None, text_of(block.get("caption"))),
-                self.picture_of(block),
+                self.picture_of(block) if embed_picture else "",
                 E("p", {"class": "quiet"}, "The picture is ", E("code", None, text_of(block.get("path"))),
                   " at ", text_of(block.get("ref")), ".") if text_of(block.get("path")) else "",
                 self.made_from(block),
@@ -844,8 +865,8 @@ class Page:
     def figure_block(self, block):
         return E("div", {"class": "blockfig"}, *self.figure_body(block))
 
-    def figure_ref(self, block):
-        return self.show("Show the figure", *self.figure_body(block))
+    def figure_ref(self, block, embed_picture=True):
+        return self.show("Show the figure" if embed_picture else "Figure source", *self.figure_body(block, embed_picture))
 
     def code_ref(self, item):
         first, last = integer(item.get("from")), integer(item.get("to"))
@@ -864,7 +885,7 @@ class Page:
                          if address else E("p", {"class": "nothing"}, "This memory names a change that this page "
                                                                        "cannot link to."))
 
-    def references(self, memory):
+    def references(self, memory, embed_pictures=True):
         out = []
         for item in memory.get("evidence", []):
             kind = item.get("kind")
@@ -875,7 +896,7 @@ class Page:
             elif kind == "table":
                 out.append(self.table_ref(item))
             elif kind == "figure":
-                out.append(self.figure_ref(item))
+                out.append(self.figure_ref(item, embed_pictures))
             elif kind == "code":
                 out.append(self.code_ref(item))
             elif kind == "pull":
@@ -942,6 +963,8 @@ class Page:
                              "data-kind": kind_class(memory)[2:], "data-group": group, "tabindex": "-1"},
                  self.meta(memory, date=True),
                  E("p", {"class": "big"}, self.sentence(memory, "button")),
+                 self.links("Later recorded change", [p for p in memory.get("in", []) if p.get("kind") in ("replaces", "instead")])
+                 if memory.get("css") in ("replaced", "aside") else "",
                  self.remind(memory),
                  E("p", {"class": "quiet plannote"}, {"bore": "This bore out a planned claim.",
                                                      "against": "This spoke against a planned claim."}[memory["plan_note"]])
@@ -957,8 +980,9 @@ class Page:
                  E("p", {"class": "quiet changednote"}, CHANGED_NOTE) if memory.get("changed") is True else "",
                  E("details", {"class": "where"}, E("summary", None, "Where this was said"),
                    *[self.field(entry) for entry in memory.get("where", [])],
-                   E("p", None, "Written by ", E("span", {"class": "people"}, who), " at %s, as a comment in the "
-                                                                                    "project's record on GitHub." % when),
+                   E("p", None, "Recorded by ", E("span", {"class": "people"}, who), ". Event stamp: ", when,
+                     ". Posted to the record: ", self.history_stamp(memory.get("posted")), ".",
+                     " Reconstructed later." if memory.get("reconstructed") else ""),
                    E("a", {"href": address}, "Open the original comment on GitHub")
                    if address else ""))
 
@@ -985,33 +1009,440 @@ class Page:
                  *[E("p", None, words) for words in paras],
                  E("p", {"class": "quiet"}, mind_model.PHRASES["short.asof"] % text_of(summary.get("asof"))))
 
+    def task_data(self):
+        tasks = self.model.get("tasks")
+        return tasks if isinstance(tasks, dict) else {}
+
+    def resume_work_link(self, row, automatic):
+        tasks = self.task_data()
+        if not isinstance(row, dict) or tasks.get("available") is False:
+            return ""
+        refs = {integer(n) for n in row.get("task_refs", []) if number(integer(n), ISSUE_NUMBER)} \
+            if isinstance(row.get("task_refs"), list) else set()
+        opened = tasks.get("open") if isinstance(tasks.get("open"), list) else []
+        closed = tasks.get("closed") if isinstance(tasks.get("closed"), list) else []
+        matches = [task for task in opened + closed if isinstance(task, dict) and integer(task.get("issue")) in refs]
+        if len(matches) != 1:
+            return ""
+        task = matches[0]
+        target = row.get("work_step")
+        checked = self.step_id(target.get("issue"), target) if isinstance(target, dict) else None
+        for step in task.get("steps", []) if task in opened and isinstance(task.get("steps"), list) else []:
+            if not isinstance(step, dict) or integer(step.get("n")) < 1 or integer(step.get("comment")) < 1 \
+                    or integer(step.get("ordinal")) < 1:
+                continue
+            ident = self.step_id(task.get("issue"), step)
+            if "work_step" in row:
+                if ident == checked:
+                    return E("a", {"class": "lk", "href": anchor(ident)}, "Review step")
+            elif automatic:  # Older models only carried the observer's short action and its issue reference.
+                words = text_of(step.get("text"))
+                if words and len(words) <= 120 and text_of(row.get("action_text")) == \
+                        "Step %d: %s" % (integer(step.get("n")), words.replace("|", "/")):
+                    return E("a", {"class": "lk", "href": anchor(ident)}, "Review step")
+        return E("a", {"class": "lk", "href": anchor("work-task-%d" % integer(task.get("issue")))}, "Open task")
+
+    def handoff_update(self, row):
+        completion, target = row.get("completion"), row.get("work_step")
+        if not isinstance(completion, dict) or not isinstance(target, dict):
+            return ""
+        memory = self.m.get(integer(completion.get("source")))
+        if not memory or memory.get("kind") not in record_format.MARK_RULES["done"]:
+            return ""
+        kind = memory["kind"]
+        address = github_url("memory", self.repo, memory.get("issue"), memory.get("id"))
+        author = text_of(memory.get("author"))
+        evidence = self.show("Read " + kind,
+                             E("p", {"class": "quiet"}, "Recorded ", self.history_stamp(memory.get("posted")),
+                               " by " + author if author else "", "."),
+                             *[self.field(entry, address) for entry in memory.get("fields", [])],
+                             *self.references(memory, embed_pictures=False),
+                             *[self.field(entry, address) for entry in memory.get("where", [])],
+                             E("a", {"href": address}, "Original " + kind + " on GitHub") if address else "")
+        following = completion.get("next_step")
+        if completion.get("task_closed") is True:
+            next_line = E("p", {"class": "quiet"}, "Task closed.")
+        elif isinstance(following, dict):
+            ident = self.step_id(target.get("issue"), following)
+            words = text_of(following.get("text"))
+            label = "Next step is blocked" if following.get("state") == "blocked" else "Next open step"
+            next_line = E("p", {"class": "handoff-follow"}, E("span", {"class": "lab"}, label),
+                          E("a", {"href": anchor(ident)}, words) if ident else words)
+        else:
+            next_line = E("p", {"class": "quiet"}, "No open steps in this task.")
+        return E("div", {"class": "handoff-update"}, E("b", {"class": "handoff-state"}, "Completed since handoff"),
+                 E("p", {"class": "handoff-outcome"}, self.sentence(memory)), evidence, next_line)
+
+    def handoff_row(self, row, automatic):
+        update = self.handoff_update(row)
+        action = J(self.runs(row.get("action")), J(" (", self.runs(row.get("where")), ")") if row.get("where") else "")
+        owner = text_of(row.get("owner"))
+        if update:
+            return E("li", {"class": "handoff-completed"}, E("div", None, action),
+                     E("span", {"class": "who people"}, "Owner: ", owner) if owner else "", update)
+        return E("li", None, E("span", {"class": "who people"}, owner),
+                 E("span", None, action, " ", self.resume_work_link(row, automatic)))
+
+    IMPACT_VERDICTS = {"still_correct": "Still correct", "unrelated": "Unrelated", "defer": "Deferred",
+                       "needs_update": "Update accepted", "applying": "Verification pending", "applied": "Update verified"}
+
+    @staticmethod
+    def pending_impact(item):
+        return (item.get("review") or {}).get("verdict") in (None, "needs_update", "applying")
+
+    def record_address(self, url):
+        """Rebuild a same-project citation from issue and comment identifiers."""
+        parts = mind_model.mind_text.github_parts(url) or {}
+        if parts.get("repo") == self.repo and parts.get("kind") in ("memory", "issue"):
+            return self.address(parts)
+        return None
+
+    def decision_line(self, label, entry):
+        mid = integer(entry.get("id"))
+        address = github_url("memory", self.repo, entry.get("issue"), mid)
+        words = text_of(entry.get("text"))
+        if mid in self.m:
+            link = self.said(self.m[mid], "inl", words)
+        else:
+            link = E("a", {"href": address}, words) if address else words
+        return E("p", {"class": "impact-decision"}, E("span", {"class": "lab"}, label), link)
+
+    @staticmethod
+    def guidance_prompts(subject):
+        prompts = []
+        for title, question in (("Help me decide", "Help me decide what to do"),
+                                ("What am I missing?", "What am I missing")):
+            words = "/recortex:guide %s about %s?" % (question, subject)
+            prompts.append(E("details", {"class": "impact-prompt"}, E("summary", None, title),
+                             E("code", None, words),
+                             E("button", {"type": "button", "class": "impact-copy"}, "Copy question"),
+                             E("span", {"class": "quiet", "aria-live": "polite"})))
+        return prompts
+
+    def impact_editor(self):
+        if self.action_root:
+            return self.action_root.rsplit("/", 1)[0] + "/impact-review"
+        sample = self.model.get("sample_impact_editor")
+        return sample + "-review.html" if sample in ("software", "research", "manuscript") else ""
+
+    def impact_item(self, group, item, history):
+        ident, revision = text_of(item.get("id")), text_of(item.get("revision"))
+        if not all(re.fullmatch("[a-f0-9]{64}", value) for value in (ident, revision)):
+            return ""
+        old = integer(group["old"]["id"])
+        label, quote = text_of(item.get("label")), text_of(item.get("quote"))
+        address, target = self.record_address(item.get("url")), text_of(item.get("anchor"))
+        jump = E("a", {"href": anchor(target)}, "Open in dashboard") if target and ANCHOR.fullmatch(target) else ""
+        source = E("a", {"href": address}, "Original on GitHub") if address else ""
+        review = item.get("review") or {}
+        state = self.IMPACT_VERDICTS.get(review.get("verdict"), "")
+        prompts = self.guidance_prompts("impact-%d, item %s in %s" % (old, ident, self.repo))
+        editor = self.impact_editor()
+        if editor:
+            location = "%s#impact-%d-%s%s" % (editor, old, ident, "" if history else "-overview")
+            review_link = E("a", {"class": "impact-review-link", "href": Href(location)},
+                            "Review change" if not state else "Open review")
+        else:
+            review_link = E("details", {"class": "impact-prompt"}, E("summary", None, "Review change"),
+                            E("p", None, "In the project chat, ask to review this item. You can inspect the exact change before saving."),
+                            E("code", None, "/recortex:impact impact-%d %s" % (old, ident)),
+                            E("button", {"type": "button", "class": "impact-copy"}, "Copy request"),
+                            E("span", {"class": "quiet", "aria-live": "polite"}))
+        return E("li", {"class": "impact-item"}, E("h5", None, label),
+                 E("blockquote", None, quote) if quote else "",
+                 E("p", None, text_of(item.get("reason"))),
+                 E("p", {"class": "impact-sources"}, jump, source),
+                 E("p", {"class": "quiet"}, state, " · ", text_of(review.get("reviewer"))) if state else "",
+                 E("div", {"class": "impact-choices"}, review_link, *prompts))
+
+    def impact_group(self, group, history=False):
+        old = group["old"]
+        current = group.get("successors") or []
+        items = group.get("items") or []
+        pending = [item for item in items if self.pending_impact(item)]
+        verifications = group.get("pending_verifications", [])
+        if not current or not (history or pending or verifications or group.get("conflict")):
+            return ""
+        ident = ("history-impact-" if history else "impact-") + str(integer(old.get("id")))
+        entries = items if history else pending
+        sections = []
+        for kind, caption in (("direct", "Explicit connections"), ("suggested", "Suggested connections")):
+            selected = [self.impact_item(group, item, history) for item in entries if item.get("relation") == kind]
+            if selected:
+                sections.append(E("div", {"class": "impact-section"}, E("h4", None, caption), E("ul", None, *selected)))
+        for event in verifications:
+            key, cid = text_of(event.get("target")), number(event.get("comment"), COMMENT_ID)
+            if not re.fullmatch("[0-9a-f]{64}", key) or not cid:
+                continue
+            editor = self.impact_editor()
+            target = (event.get("context") or {}).get("label") or "Earlier item"
+            path = "impact-%d-%s-pending-%d" % (integer(old.get("id")), key, cid)
+            receipt = github_url("memory", self.repo, group.get("hub"), cid)
+            sections.append(E("div", {"class": "impact-section"}, E("h4", None, "Verification pending"),
+                              E("p", None, target),
+                              E("a", {"href": Href(editor + "#" + path + ("" if history else "-overview"))}, "Check pending change") if editor else
+                              E("a", {"href": receipt}, "Read shared review") if receipt else ""))
+        log = []
+        if history:
+            for event in group.get("review_history", []):
+                state = self.IMPACT_VERDICTS.get(event.get("verdict"))
+                if state:
+                    key = event.get("target")
+                    current_item = next((item for item in items if item["id"] == key), {})
+                    name = (event.get("context") or {}).get("label") or current_item.get("label") or "Earlier item"
+                    receipt = github_url("memory", self.repo, group.get("hub"), event.get("comment"))
+                    log.append(E("li", None, E("b", None, name), " · ", state, " · ", text_of(event.get("reviewer")),
+                                 " · ", self.history_stamp(event.get("at")),
+                                 E("p", None, text_of(event.get("note"))) if event.get("note") else "",
+                                 E("a", {"href": receipt}, "Read shared review") if receipt else ""))
+        count = len(pending) + len(verifications)
+        summary = plural(count, "1 item to review", "%d items to review") if count else "No items awaiting review"
+        if group.get("conflict"):
+            summary = "Choose which replacement governs"
+        return E("details", {"class": "impact-group", "id": ident},
+                 E("summary", None, E("span", {"class": "impact-count"}, "" if history else "Changed decision · ", summary), E("b", None, text_of(current[0].get("text")))
+                   if len(current) == 1 else E("b", None, text_of(old.get("text")))),
+                 E("div", {"class": "impact-body"}, self.decision_line("Earlier decision", old),
+                   *[self.decision_line("Recorded replacement", source) for source in current],
+                   E("p", {"class": "impact-notice"}, "Multiple recorded replacements are in force. Confirm which one governs this work in the project chat.")
+                   if group.get("conflict") else "",
+                   *sections, E("p", {"class": "quiet"}, "No current connections were found within the reviewed record.")
+                   if not items and not verifications else "",
+                   self.show("Review history", E("ul", None, *log)) if log else "",
+                   E("a", {"href": anchor("history-impact-%d" % integer(old.get("id")))}, "See review history") if not history else ""))
+
+    def impact_coverage(self):
+        coverage = self.model.get("decision_impacts") or {}
+        notes = [text_of(value) for value in coverage.get("coverage", []) if text_of(value)]
+        if coverage.get("partial"):
+            return E("p", {"class": "impact-notice"}, "Review covers part of the project record. ", " ".join(notes))
+        return ""
+
+    def overview_attention(self, last, opened):
+        """Show at most three entries from the recorded handoff and unresolved task failures."""
+        rows = []
+        if last and last.get("holds"):
+            source = github_url("memory", self.repo, last.get("issue"), last.get("id"))
+            rows.append(E("li", None, E("span", {"class": "lab"}, "Hold from the last handoff"),
+                          self.blocks(last["holds"], cut_to=source),
+                          E("a", {"class": "lk", "href": source}, "Read the handoff on GitHub") if source else ""))
+        blocked = [task for task in opened if task.get("blocked") is True]
+        room = 3 - len(rows)
+        for task in blocked[:room]:
+            issue = integer(task["issue"])
+            steps = task.get("steps") if isinstance(task.get("steps"), list) else []
+            step = next((s for s in steps if isinstance(s, dict) and s.get("state") == "blocked"), {})
+            target = self.step_id(issue, step) or "work-task-%d" % issue
+            title = text_of(task.get("title")) or "Task #%d" % issue
+            failure = task.get("blocking_failure") if isinstance(task.get("blocking_failure"), dict) else {}
+            memory = self.m.get(integer(failure.get("id")))
+            if memory and memory.get("kind") == "failure":
+                evidence = self.said(memory, "lk", "Read the blocking failure")
+            else:
+                address = github_url("memory", self.repo, failure.get("issue"), failure.get("id"))
+                evidence = E("a", {"class": "lk", "href": address}, "Read the failure on GitHub") if address else ""
+            words = text_of(step.get("text"))
+            rows.append(E("li", None, E("span", {"class": "lab"}, "Blocked step" if words else "Blocked task",
+                                       " · ", title if words else "#%d" % issue),
+                          E("a", {"class": "said", "href": anchor(target)}, words or title),
+                          evidence))
+        groups = (self.model.get("decision_impacts") or {}).get("groups", [])
+        impacts = [panel for panel in (self.impact_group(group) for group in groups) if panel]
+        if not rows and not impacts:
+            return ""
+        more = len(blocked) - room
+        return E("section", {"class": "attention", "aria-labelledby": "attention-h"},
+                 E("h3", {"id": "attention-h"}, "Needs your attention"), *impacts,
+                 self.impact_coverage() if impacts else "", E("ul", None, *rows) if rows else "",
+                 E("a", {"class": "lk", "href": anchor("work")},
+                   plural(more, "See 1 more blocked task in Work", "See %d more blocked tasks in Work")) if more > 0 else "")
+
+    def handoff_excerpt(self, line):
+        """Show a checked project citation by name while keeping its address for the portable handoff."""
+        if len(line) > 360:
+            line = line[:359].rstrip() + "…"
+        parts, start = [], 0
+        for match in HANDOFF_LINK.finditer(line):
+            written = match.group().rstrip(".,;:!?")
+            address = self.record_address(written)
+            if address and address == written:
+                parts.extend([line[start:match.start()], E("a", {"href": address}, "cited record")])
+                start = match.start() + len(written)
+        return J(parts, line[start:])
+
+    def handoff_brief(self, opened):
+        """A portable excerpt of the trusted snapshot. Separate the dated handoff from later task evidence."""
+        built = self.model.get("built") or {}
+        last = self.model.get("last") or {}
+        source = github_url("memory", self.repo, last.get("issue"), last.get("id"))
+        notes = []
+        if source:
+            status = ["Recorded handoff · " + (text_of(last.get("day")) or "date unknown")]
+            for key, label in (("focus", "Focus"), ("holds", "Holds")):
+                field = last.get(key)
+                if isinstance(field, dict) and field.get("blocks"):
+                    words = " ".join(mind_versions.block_text(block) for block in field["blocks"] if isinstance(block, dict))
+                    status.append(label + " — " + (words.strip() if words.strip() and not field.get("cut")
+                                                   else "Read the full field in the original handoff."))
+            actions = last.get("next") or []
+            for row in actions[:3]:
+                action = text_of(row.get("action_text")) or mind_versions.run_text(row.get("action"))
+                if action:
+                    status.append("Planned at handoff — " + action)
+            if len(actions) > 3:
+                status.append("More planned actions are in the original handoff.")
+            status.append(E("a", {"href": source}, "Read the original handoff"))
+            notes.append(status)
+            for row in actions[:3]:
+                memory = self.m.get(integer((row.get("completion") or {}).get("source")))
+                if memory and memory.get("kind") in record_format.MARK_RULES["done"]:
+                    receipt = github_url("memory", self.repo, memory.get("issue"), memory.get("id"))
+                    if receipt:
+                        notes.append(["Completed since handoff — " + text_of(memory.get("plain") or memory.get("title")),
+                                      E("a", {"href": receipt}, "Read the completion record")])
+        tasks = self.task_data()
+        if tasks.get("available") is True and built.get("complete") is not False:
+            current = []
+            for task in opened:
+                step = next((s for s in task.get("steps", []) if isinstance(s, dict)
+                             and s.get("state") in ("open", "blocked")), None)
+                if step and text_of(step.get("text")):
+                    receipt = github_url("memory", self.repo, task["issue"], step.get("comment"))
+                    if receipt:
+                        label = "Blocked step" if step["state"] == "blocked" else "Open step"
+                        title = text_of(task.get("title"))
+                        current.append([label + (" · " + title if title else "") + " — " + step["text"],
+                                        E("a", {"href": receipt}, "Read the recorded step")])
+            notes.extend(current[:3])
+            if len(current) > 3:
+                notes.append(["More tasks with unfinished steps are listed in Work."])
+        groups = (self.model.get("decision_impacts") or {}).get("groups", [])
+        impacts = []
+        for group in groups:
+            pending = [item for item in group.get("items", []) if self.pending_impact(item)]
+            waiting = group.get("pending_verifications", [])
+            if group.get("conflict") or pending or waiting:
+                replacements = group["successors"][:2]
+                sources = [self.record_address(entry.get("url")) for entry in [group["old"]] + replacements]
+                lines = ["Earlier decision — " + text_of(group["old"].get("text"))]
+                lines.extend("Recorded replacement — " + text_of(entry.get("text")) for entry in replacements)
+                if len(group["successors"]) > len(replacements):
+                    lines.append("See History for additional replacements.")
+                if group.get("conflict"):
+                    lines.append("Next judgment — confirm which recorded replacement governs.")
+                elif waiting:
+                    event = waiting[0]
+                    label = (event.get("context") or {}).get("label") or "the earlier item"
+                    lines.append("Next step — verify the pending change for " + label + ".")
+                    sources.append(github_url("memory", self.repo, group.get("hub"), event.get("comment")))
+                else:
+                    item = pending[0]
+                    state = (item.get("review") or {}).get("verdict")
+                    if state == "needs_update":
+                        lines.append("Next step — reopen the accepted draft for " + text_of(item.get("label")) + ".")
+                    elif state == "applying":
+                        lines.append("Next step — verify the pending change for " + text_of(item.get("label")) + ".")
+                    else:
+                        lines.append("Next judgment — review " + text_of(item.get("label")) + ". " + text_of(item.get("reason")))
+                    sources.append(self.record_address(item.get("url")))
+                sources = list(dict.fromkeys(address for address in sources if address))
+                lines.extend(E("a", {"href": address}, "Read decision review source %d" % number)
+                             for number, address in enumerate(sources, 1))
+                impacts.append(lines)
+        notes.extend(impacts[:2])
+        if len(impacts) > 2:
+            notes.append(["Additional decision changes await review in Overview."])
+        if not notes:
+            return ""
+        stamp = self.history_stamp(built.get("synced_at"))
+        lines = ["Project handoff · " + self.repo, "Record last read · " + stamp]
+        if built.get("complete") is False or tasks.get("available") is False:
+            lines.append("Current task state is unavailable from this snapshot.")
+        brief = ["\n".join(lines)]
+        for note in notes:
+            brief.append("\n\n")
+            for pos, line in enumerate(note):
+                if pos:
+                    brief.append("\n")
+                if isinstance(line, Safe):  # A source link built above; retain the whole address for copying.
+                    brief.append(line)
+                else:
+                    for n, field_line in enumerate(line.splitlines()):
+                        if n:
+                            brief.append("\n")
+                        brief.append(self.handoff_excerpt(field_line))
+        return E("div", {"class": "handoff-share noprint"},
+                 E("button", {"type": "button", "id": "handoff-copy"}, "Copy handoff"),
+                 E("details", {"id": "handoff-preview"}, E("summary", None, "Read handoff text"),
+                   E("pre", {"id": "handoff-text", "tabindex": "-1"}, brief),
+                   E("pre", {"id": "handoff-manual-copy", "tabindex": "-1", "hidden": "hidden"})),
+                 E("p", {"class": "quiet", "id": "handoff-copy-status", "aria-live": "polite"}))
+
     def now_view(self):
-        last, out = self.model.get("last"), []
-        out.append(self.summary_block(last.get("summary") if isinstance(last, dict) else None))
+        last, out = self.model.get("last"), [self.snapshot_line()]
+        tasks = self.task_data()
+        opened = sorted((task for task in tasks.get("open", []) if isinstance(task, dict)
+                         and number(integer(task.get("issue")), ISSUE_NUMBER)),
+                        key=lambda task: (task.get("todo") is True, integer(task["issue"]))) if isinstance(tasks.get("open"), list) else []
+        complete = (self.model.get("built") or {}).get("complete") is not False
+        out.append(self.overview_attention(last, opened if complete and tasks.get("available") is True else []))
+        if tasks.get("available") is False:
+            out.append(E("p", {"class": "nothing"}, "Work could not be read from this snapshot. Sync the record and rebuild the page."))
+        elif not last:
+            first = next(((task, step) for task in opened
+                          for step in (task.get("steps") if isinstance(task.get("steps"), list) else [])
+                          if isinstance(step, dict) and step.get("state") in ("open", "blocked") and text_of(step.get("text"))), None)
+            if first and not (first[0].get("blocked") and complete and tasks.get("available") is True):
+                task, step = first
+                target = self.step_id(task["issue"], step) or "work-task-%d" % task["issue"]
+                receipt = github_url("memory", self.repo, task["issue"], step.get("comment"))
+                guidance = self.guidance_prompts("the unfinished task step in %s at %s" % (self.repo, receipt)) if receipt else []
+                out.append(E("section", {"class": "resume-step"}, E("h3", None, "First unfinished recorded step"),
+                             E("a", {"class": "said", "href": anchor(target)}, text_of(step["text"])),
+                             E("p", {"class": "quiet"}, "Blocked. " if step.get("state") == "blocked" else "",
+                               "From the recorded task order. ", E("a", {"href": anchor("work")}, "See all work")),
+                             E("div", {"class": "impact-choices"}, *guidance) if guidance else ""))
+        if complete and tasks.get("available") is True and not any((self.m, self.threads, opened, tasks.get("closed"),
+                (self.model.get("project_map") or {}).get("nodes"), (self.model.get("not_told") or {}).get("count"))):
+            out.append(E("section", {"class": "resume-step"}, E("h3", None, "Start your project record"),
+                         E("p", None, "For an existing project, say “Catch up the record” in Claude Code to review earlier work. ",
+                           "For a new project, open the ", E("a", {"href": anchor("project-map")}, "Project Map"),
+                           " to organize your first goals.")))
         if last:
             day = text_of(last.get("day"))
-            out.append(E("p", {"class": "paused"}, "We last paused on %s. This is how things stood:" % day if day else
-                         "We last paused here. This is how things stood:"))
+            source = github_url("memory", self.repo, last.get("issue"), last.get("id"))
+            caption = "Status automatically refreshed on %s." % day if last.get("automatic") is True else \
+                "We last paused on %s. This is how things stood:" % day if day else "Recorded status."
+            out.append(E("p", {"class": "paused"}, caption, " ", E("a", {"href": source}, "Original status") if source else ""))
             out.append(E("blockquote", {"class": "focus"}, self.blocks(last.get("focus"))))
-            steps = [E("li", None, E("span", {"class": "who people"}, text_of(row.get("owner"))),
-                       E("span", None, self.runs(row.get("action")),
-                         J(" (", self.runs(row.get("where")), ")") if row.get("where") else ""))
-                     for row in last.get("next", [])]
-            out.append(E("div", {"class": "two"},
-                         E("div", None, E("h3", None, "What we meant to do next"),
-                           E("ul", {"class": "next"}, *steps) if steps else
-                           E("p", {"class": "quiet"}, "Nothing was written down for next.")),
-                         E("div", None, E("h3", None, "Wait for a yes before"),
-                           E("div", {"class": "hold"}, self.blocks(last.get("holds"))) if last.get("holds") else
-                           E("p", {"class": "quiet"}, "Nothing waits for a yes."))))
+            steps = [self.handoff_row(row, last.get("automatic") is True) for row in last.get("next", [])]
+            out.append(E("section", {"class": "handoff-next"}, E("h3", None, "What we meant to do next"),
+                         E("ul", {"class": "next"}, *steps) if steps else
+                         E("p", {"class": "quiet"}, "Nothing was written down for next.")))
+            out.append(E("p", {"class": "quiet"}, "Automatic status: focus and holds were carried forward." if last.get("automatic") is True
+                         else "From the latest recorded status, not your last visit."))
+            out.append(self.handoff_brief(opened))
+            out.append(self.show("Project summary", self.summary_block(last.get("summary"))))
             if last.get("day"):
                 since = [self.card(self.m[mid]) for mid in self.model.get("since", []) if mid in self.m]
-                out += [E("h3", None, "Since that pause"),
-                        E("div", {"class": "stack"}, *since) if since else
-                        E("p", {"class": "quiet"}, "Nothing has been recorded since.")]
+                out.append(self.show("Since that pause: event sequence", E("div", {"class": "stack"}, *since) if since else
+                                     E("p", {"class": "quiet"}, "No later events are included after this status time.")))
+            additions = [self.card(self.m[mid]) for mid in self.model.get("recorded_since", [])[:5] if mid in self.m]
+            if additions:
+                out += [E("h3", None, "Added after that status was posted"), E("div", {"class": "stack"}, *additions),
+                        E("p", {"class": "quiet"}, "Includes earlier events recorded later. ",
+                          E("a", {"href": anchor("history")}, "Browse all included history"))]
         else:
             out.append(E("p", {"class": "nothing"}, PAUSE_UNTOLD if (self.model.get("not_told") or {}).get("pause")
                          is True else "No pause has been recorded yet."))
+            out.append(self.handoff_brief(opened))
+        out.append(E("nav", {"class": "area-links noprint", "aria-label": "Project areas"},
+                     E("a", {"href": anchor("project-map")}, "Explore the project map"),
+                     E("a", {"href": anchor("settled")}, "Current understanding"),
+                     E("a", {"href": anchor("history")}, "Catch up"),
+                     E("a", {"href": anchor("work")}, "All work"),
+                     E("a", {"href": anchor("text")}, "Current topic text") if not self.model.get("outputs_available") and
+                     (self.outline.get("deliverables") or self.outline.get("other")) else ""))
         latest = []
         for kind, label in (("decision", "The last thing we decided"), ("result", "The last thing we found"),
                             ("failure", "The last thing that went wrong"), ("question", "The last thing we asked")):
@@ -1020,7 +1451,210 @@ class Page:
                 latest.append(E("li", None, E("span", {"class": "lab"}, label), self.card(self.m[mid])))
         if latest:
             out += [E("h3", None, "The latest of each kind"), E("ul", {"class": "latest"}, *latest)]
-        return self.view("now", "Where we are", None, *out, self.untold())
+        return self.view("now", "Resume work", None, *out, self.untold())
+
+    def project_map_view(self):
+        state = self.model.get("project_map") or {}
+        nodes = {key: node for key, node in state.get("nodes", {}).items()
+                 if isinstance(node, dict) and not node.get("deleted")}
+        edit = E("a", {"class": "lk", "href": Href(self.action_root.rsplit("/", 1)[0] + "/map-editor")},
+                 "Edit project map") if self.action_root else ""
+        if not nodes:
+            return self.view("project-map", "Project Map", None, E("p", {"class": "nothing"}, "No branches yet."),
+                             E("p", None, "Use ", E("code", None, "/recortex:map"),
+                               " to start with your goals or choose project files for Recortex to read."), edit)
+        children = {}
+        for ident, node in nodes.items():
+            children.setdefault(node["parent"], []).append(ident)
+        for group in children.values():
+            group.sort(key=lambda key: (nodes[key]["title"].casefold(), key))
+        # Build bottom-up without using the Python call stack for user-defined nesting depth.
+        order = []
+        pending = list(reversed(children.get(None, [])))
+        while pending:
+            ident = pending.pop()
+            order.append(ident)
+            pending.extend(reversed(children.get(ident, [])))
+        rows, details = {}, []
+        history = state.get("history", [])
+        history_by_id = {}
+        for event in reversed(history):
+            for ident in event.get("affected", []):
+                history_by_id.setdefault(ident, []).append(event)
+        for ident in reversed(order):
+            node, nested = nodes[ident], children.get(ident, [])
+            dest = branch_anchor(ident)
+            toggle = E("button", {"class": "branch-toggle", "type": "button", "aria-expanded": "true",
+                                  "aria-controls": dest + "-children"},
+                       E("span", {"aria-hidden": "true"}, "▸"), E("span", {"class": "branch-sr"}, "Branches under ", node["title"]))
+            rows[ident] = E("li", {"class": "branch-row branch-parent" if nested else "branch-row"},
+                            E("div", {"class": "branch-label"}, toggle if nested else E("span", {"class": "branch-dot"}),
+                              E("a", {"href": anchor(dest)}, node["title"]),
+                              E("span", {"class": "branch-count"}, str(len(nested))) if nested else ""),
+                            E("ul", {"id": dest + "-children"}, [rows.pop(k) for k in nested]) if nested else "")
+            parent = node["parent"]
+            back = E("a", {"href": anchor(branch_anchor(parent))}, nodes[parent]["title"]) if parent in nodes else None
+            related = [E("li", None, E("a", {"href": anchor(branch_anchor(k))}, nodes[k]["title"]))
+                       for k in node.get("links", []) if k in nodes]
+            evidence = [self.branch_evidence(ref) for ref in node.get("evidence", [])]
+            details.append(E("article", {"class": "branch-detail", "id": dest, "tabindex": "-1"},
+                             E("p", {"class": "branch-path"}, E("a", {"href": anchor("project-map")}, "Project"),
+                               J(" / ", back) if back else ""),
+                             E("h3", {"class": "branch-title"}, node["title"]),
+                             E("p", {"class": "branch-description"}, node["description"]) if node.get("description") else "",
+                             E("h4", None, "Evidence"), E("ul", None, evidence) if evidence else
+                             E("p", {"class": "quiet"}, "No evidence links recorded."),
+                             J(E("h4", None, "Related branches"), E("ul", None, related)) if related else "",
+                             self.branch_history(history_by_id.get(ident, [])[:6], nodes, selected=ident),
+                             E("a", {"href": Href(self.action_root.rsplit("/", 1)[0] + "/map-editor#" + dest)},
+                               "Edit this branch") if self.action_root else ""))
+        roots = children.get(None, [])
+        home = E("article", {"class": "branch-detail branch-home"}, E("p", {"class": "branch-path"}, "Project"),
+                 E("h3", {"class": "branch-title"}, self.model.get("name") or "This project"),
+                 E("p", {"class": "quiet"}, "%d main %s · %d %s in total" % (
+                     len(roots), "branch" if len(roots) == 1 else "branches", len(order),
+                     "branch" if len(order) == 1 else "branches")),
+                 self.branch_history(list(reversed(history[-6:])), nodes, show_branch=True), edit)
+        outline = E("nav", {"class": "branch-outline", "aria-label": "Project branches"},
+                    E("a", {"class": "branch-root", "href": anchor("project-map")}, self.model.get("name") or "Project"),
+                    E("ul", {"class": "branch-tree"}, [rows[k] for k in roots]))
+        demo = ""
+        if self.model.get("sample_map_edits") is True:
+            demo = E("details", {"class": "branch-demo"}, E("summary", None, "Try renaming a sample branch"),
+                     E("p", {"class": "quiet"}, "Choose a branch, enter a new name, and preview the change. "
+                       "This example keeps edits only until you reload."),
+                     E("label", None, "New branch name", E("input", {"id": "branch-new-name", "type": "text"})),
+                     E("button", {"type": "button", "id": "branch-try"}, "Preview rename"),
+                     E("p", {"id": "branch-sample-status", "role": "status"}),
+                     E("button", {"type": "button", "id": "branch-apply", "hidden": "hidden"}, "Apply to sample"))
+        return self.view("project-map", "Project Map", "Explore the branches of this project and the evidence behind them.",
+                         E("div", {"class": "branch-tools"}, E("label", {"class": "branch-search"},
+                           E("span", {"class": "lab"}, "Find a branch"),
+                           E("input", {"id": "branch-search", "type": "search", "aria-label": "Find a branch"})),
+                           E("div", {"class": "branch-modes", "role": "group", "aria-label": "Project branches"},
+                             E("button", {"type": "button", "id": "branch-diagram"}, "Branch map"),
+                             E("button", {"type": "button", "id": "branch-list"}, "Outline")),
+                           E("p", {"id": "branch-matches", "class": "quiet", "role": "status"})),
+                         E("div", {"class": "branch-layout"}, outline, E("div", {"class": "branch-inspector"},
+                           home, list(reversed(details)), demo)))
+
+    def branch_evidence(self, ref):
+        kind, _, value = ref.partition(":")
+        if kind == "comment" and value.isascii() and value.isdigit() and len(value) < 20:
+            memory = self.m.get(int(value))
+            if memory:
+                return E("li", None, self.said(memory, "inl"), E("span", {"class": "lab"}, memory.get("day") or ""))
+        if kind == "issue" and number(value, ISSUE_NUMBER):
+            n = int(value)
+            opened = self.task_data().get("open")
+            task = next((t for t in opened if isinstance(t, dict) and t.get("issue") == n), None) \
+                if isinstance(opened, list) else None
+            if task:
+                return E("li", None, E("a", {"href": anchor("work-task-%d" % n)}, task.get("title") or "Task #%d" % n))
+            return E("li", None, E("a", {"href": github_url("issue", self.repo, n)}, "Issue #%d" % n))
+        return E("li", None, E("code", None, value) if kind == "file" else ref)
+
+    @staticmethod
+    def branch_history(events, nodes, show_branch=False, selected=None):
+        if not events:
+            return ""
+        verbs = {"add": "Added", "rename": "Renamed", "move": "Moved", "update": "Updated", "delete": "Removed",
+                 "restore": "Restored", "merge": "Merged", "split": "Split"}
+        entries = []
+        for event in events:
+            ident = event.get("node")
+            title = event.get("title") or nodes.get(ident, {}).get("title") or "branch"
+            name = E("a", {"href": anchor(branch_anchor(ident))}, title) if ident in nodes else title
+            action = event.get("action")
+            detail = J(" ", name) if show_branch or ident != selected else ""
+            if action == "rename" and event.get("before_title"):
+                detail = J(" ", event["before_title"], " to ", name)
+            elif action == "move" and event.get("origin"):
+                detail = J(detail, " from ", event["origin"], " to ", event["destination"])
+            elif action == "merge" and event.get("destination"):
+                detail = J(detail, " into ", event["destination"])
+            entries.append(E("li", None, verbs.get(action, "Changed"), detail,
+                             E("span", {"class": "lab"}, (event.get("at") or "")[:10], " · ",
+                               "Observer via " if event.get("source") == "observer" else "", event.get("author") or "")))
+        return J(E("h4", None, "Recent changes"), E("ul", {"class": "branch-history"}, entries))
+
+    def snapshot_line(self):
+        built = self.model.get("built") or {}
+        synced = text_of(built.get("synced_at"))
+        return E("p", {"class": "snapshot quiet"}, "Snapshot built ", text_of(built.get("words")) or "on an unknown day",
+                 ". Record last read ", synced if index.ISO_UTC.fullmatch(synced) else "at an unknown time",
+                 ". ", "Incomplete read. " if built.get("complete") is False else "",
+                 "Local interactive session." if self.action_root else "Static snapshot.")
+
+    @staticmethod
+    def history_stamp(value):
+        return value.replace("T", " ").replace("Z", " UTC") if isinstance(value, str) and index.ISO_UTC.fullmatch(value) else "Time unknown"
+
+    @staticmethod
+    def history_select(ident, label, choices):
+        return E("label", None, E("span", {"class": "lab"}, label), E("select", {"id": ident},
+                 *[E("option", {"value": key}, words) for key, words in choices]))
+
+    def history_view(self):
+        rows = []
+        ordered = sorted(self.m.values(), key=lambda m: (m.get("posted") or "", integer(m.get("id"))), reverse=True)
+        since = set(self.model.get("recorded_since", []))
+        boundary = (self.model.get("last") or {}).get("posted")
+        kinds = (("all", "All event kinds"), ("decision", "Decisions"), ("result", "Findings"), ("failure", "Failures"),
+                 ("correction", "Corrections"), ("question", "Questions"), ("idea", "Ideas"), ("checkpoint", "Checkpoints"),
+                 ("text", "Text changes"))
+        states = (("all", "All states"), ("stands", "Still stands"), ("open", "Still open"), ("replaced", "Replaced"),
+                  ("aside", "Set aside"), ("answered", "Answered"), ("tried", "Tried"), ("taken", "Taken up"),
+                  ("led", "Led to a change"), ("pause", "Checkpoints"))
+        topics = [("all", "All topics")] + [(n, text_of(t.get("name"))) for n, t in self.threads.items()]
+        for memory in ordered:
+            mid = integer(memory.get("id"))
+            event = memory.get("event_time") or ""
+            posted = memory.get("posted") or ""
+            event = event if index.ISO_UTC.fullmatch(event) else ""
+            posted = posted if index.ISO_UTC.fullmatch(posted) else ""
+            dates = [E("span", {"class": "h-posted"}, "Recorded ", self.history_stamp(posted)),
+                     E("span", {"class": "h-event"}, "Event ", self.history_stamp(event))]
+            if memory.get("time_basis") == "posting":
+                dates.append(E("span", {"class": "quiet"}, "Event time unavailable; ordered by posting time."))
+            if memory.get("reconstructed"):
+                dates.append(E("span", {"class": "quiet"}, "Reconstructed later"))
+            rows.append(E("li", {"class": "history-row " + kind_class(memory), "id": "history-%d" % mid,
+                                  "data-kind": kind_class(memory)[2:],
+                                  "data-state": state_class(memory)[2:], "data-thread": integer(memory.get("thread")),
+                                  "data-event": event, "data-posted": posted, "data-catchup": "yes" if mid in since else "no"},
+                          E("div", {"class": "history-date"}, *dates),
+                          E("div", {"class": "history-content"}, self.meta(memory, thread=True), self.said(memory))))
+        controls = E("fieldset", {"class": "history-controls noprint"}, E("legend", None, "Filter history"),
+                     self.history_select("history-order", "Order", (("newest", "Newest first"), ("oldest", "Oldest first"))),
+                     self.history_select("history-topic", "Topic", topics),
+                     self.history_select("history-kind", "Event kind", kinds),
+                     self.history_select("history-state", "Recorded state", states),
+                     self.history_select("history-scope", "Range", (("all", "All included history"),) +
+                                         ((("since", "After the latest status"),) if boundary else ())),
+                     E("label", None, E("span", {"class": "lab"}, "Words"),
+                       E("input", {"id": "history-query", "type": "search", "aria-label": "Find words in history"})),
+                     E("label", None, E("span", {"class": "lab"}, "From (UTC)"),
+                       E("input", {"id": "history-from", "type": "date", "aria-label": "Start date"})),
+                     E("label", None, E("span", {"class": "lab"}, "Through (UTC)"),
+                       E("input", {"id": "history-to", "type": "date", "aria-label": "End date"})),
+                     E("button", {"id": "history-reset", "type": "button"}, "Reset filters"))
+        groups = (self.model.get("decision_impacts") or {}).get("groups", [])
+        return self.view("history", "History", "Follow the record, then open a memory to see its evidence and what changed.",
+                         E("section", {"class": "impact-history"}, E("h3", None, "Changed decisions"),
+                           *[self.impact_group(group, history=True) for group in groups]) if groups else "",
+                         self.impact_coverage(),
+                         E("div", {"class": "history-tools noprint"},
+                           self.history_select("history-clock", "Read by", (("posted", "Recently recorded"), ("event", "Event sequence"))),
+                           E("details", {"class": "history-filters"}, E("summary", {"id": "history-filter-label"}, "Filters"), controls,
+                             E("p", {"class": "quiet", "id": "history-boundary"},
+                               "Latest status posted " + self.history_stamp(boundary) + ". This boundary changes when a new status is posted."
+                               if boundary else "No checked status boundary is available. All included history is shown."))),
+                         E("p", {"id": "history-count", "aria-live": "polite"}, "%d included memories" % len(rows)),
+                         E("p", {"class": "quiet", "id": "history-selected", "hidden": "hidden"}),
+                         E("ol", {"class": "history-list", "id": "history-list"}, *rows),
+                         E("p", {"id": "history-empty", "hidden": "hidden" if rows else None}, "No memories are included yet. "
+                           "The record may be empty or its memories unavailable."), self.untold_line())
 
     # ------------------------------------------------------------ the text
 
@@ -1367,7 +2001,9 @@ class Page:
         name = text_of(sheet.get("name"))
         front = E("header", {"class": "front"},
                   E("h2", {"id": "paper-h", "class": "ptitle"}, title),
-                  E("p", {"class": "psub"}, name) if name else "",
+                  E("p", {"class": "psub" if name else "psub noprint"}, name,
+                    E("span", {"class": "noprint"}, " · " if name else "",
+                      E("a", {"class": "lk", "href": anchor("project-map")}, "Project Map"))),
                   E("p", {"class": "dateline"}, mind_model.PHRASES["sheet.dateline"] % built),
                   E("p", {"class": "fronttools noprint"}, E("a", {"class": "lk", "href": anchor("text")}, mind_model.PHRASES["sheet.deliver"]),
                     E("button", {"type": "button", "data-print": "1"}, mind_model.PHRASES["sheet.print"])),
@@ -1863,23 +2499,41 @@ class Page:
         other = [o for o in outline.get("other", []) if isinstance(o, dict)] if isinstance(outline.get("other"), list) \
             else []
         title = text_of(outline.get("title")) or "What we deliver"
+        if self.model.get("outputs_available") is False:
+            title = "Current topic text"
         noun = text_of(outline.get("noun")) or "the deliverable"
         if not groups and not other:
             return self.view("text", title, TEXT_LEDE,
+                             E("ul", {"class": "plainlist"}, *[E("li", None, text_of(o.get("title")), ": no current text yet.")
+                               for o in outline.get("outputs", []) if isinstance(o, dict)]),
                              E("p", {"class": "quiet"}, "No part of %s has been written into the record yet." % noun),
                              self.untold_line())
-        contents, body, sourced = [], [], []
-        for group in groups:
+        contents, body, sourced, drawn_parts = [], [], [], set()
+        group_ids = []
+        for i, group in enumerate(groups):
+            ident = "output-" + str(group.get("id") or group.get("profile") or "text")
+            if not ANCHOR.fullmatch(ident) or ident in group_ids:
+                ident = "output-unknown-%d" % (i + 1)
+                while ident in group_ids:
+                    ident += "-x"
+            group_ids.append(ident)
+
+        def draw_part(part):
+            key = (integer(part.get("thread")), part.get("ordinal"))
+            if key in drawn_parts:
+                return E("p", {"class": "quiet"}, "Shared current text: ", self.part_link(part))
+            drawn_parts.add(key)
+            return self.part(part)
+        for group, ident in zip(groups, group_ids):
             sections = [s for s in group.get("sections", []) if isinstance(s, dict)]
-            if len(groups) > 1:
-                body.append(E("h3", {"class": "deliv"}, text_of(group.get("title"))))
+            body.append(E("h3", {"class": "deliv", "id": ident}, text_of(group.get("title"))))
             for section in sections:
                 parts = [p for p in section.get("parts", []) if isinstance(p, dict)]
                 n = integer(section.get("n"))
                 contents.append(E("li", None, self.section_link(n, section.get("label")),
                                   E("ul", None, *[E("li", None, self.part_link(p)) for p in parts])))
                 body.append(E("section", {"class": "sec", "id": "sec-%d" % n}, E("h3", None, text_of(section.get("label"))),
-                              self.blocks(section.get("before")), *[self.part(p) for p in parts]))
+                              self.blocks(section.get("before")), *[draw_part(p) for p in parts]))
                 sourced += [integer(p.get("thread")) for p in parts]
         by_thread = []
         for entry in other:
@@ -1892,7 +2546,7 @@ class Page:
                 E("h3", None, "Other text of ", self.thread_link(n))
             if not groups:
                 contents.append(E("li", None, E("a", {"href": anchor("other-%d" % n)}, self.thread_name(n))))
-            body.append(E("section", {"class": "sec", "id": "other-%d" % n}, heading, *[self.part(p) for p in entries]))
+            body.append(E("section", {"class": "sec", "id": "other-%d" % n}, heading, *[draw_part(p) for p in entries]))
             sourced.append(n)
         numbers = []
         for n in dict.fromkeys(sourced):
@@ -1902,6 +2556,9 @@ class Page:
                     "class": "srcs"}, *[E("li", None, E("b", None, self.runs(row.get("statement"))), ": ",
                                           self.runs(row.get("source"))) for row in sources])))
         return self.view("text", title, TEXT_LEDE, self.read_line() if self.sheet else self.print_line(), self.plan_summary(),
+                         E("nav", {"class": "area-links", "aria-label": "Within this area"}, *[
+                           E("a", {"href": anchor(ident)}, text_of(g.get("title")))
+                           for g, ident in zip(groups, group_ids)]) if len(groups) > 1 else "",
                          self.versions_block(),
                          E("ul", {"class": "contents", "aria-label": "The parts of the text, in order"}, *contents),
                          *body, E("h3", None, "Where the numbers come from") if numbers else "", *numbers,
@@ -2013,15 +2670,14 @@ class Page:
                  if integer(stands.get(key)) in self.m]
         points = [E("li", None, self.said_id(mid)) for mid in stands.get("open", []) if integer(mid) in self.m]
         tasks = [self.task_note(task, with_story=True) for task in stands.get("tasks", []) if isinstance(task, dict)]
-        noun = text_of(self.outline.get("noun")) or "the deliverable"
-        where = [E("a", {"href": anchor("text-%d-%d" % (n, f["ordinal"])) if isinstance(f.get("ordinal"), int)
-                         and not isinstance(f.get("ordinal"), bool) else anchor("sec-%d" % integer(f.get("n")))},
-                   text_of(f.get("label"))) for f in thread.get("feeds", []) if isinstance(f, dict)]
-        return E("article", {"class": "thread", "id": "thread-%d" % n},
-                 E("h3", None, text_of(thread.get("name")), " ",
-                   self.explain_button(text_of(thread.get("status_explain")), text_of(thread.get("status")),
-                                       "chip " + STATE_CLASS.get(thread.get("status_css"), "s-plain"))),
-                 E("p", {"class": "feeds quiet"}, "Feeds ", *self.join(feeds)) if feeds else "",
+        if tasks and thread.get("status_explain") == "thread-clear":
+            status = E("span", {"class": "quiet"}, plural(len(tasks), "1 open task", "%d open tasks"))
+        else:
+            status = self.explain_button(text_of(thread.get("status_explain")), text_of(thread.get("status")),
+                                         "chip " + STATE_CLASS.get(thread.get("status_css"), "s-plain"))
+        return E("article", {"class": "thread", "id": "thread-%d" % n, "tabindex": "-1"},
+                 E("a", {"class": "story-back", "href": anchor("threads")}, "All topic stories"),
+                 E("h3", None, text_of(thread.get("name")), " ", status),
                  E("div", {"class": "about"}, E("h4", {"class": "sh"}, "What this thread is about"),
                    E("p", {"class": "aboutsay"}, "This thread is about ", self.runs(self.first_runs(opening["about"])), ".")
                    if opening else E("p", {"class": "aboutsay"}, "Nobody has written what this thread is about yet."),
@@ -2030,7 +2686,7 @@ class Page:
                    E("ul", {"class": "latest"}, *cards) if cards else "",
                    E("p", {"class": "lab"}, "Still open here") if points else "",
                    E("ul", {"class": "plainlist"}, *points) if points else "", *tasks,
-                   E("p", {"class": "quiet"}, "Its text is in %s under " % noun, *self.join(where), ".") if where else ""),
+                   E("p", {"class": "quiet"}, E("span", {"class": "lab"}, "Related output text"), *self.join(feeds)) if feeds else ""),
                  E("h4", {"class": "sh"}, "The story, oldest first"),
                  E("p", None, E("a", {"class": "jump", "href": anchor("latest-%d" % n)}, "Jump to the latest"))
                  if thread.get("steps") else "", self.chain(thread))
@@ -2050,55 +2706,28 @@ class Page:
                  if story else "", " " if story else "",
                  E("a", {"class": "quiet", "href": address}, "Open the task on GitHub") if address else "")
 
-    def outline_entry(self, thread):
-        n = integer(thread.get("n"))
-        also = [E("a", {"href": anchor("sec-%d" % integer(f.get("n")))}, text_of(f.get("label")))
-                for f in thread.get("feeds", [])[1:] if isinstance(f, dict)]
-        tasks = []
-        for task in thread.get("tasks", []):
-            if not isinstance(task, dict):
-                continue
-            title = text_of(task.get("title")) or "a task"
-            state = "still open" if task.get("open") is True else "closed"
-            tasks.append(E("li", None, E("a", {"href": anchor("task-%d" % integer(task.get("issue")))}, title)
-                           if task.get("memories") else title, " ", E("span", {"class": "quiet"}, state)))
-        return E("li", None, self.thread_link(n), " ",
-                 self.explain_button(text_of(thread.get("status_explain")), text_of(thread.get("status")),
-                                     "chip " + STATE_CLASS.get(thread.get("status_css"), "s-plain")),
-                 E("span", {"class": "quiet"}, " also feeds ", *self.join(also)) if also else "",
-                 E("ul", {"class": "outline"}, *tasks) if tasks else "")
-
     def threads_view(self):
-        threads = self.model.get("threads", [])
-        groups = [g for g in self.outline.get("deliverables", []) if isinstance(g, dict)] \
-            if isinstance(self.outline.get("deliverables"), list) else []
-        out = []
-        for group in groups:
-            if len(groups) > 1:
-                out.append(E("h3", {"class": "deliv"}, text_of(group.get("title"))))
-            for section in group.get("sections", []):
-                firsts = [self.threads[integer(p.get("thread"))] for p in section.get("parts", [])
-                          if isinstance(p, dict) and p.get("first") is True and integer(p.get("thread")) in self.threads]
-                if firsts:
-                    out.append(E("section", {"class": "outl"}, E("p", {"class": "lab"}, self.section_link(
-                        section.get("n"), section.get("label"))), E("ul", {"class": "outline"}, *[
-                            self.outline_entry(t) for t in firsts])))
-        unplaced = [self.threads[n] for n in self.outline.get("unplaced", []) if integer(n) in self.threads]
-        if unplaced:
-            out.append(E("section", {"class": "outl"}, E("p", {"class": "lab"}, "Topics"),
-                         E("ul", {"class": "outline"}, *[self.outline_entry(t) for t in unplaced])))
-        aside = [t for t in threads if t.get("set_aside") is True]
-        if aside:
-            out.append(E("section", {"class": "outl"}, E("p", {"class": "lab"}, "Set aside"),
-                         E("ul", {"class": "outline"}, *[self.outline_entry(t) for t in aside])))
-        loose = [t for t in threads if t.get("loose") is True]
-        if loose:
-            out.append(E("section", {"class": "outl"}, E("ul", {"class": "outline"}, *[self.outline_entry(t)
-                                                                                      for t in loose])))
-        return self.view("threads", "How we got here", "Each thread is one line of thought, told from its first memory "
-                         "to its latest. Choose a sentence to open that memory.",
-                         E("div", {"class": "outlines", "aria-label": "The threads, by section"}, *out),
-                         *[self.thread_article(t) for t in threads], self.untold_line())
+        # The model keeps deliverable order for Outputs. A story's place in History follows its included records.
+        stories = []
+        for thread in self.threads.values():
+            memories = [self.m[mid] for mid in thread.get("memories", []) if mid in self.m]
+            latest = max((m["posted"] for m in memories if index.ISO_UTC.fullmatch(text_of(m.get("posted")))), default="")
+            stories.append((thread, latest, len(memories)))
+        stories.sort(key=lambda row: (text_of(row[0].get("name")).casefold(), integer(row[0].get("n"))))
+        stories.sort(key=lambda row: row[1], reverse=True)
+        entries = []
+        for thread, latest, count in stories:
+            words = plural(count, "1 record", "%d records") if count else "No records in this snapshot"
+            if count:
+                words += " · " + (mind_model.full_day(latest) if latest else "Posting date unknown")
+            entries.append(E("li", None, E("div", None, self.thread_link(thread["n"]),
+                                            E("span", {"class": "story-aside"}, "Set aside") if thread.get("set_aside") else ""),
+                             E("span", {"class": "story-activity"}, words)))
+        directory = E("nav", {"class": "story-topics", "aria-label": "Project topics"}, E("ul", None, *entries)) \
+            if entries else E("p", {"class": "nothing"}, "No topic stories are included in this snapshot.")
+        return self.view("threads", "Topic stories", "Choose a topic to follow its decisions, findings and open questions. "
+                         "Topics with the most recently posted records appear first." if entries else None,
+                         directory, *[self.thread_article(thread) for thread, _, _ in stories], self.untold_line())
 
     # ------------------------------------------------------------ lessons, what is settled, what is open
 
@@ -2355,6 +2984,9 @@ class Page:
         how = [E("p", {"class": "wt"}, "How to read this page"),
                E("p", {"class": "def"}, "Every sentence here comes from what the project recorded. Words that explain "
                                         "themselves are buttons: choose one to read what it means."),
+               E("p", {"class": "lab"}, "Project areas"),
+               *[E("p", None, E("a", {"href": anchor(go)}, name), ": ", words)
+                 for go, name, words in self.navigation_guide()],
                *[E("p", None, E("b", None, name), ": ", text) for name, text in HOW_TO_READ],
                E("p", {"class": "lab"}, "What each kind of memory records"),
                E("ul", {"class": "plainlist"}, *[E("li", None, E("b", None, word), ": ", text)
@@ -2579,8 +3211,8 @@ class Page:
     def ask_view(self):
         chips = (("decided", "What have we decided?"), ("wrong", "What went wrong?"), ("open", "What is still open?"),
                  ("changed", "Where did we change our mind?"))
-        return self.view("ask", "Ask the mind", "Type a word or two. The answers are the memories that mention it, each "
-                         "told with what led to it or what came of it.",
+        return self.view("ask", "Search memories", "Match words in the included memories and their evidence. "
+                         "Task steps and output text are not searched here.",
                          E("div", {"class": "askbar"},
                            E("input", {"type": "search", "id": "q", "placeholder": "For example: memory, quote, speed",
                                        "aria-label": "Words to look for", "autocomplete": "off"})),
@@ -2738,6 +3370,11 @@ class Page:
 
     # ------------------------------------------------------------ the to-do view
 
+    @staticmethod
+    def step_id(issue, step):
+        identity = (integer(issue), integer(step.get("comment")), integer(step.get("ordinal")))
+        return "work-step-%d-%d-%d" % identity if all(identity) else None
+
     def todo_task(self, task, closed=False):
         n = integer(task.get("issue"))
         title = text_of(task.get("title"))
@@ -2769,18 +3406,25 @@ class Page:
                 else:
                     address = github_url("memory", self.repo, made.get("issue"), made.get("id"))
                     by = E("a", {"class": "lk", "href": address}, words) if address else words
-            items.append(E("li", {"class": "step s-" + state}, E("span", {"class": "sk"}, TODO_STATES[state]),
+            items.append(E("li", {"class": "step s-" + state, "id": self.step_id(n, step)}, E("span", {"class": "sk"}, TODO_STATES[state]),
                            E("span", {"class": "sbody"}, E("span", {"class": "stx"}, text_of(step.get("text"))),
-                             E("span", {"class": "by"}, E("span", {"class": "quiet"}, "Marked by: "), by) if by != "" else "")))
+                             E("span", {"class": "by"}, E("span", {"class": "quiet"}, "Marked by: "), by) if by != "" else "",
+                             E("a", {"class": "lk", "href": Href(self.action_root + "#step-%d-%d-%d" % (n, integer(step.get("comment")), integer(step.get("ordinal"))))},
+                               "Review task action") if self.action_root and state in ("open", "blocked")
+                             and n and integer(step.get("comment")) and integer(step.get("ordinal")) else "")))
         if items:
             body.append(E("ol", {"class": "steps"}, *items))
-        return E("section", {"class": "utask"}, *body)
+        return E("section", {"class": "utask", "id": "work-task-%d" % n}, *body)
 
     def todo_view(self):
-        data = self.model.get("tasks") if isinstance(self.model.get("tasks"), dict) else {}
+        data = self.task_data()
         opened = [t for t in data.get("open", []) if isinstance(t, dict)] if isinstance(data.get("open"), list) else []
         closed = [t for t in data.get("closed", []) if isinstance(t, dict)] if isinstance(data.get("closed"), list) else []
-        parts = [self.todo_task(task) for task in opened] or [E("p", {"class": "usage-empty"}, TODO_NONE)]
+        parts = [self.todo_task(task) for task in opened] or [E("p", {"class": "usage-empty"},
+                 "Work could not be read. Sync the record and rebuild the page." if data.get("available") is False else TODO_NONE)]
+        if self.action_root:
+            parts.insert(0, E("p", {"class": "quiet"}, E("a", {"href": Href(self.action_root)}, "Open task actions"),
+                              ". Actions are checked against the current record before they are saved."))
         if closed:
             parts += [E("h3", None, "Closed in the last 30 days")] + [self.todo_task(task, True) for task in closed]
         acts = []
@@ -2854,37 +3498,34 @@ class Page:
                    E("div", {"class": "wordbar"}, E("button", {"type": "button", "id": "wordclose", "class": "primary"},
                                                     "Close"))))
 
-    def tour(self):
-        threads = [t for t in self.model.get("threads", []) if t.get("memories")]
-        first_thread = threads[0] if threads else None
-        counts = self.model.get("counts") or {}
-        first, latest = text_of(self.model.get("first")), text_of(self.model.get("latest"))
-        steps = [
-            ("now", J("This is the memory of ", text_of(self.model.get("name")), ": ",
-                      plural(integer(counts.get("memories")), "1 memory", "%d memories"), " in ",
-                      plural(integer(counts.get("threads")), "1 thread", "%d threads"),
-                      ", from %s to %s. " % (first, latest) if first else ". ",
-                      "Nothing here is a list of tickets. It is what was thought, tried, decided and learned, in "
-                      "sentences.")),
-            ("text", "This is the text itself, part by part, in the order of what the project delivers. Under each part "
-                     "are the day it last changed and what is still open on it. Choose “Why it says this” to see what "
-                     "holds it up."),
-            ("thread-%d" % integer(first_thread.get("n")) if first_thread else "threads",
-             "A thread is one line of thought. It opens with where it stands now. Below that is its story, oldest first. "
-             "The words between two memories say how one led to the next: so, we tried it, later that changed."),
-            ("settled", "This is what the project holds today, and the memories that hold it up. When an answer "
-                        "replaced an earlier one, the earlier one is folded underneath."),
-            ("lessons", "Every failure sits next to what it led to. A failure with nothing beside it is one nobody has "
-                        "acted on."),
-            ("open", "These thoughts are still open: questions without an answer, ideas nobody tested, and what the "
-                     "results do not show."),
-            ("map", "The map shows what we know, as a tree, and every thread over time. To find something by a word, ask "
-                    "the mind. Choose any sentence, anywhere, to open that memory. A word with a dotted line is one of "
-                    "the project's own words: point at it to see what it means, or choose it for the whole story. Every "
-                    "word that explains itself is a button. “How to read this page” lists them all."),
+    def navigation_guide(self):
+        """The same short guide in the optional tour and the help box; only visible areas are introduced."""
+        areas = [
+            ("now", "Overview", "Resume with the recorded focus, next actions, and holds. The project summary is below them. "
+             "The status date shows when that handoff was recorded; automatic refreshes are labeled."),
+            ("work", "Work", J("Read recorded tasks and steps, then open the memory that marked a step. ",
+              E("a", {"href": anchor("open")}, "Open questions and limits"),
+              " holds unanswered questions, untested ideas, and what the results do not show.")),
+            ("history", "History", J("Start with Recently recorded, or choose Event sequence. Filters narrow by topic, event kind, "
+              "state, words, or date. Open a memory for evidence and what led to it. Other views: ",
+              E("a", {"href": anchor("settled")}, "Current understanding"), ", ",
+              E("a", {"href": anchor("threads")}, "Topic stories"), ", ",
+              E("a", {"href": anchor("lessons")}, "Lessons"), ", and ", E("a", {"href": anchor("map")}, "Maps"), ".")),
         ]
+        if self.model.get("outputs_available", bool(self.outline.get("deliverables") or self.outline.get("other"))):
+            areas.append(("outputs", "Outputs", J("Read the project's current text and sources, with each output named separately. "
+                          "Choose “Why it says this” for the memories behind a part. ",
+                          J(E("a", {"href": anchor("paper")}, "Read the manuscript"), " opens its paper reader.")
+                          if self.sheet is not None else "")))
+        areas.append(("ask", "Search memories", "Find words in included memories and their evidence, or use the buttons for "
+                      "decisions, failures, open questions, and changes. Task steps and output text are not searched here. "
+                      "Choose a memory sentence for its full detail; Close or Back returns you to the list."))
+        return areas
+
+    def tour(self):
         return E("div", {"id": "tour", "class": "tour", "role": "dialog", "aria-label": "First visit", "hidden": "hidden"},
-                 *[E("p", {"class": "step", "data-go": "#" + go, "hidden": "hidden"}, words) for go, words in steps],
+                 *[E("p", {"class": "step", "data-go": "#" + go, "hidden": "hidden"}, E("b", None, name), ": ", words)
+                   for go, name, words in self.navigation_guide()],
                  E("div", {"class": "tourbar"}, E("span", {"id": "tourn", "class": "quiet"}),
                    E("button", {"type": "button", "id": "tourback"}, "Back"),
                    E("button", {"type": "button", "id": "tournext", "class": "primary"}, "Next"),
@@ -2940,26 +3581,33 @@ class Page:
                  E("title", None, "The mind of ", text_of(self.model.get("name"))), Safe("<style>%s</style>" % style))
         logo = E("svg", {"viewBox": "144 144 968 968", "class": "logo", "aria-hidden": "true"},
                  E("path", {"class": "lg-a", "d": icon[0]}), E("path", {"class": "lg-b", "d": icon[1]}))
-        labels = dict(NAV)
-        labels["text"] = text_of(self.outline.get("nav")) or "What do we deliver?"
-        keys = [key for key, _ in NAV]
-        if self.sheet is not None:   # the manuscript has a view of its own, the third way in
-            keys.insert(keys.index("text") + 1, "paper")
-            labels["paper"] = mind_model.PHRASES["sheet.nav"] % (text_of(self.sheet.get("noun")) or "the paper")
-        side = E("nav", {"class": "side fold", "aria-label": "Ways into the mind"}, logo,
+        labels = {"now": "Overview", "project-map": "Project Map", "work": "Work", "history": "History", "outputs": "Outputs"}
+        keys = ["now", "project-map", "work", "history"]
+        if self.model.get("outputs_available", bool(self.outline.get("deliverables") or self.outline.get("other"))):
+            keys.append("outputs")
+        side = E("nav", {"class": "side fold", "aria-label": "Project areas"}, logo,
                  E("p", {"class": "mindname"}, text_of(self.model.get("name"))),
                  E("p", {"class": "mindsub"}, "the cortex of one project"),
                  E("button", {"type": "button", "class": "foldbtn waysbtn", "data-fold": "ways",
-                              "aria-expanded": "true"}, "Ways in"),
-                 E("ul", {"class": "foldbody"}, *[E("li", None, E("a", {"href": anchor(key), "data-nav": key}, labels[key]),
-                                                  self.sheet_contents() if key == "paper" else "") for key in keys]),
-                 E("div", {"class": "sidefoot"},
+                              "aria-expanded": "true", "aria-controls": "project-tools"}, "Project tools"),
+                 E("ul", {"class": "project-tabs"}, *[E("li", None, E("a", {"href": anchor(key), "data-nav": key}, labels[key])) for key in keys]),
+                 E("div", {"class": "sidefoot foldbody", "id": "project-tools"},
+                   E("a", {"href": anchor("ask")}, "Search memories"),
+                   E("a", {"href": anchor("usage")}, "Recortex usage"),
+                   E("a", {"href": Href(self.action_root.rsplit("/", 1)[0] + "/suggestions")}, "Observer suggestions")
+                   if self.action_root else E("details", None, E("summary", None, "Observer suggestions"),
+                       E("p", None, "Run ", E("code", None, "/recortex:dashboard suggestions"),
+                         " in the project to review sources and manage reminders on this device.")),
                    self.explain_button("how", "How to read this page", "howbtn"),
                    E("button", {"type": "button", "id": "tourstart"}, "First visit? Take the tour"),
                    E("button", {"type": "button", "id": "theme"}, "Switch light and dark"),
-                   E("p", {"class": "quiet"}, "Read from the record on %s. This page never changes the record."
-                     % text_of(built.get("words")))))
-        main = E("main", {"id": "main"}, self.now_view(), self.text_view(), self.sheet_view() if self.sheet is not None else "",
+                   E("p", {"class": "quiet"}, "Read from the record on %s. " % text_of(built.get("words")),
+                     "Report completed steps from Work." if self.action_root else "This page never changes the record.")))
+        output_views = E("nav", {"id": "output-views", "class": "area-links noprint", "aria-label": "Output views"},
+                         E("a", {"href": anchor("outputs")}, "Current text and sources"),
+                         E("a", {"href": anchor("paper")}, "Read the manuscript")) if self.sheet is not None else ""
+        main = E("main", {"id": "main"}, self.now_view(), self.project_map_view(), self.history_view(), output_views,
+                 self.text_view(), self.sheet_view() if self.sheet is not None else "",
                  self.threads_view(), self.settled_view(),
                  self.lessons_view(), self.open_view(), self.todo_view(), self.map_view(), self.ask_view(), self.usage_view())
         panel = E("aside", {"id": "panel", "class": "panel", "aria-label": "One memory"},
@@ -3183,6 +3831,7 @@ def main(argv=None):
     if args.open:
         print("asked the browser to open it" if webbrowser.open(address) else
               "no browser could be started; open the address above yourself")
+    print("the project map: %s#project-map" % address)
     return 0
 
 

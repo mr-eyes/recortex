@@ -19,17 +19,21 @@ project word, with its number "n") or "cite" (a citation told in words, with "n"
 """
 
 import datetime
+import hashlib
 import os
 import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import decision_impact  # noqa: E402
 import index  # noqa: E402
 import mind_plan  # noqa: E402
 import mind_sheet  # noqa: E402
 import mind_text  # noqa: E402
+import project_map  # noqa: E402
 import recortex  # noqa: E402
 import record_format  # noqa: E402
+import task_rules  # noqa: E402
 
 CAP_MEMORIES = 2000       # the newest told memories on the page; older ones are counted
 CAP_MAP_THREADS = 24      # rows of the map; the quietest threads fold into one row
@@ -393,6 +397,8 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
             if row["comment"] in found["items"]:
                 self.evidence.setdefault(row["comment"], []).append(row)
         self.m = {}
+        posted = {row["comment"]: clean(row["created_at"] or "")
+                  for row in self.db.execute("SELECT comment, created_at FROM events")}
         strange = {cid for cid, m in found["items"].items() if m["kind"] not in KINDS}  # the plan comments
         self.plan_links = {item["id"]: [(key, target) for key, target in item["links"] if target in strange]
                            for item in kept if any(target in strange for _, target in item["links"])}
@@ -403,6 +409,7 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
                 "plain": short(item["plain"]).rstrip(".").strip() or None if item["plain"] is not None else None,
                 "title": short(item["title"]), "state": item["state"], "author": login(item["author"]),
                 "changed": bool(item.get("changed")),
+                "posted": posted.get(item["id"], ""), "reconstructed": bool(item.get("reconstructed")),
                 "links": [(key, target) for key, target in item["links"] if key in LINK_ORDER and target not in strange],
             }
         self.order = [self.m[item["id"]] for item in kept]
@@ -719,8 +726,13 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
                     name = rest
                 else:
                     name, source = PHRASES["thread.unnamed"], "fixed"
-            thread.update(name=name, name_from=source, shown=shown, set_aside=label is not None and label != PLAN_LABEL
-                          and thread["topic"] is None, loose=label is None)
+            set_aside = label not in (None, PLAN_LABEL) and thread["topic"] is None
+            if set_aside and closed is None:
+                # An open project task can have its own recorded story before there is any deliverable text.
+                set_aside = not any(n != self.hub and not self.issues[n]["pull"] and self.issues[n]["state"] == "open"
+                                    and self.ok(self.issues[n]["author"]) and self.has_label(n, "active")
+                                    for n in thread["issues"])
+            thread.update(name=name, name_from=source, shown=shown, set_aside=set_aside, loose=label is None)
             if thread["topic"] is not None and thread["topic"] not in self.topic_thread:
                 self.topic_thread[thread["topic"]] = thread
             for memory in thread["memories"]:
@@ -786,6 +798,10 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
         return {
             "id": cid, "issue": memory["issue"], "thread": memory["thread"], "kind": memory["kind"],
             "at": memory["at"], "day": memory["day"], "plain": memory["plain"], "title": memory["title"],
+            "event_time": memory["time"] if index.ISO_UTC.fullmatch(memory["time"]) else None,
+            "posted": memory["posted"] if index.ISO_UTC.fullmatch(memory["posted"]) else None,
+            "reconstructed": memory["reconstructed"],
+            "time_basis": "event" if re.search(r"(?:Z|[+-][0-9]{2}:[0-9]{2})$", memory["at"]) else "posting",
             "old": memory["old"], "changed": memory["changed"], "state": memory["state"], "css": memory["css"], "chip": memory["chip"],
             "latest": memory.get("latest", ""), "latest_note": memory.get("latest_note", ""),
             "explain": memory["explain"], "group": memory["group"], "sentence": sentence,
@@ -889,7 +905,7 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
         return {"pause": before[-1]["index"] if before else None, "root": root["id"] if hops > 1 else None,
                 "before": earlier}
 
-    def read_pauses(self):
+    def read_pauses(self, tasks=None):
         """Earlier pauses (resume comments of allowed accounts never edited, and told checkpoints) and the last one,
         from meta.resume, which the sync stores only after its author and never-edited checks. The stored block is told
         only when the hub comment that holds it is one of the told pauses of this build: the allowed list may have
@@ -899,7 +915,7 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
         edited = index.edited_comments(self.db)
         pauses = []
         resume = clean(index.get_meta(self.db, "resume") or "").strip()
-        last_id = None
+        last_id, last_posted = None, None
         if hub is not None:
             for row in self.db.execute("SELECT e.comment, e.at, e.author, e.created_at, c.body FROM events e JOIN comments c ON "
                                        "c.id = e.comment WHERE e.type = 'resume' AND e.issue = ? ORDER BY e.comment",
@@ -909,6 +925,7 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
                     continue
                 if resume and clean(block).strip() == resume:
                     last_id = row["comment"]
+                    last_posted = row["created_at"]
                 if not self.ok(row["author"]) or row["comment"] in edited:
                     continue
                 focus = next((text for label, text in record_format.fields(block) if label == "Current focus"), "")
@@ -935,6 +952,7 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
             values = dict(record_format.fields(resume))
             seen = set()
             next_rows = []
+            candidates = []
             table = first_table(values.get("Next actions", ""))
             if table:
                 head = [cell.lower() for cell in table[0]]
@@ -942,16 +960,120 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
                 spots = (column("action", 0), column("owner", 1), column("where", 2))
                 for row in table[1]:
                     cell = lambda i: row[i] if i < len(row) else ""
+                    citations = record_format.citations(cell(spots[0]) + " " + cell(spots[2]), self.repo)
+                    refs = sorted({item["issue"] for item in citations if item["kind"] == "issue"})
                     next_rows.append({"action": self.runs(cell(spots[0]), seen), "owner": short(cell(spots[1])),
+                                      "action_text": short(cell(spots[0])), "task_refs": refs, "work_step": None,
                                       "where": self.runs(cell(spots[2]), seen)})
+                    action = " ".join(clean(cell(spots[0])).split())
+                    if len(refs) == 1 and not any(item["kind"] == "elsewhere" for item in citations) \
+                            and re.fullmatch(r"Step [1-9][0-9]*: .+", action):
+                        candidates.append((next_rows[-1], action))
             summary = record_format.resume_in_short(resume)
+            holds = values.get("Holds", "").strip()
+            if holds.casefold().strip(" .-*_`") in ("", "none", "none yet", "no holds", "no holds recorded", "n/a", "nothing"):
+                holds = ""
             self.last = {"id": last_id, "day": last["day"], "wall": last["wall"], "time": last["time"],
+                         "issue": hub, "automatic": values.get("Last updated", "").strip().endswith(" by the observer"),
+                         "posted": self.meta("resume_posted") if index.ISO_UTC.fullmatch(self.meta("resume_posted")) else None,
                          "focus": self.doc(values.get("Current focus", ""), seen),
-                         "next": next_rows, "holds": self.doc(values["Holds"], seen) if values.get("Holds") else None,
+                         "next": next_rows, "holds": self.doc(holds, seen) if holds else None,
                          # the "In short" of the block, as text: two paragraphs at most, each cut like a field, marked with
                          # the day the block says it was written (told like the block: allowed author, never edited)
                          "summary": {"paras": [short(paragraph, CAP_FIELD) for paragraph in summary.split("\n\n")[:2]],
                                      "asof": full_day(last["at"])} if summary else None}
+            if candidates and tasks and tasks["available"] and self.meta("sync_complete") == "1" \
+                    and self.meta("derive_pending") != "1" and index.derived_current(self.db) \
+                    and last_posted and last_posted == self.last["posted"]:
+                self.bind_handoff_steps(candidates, tasks, last_posted)
+
+    def handoff_steps_at(self, issues, boundary):
+        """Recover the numbered steps and their marks as they stood when the handoff was posted.
+
+        Task ordering uses the event's stated time, but a backdated comment could only affect a handoff after it
+        was actually posted. A later edit to a steps list leaves its earlier wording and numbering unknown.
+        """
+        items = self.found["items"]
+        withheld = set(self.found["edited_ids"])
+        mark_kinds = record_format.MARK_RULES["done"] | record_format.MARK_RULES["dropped"]
+        marks_known = True
+        uncertain, replaced, aside = set(), set(), set()
+        earlier = {}
+        for row in self.db.execute("SELECT e.comment, e.issue, e.type, e.author, c.created_at, c.updated_at FROM events e "
+                                   "LEFT JOIN comments c ON c.id = e.comment"):
+            cid, issue = row["comment"], row["issue"]
+            posted, updated = row["created_at"] or "", row["updated_at"] or ""
+            if index.ISO_UTC.fullmatch(posted) and posted > boundary:
+                continue
+            item = items.get(cid)
+            if self.ok(row["author"]) and posted != updated and not (index.ISO_UTC.fullmatch(updated) and updated < boundary):
+                # The old body is unavailable: even an ordinary comment here could have been a steps list.
+                uncertain.add(issue)
+                if row["type"] in mark_kinds:
+                    # An erased mark could have named a step on another issue.
+                    marks_known = False
+            if item is None:
+                if cid in withheld and row["type"] == "steps":
+                    uncertain.add(issue)
+                continue
+            earlier[cid] = dict(item, state="stands")
+            if not (index.ISO_UTC.fullmatch(posted) and index.ISO_UTC.fullmatch(updated)
+                    and posted <= updated < boundary):
+                # Include its current marks conservatively; we cannot use its links to revoke an earlier mark.
+                if item["kind"] == "steps":
+                    uncertain.add(issue)
+                    uncertain.update(items[t]["issue"] for k, t in item["links"] if k == "replaces" and t in items)
+                continue
+            replaced.update(t for k, t in item["links"] if k == "replaces")
+            aside.update(t for k, t in item["links"] if k == "instead")
+        for cid, item in earlier.items():
+            if cid in replaced or cid in aside:
+                item["state"] = "replaced" if cid in replaced else "set aside"
+
+        certain = issues - uncertain
+        plans = {cid: {"comment": cid, "time": item["time"], "state": item["state"], "texts": [],
+                       "replaces": [t for k, t in item["links"] if k == "replaces"]}
+                 for cid, item in earlier.items() if item["kind"] == "steps" and item["issue"] in certain}
+        for row in self.db.execute("SELECT comment, text FROM steps ORDER BY comment, ordinal"):
+            if row["comment"] in plans:
+                plans[row["comment"]]["texts"].append(row["text"])
+        marks = [tuple(row) for row in self.db.execute("SELECT source, kind, target, step FROM marks")
+                 if row["target"] in plans and row["source"] in earlier]
+        out = {}
+        for issue in certain:
+            numbered = task_rules.numbered([plan for cid, plan in plans.items() if earlier[cid]["issue"] == issue])
+            for step in task_rules.assess(numbered, marks, earlier):
+                if not earlier[step["comment"]]["reconstructed"]:
+                    words = " ".join(clean(step["text"]).split())
+                    if self.last["automatic"]:
+                        words = words.replace("|", "/")
+                    out[(issue, "Step %d: %s" % (step["n"], words))] = step
+        return out, marks_known
+
+    def bind_handoff_steps(self, candidates, tasks, boundary):
+        """Join an explicit handoff action to a stable steps comment and ordinal, then to its current evidence."""
+        current = {task["issue"]: (task, group == "closed") for group in ("open", "closed") for task in tasks[group]}
+        issues = {row["task_refs"][0] for row, _ in candidates} & current.keys()
+        if not issues:
+            return
+        history, marks_known = self.handoff_steps_at(issues, boundary)
+        for row, action in candidates:
+            issue = row["task_refs"][0]
+            old = history.get((issue, action))
+            if old is None:
+                continue
+            task, closed = current[issue]
+            step = next((s for s in task["steps"]
+                         if (s["comment"], s["ordinal"]) == (old["comment"], old["ordinal"])), None)
+            if step is None:
+                continue
+            row["work_step"] = {"issue": issue, "comment": step["comment"], "ordinal": step["ordinal"]}
+            if not marks_known or old["state"] != "open" or step["state"] != "done" or not step["by"]:
+                continue
+            memory = self.m.get(step["by"]["id"])
+            if memory and index.ISO_UTC.fullmatch(memory["posted"]) and memory["posted"] > boundary:
+                row["completion"] = {"source": memory["id"], "task_closed": closed,
+                                     "next_step": None if closed else task_rules.next_open(task["steps"])}
 
     # ------------------------------------------------------------ the model
 
@@ -985,7 +1107,8 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
                     memory["latest"] = PHRASES["latest." + kind]
                     memory["latest_note"] = PHRASES["latest.replaced"] if any(
                         key == "replaces" for key, _ in memory["links"]) else ""
-        self.read_pauses()
+        tasks = self.tasks_model()
+        self.read_pauses(tasks)
         self.read_outline(self.profiles)
         self.plan = self.plan_model()
         memories = [self.memory_model(memory) for memory in self.order]
@@ -1000,6 +1123,12 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
         opened = self.open_model()
         not_told = self.not_told_model()
         self.read_first_lines()
+        recorded = sorted(memories, key=lambda m: (m["posted"] or "", m["id"]), reverse=True)
+        boundary = (self.last or {}).get("posted")
+        hierarchy = project_map.read_map(self.db, self.hub, self.allowed) if self.hub else project_map.empty()
+        impacts = decision_impact.from_index(self.db, self.repo, self.allowed, builder=self, tasks=tasks,
+                                             map_state=hierarchy,
+                                             suggestions=decision_impact.suggestions_enabled(self.repo, self.config))
         return {
             "repo": self.repo, "name": self.repo.split("/")[1],
             "built": {"day": self.today.isoformat(), "words": full_day(self.today.isoformat()),
@@ -1011,20 +1140,25 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
             "pauses": [{key: p[key] for key in ("kind", "id", "day", "focus", "wall")} for p in self.pauses],
             "last": self.last,
             "since": [m["id"] for m in self.order if self.last and self.last["time"] and m["time"] > self.last["time"]],
+            "recorded": [m["id"] for m in recorded],
+            "recorded_since": [m["id"] for m in recorded if boundary and m["posted"] and m["posted"] > boundary],
+            "outputs_available": any((p if isinstance(p, str) else p.get("name")) != "core" for p in self.profiles),
             "latest_of": self.latest_of(),
             "cited": [self.cited[n] for n in sorted(self.cited)],
-            "open": opened, "map": self.map_model(), "plan": self.plan, "versions": self.versions, "sheet": self.sheet,
+            "open": opened, "map": self.map_model(),
+            "project_map": hierarchy, "decision_impacts": impacts, "plan": self.plan, "versions": self.versions,
+            "sheet": self.sheet,
             "counts": {"memories": len(self.order), "threads": len(self.threads), "words": len(words),
                        "open": sum(1 for m in self.order if m["css"] == "open")},
-            "not_told": not_told, "tasks": self.tasks_model(),
+            "not_told": not_told, "tasks": tasks,
         }
 
     def tasks_model(self):
         """The to-do view's tasks: each open task with its steps (state, and for a step that was marked the memory that marked
         it: its id, its issue and its plain line) and the tasks closed in the last 30 days, from index.tasks, which reads told
         memories alone. A title that someone outside the allowed accounts changed is left out. An index that cannot give them
-        gives no tasks."""
-        none = {"todo": None, "open": [], "closed": []}
+        reports unavailable work rather than an empty task list."""
+        none = {"todo": None, "open": [], "closed": [], "available": False}
         try:
             now = datetime.datetime.combine(self.today, datetime.time(23, 59, 59), datetime.timezone.utc)
             report = index.tasks(self.db, self.allowed, closed_days=30, now=now)
@@ -1042,13 +1176,15 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
             closed = (entry["closed_at"] or "")[:10]
             return {"issue": entry["issue"], "title": short(entry["title"]) if entry["title_told"] else "",
                     "todo": entry["todo"] is True, "hand": entry["hand"] is True, "counts": dict(entry["counts"]),
+                    "blocked": entry["blocked"] is True, "blocking_failure": marked(entry.get("blocking_failure")),
                     "closed": closed if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", closed) else "",
                     "steps": [{"n": step["n"], "text": short(step["text"]), "state": step["state"],
+                               "comment": step["comment"], "ordinal": step["ordinal"],
                                "by": marked(step["by"]["id"]) if step["by"] else None} for step in entry["steps"]]}
 
         opened = [task(entry) for entry in report["tasks"] if entry["state"] == "open"]
         closed = [task(entry) for entry in report["tasks"] if entry["state"] == "closed"]
-        return {"todo": report["todo"],
+        return {"todo": report["todo"], "available": True,
                 "open": sorted(opened, key=lambda t: (not t["todo"], t["issue"])),
                 "closed": sorted(closed, key=lambda t: (t["closed"], t["issue"]), reverse=True)}
 
@@ -1117,7 +1253,8 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
             plan, self.unreadable = [], True
         table = shown and record_format.section_text(self.issues[self.hub]["body"], "Deliverable sections") is not None
         self.order_from = "hub" if table else "profile"
-        profile_of = {}
+        profile_of, output_of = {}, {}
+        self.outputs = []
         for entry in profiles:
             try:
                 labels = [label for label, _ in recortex.section_labels([entry])]
@@ -1125,13 +1262,24 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
                 self.unreadable = True
                 continue
             name = entry if isinstance(entry, str) else entry.get("name")
+            ident = name if isinstance(entry, str) else name + "-" + hashlib.sha256("\n".join(sorted(labels)).encode()).hexdigest()[:12]
+            raw_profiles = (self.config or {}).get("profiles", [])
+            original = next((p for p in (raw_profiles if isinstance(raw_profiles, list) else []) if isinstance(p, dict)
+                             and recortex.custom_sections(p) and p.get("name") == name
+                             and sorted(label for label, _ in p["sections"]) == sorted(labels)), None)
+            title = (original or {}).get("deliverable") or (entry.get("deliverable") if isinstance(entry, dict) else None)
+            title = title if isinstance(title, str) and recortex.HEADING_TEXT.fullmatch(title) else None
+            if name != "core":
+                self.outputs.append({"id": ident, "profile": name, "title": clean(title) if title else self.NOUNS.get(name, (None, name))[1].capitalize()})
             for label in labels:
                 profile_of.setdefault(label, name)
+                output_of.setdefault(label, ident)
         self.plan_rows = []
         for label, heading, numbers in plan:
             threads = [self.topic_thread[n]["n"] for n in numbers if n in self.topic_thread]
             if threads:
                 self.plan_rows.append({"key": label, "heading": clean(heading), "profile": profile_of.get(label),
+                                       "output": output_of.get(label),
                                        "threads": threads})
         for thread in self.threads:
             thread["place"], thread["feeds_keys"] = None, []
@@ -1241,10 +1389,12 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
                 first.setdefault(part["thread"], count)
                 by_n[part["thread"]]["feeds"].append({"n": count, "label": row["heading"], "ordinal": part["ordinal"]})
             name = row["profile"] or "deliverable"
-            group = next((g for g in deliverables if g["profile"] == name), None)
+            ident = row.get("output") or name
+            group = next((g for g in deliverables if g["id"] == ident), None)
             if group is None:
                 aux, noun = self.NOUNS.get(name, (None, None))
-                group = {"profile": name, "noun": noun, "title": (noun or name).capitalize() if noun or name else "",
+                output = next((o for o in self.outputs if o["id"] == ident), {})
+                group = {"id": ident, "profile": name, "noun": noun, "title": output.get("title") or (noun or name).capitalize(),
                          "sections": []}
                 deliverables.append(group)
             group["sections"].append({"key": row["key"], "label": row["heading"], "n": count,
@@ -1259,16 +1409,19 @@ class Build(mind_plan.PlanMixin, mind_sheet.SheetMixin):
             noun, nav, title = None, "What do we deliver?", "What we deliver"
         other, unplaced = [], []
         for model in models:
-            if model["topic"] is None or model["set_aside"] or model["loose"]:
+            if model["set_aside"] or model["loose"] or model["label"] == PLAN_LABEL:
                 continue
             if model["n"] not in first:
                 unplaced.append(model["n"])
+            if model["topic"] is None:
+                continue  # Task-only stories belong on the project map, and contribute no text to Outputs.
             if model["shown"]:
                 other += [{"thread": model["n"], "ordinal": i} for i in range(len(model["sections"]))
                           if i not in used.get(model["n"], ())]
             elif model["n"] not in first:
                 other.append({"thread": model["n"], "ordinal": None})
         return {"order_from": self.order_from, "nav": nav, "title": title, "noun": noun, "deliverables": deliverables,
+                "outputs": self.outputs,
                 "other": other, "unplaced": unplaced, "unreadable": self.unreadable, "sections": count}
 
     def thread_model(self, thread):

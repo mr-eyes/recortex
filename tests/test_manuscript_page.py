@@ -28,7 +28,7 @@ import record_format  # noqa: E402
 import recortex  # noqa: E402
 
 PAGE = os.path.join(ROOT, "skills", "recortex", "page")
-EXAMPLE_PAGE_SHA = "95fec449cbc8f7742dc60817ce28ab570ba3948b5dc0dcfe205e5ed9548a0d85"   # the example's page at 71bf8cf plus the 1.5.0 to-do and usage views and the "cortex of one project" subtitle
+EXAMPLE_PAGE_SHA = "e5b183151e67bfbfe4b5e4b49eac1a35e09fe97ed4dff12588d5411bfadd15df"   # fixed example with a hold and portable handoff
 
 FORMS = {"autonomous": "Written without asking, under the autonomous mode.",
          "chat": "By the author in the chat, 2026-11-21 09:38 EST:\n\n> Approve",
@@ -646,18 +646,22 @@ class Steps(PageBox):
 
 
 class WhoGetsItTests(PageBox):
-    def test_a_paper_record_has_the_view_as_the_third_way_in_and_the_text_view_points_to_it(self):
+    def test_a_paper_record_has_its_reader_under_outputs_and_the_text_view_points_to_it(self):
         text = self.page()
         self.assertEqual([], ts.page_problems(text))
         page = ts.PageReader(text)
         views = [dict(attrs)["id"] for tag, attrs in page.elements if tag == "section" and "view" in dict(attrs).get("class", "")]
-        self.assertEqual(["now", "text", "paper", "threads", "settled", "lessons", "open", "todo", "map", "ask", "usage"], views)
+        self.assertEqual(["now", "project-map", "history", "text", "paper", "threads", "settled", "lessons", "open", "todo", "map", "ask", "usage"], views)
         navs = [dict(attrs)["data-nav"] for tag, attrs in page.elements if "data-nav" in dict(attrs)]
-        self.assertEqual(views, navs)
+        self.assertEqual(["now", "project-map", "work", "history", "outputs"], navs)
         words = self.words(text)
         self.assertIn("Read the manuscript", words)
         self.assertIn("The plan and the text", words)            # the old view's name, with the one manuscript profile
         self.assertNotIn("What does the manuscript say?", words)
+        self.assertEqual(1, text.count('id="output-views"'))
+        switcher = text.split('id="output-views"', 1)[1].split("</nav>", 1)[0]
+        self.assertEqual(["#outputs", "#paper"], re.findall(r'href="([^"]+)"', switcher))
+        self.assertLess(text.index('id="output-views"'), text.index('id="text"'))
         text_view = text[text.index('<section class="view" id="text"'):text.index('<section class="view" id="paper"')]
         self.assertIn('<a class="lk" href="#paper">Read it as a paper</a>', text_view)
         self.assertNotIn("Print or save as PDF", text_view)
@@ -679,16 +683,18 @@ class WhoGetsItTests(PageBox):
         self.assertIsNone(model["sheet"])
         text = self.page()
         self.assertNotIn('id="paper"', text)
+        self.assertNotIn('id="output-views"', text)
         self.assertNotIn("Read the manuscript", self.words(text))
         self.assertNotIn("Read it as a paper", text)
         self.assertEqual(1, text.count('data-print="1"'))
         self.assertEqual([], [tag for tag, attrs in ts.PageReader(text).elements if "data-mode" in dict(attrs)])
-        self.assertEqual(0, len([tag for tag, _ in ts.PageReader(text).elements if tag in ("figure", "fieldset", "select")]))
+        self.assertEqual(0, len([tag for tag, _ in ts.PageReader(text).elements if tag == "figure"]))
+        # Shared History has filters in every project; manuscript-only display controls remain absent.
+        self.assertNotIn('id="paper-mode"', text)
+        self.assertNotIn('id="paper-source"', text)
 
-    def test_the_built_in_examples_page_is_the_page_it_was_apart_from_the_style_and_the_script(self):
-        """The example's page built with a fixed day, its style, its script and their hashes taken out, has the SHA-256 that the page of
-        commit 71bf8cf (before the manuscript view) had, plus the two views of 1.5.0 (what is there to do, what recortex used; with
-        no usage numbers in the model the second is its fixed no-data line). A change to the example record's tasks changes it."""
+    def test_the_built_in_examples_page_matches_the_shared_dashboard_snapshot(self):
+        """A fixed-day example keeps the complete shared dashboard and legacy content stable, apart from CSS and JS."""
         sandbox = ts.MindSandbox("run")
         sandbox.setUp()
         self.addCleanup(sandbox.doCleanups)
@@ -705,6 +711,7 @@ class WhoGetsItTests(PageBox):
         finally:
             db.close()
         self.assertIsNone(model["sheet"])
+        model["built"]["synced_at"] = "2026-11-17T00:00:00Z"
         text = mind.render(model, {})
         text = re.sub(r"<style>.*?</style>", "<style></style>", text, flags=re.S)
         text = re.sub(r"<script>.*?</script>", "<script></script>", text, flags=re.S)
@@ -1495,12 +1502,12 @@ class ModeTests(Steps):
     def test_the_sheets_screen_rules_follow_the_review(self):
         with open(os.path.join(PAGE, "mind.css"), encoding="utf-8") as handle:
             style = handle.read()
-        self.assertIn(".sbar{position:sticky;top:0;z-index:3;background:var(--fog);padding:12px 0;margin:0 0 20px;border-bottom:1px solid var(--rule);max-width:1060px", style)
+        self.assertIn(".sbar{position:sticky;top:0;z-index:3;background:var(--fog);padding:12px 0;margin:0 0 20px;border-bottom:1px solid var(--rule);max-width:var(--paper-width)", style)
         self.assertIn(".ptx{font:19px/1.68 var(--serif);hyphens:auto;text-wrap:pretty;max-width:35em", style)
         self.assertIn("@media (max-width:1180px){", style)
         self.assertIn(".row:not(.r-removed){display:block}", style.split("@media (max-width:1180px){", 1)[1])
         self.assertIn(".mn{border-left:0;padding:0;margin:0 0 18px;display:flex;flex-wrap:wrap;gap:6px 14px}.mn .lab,.meter{display:none}", style)
-        self.assertIn("@media (max-width:420px){.js[data-view=paper] main{padding:0}.sheet{border-radius:0;box-shadow:none;padding:18px 16px}", style)
+        self.assertIn("@media (max-width:420px){.js #paper.view{margin-inline:-12px}.sheet{border-radius:0;box-shadow:none;padding:18px 16px}", style)
         self.assertIn(".st-against::before{background:none;border:2px solid var(--c);border-radius:1px}", style)
         self.assertIn(".hole{border:1.5px dashed var(--asked);border-radius:10px;padding:8px 14px;font:14.5px/1.5 var(--sans);color:var(--ink)}", style)
         self.assertIn(".hole .kind{display:block;font:600 11.5px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--asked)}", style)
@@ -1578,7 +1585,7 @@ class ModeTests(Steps):
         # 1.5.0: at phone width only the paper sheet is flush; every other view keeps the gutter of main (16px at 860px)
         phone = self.block(style, "@media (max-width:420px){")
         self.assertNotRegex(phone, r"(?:^|[{}])main\{padding:0\}")
-        self.assertIn(".js[data-view=paper] main{padding:0}", phone)
+        self.assertIn(".js #paper.view{margin-inline:-12px}", phone)
         self.assertIn("main{padding:16px 12px 100px}", self.block(style, "@media (max-width:860px){#paper.view"))
         self.assertIn(".legend summary{display:list-item;", style)   # S11
         self.assertIn(".mn .stw{display:inline-block;padding:3px 0}", style)   # S12
@@ -1671,7 +1678,7 @@ class ScriptTests(unittest.TestCase):
     def test_the_style_has_the_wide_rule_after_the_shut_rule_and_the_script_the_change_listener(self):
         with open(os.path.join(PAGE, "mind.css"), encoding="utf-8") as handle:
             style = handle.read()
-        wide = "@media (min-width:861px){.foldbtn.waysbtn{display:none}.side.shut>.foldbody{display:block}}"
+        wide = "@media (min-width:861px){.foldbtn.waysbtn{display:none}.side.shut>.sidefoot{display:flex}}"
         self.assertIn(wide, style)
         self.assertLess(style.index(".fold.shut>.foldbody{display:none}"), style.index(wide))
         script = self.script()
@@ -1892,14 +1899,17 @@ class FailureModeTests(PageBox):
         wanted = mind_figures.wanted(model)
         self.assertIn(("octo-org/sample-project", "v0.3", "figures/old.png"), wanted)
 
-    def test_the_text_view_and_the_old_nav_names(self):
+    def test_the_text_view_keeps_mixed_outputs_under_shared_navigation(self):
         words = self.words(self.page())
         self.assertIn("The plan and the text", words)
         self.write_config(dict(self.config, profiles=["manuscript", "software"]))
         self.ready()
-        again = self.words(self.page())
-        self.assertIn("What do we deliver?", again)       # with several profiles the old name stays
+        page = self.page()
+        again = self.words(page)
+        self.assertIn('data-nav="outputs"', page)
+        self.assertIn("Outputs", again)
         self.assertIn("Read the manuscript", again)
+        self.assertEqual(["manuscript", "software"], [output["profile"] for output in self.model()["outline"]["outputs"]])
 
 
 class FixRoundTests(Steps):
@@ -2131,8 +2141,8 @@ class WholeBuildTests(Steps):
         self.assertEqual([], ts.page_problems(text))
         self.assertEqual(1, text.count("<style>"))
         self.assertEqual(1, text.count("<script>"))
-        self.assertIn('the manuscript: file://', self.last_output)
-        self.assertTrue(self.last_output.rstrip().split("\n")[-1].endswith("#paper"))
+        for label, anchor in (("the manuscript", "paper"), ("the project map", "project-map")):
+            self.assertRegex(self.last_output, rf"(?m)^{label}: file://[^\n]+/mind\.html#{anchor}$")
         self.assertEqual(0, self.tool("mind.py", "--paper", gh="false").returncode)     # the standalone paper is still there
         paper = open(os.path.join(self.data, "private", self.slug(), "paper.html"), encoding="utf-8").read()
         self.assertEqual([], ts.page_problems(paper))

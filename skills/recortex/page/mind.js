@@ -10,21 +10,30 @@
   function $(s, el) { return (el || document).querySelector(s); }
   function $$(s, el) { return Array.prototype.slice.call((el || document).querySelectorAll(s)); }
   var views = $$('.view'), threads = $$('.thread'), mems = $$('.mem'), panel = $('#panel');
-  var opened = null, lastFocus = null;
+  var opened = null, lastFocus = null, returnFocus = null;
+  var outputViews = $('#output-views');
+  var AREAS = { todo: 'work', open: 'work', text: 'outputs', paper: 'outputs', threads: 'history',
+    settled: 'history', lessons: 'history', map: 'history' };
 
   function show(id) {
     views.forEach(function (v) { v.classList.toggle('on', v.id === id); });
     root.setAttribute('data-view', id);
+    if (outputViews) $$('a', outputViews).forEach(function (link) {
+      var active = id === 'text' && link.hash === '#outputs' || id === 'paper' && link.hash === '#paper';
+      link.classList.toggle('here', active);
+      if (active) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
+    });
     $$('[data-nav]').forEach(function (a) {
-      var on = a.getAttribute('data-nav') === id;
+      var on = a.getAttribute('data-nav') === (AREAS[id] || id);
       a.classList.toggle('on', on);
       if (on) { a.setAttribute('aria-current', 'page'); } else { a.removeAttribute('aria-current'); }
     });
   }
   function showThread(id) {
     threads.forEach(function (t) { t.classList.toggle('on', t.id === id); });
+    $('#threads').classList.toggle('reading', !!id);
   }
-  // a fold: a branch of the tree, a task group of a story, the ways in on a phone. The page is built open; only this
+  // a fold: a branch of the tree, a task group of a story, project tools on a phone. The page is built open; only this
   // script shuts what starts shut, so without it everything is open.
   function setShut(host, shut) {
     host.classList.toggle('shut', shut);
@@ -63,43 +72,202 @@
     panel.scrollTop = 0;
     opened = id;
     mark(id);
+    selectedHistory();
     target.focus({ preventScroll: true });
   }
-  function closeMem() {
+  function closeMem(routing) {
     if (!opened) { return; }
     panel.classList.remove('on');
     opened = null;
     mark(null);
-    if (lastFocus && document.contains(lastFocus)) { lastFocus.focus({ preventScroll: true }); }
+    if (lastFocus && document.contains(lastFocus)) {
+      returnFocus = lastFocus;
+      lastFocus.focus({ preventScroll: true });
+    }
+    selectedHistory();
+    if (!routing && /^#m-[0-9]+$/.test(location.hash)) {
+      var depth = history.state && history.state.memDepth;
+      if (Number.isInteger(depth) && depth > 0 && depth < 100) { history.go(-depth); }
+      else { location.hash = '#' + (root.getAttribute('data-view') || 'now'); }
+    }
   }
+  var branchRows = $$('.branch-row'), branchDetails = $$('.branch-detail'), branchSearch = $('#branch-search');
+  var branchById = new Map(), branchInfo = new Map(), selectedBranch = null, sampleRename = null;
+  function branchOpen(row) {
+    return row.classList.contains('branch-open') || row.classList.contains('branch-reveal');
+  }
+  function setBranchOpen(row, open) {
+    row.classList.remove('branch-reveal');
+    row.classList.toggle('branch-open', open);
+    var button = row.firstElementChild.querySelector('button');
+    if (button) button.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  branchRows.forEach(function (row) {
+    var link = row.firstElementChild.querySelector('a'), id = link.hash.slice(1);
+    if (!/^branch-[a-f0-9]{24}$/.test(id)) return;
+    var detail = document.getElementById(id);
+    if (!detail) return;
+    var button = row.firstElementChild.querySelector('button');
+    branchById.set(id, row);
+    branchInfo.set(row, {link: link, detail: detail, parent: row.parentElement.closest('.branch-row')});
+    setBranchOpen(row, false);
+    if (button) button.addEventListener('click', function () { setBranchOpen(row, !branchOpen(row)); });
+    link.addEventListener('keydown', function (event) {
+      var key = event.key;
+      if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].indexOf(key) < 0) return;
+      event.preventDefault();
+      var child = row.children[1] && row.children[1].querySelector(':scope > li:not([hidden])');
+      if (key === 'ArrowRight' && child) {
+        if (branchOpen(row)) branchInfo.get(child).link.focus();
+        else setBranchOpen(row, true);
+      } else if (key === 'ArrowLeft') {
+        if (child && branchOpen(row)) setBranchOpen(row, false);
+        else if (branchInfo.get(row).parent) branchInfo.get(branchInfo.get(row).parent).link.focus();
+      } else if (key === 'ArrowUp' || key === 'ArrowDown') {
+        var visible = branchRows.filter(function (r) { return r.offsetHeight > 0; });
+        var next = visible[visible.indexOf(row) + (key === 'ArrowDown' ? 1 : -1)];
+        if (next) branchInfo.get(next).link.focus();
+      }
+    });
+  });
+  function filterBranches() {
+    if (!branchSearch) return;
+    var query = branchSearch.value.trim().toLowerCase(), found = 0, visible = new Set();
+    branchRows.slice().reverse().forEach(function (row) {
+      var info = branchInfo.get(row);
+      var description = $('.branch-description', info.detail);
+      var match = !query || (info.link.textContent + ' ' + (description ? description.textContent : '')).toLowerCase().indexOf(query) >= 0;
+      if (match) found++;
+      if (match || visible.has(row)) {
+        if (info.parent) visible.add(info.parent);
+        row.hidden = false;
+      } else row.hidden = true;
+      row.classList.toggle('branch-reveal', !!query && visible.has(row));
+      var button = row.firstElementChild.querySelector('button');
+      if (button) button.setAttribute('aria-expanded', String(branchOpen(row)));
+    });
+    $('#branch-matches').textContent = query ? found + (found === 1 ? ' match' : ' matches') : '';
+  }
+  function revealBranchLabel(link) {
+    var canvas = link.closest('.branch-outline'), label = link.getBoundingClientRect(), bounds = canvas.getBoundingClientRect();
+    if (label.right > bounds.right) canvas.scrollLeft += label.right - bounds.right + 16;
+    else if (label.left < bounds.left) canvas.scrollLeft += label.left - bounds.left - 16;
+    if (label.bottom > bounds.bottom) canvas.scrollTop += label.bottom - bounds.bottom + 16;
+    else if (label.top < bounds.top) canvas.scrollTop += label.top - bounds.top - 16;
+  }
+  function selectBranch(id) {
+    if (!branchDetails.length) return;
+    var row = branchById.get(id), info = row && branchInfo.get(row), detail = info ? info.detail : $('.branch-home');
+    if (selectedBranch !== id && $('#branch-apply')) {
+      sampleRename = null; $('#branch-apply').hidden = true; $('#branch-sample-status').textContent = '';
+    }
+    selectedBranch = row ? id : null;
+    branchDetails.forEach(function (d) { d.classList.toggle('selected', d === detail); });
+    branchById.forEach(function (r) {
+      r.classList.toggle('selected', r === row);
+      branchInfo.get(r).link.removeAttribute('aria-current');
+    });
+    if (info) {
+      if (row.hidden && branchSearch) { branchSearch.value = ''; filterBranches(); }
+      info.link.setAttribute('aria-current', 'location');
+      for (var p = row; p; p = branchInfo.get(p).parent) setBranchOpen(p, true);
+      revealBranchLabel(info.link);
+    }
+  }
+  if (branchSearch) {
+    branchSearch.addEventListener('input', filterBranches);
+    var mapView = $('#project-map'), diagramButton = $('#branch-diagram'), outlineButton = $('#branch-list');
+    function chooseLayout(diagram) {
+      mapView.classList.toggle('branch-diagram', diagram);
+      diagramButton.setAttribute('aria-pressed', String(diagram));
+      outlineButton.setAttribute('aria-pressed', String(!diagram));
+      var row = branchById.get(selectedBranch);
+      if (row) revealBranchLabel(branchInfo.get(row).link);
+    }
+    chooseLayout(window.matchMedia('(min-width: 700px)').matches);
+    diagramButton.addEventListener('click', function () { chooseLayout(true); });
+    outlineButton.addEventListener('click', function () { chooseLayout(false); });
+  }
+  var tryRename = $('#branch-try');
+  if (tryRename) {
+    var newName = $('#branch-new-name'), applyRename = $('#branch-apply'), sampleStatus = $('#branch-sample-status');
+    tryRename.addEventListener('click', function () {
+      var row = branchById.get(selectedBranch), words = newName.value.trim();
+      applyRename.hidden = true; sampleRename = null;
+      if (!row) { sampleStatus.textContent = 'Choose a branch in the map first.'; return; }
+      if (!words || words.length > 120) { sampleStatus.textContent = 'Enter a branch name of 1 to 120 characters.'; return; }
+      sampleRename = {id: selectedBranch, words: words};
+      sampleStatus.textContent = 'Rename “' + branchInfo.get(row).link.textContent + '” to “' + words + '”.';
+      applyRename.hidden = false;
+    });
+    newName.addEventListener('input', function () { sampleRename = null; applyRename.hidden = true; sampleStatus.textContent = ''; });
+    applyRename.addEventListener('click', function () {
+      if (!sampleRename || selectedBranch !== sampleRename.id) return;
+      var info = branchInfo.get(branchById.get(selectedBranch));
+      $$('.branch-layout a').forEach(function (link) {
+        if (link.hash === '#' + selectedBranch && !link.closest('.branch-history')) link.textContent = sampleRename.words;
+      });
+      $('.branch-title', info.detail).textContent = sampleRename.words;
+      var buttonLabel = $('.branch-sr', branchById.get(selectedBranch).firstElementChild);
+      if (buttonLabel) buttonLabel.textContent = 'Branches under ' + sampleRename.words;
+      sampleStatus.textContent = 'Sample renamed. Reload to reset the example.';
+      newName.value = ''; sampleRename = null; applyRename.hidden = true; filterBranches();
+    });
+  }
+  var mapNav = $('[data-nav="project-map"]');
+  if (mapNav) mapNav.addEventListener('click', function (event) {
+    if (!selectedBranch || root.getAttribute('data-view') === 'project-map') return;
+    event.preventDefault(); location.hash = '#' + selectedBranch;
+  });
   var kept = {};
-  function route() {
+  function route(outputScroll) {
     var was = root.getAttribute('data-view');
-    if (was) { kept[was] = window.scrollY; }
+    var previousStory = was === 'threads' && $('.thread.on');
+    if (was && !previousStory) { kept[was] = window.scrollY; }
     var h = location.hash.slice(1) || 'now';
     if (/^m-[0-9]+$/.test(h)) {
       if (!views.some(function (v) { return v.classList.contains('on'); })) { show('now'); }
       openMem(h.slice(2), true);
       return;
     }
-    closeMem();
+    closeMem(true);
     // a hash that names anything inside a view shows that view, and inside a thread that thread's article
     var el = ID.test(h) ? document.getElementById(h) : null;
+    if (!el && /^impact-[0-9]+$/.test(h)) {
+      // A completed review may have cleared the last Overview item. Its history keeps the return anchor.
+      el = document.getElementById('history-' + h);
+    }
     var view = el && el.closest ? el.closest('.view') : null;
     if (view) {
       show(view.id);
+      if (view.id === 'project-map') selectBranch(h);
       var thread = el.closest('.thread');
-      if (thread) { showThread(thread.id); }
+      if (view.id === 'threads') { showThread(thread && thread.id); }
       var pane = el.closest('.mappane');
       if (pane) { showPane(pane.id.slice(4)); }
       unfold(el);
+      if (el.classList.contains('impact-group')) { el.open = true; }
     } else { show('now'); }
     if (el && el.classList && el.classList.contains('histbox') && el.hidden) { toggleBox(el.id); }
+    var focusAfterRoute = returnFocus && view && returnFocus.closest('.view') === view ? returnFocus : null;
+    if (!focusAfterRoute && previousStory && h === 'threads' && THREAD.test(previousStory.id)) {
+      focusAfterRoute = $('.story-topics a[href="#' + previousStory.id + '"]');
+    }
+    if (!focusAfterRoute && thread && thread === el) { focusAfterRoute = thread; }
+    if (!focusAfterRoute && el && el.classList.contains('impact-group')) { focusAfterRoute = $('summary', el); }
+    if (!focusAfterRoute && el && el.classList.contains('branch-detail')) { focusAfterRoute = el; }
     function settle() {
-      if (el && view && el !== view) { el.scrollIntoView(); } else { window.scrollTo(0, (view && kept[view.id]) || 0); }
+      if (typeof outputScroll === 'number') { window.scrollTo(0, outputScroll); return; }
+      var areaRoot = el === view || h === 'work' && view && view.id === 'todo' || h === 'outputs' && view && view.id === 'text';
+      if (view && view.id === 'project-map' && window.matchMedia('(min-width: 1001px)').matches && el !== view) { return; }
+      if (el && view && !areaRoot) { el.scrollIntoView(); } else { window.scrollTo(0, (view && kept[view.id]) || 0); }
     }
     settle();
-    setTimeout(settle, 0);
+    setTimeout(function () {
+      settle();
+      if (focusAfterRoute && document.contains(focusAfterRoute)) { focusAfterRoute.focus({ preventScroll: true }); }
+      returnFocus = null;
+    }, 0);
     var side = $('.side');
     if (narrow() && side) { setShut(side, true); }
   }
@@ -163,9 +331,28 @@
     }
   });
 
-  if (threads.length) { showThread(threads[0].id); }
   $$('.fold.closed').forEach(function (host) { setShut(host, true); });
+  if (outputViews) outputViews.addEventListener('click', function (event) {
+    var link = event.target.closest('a');
+    if (!link || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (location.hash !== link.hash) {
+      var top = window.scrollY;
+      history.pushState(null, '', link.hash);
+      route(top);
+    }
+    link.focus({preventScroll: true});
+  });
   window.addEventListener('hashchange', route);
+  window.addEventListener('popstate', route);
+  window.addEventListener('pageshow', function () {
+    // Firefox restores document focus after initial hash routing on reload.
+    window.requestAnimationFrame(function () {
+      if (!selectedBranch || document.activeElement !== document.body || location.hash !== '#' + selectedBranch) return;
+      var detail = document.getElementById(selectedBranch);
+      if (detail) detail.focus({preventScroll: true});
+    });
+  });
   route();
   // the panel slides only after the first frame, so that it does not slide off the page while it loads
   window.requestAnimationFrame(function () { root.classList.add('ready'); });
@@ -196,11 +383,123 @@
       return;
     }
     var el = event.target.closest && event.target.closest('[data-m]');
-    if (el) { event.preventDefault(); openMem(el.getAttribute('data-m'), !!el.closest('#panel')); return; }
+    if (el) {
+      event.preventDefault();
+      var mid = el.getAttribute('data-m');
+      if (!MEMORY.test(mid || '') || !document.getElementById('m-' + mid)) { return; }
+      if (!el.closest('#panel')) { lastFocus = el; }
+      var depth = opened && history.state ? history.state.memDepth : 0;
+      depth = Number.isInteger(depth) && depth > 0 && depth < 98 ? depth : 0;
+      if (location.hash !== '#m-' + mid) { history.pushState({ memDepth: depth + 1 }, '', '#m-' + mid); }
+      openMem(mid, true); return;
+    }
     if (opened && !event.target.closest('#panel') && !event.target.closest('#tour') &&
-        !event.target.closest('#wordbox')) { closeMem(); }
+        !event.target.closest('#wordbox')) {
+      var destination = event.target.closest('a');
+      closeMem(!!(destination && (destination.getAttribute('href') || '').charAt(0) === '#'));
+    }
   });
-  $('#close').addEventListener('click', closeMem);
+  $('#close').addEventListener('click', function () { closeMem(false); });
+
+  // The timeline uses only the bounded, trusted rows already on this page. Filter state stays in this document.
+  var historyList = $('#history-list'), historyRows = $$('.history-row'), historyControls = [
+    'history-clock', 'history-order', 'history-topic', 'history-kind', 'history-state', 'history-scope',
+    'history-query', 'history-from', 'history-to'];
+  var historyEntries = historyRows.map(function (row) {
+    return { row: row, ident: row.id.slice(8), text: row.textContent.toLowerCase(),
+      posted: row.getAttribute('data-posted') || '', event: row.getAttribute('data-event') || '',
+      topic: row.getAttribute('data-thread'), kind: row.getAttribute('data-kind'), state: row.getAttribute('data-state'),
+      catchup: row.getAttribute('data-catchup') === 'yes', group: null };
+  });
+  var historyOrders = {}, historyOrderKey = '', historyGroups = [];
+  function orderHistory(clock, reverse) {
+    var key = clock + (reverse < 0 ? '-newest' : '-oldest');
+    if (key === historyOrderKey) { return; }
+    historyOrderKey = key;
+    if (!historyOrders[key]) {
+      historyOrders[key] = historyEntries.slice().sort(function (a, b) {
+        var at = a[clock], bt = b[clock];
+        if (!at && bt) { return 1; } if (at && !bt) { return -1; }
+        var byId = a.ident.length - b.ident.length || (a.ident < b.ident ? -1 : a.ident > b.ident ? 1 : 0);
+        return reverse * (at < bt ? -1 : at > bt ? 1 : byId);
+      });
+    }
+    historyGroups.forEach(function (group) { group.node.remove(); });
+    historyGroups = [];
+    var fragment = document.createDocumentFragment(), lastDay = null, group;
+    historyOrders[key].forEach(function (entry) {
+      var day = entry[clock].slice(0, 10);
+      if (day !== lastDay) {
+        var label = document.createElement('li'); label.className = 'history-day';
+        label.textContent = day ? day + ' (UTC)' : 'Time unknown';
+        group = { node: label, visible: 0 }; historyGroups.push(group); fragment.appendChild(label); lastDay = day;
+      }
+      entry.group = group;
+      fragment.appendChild(entry.row);
+    });
+    historyList.appendChild(fragment);
+  }
+  function selectedHistory() {
+    var note = $('#history-selected'), row = opened && document.getElementById('history-' + opened);
+    if (!note) { return; }
+    note.hidden = !(row && row.hidden);
+    note.textContent = row && row.hidden ? 'The selected memory is outside these filters. Its full detail and recorded links remain available.' : '';
+  }
+  function historyValue(id) { var el = $('#' + id); return el ? el.value : ''; }
+  function filterHistory() {
+    if (!historyList) { return; }
+    var clock = historyValue('history-clock') === 'event' ? 'event' : 'posted';
+    var words = historyValue('history-query').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    var topic = historyValue('history-topic'), kind = historyValue('history-kind'), state = historyValue('history-state');
+    var since = historyValue('history-scope') === 'since', from = historyValue('history-from'), to = historyValue('history-to');
+    var reverse = historyValue('history-order') === 'newest' ? -1 : 1;
+    root.setAttribute('data-history-clock', clock);
+    var activeFilters = [topic !== 'all', kind !== 'all', state !== 'all', since, !!words.length, !!from, !!to].filter(Boolean).length;
+    $('#history-filter-label').textContent = activeFilters ? 'Filters (' + activeFilters + ' active)' : 'Filters';
+    orderHistory(clock, reverse);
+    historyGroups.forEach(function (group) { group.visible = 0; });
+    var count = 0;
+    historyEntries.forEach(function (entry) {
+      var row = entry.row, day = entry[clock].slice(0, 10);
+      var visible = (topic === 'all' || entry.topic === topic) &&
+        (kind === 'all' || entry.kind === kind) &&
+        (state === 'all' || entry.state === state) &&
+        (!since || entry.catchup) &&
+        (!from || day && day >= from) && (!to || day && day <= to) &&
+        words.every(function (word) { return entry.text.indexOf(word) >= 0; });
+      if (row.hidden !== !visible) { row.hidden = !visible; }
+      if (visible) {
+        count += 1;
+        entry.group.visible += 1;
+      }
+    });
+    historyGroups.forEach(function (group) {
+      var hidden = group.visible === 0;
+      if (group.node.hidden !== hidden) { group.node.hidden = hidden; }
+    });
+    $('#history-count').textContent = count + ' of ' + historyRows.length + ' included memories · ' +
+      (clock === 'event' ? 'event time' : 'posting time') + ' · UTC' +
+      (since ? ' · after the latest status' : '');
+    var empty = $('#history-empty'); empty.hidden = count > 0;
+    empty.textContent = historyRows.length ? 'No included memories match these filters. Reset filters to see the included history; omitted history is not searched.' :
+      'No memories are included yet. The record may be empty or its memories unavailable.';
+    selectedHistory();
+  }
+  if (historyList) {
+    historyControls.forEach(function (id) {
+      var control = $('#' + id);
+      if (control.tagName !== 'SELECT') { control.addEventListener('input', filterHistory); }
+      control.addEventListener('change', function () {
+        if (id === 'history-clock') { $('#history-order').value = control.value === 'event' ? 'oldest' : 'newest'; }
+        filterHistory();
+      });
+    });
+    $('#history-reset').addEventListener('click', function () {
+      historyControls.forEach(function (id) { var el = $('#' + id); if (el.tagName === 'SELECT') { el.selectedIndex = 0; } else { el.value = ''; } });
+      filterHistory();
+    });
+    filterHistory();
+  }
 
   // the map: reading line and lit links
   var reading = $('#reading'), restText = reading ? reading.textContent : '';
@@ -390,17 +689,63 @@
       box.focus(); box.select();
       say('Copy did not work; press Ctrl+C.');
     }
+    copyText(text, function () { say('Request copied. Paste it in the chat.'); }, failed);
+  }
+  function copyText(text, copied, failed) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function () { say('Request copied. Paste it in the chat.'); }, failed);
+      navigator.clipboard.writeText(text).then(copied, failed);
       return;
     }
-    var area = document.createElement('textarea');
+    var area = document.createElement('textarea'), previous = document.activeElement;
     area.value = text; area.setAttribute('readonly', 'readonly'); area.className = 'copyaside';
     document.body.appendChild(area); area.select();
     var done = false;
     try { done = document.execCommand('copy'); } catch (error) { done = false; }
     document.body.removeChild(area);
-    if (done) { say('Request copied. Paste it in the chat.'); } else { failed(); }
+    if (previous && previous.focus) { previous.focus({preventScroll: true}); }
+    if (done) { copied(); } else { failed(); }
+  }
+  $$('.impact-copy').forEach(function (button) {
+    button.addEventListener('click', function () {
+      var prompt = button.closest('details'), text = $('code', prompt), status = $('[aria-live]', prompt);
+      copyText(text.textContent, function () { status.textContent = 'Copied. Paste into your project chat.'; }, function () {
+        var selection = window.getSelection(), range = document.createRange();
+        range.selectNodeContents(text);
+        selection.removeAllRanges(); selection.addRange(range);
+        status.textContent = 'Use your device’s Copy command to copy the selected request.';
+      });
+    });
+  });
+  var handoffCopy = $('#handoff-copy');
+  if (handoffCopy) {
+    var handoff = $('#handoff-text'), handoffPreview = $('#handoff-preview'),
+        manualCopy = $('#handoff-manual-copy'), copyStatus = $('#handoff-copy-status');
+    function restoreHandoff() {
+      manualCopy.hidden = true;
+      handoff.hidden = false;
+    }
+    handoffPreview.addEventListener('toggle', function () {
+      if (!handoffPreview.open) restoreHandoff();
+    });
+    handoffCopy.addEventListener('click', function () {
+      var portable = handoff.cloneNode(true);
+      $$('a', portable).forEach(function (link) { link.textContent = link.getAttribute('href'); });
+      var text = portable.textContent;
+      copyText(text, function () {
+        restoreHandoff();
+        copyStatus.textContent = 'Handoff copied.';
+      }, function () {
+        manualCopy.textContent = text;
+        handoff.hidden = true;
+        manualCopy.hidden = false;
+        handoffPreview.open = true;
+        manualCopy.focus();
+        var selection = window.getSelection(), range = document.createRange();
+        range.selectNodeContents(manualCopy);
+        selection.removeAllRanges(); selection.addRange(range);
+        copyStatus.textContent = 'Use your device’s Copy command to copy the selected handoff.';
+      });
+    });
   }
   if (paper) {
     $$('.histbox', paper).forEach(function (box) { box.hidden = true; });
@@ -466,7 +811,7 @@
     // a link to a history box opens it (the boxes were shut above, after the first route)
     if (/^#hist-[0-9]+-[0-9]+$/.test(location.hash)) { route(); }
   }
-  // a window that was narrow and is wide again shows the ways in
+  // a window that was narrow and is wide again shows the project tools
   var wide = window.matchMedia ? window.matchMedia('(max-width: 860px)') : null;
   function widened(event) { var side = $('.side'); if (side && !event.matches) { setShut(side, false); } }
   if (wide) { if (wide.addEventListener) { wide.addEventListener('change', widened); } else if (wide.addListener) { wide.addListener(widened); } }
@@ -505,6 +850,6 @@
       if (shownBox && !shownBox.hidden) { toggleBox(shownBox.id); return; }
       if (opened) { closeMem(); } else if (!tour.hidden) { endTour(); }
     }
-    if (event.key === '/' && document.activeElement !== q) { event.preventDefault(); location.hash = '#ask'; q.focus(); }
+    if (event.key === '/' && q && !/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) { event.preventDefault(); location.hash = '#ask'; q.focus(); }
   });
 }());
