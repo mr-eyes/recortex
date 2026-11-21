@@ -8,6 +8,8 @@
   if (selected) document.getElementById('back').href = 'snapshot#work-step-' + selected[1];
   var busy = false, preview = null;
   var status = document.getElementById('status');
+  // Recording waits on GitHub for up to about half a minute: the page says so at once, with the buttons off.
+  var RECORDING = 'Recording this completion on GitHub… This can take about 30 seconds. Please wait, and do not record it again.';
   var messages = {
     unauthorized: 'This connection has expired. Open the private address again from the terminal or the launch file that started the service. A stopped service needs a new start.',
     unavailable: 'The record could not be checked. No success is assumed. Check recent operations before trying again.',
@@ -128,7 +130,7 @@
             status.textContent = 'Review your statement before recording it.';
           }); });
           input.addEventListener('input', function () {
-            if (preview) {
+            if (preview && !busy) {
               closePreview();
               status.textContent = 'Preview your updated statement to continue.';
             }
@@ -169,18 +171,27 @@
     status.textContent = 'Record and offline snapshot refreshed. Reopen the saved snapshot to view its new contents.';
   }); });
   document.getElementById('cancel').addEventListener('click', closePreview);
+  function lockConfirm(locked) {
+    document.getElementById('confirm').disabled = locked;
+    document.getElementById('cancel').disabled = locked;
+  }
   document.getElementById('confirm').addEventListener('click', function () { run(async function () {
     if (!preview) return;
     var chosen = preview;
-    closePreview();
+    lockConfirm(true);
+    status.textContent = RECORDING;
     try {
       var result = await api('api/commit', {id: chosen.id, body_hash: chosen.body_hash});
+      closePreview();
       await reloadState();
       showResult(result);
     } catch (error) {
+      closePreview();
       await reloadState();
       recoveryButton(chosen.id);
       status.textContent = error.message + ' Check this operation’s receipt before starting another completion.';
+    } finally {
+      lockConfirm(false);
     }
   }); });
   run(async function () {

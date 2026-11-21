@@ -10,6 +10,7 @@ import os
 import pathlib
 import re
 import select
+import shutil
 import stat
 import subprocess
 import sys
@@ -689,6 +690,132 @@ class LifetimeTests(unittest.TestCase):
             time.sleep(0.1)
         thread.join(10)
         self.assertEqual(["limit"], done)
+
+
+PAGE_STATES = r"""
+// The action page's own script, run against a small stand-in for the document and for fetch, to see what the page shows while
+// a completion is being recorded, then after the receipt, and after a failure.
+const fs = require('fs'), vm = require('vm');
+const source = fs.readFileSync(process.env.PAGE_JS, 'utf8');
+const made = [];
+function element(tag) {
+  const el = {tag, children: [], listeners: {}, attrs: {}, hidden: false, disabled: false, textContent: '', value: '', open: false,
+    appendChild(child) { this.children.push(child); return child; },
+    replaceChildren(...children) { this.children = children; },
+    prepend(child) { this.children.unshift(child); },
+    addEventListener(name, handler) { (this.listeners[name] = this.listeners[name] || []).push(handler); },
+    setAttribute(name, value) { this.attrs[name] = value; },
+    removeAttribute(name) { delete this.attrs[name]; },
+    focus() {}};
+  made.push(el);
+  return el;
+}
+const ids = {};
+['project', 'back', 'tasks', 'preview', 'review-step', 'review-statement', 'body', 'exact-record', 'confirm', 'cancel',
+ 'refresh', 'status', 'operations'].forEach(id => { ids[id] = element('x'); });
+ids.preview.hidden = true;
+const main = element('main');
+const document = {getElementById: id => ids[id], querySelector: () => main, createElement: element};
+const window = {location: {hash: '', pathname: '/mount/actions', replace() {}}, history: {replaceState() {}}};
+const state = {repo: 'octo-org/octo-repo', omitted_tasks: 0, operations: [],
+  tasks: [{issue: 7, title: 'Task', steps: [{id: '7:9108:2', text: 'Rerun the set', state: 'open'}]}]};
+let pending = null;
+const calls = [];
+function reply(ok, data) { return {ok, json: async () => data}; }
+const fetch = (path, options) => {
+  calls.push(path);
+  if (path === 'api/state') return Promise.resolve(reply(true, state));
+  if (path === 'api/preview') return Promise.resolve(reply(true, {id: 'a'.repeat(32), body_hash: '0'.repeat(64), body: 'the body',
+    statement: 'I ran it.', step_text: 'Rerun the set', target: {issue: 7}}));
+  if (path === 'api/commit') return new Promise((resolve, reject) => { pending = {resolve, reject}; });
+  return Promise.reject(new Error('unexpected ' + path));
+};
+const context = vm.createContext({document, window, fetch, JSON, Number, Promise, Error, console});
+const tick = () => new Promise(resolve => setTimeout(resolve, 10));
+let sent = 0;   // the commits of earlier scenarios
+const shot = () => ({status: ids.status.textContent, confirm_disabled: ids.confirm.disabled, cancel_disabled: ids.cancel.disabled,
+  preview_hidden: ids.preview.hidden, busy: main.attrs['aria-busy'] || '', commits: calls.filter(c => c === 'api/commit').length - sent,
+  recovery: ids.operations.children.some(c => c.textContent === 'Check this operation’s receipt')});
+async function record(outcome) {
+  sent = calls.filter(c => c === 'api/commit').length;
+  const button = made.filter(el => el.textContent === 'Preview completion').pop();
+  made.filter(el => el.tag === 'textarea').pop().value = 'I ran it.';
+  button.listeners.click[0]();
+  await tick();
+  const out = {reviewing: shot()};
+  ids.confirm.listeners.click[0]();
+  await tick();
+  out.recording = shot();
+  ids.confirm.listeners.click[0]();   // a second click that a browser would have refused still must not send a second request
+  if (!ids.cancel.disabled) ids.cancel.listeners.click[0]();   // a disabled button gets no click
+  await tick();
+  out.during_second_click = shot();
+  outcome();
+  await tick();
+  out.after = shot();
+  return out;
+}
+(async () => {
+  vm.runInContext(source, context);
+  await tick();
+  const result = {};
+  result.recorded = await record(() => pending.resolve(reply(true, {state: 'recorded', refresh: 'updated', receipt: {url: 'x'}})));
+  result.failed = await record(() => pending.resolve(reply(false, {code: 'unavailable'})));
+  console.log(JSON.stringify(result));
+})();
+"""
+
+
+class ConfirmStatesTests(unittest.TestCase):
+    """What the action page shows while "Record this completion" waits on GitHub (the live check found 30 seconds of the
+    words that the preview showed): a fixed "Recording" line at once, in the polite live region, with the buttons off; then
+    the receipt, or one fixed failure line with the way to check the receipt."""
+
+    def source(self):
+        with open(os.path.join(ROOT, "skills", "recortex", "page", "dashboard_action.js"), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_page_has_a_polite_live_status_and_the_script_orders_the_states(self):
+        self.assertIn('<p id="status" role="status" aria-live="polite"></p>', action.HTML)
+        code = self.source()
+        confirm = code[code.index("document.getElementById('confirm').addEventListener('click'"):]
+        for earlier, later in (("lockConfirm(true)", "status.textContent = RECORDING"),
+                               ("status.textContent = RECORDING", "api('api/commit'"),
+                               ("api('api/commit'", "closePreview()"),
+                               ("closePreview()", "showResult(result)")):
+            self.assertLess(confirm.index(earlier), confirm.index(later), (earlier, later))
+        self.assertIn("finally {\n      lockConfirm(false);", confirm)
+        self.assertIn("var RECORDING = 'Recording this completion on GitHub…", code)
+
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to run the page's script")
+    def test_the_recording_state_shows_at_once_then_the_receipt_or_one_failure_line(self):
+        done = subprocess.run(["node", "-"], input=PAGE_STATES, universal_newlines=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, timeout=60,
+                              env=dict(os.environ, PAGE_JS=os.path.join(ROOT, "skills", "recortex", "page", "dashboard_action.js")))
+        self.assertEqual(0, done.returncode, done.stderr)
+        shots = json.loads(done.stdout)
+        for name in ("recorded", "failed"):
+            seen = shots[name]
+            self.assertFalse(seen["reviewing"]["confirm_disabled"], name)
+            self.assertFalse(seen["reviewing"]["preview_hidden"], name)
+            # the moment after the click, before GitHub has answered
+            self.assertTrue(seen["recording"]["status"].startswith("Recording this completion on GitHub…"), seen["recording"])
+            self.assertTrue(seen["recording"]["confirm_disabled"] and seen["recording"]["cancel_disabled"], name)
+            self.assertFalse(seen["recording"]["preview_hidden"], name)   # the statement stays in view while it is recorded
+            self.assertEqual("true", seen["recording"]["busy"], name)
+            self.assertEqual(1, seen["recording"]["commits"], name)
+            self.assertEqual(1, seen["during_second_click"]["commits"], name)   # a second click sends nothing
+            self.assertTrue(seen["during_second_click"]["status"].startswith("Recording"), name)
+            self.assertFalse(seen["during_second_click"]["preview_hidden"], name)
+            self.assertFalse(seen["after"]["confirm_disabled"] or seen["after"]["cancel_disabled"], name)
+            self.assertTrue(seen["after"]["preview_hidden"], name)
+            self.assertEqual("", seen["after"]["busy"], name)
+        self.assertIn("Completion recorded and the task list updated", shots["recorded"]["after"]["status"])
+        self.assertFalse(shots["recorded"]["after"]["recovery"])
+        failed = shots["failed"]["after"]
+        self.assertIn("Check this operation’s receipt before starting another completion.", failed["status"])
+        self.assertTrue(failed["recovery"])
+        self.assertNotIn("Recording this completion", failed["status"])
 
 
 class HttpTests(unittest.TestCase):
