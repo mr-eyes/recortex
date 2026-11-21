@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Edit project map · Recortex</title>
+<link rel="stylesheet" href="action.css"><script src="map-editor.js" defer></script>
+</head>
+<body><main>
+<p><a id="back" href="snapshot#project-map">Back to Project Map</a></p>
+<h1>Edit project map</h1>
+<p>Preview the affected branches before saving your change to the shared project record.</p>
+<p id="status" role="status" aria-live="polite">Reading the shared map…</p>
+<div class="action-columns">
+<div>
+<form id="map-change" hidden>
+<div><label for="action">Change</label><select id="action">
+<option value="add">Add a branch</option><option value="rename">Rename a branch</option>
+<option value="update">Edit branch details</option><option value="move">Move a branch</option>
+<option value="split">Split into branches</option><option value="merge">Merge into another branch</option>
+<option value="delete">Delete a branch</option><option value="restore">Restore a removed branch</option>
+</select></div>
+<div id="fields"></div>
+<button type="submit">Preview change</button>
+</form>
+<button type="button" id="refresh-map">Read current map</button>
+</div>
+<section id="preview" hidden><h2>Review change</h2><div id="map-diff"></div>
+<button id="confirm" type="button">Apply to shared map</button><button id="cancel" type="button">Cancel</button>
+</section>
+</div>
+</main></body></html>

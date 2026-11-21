@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Review a decision change · Recortex</title>
+<link rel="stylesheet" href="action.css"><script src="impact.js" defer></script>
+</head>
+<body><main class="impact-editor">
+<p><a id="back" href="snapshot#history">Back to History</a></p>
+<h1>Review a decision change</h1>
+<p id="project"></p>
+<p id="status" role="status" aria-live="polite">Reading the project record…</p>
+<label id="choose" hidden>Item to review <select id="item"></select></label>
+<div class="action-columns">
+<section id="evidence" hidden>
+<h2 id="label"></h2>
+<blockquote id="quote"></blockquote>
+<p id="reason"></p>
+<a id="source">Read original on GitHub</a>
+<div id="decisions"></div>
+<div id="questions"></div>
+<p id="current"></p>
+<button type="button" id="resume" hidden>Reopen accepted change</button>
+</section>
+<form id="judgment" hidden>
+<fieldset><legend>What should happen to this item?</legend>
+<label><input type="radio" name="verdict" value="still_correct" required> Still correct <small>The existing wording holds.</small></label>
+<label><input type="radio" name="verdict" value="needs_update"> Needs an update <small>Review the exact change or prepare a request.</small></label>
+<label><input type="radio" name="verdict" value="unrelated"> Unrelated <small>Dismiss this connection for the current evidence.</small></label>
+<label><input type="radio" name="verdict" value="defer"> Defer <small>Leave the judgment for later. You can return from History.</small></label>
+</fieldset>
+<label>Reason or correction <small>(optional)</small><textarea id="note" rows="2" maxlength="1500"></textarea></label>
+<label id="draft-field" hidden>Proposed wording or follow-up <textarea id="draft" rows="4" maxlength="4000"></textarea></label>
+<button type="submit">Preview review</button>
+</form>
+<section id="preview" aria-labelledby="preview-title" hidden>
+<h2 id="preview-title" tabindex="-1">Review before saving</h2>
+<p id="summary"></p>
+<div id="detail"></div>
+<p id="effect"></p>
+<button type="button" id="confirm" hidden>Save shared review</button>
+<button type="button" id="apply" hidden>Apply reviewed change</button>
+<button type="button" id="edit" hidden>Back to editing</button>
+<a id="receipt" hidden>Read shared receipt on GitHub</a>
+</section>
+</div>
+</main></body></html>
