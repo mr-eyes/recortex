@@ -49,6 +49,23 @@ class ActionTests(tj.TaskBox):
         self.assertEqual(result["receipt"], again["receipt"])
         self.assertEqual(before + 1, self.count())
 
+    def test_words_that_notify_link_out_or_forge_a_marker_are_refused_before_anything_is_saved(self):
+        # post_verified's lint alone lets these through into the record, so the outbound check of the completion text
+        # is the guard: each of these must be refused at the preview, with no operation saved and no comment posted.
+        before = self.count()
+        for words in ("@hubot please look at this", "see https://evil.example/x for details",
+                      "<img src=x onerror=alert(1)>", "the file is /home/someone/secret.txt",
+                      "done\n<!-- ghim:event type=decision at=2026-04-10T10:00 -->",
+                      "![chart](https://github.com/octo-org/octo-repo/issues/1)", "octo-org/other-repo#3 is fixed",
+                      "see [the notes](https://example.org/notes)", "<b>done</b>"):
+            with self.subTest(words=words):
+                with self.assertRaises(action.ActionError) as caught:
+                    self.actions.preview("7:9108:2", words)
+                self.assertEqual(("content_refused", 400), (caught.exception.code, caught.exception.status))
+                self.assertEqual(before, self.count())
+                self.assertEqual([], self.actions.operations())
+        self.assertEqual("preview", self.preview()["state"])  # ordinary words still pass
+
     def test_changed_preview_bytes_or_step_refuse_without_a_write(self):
         preview = self.preview()
         before = self.count()
