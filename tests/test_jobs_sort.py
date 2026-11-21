@@ -931,7 +931,9 @@ class Replay(Scripted):
         steps = next(e for e in events if e['kind'] == 'steps')
         self.assertIn('> ', steps['body'])
         self.assertIn(data['sources'][2]['text'][:20], steps['body'])
-        self.assertEqual({'steps', 'failure', 'decision', 'result', 'checkpoint'}, {e['kind'] for e in events})
+        # "decode with replacement characters for now" scopes the workaround. The result and checkpoint
+        # retain the work performed. The choice is still open for a future decision about encodings.
+        self.assertEqual({'steps', 'failure', 'result', 'checkpoint'}, {e['kind'] for e in events})
 
     def test_all_tests_pass_except_two_marks_no_step_three(self):
         calls, events, data = self.replay('s29')

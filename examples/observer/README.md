@@ -70,3 +70,38 @@ Have an independent human reviewer label meaningful observations and their suppo
 Report supported useful recordings divided by all recordings, matched meaningful observations divided by all labeled meaningful observations, and relevant advice divided by all surfaced advice. Report counts, exclusions, uncertainty intervals, coding and research results separately, and every matched explicit-hold failure. A small denominator or an unobserved failure mode remains a limitation even if a point estimate exceeds its target. Do not claim a release gate passed until the actual runtime evidence, deterministic checks, complete matched hold cases, and human-labeled quality targets all support that claim.
 
 See the [observer contract](../../skills/recortex/references/observer.md) for supported actions and the boundaries of automatic mode.
+
+## Score a return to a project
+
+Compare ordinary context, a candidate calculated but hidden (`shadow`), and a candidate actually eligible for delivery (`delivered`). Keep the task, evidence budget and time allowed for recording the same across arms. Alternate the order with matched cases. Count unrelated tasks and occasions where staying quiet is appropriate. Have someone who has not seen the suggestions label the expected facts and the correct next decision first.
+
+Save one JSON object per completed trial in a private file. The example below illustrates the format. Supply one distinct ID per expected fact and its last confirmed stage at the end of the observation window. Allowed values are `missed`, `selected`, `drafted`, `reviewed`, `queued`, `published`, `verified` and `retrieved`. Keep the source and qualifications in the private answer key. A matching message ID alone earns no credit. Log pending, deferred and unavailable evidence with its reason in that key and count only the stage actually established.
+
+```json
+{"purpose":"research","case":"plots","trial":"1","arm":"delivered","facts":{"decision":"retrieved","scope":"verified"},"claims":[true,true],"advice":[true],"correct":true,"seconds":34,"interruptions":0,"calls":0,"tokens":0}
+```
+
+`claims` holds one independent judgment for every recorded claim. Use true only when it was supported, correctly attributed and worth retaining. `advice` holds one relevance judgment per visible suggestion. Count every unnecessary interruption, actual model calls and tokens. Record the user's next decision against the frozen answer, including in arms with no suggestion. The scorer outputs counts and denominators by purpose and arm. Empty denominators and unobserved arms remain null.
+
+```bash
+python3 examples/observer/score_handoffs.py < reviewed-trials.jsonl
+```
+
+Use the counts with the case-level review and uncertainty estimates from the live evaluation. Repeated trials share underlying cases. A good point estimate on one fixture cannot establish a release-quality result.
+
+## Evaluate Project Map
+
+The 60-day replay also reconstructs a shared project map on two simulated devices after each day. It covers a lost acknowledgment, an explicit correction, quiet weeks after a deletion, and a later restoration.
+
+For a live model check, supply invented cases and choose a new JSONL output path. The first command uses the installed Claude runtime and the same draft, review, and admission functions as the worker. It has no GitHub write path. The second command reads the decisions and separate, prewritten labels.
+
+```bash
+python3 examples/observer/map_trial.py run examples/observer/map_cases.json .tmp/map-decisions.jsonl
+python3 examples/observer/map_trial.py score examples/observer/map_labels.json .tmp/map-decisions.jsonl
+```
+
+The included cases are repeatable examples. For a blind evaluation, have a reviewer write fresh cases and freeze acceptable placements and expected quiet cases before the evaluator sees the results. Keep the labels out of both model calls. Score additions, renames, moves, and restorations across software, research, and mixed projects. Report eligible automatic changes, how many were correct, missed opportunities, and actions that should have required review.
+
+For a matched return-task model check, run `python3 examples/observer/map_returns.py .tmp/map-returns.jsonl`. It rotates the three arms over three invented questions, asks the same model to choose a next action from the supplied context, and checks the choice against its source citation. Each row records the selected sources, issued note, elapsed model time, and usage. Participants in a field trial can also measure human time and interruptions.
+
+For the private field trial, agree on the projects and sessions with the owner after dashboard review. Start in shadow mode. Independently label real changes and matched return-to-work tasks before inspecting the outcomes. Compare ordinary context, map computed but hidden, and map delivered. Record task correctness, recovered decisions, false suggestions, interruptions, elapsed time, model calls, and tokens. Report each domain separately, including quiet sessions and empty denominators. Review the actual mistakes alongside the proposed gates of 95% correct automatic changes, 90% relevant surfaced suggestions, and zero unauthorized or destructive changes.

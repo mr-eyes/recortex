@@ -1143,6 +1143,42 @@ class ObserverHookTests(unittest.TestCase):
             again = self.run_hook(command="git push")  # a newer sync time, the same selection
             self.assertNotIn("hookSpecificOutput", again)
 
+    def test_advisory_shadow_and_delivery_have_separate_receipts_and_never_deny(self):
+        class Empty:
+            def execute(self, *args):
+                return []
+
+            def close(self):
+                pass
+        self._context.stop()
+        packet = {"text": "CONTEXT", "selected": [1, 2], "resume_id": None, "scope": None,
+                  "freshness": {"sync_complete": True, "age_seconds": 0},
+                  "advisories": [{"issue": 2, "decision": 2, "failure": 1, "failure_issue": 2,
+                                  "fingerprint": "f" * 64, "text": "OPTIONAL EVIDENCE POINTER"}]}
+        data = dict(self.data, prompt="Try the quoted input again")
+        with mock.patch("index.connect", return_value=Empty()), \
+                mock.patch("observer_context.build_packet", return_value=packet), \
+                mock.patch("observer_runtime.invoke") as invoke:
+            self.config["observer"]["advisory_mode"] = "shadow"
+            first = hooks.handle("prompt-submit", data, self.config, REPO)
+            self.assertEqual("CONTEXT", first["hookSpecificOutput"]["additionalContext"])
+            self.config["observer"]["advisory_mode"] = "deliver"
+            delivered = hooks.handle("prompt-submit", data, self.config, REPO)
+            self.assertEqual("CONTEXT\nOPTIONAL EVIDENCE POINTER", delivered["hookSpecificOutput"]["additionalContext"])
+            self.assertNotIn("permissionDecision", delivered["hookSpecificOutput"])
+            self.assertNotIn("hookSpecificOutput", hooks.handle("prompt-submit", data, self.config, REPO))
+            changed = hooks.handle("prompt-submit", dict(data, prompt="Try a different quoted input"), self.config, REPO)
+            self.assertNotIn("hookSpecificOutput", changed)
+            packet["scope"] = 9
+            changed = hooks.handle("prompt-submit", data, self.config, REPO)
+            self.assertIn("OPTIONAL EVIDENCE POINTER", changed["hookSpecificOutput"]["additionalContext"])
+            invoke.assert_not_called()
+        with Store(REPO, config=self.config) as store:
+            self.assertEqual([], store.events())
+            self.assertEqual([], store.holds())
+            self.assertEqual(1, len(store.get_control("advisory_shadow")))
+            self.assertEqual(2, len(store.get_control("advisory_delivered")))
+
     def test_existing_hold_survives_capture_and_diagnostic_write_failure(self):
         self.append("/recortex hold git-push")
         self.run_hook()

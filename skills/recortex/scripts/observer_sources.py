@@ -511,6 +511,13 @@ def answered(data, project_root, short, line, label="Post", max_bytes=ANSWER_BYT
     `seconds`. With `text_is` (and `labels_are`) the question must be the plugin's own whole question: its text, with every
     space and line break taken out, equal to `text_is` taken the same way, and its options' labels equal to `labels_are`, in that order: a question
     that holds the same words among others of the session's, or offers other options, is not it."""
+    map_question = False
+    if short and isinstance(text_is, str) and text_is.startswith("Project Map "):
+        # Stable branch IDs can themselves be eight hexadecimal characters. Only the canonical question with all
+        # options in order can identify those as branch IDs rather than another grant request.
+        import observer_waiting
+        expected = observer_waiting.entry({"kind": "map", "short": short, "key": short, "line": line})
+        map_question = text_is == expected["question"] and list(labels_are or ()) == expected["options"]
     line = " ".join(line.split()) if isinstance(line, str) else ""
     if not line:
         return None
@@ -556,7 +563,7 @@ def answered(data, project_root, short, line, label="Post", max_bytes=ANSWER_BYT
                         options = question.get("options") if isinstance(question.get("options"), list) else []
                         labels = [o.get("label") for o in options if isinstance(o, dict)]
                         whole = " ".join(text.split()) if isinstance(text, str) else ""
-                        if (isinstance(text, str) and (short is None or set(SHORT_ID.findall(text)) == {short})
+                        if (isinstance(text, str) and (short is None or map_question or set(SHORT_ID.findall(text)) == {short})
                                 and (line in whole if text_is is None else "".join(text.split()) == "".join(text_is.split()))
                                 and (labels_are is None or labels == list(labels_are))):
                             asked[block["id"]] = (text, label in labels, len(questions))
@@ -622,6 +629,7 @@ DIALOG_SHAPES = {
 # that holds the word recortex. The observer must not record the user's answers about the observer.
 OWN_DIALOG = re.compile(r"(?i:recortex)|\A[ \t\r\n]*Memory [0-9a-f]{8} \([a-z]+\) on #[0-9]+: |"
                         r"\A[ \t\r\n]*Task [0-9a-f]{8}: (?:open a task |every step of #[0-9]+ is done)|"
+                        r"\A[ \t\r\n]*Project Map [0-9a-f]{8}: |"
                         r"\A[ \t\r\n]*Draft [0-9a-f]{8}: update the ")
 CALL_ID = re.compile(r"([A-Za-z0-9_-]{1,128})(?:\.([0-3]))?")
 QUESTIONS_MAX, OPTIONS_MAX, QUESTION_CHARS, LABEL_CHARS = 4, 4, 2000, 300

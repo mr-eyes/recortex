@@ -118,12 +118,17 @@ class WorkerTests(unittest.TestCase):
         return {'kind':c['kind'],'issue':c['issue'],'task_title':c.get('task_title',''),'topic':c.get('topic',0),'body':c['body'],
                 'sources':[self.number(s,payload) for s in c['sources']],'excerpts':c['excerpts'],
                 'marks':c.get('marks',[]),'links':c.get('links',[])}
-    def invoke(self,*candidates,accepted=True,bad_hash=False,reason=None,label=None):
+    def invoke(self,*candidates,accepted=True,bad_hash=False,reason=None,label=None,qualification=None):
         def call(payload,schema,purpose,config):
             self.calls.append((purpose,payload))
             if purpose=='sort':return {'ok':True,'structured':self.sorting(candidates,payload,label)}
             if purpose=='draft':return {'ok':True,'structured':{'candidates':[self.drafted(c,payload) for c in candidates if c]}}
-            return {'ok':True,'structured':{'candidate_hash':'0'*64 if bad_hash else payload['candidate_hash'],'accepted':accepted,'reason':reason or ('supported' if accepted else 'unsupported')}}
+            answer = {'candidate_hash':'0'*64 if bad_hash else payload['candidate_hash'],'accepted':accepted,
+                      'reason':reason or ('supported' if accepted else 'unsupported')}
+            if qualification is not None:
+                self.assertIn("qualification", schema["required"])
+                answer["qualification"] = qualification
+            return {'ok':True,'structured':answer}
         return call
     def test_a_status_change_rests_on_the_users_words_or_the_agents_message(self):
         # The observer takes notes of the conversation: a change of an earlier memory's status rests on the user's
@@ -441,6 +446,38 @@ class WorkerTests(unittest.TestCase):
         with store.Store(REPO,config=self.config) as db:
             self.assertEqual([],db.events());self.assertNotIn(BODY.encode(),Path(db.path).read_bytes())
             self.assertEqual('review_failed',db.observation(sid)['reason'])
+    def test_one_run_qualifier_omitted_from_quote_cannot_become_a_standing_decision(self):
+        sid = self.capture("For this run only: " + QUOTE)
+        self.run_worker(self.invoke(self.candidate(sid)))
+        self.assertEqual(["sort", "draft"], [call[0] for call in self.calls])
+        with store.Store(REPO, config=self.config) as db:
+            self.assertEqual([], db.events())
+
+    def test_separate_question_or_trial_goes_to_review_with_the_whole_decision_source(self):
+        for prefix, suffix, accepted, qualification, expected in (
+                ("What if we switch the logging format? ", "", True, "separate_action", "ready"),
+                ("", " That is our permanent parser policy. For this run only, leave the documentation untouched.",
+                 True, "separate_action", "ready"),
+                ("", " That is our permanent parser policy. For this run only, leave the parser documentation untouched.",
+                 True, "separate_action", "ready"),
+                ("", " For this run only, keep strict quoting.", True, "same_decision", "review_rejected"),
+                ("", " For this run only, do that.", True, "unclear", "review_rejected"),
+                ("", " For this run only, enable that setting.", True, None, "review_failed"),
+                ("", " For this run only, rotate the logs.", False, "separate_action", "review_rejected")):
+            text = prefix + QUOTE + suffix
+            with self.subTest(text=text):
+                sid = self.capture(text)
+                self.calls = []
+                self.run_worker(self.invoke(self.candidate(sid), accepted=accepted, qualification=qualification))
+                self.assertEqual(["sort", "draft", "review"], [purpose for purpose, _ in self.calls])
+                self.assertEqual(text, self.calls[-1][1]["sources"][0]["text"])
+                with store.Store(REPO, config=self.config) as db:
+                    if expected == "ready":
+                        self.assertEqual("ready", db.event_by_source(sid)["state"])
+                    else:
+                        self.assertIsNone(db.event_by_source(sid))
+                        self.assertEqual(expected, db.observation(sid)["reason"])
+
     def test_assistant_quote_cannot_create_user_decision(self):
         sid=self.capture(role='assistant')
         self.run_worker(self.invoke(self.candidate(sid),label='idea'))   # a sorter that mislabels the moment as an idea

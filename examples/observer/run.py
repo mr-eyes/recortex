@@ -40,6 +40,7 @@ import observer_runtime
 import observer_sources
 import observer_store
 import observer_worker
+import project_map
 import recortex
 from tests.observer_source_fixture import fixture_trusted_ancestors
 
@@ -576,6 +577,50 @@ def full_hook_latency(fixture, samples=30):
             "limitation": "Local repeated-process measurement; filesystem cache and concurrent system load affect timing."}
 
 
+def project_map_replay(days):
+    """Two readers rebuild a mixed project from the same chronological hub comments."""
+    schedule = {
+        1: ("user", {"action": "add", "id": "instruments", "title": "Instruments"}),
+        2: ("observer", {"action": "add", "id": "reader", "title": "Field reader", "parent": "instruments",
+                         "evidence": ["comment:4002"]}),
+        8: ("user", {"action": "add", "id": "study", "title": "Moisture variation"}),
+        9: ("user", {"action": "move", "id": "reader", "parent": "study"}),
+        14: ("user", {"action": "rename", "id": "reader", "title": "Calibration"}),
+        17: ("user", {"action": "add", "id": "paper", "title": "Manuscript", "links": ["study"]}),
+        23: ("user", {"action": "delete", "id": "reader", "children": "subtree"}),
+        52: ("user", {"action": "restore", "id": "reader"}),
+    }
+    log = []
+    working = project_map.empty()
+    for day in range(1, days + 1):
+        if day in schedule:
+            source, change = schedule[day]
+            op = project_map.prepare(working, change, source, "change-%d" % day)
+            row = {"id": 5000 + day * 2, "author": "octocat", "created_at": "day-%d" % day,
+                   "body": project_map.encode(REPO, 4, op)}
+            log.append(row)
+            working = project_map.apply(working, op, row["created_at"], row["author"], row["id"])
+            if day == 14:  # the acknowledgment was lost; another client tries the same correction
+                log.append(dict(row, id=row["id"] + 1))
+        rebuilt = project_map.replay(REPO, 4, ["octocat"], log)
+        require(rebuilt == working, "both devices rebuild the identical map on day %d" % day)
+        if 23 <= day < 52:
+            require(rebuilt["nodes"]["reader"]["deleted"], "a quiet, deleted branch stays deleted")
+        if day == 40:
+            try:
+                project_map.prepare(rebuilt, {"action": "add", "id": "again", "title": "Calibration",
+                                              "parent": "study", "evidence": ["comment:4002"]}, "observer")
+            except project_map.MapError:
+                pass
+            else:
+                raise AssertionError("old evidence recreated a deleted branch")
+    require(working["nodes"]["reader"]["title"] == "Calibration" and
+            not working["nodes"]["reader"]["deleted"] and working["nodes"]["reader"]["parent"] == "study",
+            "deliberate restoration keeps the corrected branch and its place")
+    return {"days_rebuilt": days, "accepted_changes": len(working["history"]), "ledger_entries": len(log),
+            "project_branches": len(working["nodes"]), "model_calls": 0}
+
+
 def run_replay():
     started = time.perf_counter()
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
@@ -596,7 +641,7 @@ def run_replay():
             retrieval, delivery = context_replay(replay)
     latency["full_hook_process"] = full_hook_latency(fixture)
     return {"schema_version": 2, "kind": "deterministic_offline_longitudinal_replay", "simulated": simulated,
-            "source_ancestry": ancestry,
+            "source_ancestry": ancestry, "project_map": project_map_replay(fixture["simulated_days"]),
             "elapsed_wall_seconds": round(time.perf_counter() - started, 3), "capture_latency": latency,
             "context_retrieval": retrieval, "continuous_context_delivery": delivery,
             "real_model_invocations": 0, "live_github_calls": 0,

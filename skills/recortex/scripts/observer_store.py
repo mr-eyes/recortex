@@ -602,13 +602,22 @@ class Store:
         row = self.db.execute("SELECT value FROM controls WHERE key=?", (key,)).fetchone()
         return json.loads(row[0]) if row else default
 
+    @contextlib.contextmanager
+    def edit_controls(self):
+        """Read and write related controls under the same exclusive transaction."""
+        with self.transaction():
+            yield self._write_control
+
     def set_control(self, key, value):
+        with self.edit_controls() as write:
+            write(key, value)
+
+    def _write_control(self, key, value):
         _reason(key)
         payload = canonical(value)
         if len(payload.encode("utf-8")) > 1024 * 1024:
             raise StoreError("capacity")
-        with self.transaction():
-            self.db.execute("INSERT OR REPLACE INTO controls VALUES (?,?)", (key, payload))
+        self.db.execute("INSERT OR REPLACE INTO controls VALUES (?,?)", (key, payload))
 
     def policy(self):
         return self.get_control("settings", {})
@@ -1327,6 +1336,9 @@ class Store:
             if draft["state"] == "waiting" or draft["until"] <= now:
                 out.append({"kind": "draft", "key": draft["id"], "short": draft["id"], "created": draft["created"],
                             "draft": draft})
+        if isinstance(self.config.get("observer"), dict) and self.config["observer"].get("map_mode") == "automatic":
+            import observer_map
+            out.extend(observer_map.waiting(self))
         return sorted(out, key=lambda item: (item["created"], item["key"]))
 
     def holds(self):

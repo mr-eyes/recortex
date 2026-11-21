@@ -710,11 +710,14 @@ class UsagePageTests(UsagePageBox):
             self.assertIn(told, words)
         self.assertNotIn("$", words)
 
-    def test_the_view_is_the_last_entry_of_the_side_bar(self):
+    def test_usage_remains_a_side_bar_utility_after_search(self):
         text = self.render(full_report())
-        entries = re.findall(r'data-nav="([a-z]+)"', text)
-        self.assertEqual("usage", entries[-1])
-        self.assertIn('<a href="#usage" data-nav="usage">What did recortex use?</a>', text)
+        entries = [dict(attrs)["data-nav"] for tag, attrs in ts.PageReader(text).elements
+                   if tag == "a" and "data-nav" in dict(attrs)]
+        self.assertNotIn("usage", entries)
+        side = text[text.index('<nav class="side fold"'):text.index('</nav>')]
+        self.assertIn('<a href="#usage">Recortex usage</a>', side)
+        self.assertLess(side.index('href="#ask"'), side.index('href="#usage"'))
 
     def test_meters_are_drawn_from_whole_numbers_with_no_inline_style(self):
         text = self.render(full_report())
@@ -853,11 +856,13 @@ class TodoPageTests(TodoBox):
         self.assertIn("https://github.com/octo-org/octo-repo/issues/7", view)
         self.assertNotIn("style=", view)
 
-    def test_the_view_is_in_the_side_bar_before_the_map(self):
+    def test_work_is_primary_navigation_and_keeps_the_legacy_view(self):
         page = self.page()
-        entries = re.findall(r'data-nav="([a-z]+)"', page)
-        self.assertEqual(["now", "text", "threads", "settled", "lessons", "open", "todo", "map", "ask", "usage"],
-                         [entry for entry in entries if entry != "paper"])
+        entries = [dict(attrs)["data-nav"] for tag, attrs in ts.PageReader(page).elements
+                   if tag == "a" and "data-nav" in dict(attrs)]
+        self.assertEqual(["now", "project-map", "work", "history", "outputs"], entries)
+        self.assertIn('<a href="#work" data-nav="work">Work</a>', page)
+        self.assertIn('<section class="view" id="todo"', page)
 
     def test_hostile_step_text_title_and_plain_line_arrive_as_text(self):
         evil = 'ZZMARK<img src=x onerror=alert(1)> "quoted" & </li><script>x</script>'
@@ -900,6 +905,42 @@ class TodoPageTests(TodoBox):
             text = self.mind.render(model)
             self.assertEqual([], ts.page_problems(text))
             self.assertIn("No task is open.", self.words(self.view(text, "todo")))
+
+    def test_unavailable_work_stays_distinct_from_empty_work(self):
+        model = self.model()
+        model["tasks"] = {"available": False, "open": [], "closed": []}
+        text = self.mind.render(model)
+        for ident in ("now", "todo"):
+            view = self.words(self.view(text, ident))
+            self.assertIn("Work could not be read", view)
+            self.assertNotIn("No task is open.", view)
+
+    def test_overview_skips_malformed_tasks_and_unfinished_steps(self):
+        model = self.model()
+        model["last"] = None
+        good = {"issue": 7, "todo": False, "steps": [None, "x", {"state": "open", "text": 5},
+                {"state": "open", "text": "The valid next step", "comment": 9108, "ordinal": 2}]}
+        model["tasks"] = {"open": [None, "x", {"issue": "7", "steps": good["steps"]},
+                                     {"issue": True, "steps": good["steps"]}, {"issue": 6, "steps": "x"}, good]}
+        text = self.mind.Page(model).now_view()
+        self.assertIn("The valid next step", text)
+        self.assertIn('href="#work-step-7-9108-2"', text)
+
+    def test_resume_links_require_one_checked_numeric_task_and_whole_step(self):
+        model = self.model()
+        step = {"n": 2, "text": "The valid next step", "comment": 9108, "ordinal": 2}
+        task = {"issue": 7, "steps": [None, "x", {}, dict(step, n="2"), step]}
+        model["tasks"] = {"open": [None, "x", {"issue": "7"}, task], "closed": 5}
+        page = self.mind.Page(model)
+        row = {"task_refs": [7], "action_text": "Step 2: The valid next step"}
+        self.assertIn('href="#work-step-7-9108-2"', page.resume_work_link(row, True))
+        for invalid in (None, "x", {}, {"task_refs": "7"}, {"task_refs": [True, "7"]}):
+            self.assertEqual("", page.resume_work_link(invalid, True))
+        model["tasks"]["closed"] = [{"issue": 7}]
+        self.assertEqual("", page.resume_work_link(row, True))
+        model["tasks"]["closed"] = []
+        model["tasks"]["available"] = False
+        self.assertEqual("", page.resume_work_link(row, True))
 
     def test_a_task_closed_in_the_last_30_days_is_listed_with_its_day(self):
         import datetime

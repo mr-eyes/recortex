@@ -21,6 +21,10 @@ class ObserverLongitudinalTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"RECORTEX_GH": "/does-not-exist/live-gh", "FAKE_GH_FAIL_ON": "api"}):
             cls.report = evaluation.run_replay()
 
+    def test_map_survives_resumption_and_rebuild_after_user_corrections(self):
+        self.assertEqual({"days_rebuilt": 60, "accepted_changes": 8, "ledger_entries": 9,
+                          "project_branches": 4, "model_calls": 0}, self.report["project_map"])
+
     def test_sixty_days_cover_both_domains_and_separate_elapsed_time(self):
         replay = self.report["simulated"]
         self.assertEqual(60, replay["days"])

@@ -5,6 +5,7 @@ import os
 import sqlite3
 import sys
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "skills", "recortex", "scripts"))
@@ -73,6 +74,33 @@ class ObserverContextTests(unittest.TestCase):
         self.assertIn(2, packet["selected"])
         self.assertIn(1, packet["selected"])
         self.assertLess(len(packet["selected"]), 10)
+
+    def test_related_groups_quote_shared_evidence_only_once(self):
+        self.memory(1, "failure", "parser rejects quoted input")
+        self.memory(2, plain="use streaming for quoted input")
+        self.link(2, "because", 1)
+        self.memory(3, "question", "whether quoted input streams from a pipe")
+        self.link(3, "because", 2)
+        packet = self.packet(query="quoted input", max_chars=4000)
+        self.assertTrue({1, 2, 3} <= set(packet["selected"]))
+        self.assertEqual(len(packet["selected"]), len(set(packet["selected"])))
+        for cid in (1, 2, 3):
+            self.assertEqual(1, packet["text"].count("Memory %d;" % cid))
+
+    def test_many_overlapping_oversized_groups_have_a_fixed_selection_work_bound(self):
+        for cid in range(1, 301):
+            self.memory(cid, plain="parser quoted input case %d" % cid)
+            if cid > 1:
+                self.link(cid, "because", cid - 1)
+        with mock.patch.object(context, "_component", wraps=context._component) as component, \
+                mock.patch.object(context, "_memory_text", wraps=context._memory_text) as rendered:
+            packet = self.packet(query="parser quoted input", max_chars=4000)
+        self.assertLessEqual(component.call_count, context.GROUP_TRIES + 1)
+        self.assertLessEqual(rendered.call_count, context.GROUP_TRIES * context.GROUP_NODES)
+        self.assertTrue(packet["selection_limited"])
+        self.assertTrue(packet["incomplete"])
+        self.assertIn("Selection work was bounded", packet["text"])
+        self.assertLessEqual(len(packet["text"]), 4000)
 
     def test_scoped_governing_decision_does_not_need_query_word_match(self):
         self.memory(1, plain="strict quoting remains the default")
@@ -151,6 +179,42 @@ class ObserverContextTests(unittest.TestCase):
         self.assertEqual(self.packet(), self.packet())
         self.assertEqual(before, self.db.total_changes)
         self.assertFalse(self.db.in_transaction)
+
+    def test_oversized_group_does_not_consume_a_smaller_recorded_reason(self):
+        self.memory(1, "failure", "parser rejects quoted input", fields=[("Cause", "Quotes span lines")])
+        self.memory(2, plain="use streaming for quoted input", fields=[("Decision", "Keep strict quoting")])
+        self.link(2, "because", 1)
+        self.memory(3, "result", "parser quoted input streaming", fields=[("Result", "large " * 2000)])
+        self.link(3, "because", 2)
+        packet = self.packet(query="parser quoted input streaming", max_chars=2000)
+        self.assertTrue({1, 2} <= set(packet["selected"]))
+        self.assertNotIn(3, packet["selected"])
+        self.assertIn("Keep strict quoting", packet["text"])
+
+
+from tests import test_manuscript_plan as paper
+
+
+class ObserverResearchRecoveryTests(paper.PaperSandbox):
+    def test_standing_exclusion_and_whole_reason_fit_both_wordings_at_hook_budget(self):
+        self.ready()
+        db = sqlite3.connect(self.index_file())
+        db.row_factory = sqlite3.Row
+        self.addCleanup(db.close)
+        for query in ("Why did we drop the wet corner after rain?",
+                      "Should we exclude the waterlogged edge of the field?"):
+            for issue in (12, None):
+                with self.subTest(query=query, issue=issue):
+                    packet = context.build_packet(db, self.repo_name, {"octocat", "octo-org"}, query=query,
+                                                  issue=issue, max_chars=4000)
+                    self.assertTrue({9105, 9106} <= set(packet["selected"]), packet["selected"])
+                    self.assertLessEqual(len(packet["text"]), 4000)
+                    for words in ("The four plots of block F are excluded from every moisture analysis; 20 of 24 plots remain.",
+                                  "Do not try to correct the readings.", "0.08 m³/m³", "three days.",
+                                  "texture was not measured there before the exclusion.", "Whether the corner's soil differs in texture."):
+                        self.assertIn(words, packet["text"])
+                    self.assertIn("holds and next actions are unavailable", packet["text"])
+                    self.assertEqual((9106, 9105), (packet["advisories"][0]["decision"], packet["advisories"][0]["failure"]))
 
 
 class ObserverHoldTests(unittest.TestCase):

@@ -382,6 +382,7 @@ class DroppedTests(DialogBox):
         asked = ['Memory 1f9dd5d6 (result) on #4: "the sample read 5 runs". It would change: nothing. Post it, or drop it?',
                  'Task 3a4b5c6d: open a task "Newlines in quoted fields" with 4 steps?',
                  "Task 3a4b5c6d: every step of #14 is done. Close it?",
+                 'Project Map 3a4b5c6d: Move "Sensors" under "Equipment" (1 affected). Apply this change?',
                  "Draft 9f8e7d6c: update the Results of #5",
                  "May Recortex write the notes of this project to GitHub as you work?",
                  "Should I turn the recortex observer on?"]
@@ -401,6 +402,23 @@ class DroppedTests(DialogBox):
             call, result = own(question.text)
             rows, got = self.sources_of(call, result)
             self.assertEqual([], rows, question.id)
+
+    def test_only_the_exact_map_question_can_name_another_eight_digit_branch_id(self):
+        import observer_waiting
+        short = "3a4b5c6d"
+        line = 'Move "Sensors [deadbeef]" under "Equipment [equipment]" (1 affected)'
+        entry = observer_waiting.entry({"kind": "map", "short": short, "key": short, "line": line})
+        question, labels = entry["question"], entry["options"]
+        def answer(expected, shown, offered, canonical_labels):
+            self.write(*own(shown, offered))
+            return sources.answered(self.data(), str(self.project), short, line, label=labels[0],
+                                    text_is=expected, labels_are=canonical_labels)
+        self.assertTrue(answer(question, question, labels, labels))
+        self.assertIsNone(answer(question, question + " Apply both.", labels, labels))
+        self.assertIsNone(answer(question, question, labels, list(reversed(labels))))
+        self.assertIsNone(answer(question, question, labels[:1], labels[:1]))
+        different = "Task %s: %s" % (short, line)
+        self.assertIsNone(answer(different, different, labels, labels))
 
     def test_a_question_that_only_resembles_the_templates_is_a_source(self):
         call, result = own("Memory leaks: which tool should the tests use?")

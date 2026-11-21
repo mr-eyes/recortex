@@ -97,6 +97,9 @@ REVIEW = {"type": "object", "properties": {
     "reason": {"type": "string", "enum": ["supported", "unsupported", "attribution", "privacy", "duplicate", "uncertain",
                                           "withheld", "marks", "not_agreed"]}},
     "required": ["candidate_hash", "accepted", "reason"], "additionalProperties": False}
+MIXED_REVIEW = dict(REVIEW, properties=dict(REVIEW["properties"], qualification={
+    "type": "string", "enum": ["separate_action", "same_decision", "unclear"]}),
+    required=REVIEW["required"] + ["qualification"])
 
 
 SUMMARY = {"type": "object", "properties": {
@@ -157,7 +160,7 @@ def record_context(repo, config, query=""):
                 continue  # Never truncate a destination's constraints mid-claim.
             targets.append(target); used += size
         packet = observer_context.build_packet(db, repo, allowed, query=query, max_chars=8000)
-        return {"targets": targets, "memories": [{"id": cid} for cid in packet["selected"]],
+        return {"targets": targets, "memories": [{"id": cid, "kind": packet["selected_kinds"][cid]} for cid in packet["selected"]],
                 "context": packet["text"], "recall_incomplete": packet["incomplete"],
                 "omitted_targets": omitted, "synced_at": packet["freshness"]["synced_at"],
                 "incomplete": not packet["freshness"]["sync_complete"]}
@@ -325,7 +328,7 @@ def _said(source):
 
 
 def _users(candidate, supplied):
-    return [supplied[source]["text"] for source in candidate["sources"] if _typed(supplied[source])]
+    return [source["text"] for sid, source in supplied.items() if sid in candidate["sources"] and _typed(source)]
 
 
 def _agent(candidate, supplied):
@@ -341,7 +344,91 @@ def _quoted(candidate):
                      if line.lstrip().startswith(">")).strip()
 
 
-def status_authority(candidate, supplied):
+# Read the complete cited user message so an excerpt cannot discard a scope qualifier.
+LIMITED_SCOPE = re.compile(
+    r"\b(?:what if|just exploring|not (?:yet )?decided|undecided|haven't decided|"
+    r"(?:just |only )?(?:for|during) (?:this|one|a single) (?:run|trial|experiment|session|test)|"
+    r"(?:this|one) (?:run|trial|session) only|just this once|(?:as a |a )one[- ]off|for now|"
+    r"(?:try|test) [^.!?\n]{0,75}\bonce|(?:do not|don['’]t|never) change (?:the |our )?default|"
+    r"keep (?:our |the )?(?:old |existing )?default|haven['’]t settled|let['’]s explore)\b", re.I)
+
+
+def standing_source(quote, messages):
+    # The worker supplies messages in transcript order. A later qualification takes precedence.
+    for text in reversed(messages):
+        if quote in text:
+            return not LIMITED_SCOPE.search(text) or separate_scope(quote, text)
+        if LIMITED_SCOPE.search(text):
+            return False
+    return False
+
+
+def separate_scope(quote, text):
+    """Let the independent reviewer assess distinct statements in a fully visible source. A clipped quote,
+    an attached qualification or a bare amendment such as 'For this run only.' keeps the ordinary veto."""
+    if len(text) > SOURCE_TEXT or text.count(quote) != 1:
+        return False
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    for n, sentence in enumerate(sentences):
+        if sentence.rstrip(".!") == quote.strip().rstrip(".!") and not sentence.endswith("?"):
+            decision = n
+            break
+    else:
+        return False
+    for n, sentence in enumerate(sentences):
+        limit = LIMITED_SCOPE.search(sentence)
+        if not limit:
+            continue
+        if n == decision or limit.start() != 0 or LIMITED_SCOPE.search(sentence, limit.end()):
+            return False
+        if sentence.endswith("?") and limit.group().lower() == "what if":
+            continue
+        # A leading time limit with its own instruction can govern a separate action. A bare limit,
+        # an undecided answer or an instruction to keep the default still qualifies the choice.
+        instruction = sentence[limit.end():]
+        if not re.match(r"(?:for|during)\b", limit.group(), re.I) or not re.match(
+                r"\s*(?:only\s*)?[,:—]\s*\w+\s+\w+", instruction, re.I):
+            return False
+    return True
+
+
+def review_schema(candidate, supplied, context):
+    """Mixed scope needs an explicit finding from the independent reviewer even when it accepts the draft."""
+    if candidate["kind"] == "decision" or replaces_standing_decision(candidate, context):
+        quote = _quoted(candidate)
+        if quote and any(quote in text and LIMITED_SCOPE.search(text) for text in decision_messages(candidate, supplied)):
+            return MIXED_REVIEW
+    return REVIEW
+
+
+def decision_messages(candidate, supplied):
+    selected = set(candidate["sources"])
+    seen_sessions = set()
+    messages = []
+    for sid, source in supplied.items():
+        text = source["text"]
+        typed = _typed(source)
+        if sid in selected and (typed or (_choice(source) and source.get("via") == "question_dialog")):
+            messages.append(text)
+            seen_sessions.add(source.get("session_id"))
+        elif typed and source.get("session_id") in seen_sessions and re.match(
+                r"^\s*(?:(?:actually|sorry|correction)[,:]?\s*)?(?:just |only )?(?:for (?:this|one) "
+                r"(?:run|trial|session)(?: only)?|this (?:run|trial|session) only)[.!]?\s*$", text, re.I):
+            # A short correction in the same stretch still qualifies the statement when the draft omits its id.
+            messages.append(text)
+    return messages
+
+
+def replaces_standing_decision(candidate, context):
+    if candidate["kind"] not in ("decision", "correction"):
+        return False
+    marker = record_format.parse_marker(record_format.first_lines(candidate["body"])[0])
+    protected = {m["id"] for m in context["memories"] if m.get("kind") in ("decision", "correction")}
+    return any(key == "replaces" and (candidate["kind"] == "decision" or target in protected)
+               for key, target in record_format.links(marker))
+
+
+def status_authority(candidate, supplied, requires_user=False):
     """What a memory that changes an earlier one's status rests on, all of it said in the conversation. "user": the
     memory quotes, in its own field (a decision's Exact words, another kind's quoted lines), at least MIN_WORDS words
     and at least half of one typed message it cites, so that the user's words back this very change. "agent": the
@@ -354,7 +441,7 @@ def status_authority(candidate, supplied):
     if len(quoted.split()) >= MIN_WORDS and any(quoted in text and 2 * len(quoted) >= len(text.strip())
                                                for text in _users(candidate, supplied)):
         return "user"
-    return "agent" if _agent(candidate, supplied) else ""
+    return "agent" if not requires_user and _agent(candidate, supplied) else ""
 
 
 # ---------------------------------------------------------------- the sorter's labels, checked by code
@@ -527,12 +614,21 @@ def candidate_problem(candidate, supplied, context, config, repo=None, plan=None
         return "excerpt-binding"
     if kind == "decision":
         quoted = observer_publisher.exact_words(candidate["body"])
-        choices = [supplied[s]["text"] for s in selected if _choice(supplied[s]) and supplied[s].get("via") == "question_dialog"]
-        if not quoted or not any(quoted in text for text in _users(candidate, supplied) + choices):
+        messages = decision_messages(candidate, supplied)
+        if not quoted or not any(quoted in supplied[sid]["text"] for sid in selected
+                                 if _typed(supplied[sid]) or (_choice(supplied[sid])
+                                                             and supplied[sid].get("via") == "question_dialog")):
             return "decision-authority"
+        if not standing_source(quoted, messages):
+            return "decision-scope"
     if kind in ("result", "failure") and not _agent(candidate, supplied):
         return "agent-account"  # a result or a failure is what the agent told the user it found
     marker = record_format.parse_marker(record_format.first_lines(candidate["body"])[0])
+    if kind == "correction" and replaces_standing_decision(candidate, context):
+        quoted = _quoted(candidate)
+        messages = decision_messages(candidate, supplied)
+        if quoted and any(quoted in text for text in messages) and not standing_source(quoted, messages):
+            return "decision-scope"
     known = {m["id"] for m in context["memories"]}
     if any(target not in known for _, target in record_format.links(marker)):
         return "link-binding"
@@ -1040,13 +1136,14 @@ def _process(repo, config, project_root=None, invoke_fn=None):
             if parent:   # the reviewer is told the failure in words, never its key
                 shown.pop("because_with")
                 shown["because"] = {"kind": "failure", "plain": _line(record_format.plain(store.event(parent)["body"], "failure") or "")}
+            schema = review_schema(candidate, supplied, context)
             reviewed = invoke({"candidate": shown, "candidate_hash": digest,
                                "sources": [_view(supplied[sid], number[sid]) for sid in candidate["sources"]],
                                "context": _stretch(candidate, supplied, order, number), "record": review_record,
                                "recent_on_issue": recent.get(candidate["issue"], []), "account": account},
-                              REVIEW, "review", options)
+                              schema, "review", options)
             answer = reviewed.get("structured")
-            valid = reviewed.get("ok") is True and runtime.validate(answer, REVIEW) and answer["candidate_hash"] == digest
+            valid = reviewed.get("ok") is True and runtime.validate(answer, schema) and answer["candidate_hash"] == digest
             store.complete_invocation(review_id, valid, digest if valid else "", usage=reviewed.get("usage"),
                                       model=reviewed.get("model"))
             report["reviewed"] += 1
@@ -1056,7 +1153,8 @@ def _process(repo, config, project_root=None, invoke_fn=None):
                 report["deferred"] += 1
                 handled.add(primary)
                 continue
-            if not answer["accepted"] or answer["reason"] != "supported":
+            if (not answer["accepted"] or answer["reason"] != "supported" or
+                    (schema is MIXED_REVIEW and answer["qualification"] != "separate_action")):
                 if answer["reason"] == "withheld":
                     # The reviewer read the moment as kept off the record: by the user's typed words, or by mistake. Either
                     # way nothing is lost: the candidate waits as a held memory for the user's Post or Drop, and posts on
@@ -1073,7 +1171,7 @@ def _process(repo, config, project_root=None, invoke_fn=None):
             review = {"accepted": True, "candidate_hash": digest, "reservation_id": review_id}
             if observer_publisher.status_change(candidate["body"]) or any(
                     link["key"] in observer_publisher.STATUS_LINKS for link in candidate["links"]):
-                review["status_authority"] = status_authority(candidate, supplied)
+                review["status_authority"] = status_authority(candidate, supplied, replaces_standing_decision(candidate, context))
             eventkey = store.review_complete(primary, candidate, review)
             if eventkey is None:
                 report["deferred"] += 1
@@ -1494,6 +1592,15 @@ def run_once(repo, config, project_root=None, invoke_fn=None, settle_first=False
                 report = _process(repo, config, project_root, invoke_fn)
                 store.set_control("worker_degraded", "" if report["code"] in ("ok", "no-sources", "paused")
                                   else report["code"].replace("-", "_"))
+                if options["map_mode"] != "off" and clock.remaining() > 2 * runtime.call_timeout(options, "middle") + 5:
+                    import observer_map
+                    try:
+                        report["map"] = observer_map.consider(store, repo, config, options, invoke_fn or runtime.invoke,
+                                                              project_root or recortex.project_root())
+                    except (OSError, ValueError, sqlite3.Error, recortex.GhError, observer_store.StoreError, storage.StorageError,
+                            subprocess.TimeoutExpired):
+                        report["map"] = "map_unavailable"
+                    store.set_control(observer_map.control("last"), {"at": time.time(), "code": report["map"]})
                 approved = runtime.approval_valid(repo, config)
                 if (approved and runtime.tier_state(options, store)["middle"]["gate"]
                         and options["mode"] == "automatic" and not store.get_control("publication_paused", False)):

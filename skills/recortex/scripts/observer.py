@@ -31,6 +31,18 @@ def parser():
     status = sub.add_parser("status")
     status.add_argument("--source-details", action="store_true",
                         help="show native directory paths, modes and ownership for capture diagnosis")
+    # advisory: terminal, an explicit local choice separate from publication and the observer's level.
+    advisory = sub.add_parser("advisory", help="choose optional task-time evidence pointers on this machine")
+    advisory.add_argument("mode", choices=("off", "shadow", "deliver", "list", "mute", "unmute"),
+                          help="choose a delivery mode, list issued reminders, or edit a reminder preference")
+    advisory.add_argument("id", nargs="?", help="reminder ID from advisory list, for mute or unmute")
+    advisory.add_argument("--yes", action="store_true", help="save this choice from your own terminal")
+    # map-mode: terminal, this device and project folder own this separate choice.
+    mode = sub.add_parser("map-mode", help="choose private Project Map shadow review or automatic maintenance")
+    mode.add_argument("mode", choices=("off", "shadow", "automatic"))
+    mode.add_argument("--yes", action="store_true", help="save this choice from your own terminal")
+    # map-proposals: safe, read the reviewed proposals on this device.
+    sub.add_parser("map-proposals", help="read reviewed Project Map changes and shadow outcomes on this device")
     # holds: safe, it only reads. runtime-check: safe, at most one small call per model, counted in the day's caps.
     for name in ("holds", "runtime-check"):
         sub.add_parser(name)
@@ -169,6 +181,8 @@ def enable(repo, config, mode, yes=False, model=None, root=None, confirm=None, g
     if level not in runtime.LEVELS:
         raise ValueError("level_required")
     raw = {"enabled": True, "mode": mode, "model": model, "level": level}
+    raw["advisory_mode"] = stored.get("advisory_mode", "off")
+    raw["map_mode"] = stored.get("map_mode", "off") if level in ("assistant", "everything") else "off"
     if sort_model:
         raw["sort_model"] = sort_model
     if strong_model:
@@ -232,6 +246,25 @@ def limits(repo, config, wanted, given="terminal"):
     kept = entry.get("given") if entry.get("given") in ("terminal", "session") else given
     runtime.approve(repo, {"observer": changed}, given=kept, approved_at=entry.get("approved_at"))
     return {"action": "limits", "caps": {tier: changed[key] for tier, key in runtime.CALL_CAPS.items()}, "approved": True}
+
+
+def advisory(repo, config, mode, yes=False):
+    """Preview or save a local advisory choice; never enables capture or publication."""
+    import observer_advisory
+    if mode not in observer_advisory.MODES:
+        raise ValueError("observer_advisory_mode")
+    result = {"action": "advisory", "mode": mode, "approved": False,
+              "note": "Off by default. Shadow keeps hidden local receipts; deliver adds a nonblocking evidence pointer "
+                      "to a matching user prompt. No model call or project record change."}
+    if not runtime.approval_valid(repo, config):
+        return dict(result, code="approval")
+    if not yes:
+        return result
+    options = dict(runtime.settings(config), advisory_mode=mode)
+    entry = runtime.stored_approval() or {}
+    runtime.approve(repo, {"observer": options}, given=entry.get("given", "terminal"),
+                    approved_at=entry.get("approved_at"))
+    return dict(result, approved=True)
 
 
 HELD_NOTE = ("Ask the user about each with the multiple-choice question tool, one question per memory, from the "
@@ -477,6 +510,7 @@ def tiers_report(options, store):
 
 
 def _status(repo, config, loaded, store, options, details):
+    import observer_advisory
     variables = runtime.billing_variables()
     last = store.get_control("runtime_last") if store else None
     seen = store.get_control("call_environment", []) if store else []
@@ -501,7 +535,7 @@ def _status(repo, config, loaded, store, options, details):
                 publication_paused=store.get_control("publication_paused", False),
                 worker_degraded=store.get_control("worker_degraded", ""), queue=store.status(),
                 worker_last=store.get_control("worker_last"), dialogs_unread=observer_sources.unread(store),
-                jobs_last=store.get_control("jobs_last"))   # the housekeeping run: fixed words and integers (observer_jobs)
+                jobs_last=store.get_control("jobs_last"), advisory=observer_advisory.status(store))
 
 
 def runtime_check(repo, options, store):
@@ -573,7 +607,7 @@ def _acts(args, store, repo, config, options):
     close = lambda issue: observer_jobs.quiet(tasks.close_task, repo, config, issue)[0]   # its words are not the JSON
     result = observer_waiting.act(store, repo, config, args.short, close)
     emit(result)
-    return int(result["code"] not in ("opened", "closed"))
+    return int(result["code"] not in ("opened", "closed", "map_applied"))
 
 
 def main(argv=None):
@@ -612,6 +646,59 @@ def main(argv=None):
         if not recortex.allowed_users(repo):
             emit({"code": "repository-not-trusted"}); return 1
         options = runtime.settings(config)
+        if args.command == "map-mode":
+            if not runtime.approval_valid(repo, config) or (args.mode != "off" and options["level"] == "notes"):
+                emit({"code": "approval", "note": "Choose the Assistant or Everything observer level first."})
+                return 1
+            if args.yes:
+                if not on_terminal():
+                    emit({"code": "terminal-required", "note": "Choose map maintenance in your own terminal outside Claude Code."})
+                    return 1
+                entry = runtime.stored_approval() or {}
+                runtime.approve(repo, {"observer": dict(options, map_mode=args.mode)}, given=entry["given"],
+                                approved_at=entry["approved_at"])
+            emit({"mode": args.mode, "approved": args.yes, "note": "Uses recent eligible conversation, trusted memories "
+                  "and approved headings. Shadow stores local proposals. Automatic can add branches or rename them "
+                  "after independent review when the observer is also in automatic mode."})
+            return 0
+        if args.command == "advisory":
+            if args.mode in ("list", "mute", "unmute"):
+                import observer_advisory
+                changing = args.mode != "list"
+                if args.yes or bool(args.id) != changing:
+                    emit({"code": "invalid-advisory-arguments"})
+                    return 1
+                if changing and not on_terminal():
+                    emit({"code": "terminal-required", "note": "Change a reminder from your own terminal or local dashboard."})
+                    return 1
+                if not runtime.approval_valid(repo, config):
+                    emit({"code": "approval"})
+                    return 1
+                try:
+                    with observer_store.Store(repo, create=False, readonly=not changing, config=config) as store:
+                        if changing:
+                            row = observer_advisory.feedback(store, args.id, args.mode == "mute")
+                            emit({"id": row["id"], "muted": row["muted"]})
+                        else:
+                            emit({"reminders": observer_advisory.history(store)})
+                except KeyError:
+                    emit({"code": "reminder-unavailable"})
+                    return 1
+                except observer_store.StoreError as error:
+                    if error.reason != "missing":
+                        raise
+                    emit({"code": "reminder-unavailable"} if changing else {"reminders": []})
+                    return int(changing)
+                return 0
+            if args.id:
+                emit({"code": "unexpected-advisory-id"})
+                return 1
+            if args.yes and not on_terminal():
+                emit({"code": "terminal-required", "note": "Choose advisory mode in your own terminal outside Claude Code."})
+                return 1
+            result = advisory(repo, config, args.mode, args.yes)
+            emit(result)
+            return int(args.yes and not result.get("approved"))
         if args.command == "enable":
             # Automatic mode is the user's answer to the setup question, which the setup wizard's session records
             # here, as it records the field sheet's approval: no terminal step. Replacing this folder's entry with one
@@ -668,7 +755,7 @@ def main(argv=None):
         if args.command == "runtime-check" and not runtime.approval_valid(repo, config):
             emit({"code": "approval", "note": "Run observer.py enable --model MODEL --level LEVEL --yes first; the check is "
                                               "bound to the models chosen there."}); return 1
-        readonly = (args.command in ("status", "pending", "holds", "log") or getattr(args, "dry_run", False)
+        readonly = (args.command in ("status", "pending", "holds", "log", "map-proposals") or getattr(args, "dry_run", False)
                     or (args.command == "drafts" and args.action is None and not args.show))
         try:
             opened = observer_store.Store(repo, create=not readonly, readonly=readonly,
@@ -684,6 +771,11 @@ def main(argv=None):
                 emit({"code": "empty", "action": args.command, "dry_run": getattr(args, "dry_run", False), "queue": {}, "capture_preflight": observer_sources.preflight(recortex.project_root(), details=getattr(args, "source_details", False))}); return 0
             raise
         with opened as store:
+            if args.command == "map-proposals":
+                import observer_map
+                emit({"data_header": index.DATA_HEADER, "proposals": observer_map.listing(store),
+                      "last": store.get_control(observer_map.control("last"), {})})
+                return 0
             if args.command == "status":
                 emit(_status(repo, config, loaded, store, options, args.source_details)); return 0
             if args.command == "pending":
@@ -724,6 +816,16 @@ def main(argv=None):
                     result = release(store, args.hold_id, tty)
                 emit(result); return int(not result.get("released"))
             if args.command == "discard":
+                if options["map_mode"] != "off":
+                    import observer_map
+                    if any(p["key"] == args.eventkey and p["state"] == "review" for p in observer_map.rows(store)):
+                        refusal = declined(store, args.eventkey, "no")
+                        if refusal:
+                            emit(refusal)
+                            return 1
+                        result = observer_map.answer(store, repo, config, args.eventkey, drop=True)
+                        emit(result)
+                        return int(result["code"] != "dropped")
                 event = store.event(args.eventkey)
                 if event is None or event["state"] not in ("ready", "deferred"):
                     emit({"code": "event-not-discardable"}); return 1

@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 import test_scripts as ts  # noqa: E402
 
 sys.path.insert(0, ts.SCRIPTS)
+import index  # noqa: E402
 import lint_drafts  # noqa: E402
 import recortex  # noqa: E402
 import record_format  # noqa: E402
@@ -496,7 +497,7 @@ class TaskIndexTests(TaskBox):
         self.assertEqual([(STEPS_ID, 7, 1, "Carry the quote state across physical lines"),
                           (STEPS_ID, 7, 2, "Rerun the conformance set")], self.sql("SELECT * FROM steps ORDER BY ordinal"))
         self.assertEqual([(RESULT_ID, "done", STEPS_ID, 1)], self.sql("SELECT * FROM marks"))
-        self.assertEqual("5", self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
+        self.assertEqual(index.DERIVE_VERSION, self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
 
     def test_a_task_lists_its_steps_with_the_memory_that_checked_each(self):
         task = self.task_at(7)
@@ -643,7 +644,7 @@ class TaskIndexTests(TaskBox):
         self.ready()
         self.assertEqual(2, len(self.sql("SELECT * FROM steps")))
         self.assertEqual(1, len(self.sql("SELECT * FROM marks")))
-        self.assertEqual("5", self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
+        self.assertEqual(index.DERIVE_VERSION, self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
 
     def test_an_index_that_an_earlier_version_derived_says_nothing_about_tasks_until_it_is_synced(self):
         self.sql("UPDATE meta SET value = '4' WHERE key = 'derive_version'")

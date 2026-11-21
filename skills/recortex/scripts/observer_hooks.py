@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import sqlite3
 import shlex
 import subprocess
 import sys
@@ -44,14 +45,13 @@ NOTICES = {
 }
 # At session start, for the main session, while anything waits for the user's answer (the number is the only value in
 # it): a held memory, a task to open or close, a draft of the paper's text. The session loads the skill, which gives the
-# scripts folder, and asks each item from the template `observer.py pending --waiting` prints.
+# scripts folder, and offers a relevant item from the template `observer.py pending --waiting` prints.
 WAITING = ("recortex observer: %s for the user's answer. Load the recortex skill first, run its observer.py pending "
-           "--waiting, and ask each as one multiple-choice question from the template it prints. Do not offer them in "
-           "prose.")
+           "--waiting. At a pause, explain the one item that affects the next step. Use its exact question and options.")
 # On a later prompt of the same session, while items wait and `pending --waiting` has not run in the session: 1.4.0's live
 # runs showed that Sonnet and Haiku act on a reminder at the next prompt, not on the line at session start alone.
-REMINDER = ("recortex observer: %s for the user's answer. Before this reply ends, load the recortex skill, run its "
-            "observer.py pending --waiting and ask each as a multiple-choice question.")
+REMINDER = ("recortex observer: %s for the user's answer. At a pause, load the recortex skill and run its "
+            "observer.py pending --waiting. Offer the relevant item using its exact question and options.")
 # The bookkeeping is setup_questions.reminder's (a test holds the numbers equal): at most REMIND_MAX reminders to one
 # session, the first with its REMIND_FROM-th prompt, REMIND_GAP prompts apart, none once `pending --waiting` ran.
 REMIND_MAX, REMIND_FROM, REMIND_GAP = 3, 2, 3
@@ -545,7 +545,7 @@ def _grant_act(store, data, project_root):
         return
     import observer_waiting
     for item in store.waiting():
-        if item["short"] == short and item["kind"] in ("task_open", "task_close"):
+        if item["short"] == short and item["kind"] in ("task_open", "task_close", "map"):
             text_is, labels_are = _canonical(item)
             answer = observer_sources.answered(data, project_root, short, observer_waiting.line(item),
                                                label=observer_waiting.LABELS[item["kind"]], text_is=text_is,
@@ -652,6 +652,7 @@ SELF_RELEASE = {"reason": "recortex observer: only the user releases a hold, swi
 # their terminal, and the hook refuses a session's own Bash call to it (UNDO below is made from these rows). A test holds
 # this table, the parser of observer.py and the pattern together; observer.py states each row's reason at its definition.
 COMMANDS = {"status": "safe", "holds": "safe", "pending": "safe", "log": "safe", "context": "safe", "hook": "safe",
+            "advisory": "terminal", "map-mode": "terminal", "map-proposals": "safe",
             "runtime-check": "safe", "run-worker": "safe", "record": "safe", "reconcile": "safe", "limits": "safe",
             "pause": "safe",
             "enable": "grant", "act": "grant", "later": "grant", "discard": "grant", "drafts": "grant",
@@ -705,7 +706,7 @@ def _degraded(store, reason):
         pass  # a full queue must not prevent checking an already stored hold
 
 
-def _context(store, event, data, repo, allowed):
+def _context(store, event, data, repo, allowed, root=None):
     if event not in ("UserPromptSubmit", "SubagentStart", "PreToolUse"):
         return ""
     query = data.get("prompt", "")
@@ -722,15 +723,34 @@ def _context(store, event, data, repo, allowed):
     db = index.connect(repo, create=False, tighten=False)
     if db is None:
         raise ValueError("context-unavailable")
+    main_prompt = event == "UserPromptSubmit" and not _from_subagent(data)
+    mode = observer_runtime.settings(store.config)["advisory_mode"] if main_prompt else "off"
     try:
         active = [row[0] for row in db.execute("SELECT issue FROM labels WHERE label='active' ORDER BY issue")]
         packet = observer_context.build_packet(db, repo, allowed, query=query[:48000],
                                                issue=active[0] if len(active) == 1 else None, max_chars=4000)
+        if mode in ("shadow", "deliver") and query.strip():
+            import observer_advisory
+            try:
+                pointer = observer_advisory.change_pointer(db, repo, allowed, packet, query[:48000])
+            except (ValueError, OSError, sqlite3.Error):
+                pointer = None
+            if pointer:
+                packet["advisories"] = [pointer]
     finally:
         db.close()
     session = data.get("session_id", "")
     if not isinstance(session, str) or not observer_sources.SESSION.fullmatch(session):
         return ""
+    advice = ""
+    # Advice is a separate opt-in at the start of a main-session task, never a tool denial or an approval request.
+    if main_prompt:
+        import observer_advisory
+        try:
+            advice = observer_advisory.deliver(store, packet, query[:48000], session, mode=mode, root=root)
+        except (observer_store.StoreError, ValueError):
+            # An unavailable local preference cannot issue a reminder. Keep the ordinary trusted context usable.
+            advice = ""
     # The selection, not the text: the text carries the index's sync time, so every sync would make it new.
     digest = hashlib.sha256(json.dumps([packet.get("selected"), packet.get("resume_id")], sort_keys=True,
                                        default=str).encode("utf-8")).hexdigest()
@@ -739,10 +759,11 @@ def _context(store, event, data, repo, allowed):
     if not isinstance(seen, dict):
         seen = {}
     if seen.get(key, {}).get("digest") == digest:
-        return ""
+        # Same ids can contain newly approved edits. An issued pointer brings its current evidence, not old context.
+        return packet["text"] + "\n" + advice if advice else ""
     seen[key] = {"digest": digest, "at": time.time()}
     store.set_control("hook_context", dict(sorted(seen.items(), key=lambda pair: pair[1].get("at", 0))[-50:]))
-    return packet["text"]
+    return packet["text"] + ("\n" + advice if advice else "")
 
 
 def _budget_reached(settings, used, tiers):
@@ -914,7 +935,7 @@ def _handle(event, data, config, repo, decision):
                             ValueError):
                         pass  # no grant: the publisher refuses the held event (held_unanswered)
             try:
-                context = _context(store, event, data, repo, recortex.allowed_users(repo))
+                context = _context(store, event, data, repo, recortex.allowed_users(repo), root=project_root)
             except TimeoutError:
                 raise
             except Exception:

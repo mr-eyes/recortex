@@ -88,7 +88,8 @@ class TierTests(Box):
     def test_every_purpose_with_a_prompt_has_a_tier_and_the_tiers_are_fixed(self):
         self.assertEqual(("sort", "middle", "strong"), runtime.TIERS)
         self.assertEqual({"sort": "sort", "draft": "middle", "review": "middle", "summary": "middle",
-                          "summary_review": "middle", "text": "strong", "text_review": "strong"},
+                          "summary_review": "middle", "text": "strong", "text_review": "strong",
+                          "map_draft": "middle", "map_review": "middle"},
                          runtime.TIER_OF)
         self.assertEqual(set(runtime.PROMPTS) - {"smoke"}, set(runtime.TIER_OF))
         self.assertEqual({"sort": 32000, "middle": 48000, "strong": 120000}, runtime.INPUT_CAPS)
@@ -833,6 +834,39 @@ class CliTests(Box):
         self.assertEqual(before, self.stored())
         code, value = self.run_cli("limits")
         self.assertEqual((1, "nothing-to-change"), (code, value["code"]))
+
+    def test_1_5_1_can_read_its_approval_after_the_limits_change(self):
+        from tests.fixtures import observer_settings_151 as old
+        options = old.settings({"observer": {"enabled": True, "mode": "automatic", "level": "assistant",
+                                              "model": "sonnet", "publisher_id": runtime.publisher_id(create=True)}})
+        root = runtime.folder_key(self.folder)
+        entry = {"repo": REPO, "settings": options, "publisher_id": options["publisher_id"], "root": root,
+                 "approved_at": 1794900000.0, "given": "terminal"}
+        storage.write_file(os.path.join(runtime.approvals_folder(create=True), runtime.APPROVALS),
+                           json.dumps({"form": 2, "folders": {root: entry}}))
+        self.assertEqual(0, self.run_cli("limits", "--middle", "30")[0])
+        saved = self.stored()
+        self.assertEqual(dict(entry, settings=dict(options, max_invocations=30)), saved)
+        self.assertEqual(saved["settings"], old.settings({"observer": saved["settings"]}))
+        self.assertTrue(runtime.approval_valid(REPO, runtime.local_config({})))
+
+    def test_only_enabled_1_6_modes_require_the_new_reader(self):
+        from tests.fixtures import observer_settings_151 as old
+        self.enable()
+        with mock.patch("observer.on_terminal", return_value=True):
+            for command, key, value in (("advisory", "advisory_mode", "deliver"),
+                                        ("map-mode", "map_mode", "automatic")):
+                with self.subTest(command=command):
+                    self.assertEqual(0, self.run_cli(command, value, "--yes")[0])
+                    self.assertEqual(0, self.run_cli("limits", "--middle", "30")[0])
+                    options = self.stored()["settings"]
+                    self.assertEqual(value, options[key])
+                    self.assertTrue(runtime.approval_valid(REPO, runtime.local_config({})))
+                    with self.assertRaisesRegex(ValueError, "observer_settings"):
+                        old.settings({"observer": options})
+                    self.assertEqual(0, self.run_cli(command, "off", "--yes")[0])
+                    saved = self.stored()["settings"]
+                    self.assertEqual(saved, old.settings({"observer": saved}))
 
     def test_limits_change_an_approved_folder_only(self):
         code, value = self.run_cli("limits", "--sort", "10")
