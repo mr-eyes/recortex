@@ -152,6 +152,28 @@ class DecisionReviewActionTests(ts.MindSandbox):
             self.draft()
         self.assertFalse(self.service.history())
 
+    def test_review_text_is_checked_again_at_send_when_the_projects_patterns_tighten_after_the_preview(self):
+        p = self.draft("defer", note="The Bench notes still hold for this branch.")   # passes under the launch's patterns
+        count = len(self.repo()["comments"])
+        self.write_config(dict(self.config, restricted_patterns=["Bench notes"]))
+        # The launch that took the preview is refused at once: its project file changed under it.
+        with self.assertRaises(dashboard_action.ActionError):
+            self.service.commit(p["id"])
+        # A later launch holds the tightened patterns and takes up the same saved preview: the check at the write
+        # boundary is the only one left between the stored note and the record.
+        later = dashboard_action.Actions()
+        service = io.Service(later)
+        op = service.load(p["id"])
+        with self.assertRaisesRegex(io.ReviewError, "publication checks"):
+            service.append(op, op["event"])
+        self.assertEqual(count, len(self.repo()["comments"]))
+        self.assertEqual([], service.load(p["id"])["sent"])   # nothing was marked as sent
+        self.assertEqual([], service.history())
+        self.write_config(self.config)   # the restriction is lifted: the same preview saves
+        service = io.Service(dashboard_action.Actions())
+        self.assertEqual("defer", service.append(service.load(p["id"]), op["event"])["verdict"])
+        self.assertEqual(count + 1, len(self.repo()["comments"]))
+
     def test_signed_map_edit_resumes_on_another_session_and_verifies_actual_comment(self):
         initial = project_map_io.preview(ts.REPO, 4, {"action": "add", "id": "format", "title": "Format",
                                                      "evidence": ["issue:3", "comment:18"]})
