@@ -590,6 +590,8 @@ class LifetimeTests(unittest.TestCase):
         def handle_request():
             clock[0] += 100.0
             server.calls += 1
+            if server.calls > 1000:   # a loop with no end fails the test instead of hanging it
+                raise AssertionError("the service never ended")
             if step:
                 step(server, clock[0])
 
@@ -800,6 +802,22 @@ class HttpTests(unittest.TestCase):
         handler.dispatch("GET")   # a stop is a POST only
         self.assertEqual(404, handler.respond.call_args[0][0])
         self.assertFalse(handler.server.stop_requested)
+
+    def test_every_page_with_actions_carries_the_stop_control_and_its_script_is_served_without_record_text(self):
+        handler = self.request()
+        for route in ("/", "/actions", "/map-editor", "/suggestions", "/impact-review"):
+            handler.path = handler.server.mount + route
+            handler.dispatch("GET")
+            status, body = handler.respond.call_args.args[:2]
+            self.assertEqual(200, status, route)
+            self.assertIn('<script src="stop.js" defer></script>', body, route)
+        handler.path = handler.server.mount + "/stop.js"
+        handler.dispatch("GET")
+        status, body, kind = handler.respond.call_args.args[:3]
+        self.assertEqual((200, "text/javascript; charset=utf-8"), (status, kind))
+        self.assertIn("api/stop", body)
+        for call in ("innerHTML", "eval(", "localStorage", "sessionStorage"):
+            self.assertNotIn(call, body)
 
     def test_first_snapshot_without_index_keeps_refresh_controls_available(self):
         handler = self.request()
