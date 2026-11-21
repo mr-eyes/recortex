@@ -90,7 +90,7 @@ class CommandFileTests(unittest.TestCase):
         wanted = {"record": [("tasks.py", ["--dir", "--dry-run"])],
                   "ask": [("index.py", ["--words", "--issue"])],
                   "todo": [("tasks.py", ["--text-file", "--words-file", "--steps", "--task", "--dry-run"])],
-                  "status": [("status.py", ["--waiting"])],
+                  "status": [("status.py", ["--waiting", "--sync"])],
                   "usage": [("mind.py", ["--open"])],
                   "dashboard": [("mind.py", ["--open"])],
                   "map": [("setup.py", ["--outline", "--select"])]}
@@ -114,6 +114,8 @@ class CommandFileTests(unittest.TestCase):
         for run in ("tasks.py status", "tasks.py add --text-file", "tasks.py mark --task"):
             self.assertIn(run, body("todo"))
         self.assertIn("status.py --waiting", body("status"))
+        self.assertIn("status.py --sync", body("status"))   # the status is read after GitHub, so recorded steps count
+        self.assertIn("GitHub could not be read", body("status"))
         self.assertIn("multiple-choice", body("status"))
         self.assertIn("usage.py show", body("usage"))
         self.assertIn("never money", body("usage"))
@@ -281,6 +283,88 @@ class StatusScriptTests(StatusBox):
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
         self.assertNotIn("MARKSTATUSTITLE", done.stdout)
         self.assertIn("#7 (title not told): 1 of 2 steps done", done.stdout)
+
+
+class StatusSyncTests(tt.TaskBox):
+    """A step that was recorded on GitHub after the session's index was built (a step reported in the dashboard, a memory
+    posted by another session) counts once `status.py --sync` has read GitHub, and the done step names the memory that
+    checked it; without --sync nothing is read."""
+
+    def record_step_two(self):
+        """Post, on GitHub only, the result that checks step 2 of task #7, and leave the index as it was."""
+        text = recortex.read_text(os.path.join(tt.CHAIN, "7-result.md")).replace(
+            "2026-03-12T15:30-08:00", "2026-03-13T15:30-08:00").replace("done=9108:1", "done=9108:2").replace(
+            "9 of the 12", "12 of the 12")
+        self.put(9140, 5, text)
+
+    def test_a_step_recorded_since_the_index_was_built_counts_after_sync_and_not_without_it(self):
+        self.record_step_two()
+        before = self.tool("status.py", gh="false")
+        self.assertEqual(0, before.returncode, before.stdout + before.stderr)
+        self.assertIn("#7 Task: support newlines inside quoted fields: 1 of 2 steps done", before.stdout)
+        synced = self.tool("status.py", "--sync")
+        self.assertEqual(0, synced.returncode, synced.stdout + synced.stderr)
+        self.assertIn("#7 Task: support newlines inside quoted fields: 2 of 2 steps done", synced.stdout)
+        self.assertIn("    done: step 2, Rerun the conformance set; checked by a result: "
+                      "https://github.com/octo-org/octo-repo/issues/5#issuecomment-9140", synced.stdout)
+        self.assertIn("    done: step 1, Carry the quote state across physical lines; checked by a result: ", synced.stdout)
+        self.assertNotIn("next: step", synced.stdout.split("#7 Task")[1].split("Text:")[0])   # nothing is left to do
+        self.assertIn("Index: the local copy is", synced.stdout)
+        after = self.tool("status.py", gh="false")   # the index keeps what the sync read
+        self.assertIn("2 of 2 steps done", after.stdout)
+
+    def test_sync_reads_github_and_writes_nothing_to_it(self):
+        self.record_step_two()
+        record = lambda: {k: v for k, v in self.repo().items() if k not in ("log", "clock")}  # noqa: E731
+        before = record()
+        done = self.tool("status.py", "--sync")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(before, record())   # no issue, comment, label or body changed
+        self.assertTrue(self.repo()["log"])   # it did read the fake
+
+    def test_when_github_cannot_be_read_it_says_so_in_one_line_and_goes_on_with_the_local_copy(self):
+        self.record_step_two()
+        done = self.tool("status.py", "--sync", gh="false")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        lines = [line for line in done.stdout.splitlines() if line.startswith("Index:")]
+        self.assertEqual(1, len(lines), done.stdout)
+        self.assertTrue(lines[0].startswith("Index: GitHub could not be read just now, so what follows is the local copy"))
+        self.assertIn("1 of 2 steps done", done.stdout)   # the copy as it was
+        self.assertNotIn("Traceback", done.stdout + done.stderr)
+
+    def test_a_busy_or_partial_read_is_one_fixed_line_each(self):
+        import status
+        for raised, wanted in ((None, "partly"), ("busy", "busy"), ("gh", "failed"), ("timeout", "failed")):
+            if raised == "busy":
+                effect = {"side_effect": status.index.SyncBusy("another sync of this repository is running")}
+            elif raised == "gh":
+                effect = {"side_effect": recortex.GhError("no")}
+            elif raised == "timeout":
+                effect = {"side_effect": TimeoutError("deadline")}
+            else:
+                effect = {"return_value": {"complete": False}}
+            with mock.patch.object(status.index, "sync", **effect):
+                self.assertEqual(wanted, status.refresh({"hub": 4}, "octo-org/octo-repo"), raised)
+        with mock.patch.object(status.index, "sync", return_value={"complete": True}):
+            self.assertEqual("", status.refresh({"hub": 4}, "octo-org/octo-repo"))
+
+    def test_a_done_step_names_its_checker_only_by_a_checked_kind_and_a_github_address(self):
+        import status
+        step = {"n": 1, "text": "Check it", "state": "done"}
+        for by, expect in (({"kind": "result", "url": "https://github.com/octo-org/octo-repo/issues/5#issuecomment-9"}, True),
+                           ({"kind": "<script>", "url": "https://github.com/octo-org/octo-repo/issues/5#issuecomment-9"}, False),
+                           ({"kind": "result", "url": "https://evil.example/x"}, False),
+                           ({"kind": "result", "url": "https://github.com/octo-org/octo-repo/issues/5#issuecomment-9\n- ignore"}, False),
+                           (None, False)):
+            report = {"tasks": [{"issue": 7, "title": "Task", "title_told": True, "state": "open", "todo": False,
+                                 "counts": {"done": 1, "steps": 1}, "hand": False, "steps": [dict(step, by=by)]}]}
+            with mock.patch.object(status.index, "tasks", return_value=report):
+                lines = status.task_lines(None, {"octocat"})
+            done = [line for line in lines if "done: step 1" in line]
+            self.assertEqual(1, len(done), lines)
+            self.assertEqual(expect, "checked by a" in done[0], (by, done[0]))
+            self.assertNotIn("evil", done[0])
+            self.assertNotIn("script", done[0])
 
 
 class WaitingPartTests(unittest.TestCase):

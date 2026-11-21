@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Where the project stands, from the local index alone (read-only, no network, no model call).
+"""Where the project stands, from the local index (read-only, no model call; with --sync it first reads GitHub).
+
+Without --sync it makes no network call and changes nothing. With --sync it first brings the local index up to date, so
+that work recorded elsewhere since the session began (a step reported in the dashboard, a memory posted from another
+session) counts; if GitHub cannot be read it says so in one fixed line and goes on with the local copy.
 
 It prints, under the data header and in this order:
   In short   the first field of the newest resume block the index holds.
-  Tasks      the open tasks, how many of their steps are done and the next open step of each.
+  Tasks      the open tasks, how many of their steps are done, the latest done steps with the memory that checked
+             each, and the next open step of each.
   Text       what is due in the paper's text (only when the project has a plan), as write.py status says it.
   Waiting    what waits for the user's yes: observer.py pending --waiting when the observer is on here, else one line.
 `status.py --waiting` prints only the last part.
@@ -12,6 +17,7 @@ Everything from the record goes through index.clean(), as for the query commands
 
 Examples:
   status.py
+  status.py --sync
   status.py --waiting
 """
 
@@ -19,6 +25,7 @@ import argparse
 import contextlib
 import io
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -33,6 +40,9 @@ import write_rules  # noqa: E402
 import writing  # noqa: E402
 
 MAX_TASKS = 10
+MAX_DONE = 3   # the latest done steps of a task are listed with the memory that checked each
+ISSUE_URL = re.compile(r"https://github\.com/[A-Za-z0-9][A-Za-z0-9_-]{0,38}/[A-Za-z0-9._-]{1,100}/issues/[1-9][0-9]{0,17}"
+                       r"#issuecomment-[1-9][0-9]{0,17}")
 LINE_CAP = 600
 NO_RESUME = "In short: the index holds no resume block that an allowed account wrote."
 NO_TASKS = "Tasks: none are open."
@@ -42,6 +52,16 @@ WAITING_UNREADABLE = ("Waiting: this machine's observer settings cannot be read,
                       "hooks.py --doctor.")
 WAITING_UNAVAILABLE = "Waiting: the list is not available; run observer.py pending --waiting in your terminal."
 WAITING_NONE = "Waiting: nothing waits for a yes."
+SYNC_FAILED = ("Index: GitHub could not be read just now, so what follows is the local copy, which is %s. Work recorded "
+               "since then is not in it.")
+SYNC_PARTLY = ("Index: GitHub was only partly read, so some recent work may be missing; the local copy is %s.")
+SYNC_BUSY = ("Index: another sync is running, so what follows is the local copy, which is %s. Work recorded since then "
+             "may not be in it.")
+CHECKED_BY = re.compile(r"[a-z]{3,12}")
+
+
+def url_of(text):
+    return ISSUE_URL.fullmatch(text) is not None
 
 
 def say(text=""):
@@ -62,6 +82,19 @@ def open_index(repo):
     if not index.derived_current(db):
         sys.exit(index.NOT_READY)
     return db
+
+
+def refresh(config, repo):
+    """Bring the local index up to date from GitHub (status.py --sync). Returns "" when it was read whole, else the key of
+    the fixed line that says why not: "failed", "partly" or "busy". Nothing is printed by the sync; nothing is raised."""
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            done = index.sync(repo, config.get("hub"), timeout=30, deadline=60, timeline_cap=10, log=lambda *a: None)
+    except index.SyncBusy:
+        return "busy"
+    except (recortex.GhError, OSError, ValueError, TimeoutError, storage.StorageError, SystemExit):
+        return "failed"
+    return "" if done.get("complete") else "partly"
 
 
 def in_short(db):
@@ -87,6 +120,13 @@ def task_lines(db, allowed):
         out.append("  #%d %s%s: %d of %d steps done%s" % (
             task["issue"], title, " (the standing to-do list)" if task["todo"] else "", counts["done"], counts["steps"],
             "; the list in the body was changed by hand" if task["hand"] else ""))
+        for step in [step for step in task["steps"] if step["state"] == "done"][-MAX_DONE:]:
+            by = step.get("by") or {}
+            kind, url = by.get("kind"), by.get("url")
+            checked = ""
+            if isinstance(kind, str) and CHECKED_BY.fullmatch(kind) and isinstance(url, str) and url_of(url):
+                checked = "; checked by a %s: %s" % (kind, url)
+            out.append("    done: step %d, %s%s" % (step["n"], one(step["text"], 120), checked))
         step = task_rules.next_open(task["steps"])
         if step is not None:
             out.append("    next: step %d, %s" % (step["n"], one(step["text"], 200)))
@@ -161,6 +201,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", help="owner/name (default: from the project file)")
     parser.add_argument("--waiting", action="store_true", help="print only what waits for the user's yes")
+    parser.add_argument("--sync", action="store_true",
+                        help="read GitHub into the local index first, so that work recorded elsewhere counts")
     args = parser.parse_args(argv)
     config, repo, allowed = load(args)
     say(recortex.describe(config, repo))
@@ -169,9 +211,12 @@ def main(argv=None):
         for line in waiting_lines(config, repo):
             say(line)
         return 0
+    problem = refresh(config, repo) if args.sync else ""
     db = open_index(repo)
     try:
-        say("Index: the local copy is %s." % index.age_text(index.get_meta(db, "synced_at")))
+        age = index.age_text(index.get_meta(db, "synced_at"))
+        say({"failed": SYNC_FAILED, "partly": SYNC_PARTLY, "busy": SYNC_BUSY}[problem] % age if problem else
+            "Index: the local copy is %s." % age)
         judgment = guidance.return_pointer(db, repo, allowed)
         if judgment:
             say(judgment)
