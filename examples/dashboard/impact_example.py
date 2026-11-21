@@ -68,5 +68,6 @@ def write_example(destination, checkout, name, model, fixture):
                         '<meta http-equiv="Content-Security-Policy" content="%s"><style>%s</style>' % (policy, css))
     page = page.replace('href="snapshot#history"', 'href="%s.html#history"' % name)
     page = page.replace('<p id="project">', '<p>Sample project. Reviews and edits reset when you reload or leave this page.</p><p id="project">')
+    page = page.replace('<script src="stop.js" defer></script>', '')  # there is no service to stop in a sample
     page = page.replace('</body>', '<script>%s</script></body>' % script)
     (destination / (name + "-review.html")).write_text(page, encoding="utf-8")

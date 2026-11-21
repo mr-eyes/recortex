@@ -1,11 +1,20 @@
-"""Local dashboard action boundaries and real helpers against fake GitHub. No sockets or models."""
+"""Local dashboard action boundaries and real helpers against fake GitHub. No models. Only the launch and lifetime tests
+open a loopback socket, and no test contacts GitHub."""
 
 import contextlib
+import http.client
 import io
 import html
 import json
 import os
+import pathlib
+import re
+import select
+import stat
+import subprocess
 import sys
+import threading
+import time
 import types
 import unittest
 from unittest import mock
@@ -392,11 +401,300 @@ class ActionTests(tj.TaskBox):
             self.assertNotIn("Traceback", error.getvalue())
 
 
+class Terminal(io.StringIO):
+    """Standard output as a session sees it (not a terminal) or as a user's terminal shows it."""
+
+    def __init__(self, terminal):
+        super().__init__()
+        self.terminal = terminal
+
+    def isatty(self):
+        return self.terminal
+
+
+class LaunchTests(tj.TaskBox):
+    """The address holds the token, which is the whole capability. It reaches only a terminal; a session that starts
+    the service gets the path of a private launch file, and the browser is pointed at that file."""
+
+    TOKEN = re.compile(r"[A-Za-z0-9_-]{43}")
+
+    def setUp(self):
+        super().setUp()
+        self.in_process(extra={"CLAUDE_PROJECT_DIR": self.project})
+
+    def start(self, argv, terminal):
+        """Run main() in this process with serve() replaced by a look at the files the service holds while it runs.
+        Returns (output, errors, what the service held, the browser's calls)."""
+        out, err, held, opened = Terminal(terminal), io.StringIO(), {}, []
+
+        def serving(server):
+            held["server"] = server
+            for name in os.listdir(held["folder"]):
+                if action.LAUNCH.fullmatch(name):
+                    path = os.path.join(held["folder"], name)
+                    held["files"] = held.get("files", []) + [(path, stat.S_IMODE(os.stat(path).st_mode),
+                                                              pathlib.Path(path).read_text(encoding="utf-8"))]
+            return "stopped"
+
+        real = action.Actions
+
+        def make():
+            made = real()
+            held["folder"] = made.folder
+            return made
+
+        with mock.patch.object(sys, "stdout", out), mock.patch.object(sys, "stderr", err), \
+                mock.patch.object(action, "Actions", side_effect=make), \
+                mock.patch.object(action, "serve", side_effect=serving), \
+                mock.patch.object(action.webbrowser, "open", side_effect=lambda url: opened.append(url) or True):
+            code = action.main(argv)
+        self.assertEqual(0, code, err.getvalue())
+        return out.getvalue(), err.getvalue(), held, opened
+
+    def secrets_of(self, held):
+        server = held["server"]
+        return [server.token, server.mount.strip("/"), str(server.server_port), server.host]
+
+    def test_a_start_from_a_session_prints_only_the_path_of_a_private_file(self):
+        output, errors, held, opened = self.start(["--open"], terminal=False)
+        (path, mode, page), = held["files"]
+        for secret in self.secrets_of(held):
+            self.assertNotIn(secret, output + errors)
+        self.assertNotIn("http://", output + errors)
+        self.assertIsNone(self.TOKEN.search(output + errors))
+        self.assertIn(path, output)
+        self.assertEqual(0o600, mode)
+        self.assertEqual(held["folder"], os.path.dirname(path))
+        server = held["server"]
+        address = "http://%s%s/#%s" % (server.host, server.mount, server.token)
+        self.assertIn('<meta http-equiv="refresh" content="0;url=%s">' % address, page)
+        self.assertEqual([pathlib.Path(path).as_uri()], opened)
+        self.assertFalse(os.path.exists(path), "the launch file goes when the service stops")
+
+    def test_a_session_without_open_gets_the_path_and_no_browser_starts(self):
+        output, errors, held, opened = self.start([], terminal=False)
+        (path, _, _), = held["files"]
+        self.assertIn(path, output)
+        self.assertIn("open this file in your browser", output)
+        self.assertEqual([], opened)
+        for secret in self.secrets_of(held):
+            self.assertNotIn(secret, output + errors)
+
+    def test_a_terminal_shows_the_address_but_the_browser_gets_the_file_never_the_token(self):
+        output, _, held, opened = self.start(["--open"], terminal=True)
+        server = held["server"]
+        self.assertIn("http://%s%s/#%s" % (server.host, server.mount, server.token), output)
+        (path, _, _), = held["files"]
+        self.assertEqual([pathlib.Path(path).as_uri()], opened)
+        for url in opened:
+            self.assertNotIn(server.token, url)
+            self.assertNotIn(server.mount, url)
+        output, _, held, opened = self.start([], terminal=True)
+        self.assertEqual(([], None), (opened, held.get("files")))   # no browser and no file are needed
+
+    def test_a_launch_file_that_cannot_be_written_stops_a_session_start_without_the_address(self):
+        err, out = io.StringIO(), Terminal(False)
+        with mock.patch.object(sys, "stdout", out), mock.patch.object(sys, "stderr", err), \
+                mock.patch.object(action.storage, "write_file", side_effect=OSError("disk full")), \
+                mock.patch.object(action, "serve") as serve:
+            self.assertEqual(1, action.main([]))
+        serve.assert_not_called()
+        self.assertEqual("", out.getvalue())
+        self.assertIn("launch file could not be written", err.getvalue())
+
+    def test_launch_files_of_cut_off_services_are_removed_at_the_next_start(self):
+        folder = action.Actions().folder
+        old, recent = os.path.join(folder, "launch-00000000.html"), os.path.join(folder, "launch-11111111.html")
+        for path in (old, recent):
+            action.storage.write_file(path, "<p>old</p>")
+        stale = time.time() - action.LIFETIME_SECONDS - 3600
+        os.utime(old, (stale, stale))
+        path = action.write_launch(folder, "/" + "a" * 32, "http://127.0.0.1:1/x#y")
+        self.assertEqual("launch-aaaaaaaa.html", os.path.basename(path))
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.exists(recent))
+
+    def test_a_caller_that_reads_the_output_cannot_reach_preview_or_commit(self):
+        """The real command, started as a background task is: its output piped. Everything that output says is all the
+        caller knows; the user's browser, which reads the file, can use the service."""
+        proc = subprocess.Popen([sys.executable, os.path.join(ts.SCRIPTS, "dashboard_action.py")], cwd=self.project,
+                                env=dict(os.environ), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE)
+        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        self.addCleanup(proc.stdout.close)
+        self.addCleanup(proc.stderr.close)
+        seen, quiet_since = b"", None
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            ready, _, _ = select.select([proc.stdout], [], [], 0.3)
+            if ready:
+                chunk = os.read(proc.stdout.fileno(), 4096)
+                if not chunk:
+                    break
+                seen, quiet_since = seen + chunk, time.time()
+            elif quiet_since and time.time() - quiet_since > 1.5:
+                break
+        output = seen.decode("utf-8")
+        self.assertEqual(0, len(self.TOKEN.findall(output)), output)
+        self.assertNotIn("http://", output)
+        self.assertNotIn("127.0.0.1", output)
+        path = re.search(r"open this file in your browser: (\S+launch-[0-9a-f]{8}\.html)", output)
+        self.assertTrue(path, output)
+        path = path.group(1)
+        self.assertEqual(0o600, stat.S_IMODE(os.stat(path).st_mode))
+        # What the user's browser does: read the file and follow it.
+        address = re.search(r'content="0;url=http://([0-9.]+):([0-9]+)(/[0-9a-f]{32})/#([A-Za-z0-9_-]{43})"',
+                            pathlib.Path(path).read_text(encoding="utf-8"))
+        host, port, mount, token = address.group(1), int(address.group(2)), address.group(3), address.group(4)
+        for secret in (token, mount.strip("/"), str(port)):
+            self.assertNotIn(secret, output)
+
+        def call(method, route, data=None, **headers):
+            connection = http.client.HTTPConnection(host, port, timeout=60)
+            sent = {"Host": "%s:%d" % (host, port)}
+            sent.update(headers)
+            body = None
+            if data is not None:
+                body = json.dumps(data).encode()
+                sent.update({"Origin": "http://%s:%d" % (host, port), "Content-Type": "application/json"})
+            connection.request(method, route, body=body, headers=sent)
+            response = connection.getresponse()
+            result = response.status, response.read().decode("utf-8")
+            connection.close()
+            return result
+
+        before = self.count()
+        # A caller that holds only the output can find the port but neither the mount nor the token.
+        self.assertEqual(404, call("POST", "/api/preview", {"step": "7:9108:2", "words": "Done."})[0])
+        self.assertEqual(404, call("POST", "/api/commit", {"id": "a" * 32, "body_hash": "0" * 64})[0])
+        self.assertEqual(403, call("POST", mount + "/api/preview", {"step": "7:9108:2", "words": "Done."})[0])
+        self.assertEqual(before, self.count())
+        # The browser, with the file's address, reaches the service; and Stop ends it and removes the file.
+        bearer = {"Authorization": "Bearer " + token}
+        self.assertEqual(200, call("GET", mount + "/", **bearer)[0])
+        self.assertEqual(200, call("POST", mount + "/api/stop", {}, **bearer)[0])
+        self.assertEqual(0, proc.wait(30))
+        self.assertIn("was stopped", proc.stdout.read().decode("utf-8"))
+        self.assertFalse(os.path.exists(path))
+
+    def count(self):
+        return len(self.repo()["comments"])
+
+
+class LifetimeTests(unittest.TestCase):
+    """The service ends after 30 idle minutes, at 8 hours however busy, or when the user chooses Stop."""
+
+    def fake(self, step=None):
+        clock, server = [0.0], types.SimpleNamespace(started=0.0, last_seen=0.0, stop_requested=False, timeout=None, calls=0)
+
+        def handle_request():
+            clock[0] += 100.0
+            server.calls += 1
+            if step:
+                step(server, clock[0])
+
+        server.handle_request = handle_request
+        return server, clock
+
+    def serve(self, server, clock, **limits):
+        with mock.patch.object(action.time, "monotonic", side_effect=lambda: clock[0]):
+            return action.serve(server, **limits)
+
+    def test_the_cutoffs_are_thirty_minutes_idle_and_eight_hours_in_all(self):
+        self.assertEqual(30 * 60, action.IDLE_SECONDS)
+        self.assertEqual(8 * 60 * 60, action.LIFETIME_SECONDS)
+
+    def test_no_authorized_request_for_the_idle_time_ends_the_service(self):
+        server, clock = self.fake()
+        self.assertEqual("idle", self.serve(server, clock, idle=250, limit=10000))
+        self.assertEqual(3, server.calls)
+        server, clock = self.fake()
+        with mock.patch.object(action, "IDLE_SECONDS", 150):
+            self.assertEqual("idle", self.serve(server, clock, limit=10000))   # the module's value is the default
+        self.assertEqual(2, server.calls)
+
+    def test_requests_keep_the_service_alive_but_never_past_the_limit(self):
+        server, clock = self.fake(lambda s, now: setattr(s, "last_seen", now))
+        self.assertEqual("limit", self.serve(server, clock, idle=250, limit=1000))
+        self.assertEqual(10, server.calls)
+        server, clock = self.fake(lambda s, now: setattr(s, "last_seen", now))
+        with mock.patch.object(action, "LIFETIME_SECONDS", 450):
+            self.assertEqual("limit", self.serve(server, clock, idle=250))
+        self.assertEqual(5, server.calls)
+
+    def test_a_stop_request_ends_the_loop_after_that_request(self):
+        server, clock = self.fake(lambda s, now: setattr(s, "stop_requested", now >= 200))
+        self.assertEqual("stopped", self.serve(server, clock, idle=10000, limit=10000))
+        self.assertEqual(2, server.calls)
+
+    def service(self, mount="/" + "c" * 32):
+        server = action.http.server.HTTPServer(("127.0.0.1", 0), action.Handler)
+        self.addCleanup(server.server_close)
+        server.actions, server.token, server.mount = mock.Mock(), "t" * 43, mount
+        server.actions.state.return_value = {}
+        server.host = "127.0.0.1:%d" % server.server_port
+        server.started = server.last_seen = time.monotonic()
+        server.stop_requested = False
+        return server
+
+    def run_in_thread(self, server, **limits):
+        done = []
+        thread = threading.Thread(target=lambda: done.append(action.serve(server, tick=0.05, **limits)), daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 10)
+        return thread, done
+
+    def post_stop(self, server, **changes):
+        headers = {"Host": server.host, "Origin": "http://" + server.host, "Content-Type": "application/json",
+                   "Authorization": "Bearer " + server.token}
+        headers.update(changes)
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+        connection.request("POST", server.mount + "/api/stop", body=b"{}", headers=headers)
+        status = connection.getresponse().status
+        connection.close()
+        return status
+
+    def test_a_real_service_refuses_a_stop_from_another_origin_and_ends_on_the_users_own(self):
+        server = self.service()
+        thread, done = self.run_in_thread(server, idle=60, limit=60)
+        for changes in ({"Origin": "http://attacker.invalid"}, {"Origin": "http://127.0.0.1:1"},
+                        {"Host": "attacker.invalid"}, {"Authorization": "Bearer wrong"}, {"Sec-Fetch-Site": "cross-site"}):
+            self.assertEqual(403, self.post_stop(server, **changes), changes)
+        thread.join(0.5)
+        self.assertTrue(thread.is_alive() and not done, "a refused stop must leave the service running")
+        self.assertEqual(200, self.post_stop(server))
+        thread.join(10)
+        self.assertEqual(["stopped"], done)
+
+    def test_a_real_service_ends_when_idle_and_at_its_limit_while_busy(self):
+        server = self.service()
+        thread, done = self.run_in_thread(server, idle=0.4, limit=60)
+        thread.join(10)
+        self.assertEqual(["idle"], done)
+        server = self.service()
+        thread, done = self.run_in_thread(server, idle=1.0, limit=0.8)
+        headers = {"Host": server.host, "Authorization": "Bearer " + server.token}
+        deadline = time.monotonic() + 10
+        while not done and time.monotonic() < deadline:   # a busy user: a request every 0.1 s
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+            try:
+                connection.request("GET", server.mount + "/api/state", headers=headers)
+                connection.getresponse().read()
+            except OSError:
+                break
+            finally:
+                connection.close()
+            time.sleep(0.1)
+        thread.join(10)
+        self.assertEqual(["limit"], done)
+
+
 class HttpTests(unittest.TestCase):
     def request(self, path="/api/preview", data=None, changes=None):
         handler = object.__new__(action.Handler)
         handler.server = types.SimpleNamespace(host="127.0.0.1:1234", token="secret", actions=mock.Mock(),
-                                               mount="/" + "a" * 32, server_port=1234)
+                                               mount="/" + "a" * 32, server_port=1234, stop_requested=False,
+                                               last_seen=0.0)
         body = json.dumps(data if data is not None else {"step": "7:9108:2", "words": "done"}).encode()
         handler.headers = {"Host": "127.0.0.1:1234", "Origin": "http://127.0.0.1:1234",
                            "Content-Type": "application/json", "Authorization": "Bearer secret", "Content-Length": str(len(body))}
@@ -474,6 +772,34 @@ class HttpTests(unittest.TestCase):
         handler.headers["Cookie"] = "recortex_action=secret"
         handler.dispatch("GET")
         self.assertEqual(200, handler.respond.call_args.args[0])
+
+    def test_stop_needs_the_checks_of_every_post_and_a_refused_request_never_keeps_the_service_alive(self):
+        for changes in ({"Host": "attacker.invalid:1234"}, {"Origin": "https://attacker.invalid"}, {"Origin": None},
+                        {"Authorization": ""}, {"Sec-Fetch-Site": "cross-site"}, {"Content-Type": "text/plain"},
+                        {"Authorization": "Bearer wrong"}):
+            handler = self.request("/api/stop", {}, changes)
+            self.assertEqual(403, handler.respond.call_args[0][0], changes)
+            self.assertFalse(handler.server.stop_requested, changes)
+            self.assertEqual(0.0, handler.server.last_seen, changes)
+        handler = self.request("/api/stop", {"after": "five"})
+        self.assertEqual(400, handler.respond.call_args[0][0])
+        self.assertFalse(handler.server.stop_requested)
+        handler = self.request("/api/stop", {}, {"Authorization": ""})   # no token, no cookie
+        self.assertFalse(handler.server.stop_requested)
+        handler = self.request("/api/stop", {}, {"Authorization": "", "Cookie": "recortex_action=secret"})
+        self.assertEqual(200, handler.respond.call_args[0][0])
+        self.assertTrue(handler.server.stop_requested)
+        handler = self.request("/api/stop", {})
+        self.assertEqual(200, handler.respond.call_args[0][0])
+        self.assertEqual({"stopped": True}, json.loads(handler.respond.call_args[0][1]))
+        self.assertTrue(handler.server.stop_requested)
+        self.assertGreater(handler.server.last_seen, 0.0)
+        handler = self.request("/api/stop", {})
+        handler.server.stop_requested = False
+        handler.path = handler.server.mount + "/api/stop"
+        handler.dispatch("GET")   # a stop is a POST only
+        self.assertEqual(404, handler.respond.call_args[0][0])
+        self.assertFalse(handler.server.stop_requested)
 
     def test_first_snapshot_without_index_keeps_refresh_controls_available(self):
         handler = self.request()

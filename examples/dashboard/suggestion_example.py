@@ -39,5 +39,6 @@ window.fetch = async (path, options) => {
                         '<meta http-equiv="Content-Security-Policy" content="%s"><style>%s</style>' % (policy, css))
     page = page.replace('href="snapshot#now"', 'href="software.html#now"')
     page = page.replace('<h1>Observer suggestions</h1>', '<h1>Observer suggestions</h1><p>Sample project. Reminder changes reset on reload.</p>')
+    page = page.replace('<script src="stop.js" defer></script>', '')  # there is no service to stop in a sample
     page = page.replace('</body>', '<script>%s</script></body>' % script)
     (Path(destination) / "suggestions.html").write_text(page, encoding="utf-8")

@@ -90,3 +90,4 @@ a { color: var(--thread); }
   #tasks > section:only-child > .step:only-of-type > button { grid-column: 2; }
   .suggestion:only-child > h2, .suggestion:only-child > p { max-width: 75ch; }
 }
+.stop-service{margin-top:2rem;border-top:1px solid var(--rule);padding-top:1rem}.stop-service span{margin-left:.5rem}

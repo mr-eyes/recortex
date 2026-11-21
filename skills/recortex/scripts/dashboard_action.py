@@ -2,8 +2,11 @@
 """Explicit local dashboard actions for one configured project.
 
 Run dashboard_action.py [--open] from the project folder. The capability URL is
-private and lasts only while this process runs. The exported mind page stays
-offline. The service previews and records task completions and project map edits.
+private and lasts only while this process runs: it stops after 30 idle minutes, after 8 hours, or when the user
+chooses Stop on one of its pages. The address and its token are printed only to a terminal; started from a session
+(output that is not a terminal) the service writes a private launch file and prints only that file's path. The
+exported mind page stays offline. The service previews and records task completions and project map edits, decision
+reviews and reminder choices.
 """
 
 import argparse
@@ -15,6 +18,7 @@ import http.server
 import io
 import json
 import os
+import pathlib
 import re
 import secrets
 import sys
@@ -40,12 +44,20 @@ IMPACT_TARGET = re.compile(r"impact-[1-9][0-9]{0,18}-[0-9a-f]{64}")
 STEP = re.compile(r"([1-9][0-9]{0,12}):([1-9][0-9]{0,15}):([1-9][0-9]?)")
 MAX_BODY = 16384
 PREVIEW_SECONDS = 600
+IDLE_SECONDS = 30 * 60          # no authorized request for this long stops the service
+LIFETIME_SECONDS = 8 * 60 * 60  # the service never runs longer than this, however busy
+TICK_SECONDS = 1.0              # how often the serve loop looks at the clock when no request arrives
+LAUNCH = re.compile(r"launch-[0-9a-f]{8}\.html")
+STOPPED = {"stopped": "The private dashboard service was stopped.",
+           "idle": "The private dashboard service stopped after 30 idle minutes.",
+           "limit": "The private dashboard service stopped at its 8 hour limit.",
+           "interrupted": "The private dashboard service was interrupted."}
 POLICY = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
           "base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'")
 HTML = """<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Recortex task actions</title><link rel="stylesheet" href="action.css">
-<script src="action.js" defer></script><main><h1>Task actions</h1>
+<script src="action.js" defer></script><script src="stop.js" defer></script><main><h1>Task actions</h1>
 <p id="project">Connect using the private address printed in your terminal.</p>
 <p><a id="back" href="snapshot#todo">Back to Work</a></p>
 <p>This page records your statement that one step is complete. It does not independently verify the work.
@@ -627,6 +639,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             path = "/impact-review"
         if not authorized(method, path, self.headers, self.server.host, self.server.token):
             return self.respond(403, canonical({"code": "unauthorized"}))
+        self.server.last_seen = time.monotonic()  # only an authorized request keeps the service alive
         try:
             if method == "GET" and path in ("/", "/actions"):
                 return self.respond(200, HTML, "text/html; charset=utf-8")
@@ -645,6 +658,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                       "/map-editor.js": ("dashboard_map.js", "text/javascript; charset=utf-8"),
                       "/suggestions.js": ("dashboard_suggestions.js", "text/javascript; charset=utf-8"),
                       "/action.js": ("dashboard_action.js", "text/javascript; charset=utf-8"),
+                      "/stop.js": ("dashboard_stop.js", "text/javascript; charset=utf-8"),
                       "/action.css": ("dashboard_action.css", "text/css; charset=utf-8")}
             if method == "GET" and path in assets:
                 name, kind = assets[path]
@@ -661,7 +675,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if method != "POST" or path not in ("/api/session", "/api/preview", "/api/commit", "/api/reconcile", "/api/refresh",
                                                  "/api/map/preview", "/api/map/commit", "/api/suggestions/feedback",
                                                  "/api/impact/preview", "/api/impact/commit",
-                                                 "/api/impact/resume", "/api/impact/apply"):
+                                                 "/api/impact/resume", "/api/impact/apply", "/api/stop"):
                 raise ActionError("not_found", 404)
             length = self.headers.get("Content-Length", "")
             if self.headers.get("Transfer-Encoding") or not length.isdigit() or not 0 < int(length) <= MAX_BODY:
@@ -676,13 +690,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "/api/impact/resume": {"group", "target", "revision", "previous"},
                         "/api/impact/commit": {"id"}, "/api/impact/apply": {"id"},
                         "/api/map/preview": {"change", "revision"}, "/api/map/commit": {"id"},
-                        "/api/reconcile": {"id"}, "/api/refresh": set(), "/api/session": set()}[path]
+                        "/api/reconcile": {"id"}, "/api/refresh": set(), "/api/session": set(),
+                        "/api/stop": set()}[path]
             if not isinstance(data, dict) or set(data) != expected:
                 raise ActionError("invalid_fields", 400)
             actions = self.server.actions
             if path == "/api/session":
                 actions.authority()
                 return self.respond(200, canonical({"connected": True}), session=True)
+            elif path == "/api/stop":
+                # The loop in serve() ends after this answer is sent; same Host, Origin and token checks as any POST.
+                self.server.stop_requested = True
+                return self.respond(200, canonical({"stopped": True}))
             elif path == "/api/suggestions/feedback":
                 if not isinstance(data["id"], str) or type(data["muted"]) is not bool:
                     raise ActionError("invalid_fields", 400)
@@ -747,21 +766,86 @@ def main(argv=None):
     server.actions, server.token = actions, secrets.token_urlsafe(32)
     server.host = "127.0.0.1:%d" % server.server_port
     server.mount = "/" + secrets.token_hex(16)
+    server.started = server.last_seen = time.monotonic()
+    server.stop_requested = False
     landing = "suggestions" if args.suggestions else "impact-review" if args.impacts else ""
     if args.impacts and args.impacts != "all":
         landing += "?item=" + args.impacts
     address = "http://%s%s/%s#%s" % (server.host, server.mount, landing, server.token)
-    print("Private dashboard actions for %s. Stop with Ctrl-C. Do not share this address." % actions.repo)
-    print(address, flush=True)
-    if args.open:
-        webbrowser.open(address)
+    # The address holds the token, which is the whole capability: it is printed only to a terminal, where the user
+    # reads it. Whatever else reads this output (a session that started the service in the background) gets the path
+    # of a private file instead. A browser is pointed at that file, never at the address, so the token is on no
+    # command line either.
+    terminal = bool(getattr(sys.stdout, "isatty", lambda: False)())
+    launch = ""
+    if args.open or not terminal:
+        try:
+            launch = write_launch(actions.folder, server.mount, address)
+        except (OSError, storage.StorageError):
+            print("dashboard actions: the private launch file could not be written.", file=sys.stderr)
+            if not terminal:
+                server.server_close()
+                return 1
+    if terminal:
+        print("Private dashboard actions for %s. It stops after 30 idle minutes, or when you choose Stop on one of "
+              "its pages (Ctrl-C also stops it here). Do not share this address." % actions.repo)
+        print(address, flush=True)
+        if args.open and launch:
+            webbrowser.open(pathlib.Path(launch).as_uri())
+    else:
+        opened = webbrowser.open(pathlib.Path(launch).as_uri()) if args.open else False
+        print("Private dashboard actions for %s are running. The private address is not printed here." % actions.repo)
+        print("Opened the private dashboard in your browser." if opened else
+              "To open the private dashboard, open this file in your browser: %s" % launch, flush=True)
+        if opened:
+            print("To open it again, open this file in your browser: %s" % launch, flush=True)
+        print("The service stops after 30 idle minutes, or when you choose Stop on one of its pages.", flush=True)
     try:
-        server.serve_forever()
+        reason = serve(server)
     except KeyboardInterrupt:
-        pass
+        reason = "interrupted"
     finally:
         server.server_close()
+        if launch:
+            try:
+                storage.remove_file(actions.folder, os.path.basename(launch))
+            except (OSError, storage.StorageError):
+                pass
+    print(STOPPED[reason])
     return 0
+
+
+def serve(server, idle=None, limit=None, tick=None):
+    """Handle requests until the user chooses Stop, no authorized request has come for the idle cutoff, or the
+    lifetime limit is reached. Returns "stopped", "idle" or "limit". One thread: a stop cannot race the loop."""
+    idle = IDLE_SECONDS if idle is None else idle
+    limit = LIFETIME_SECONDS if limit is None else limit
+    server.timeout = TICK_SECONDS if tick is None else tick
+    while True:
+        server.handle_request()  # waits up to server.timeout for one request, then returns
+        if server.stop_requested:
+            return "stopped"
+        now = time.monotonic()
+        if now - server.started >= limit:
+            return "limit"
+        if now - server.last_seen >= idle:
+            return "idle"
+
+
+def write_launch(folder, mount, address):
+    """The private launch file: a 0600 page that sends the browser to the address (the pattern Jupyter uses for its
+    token). Older files of earlier launches that were cut off are removed first. Returns the file's path."""
+    now = time.time()
+    for name in os.listdir(folder):
+        if LAUNCH.fullmatch(name) and now - os.stat(os.path.join(folder, name), follow_symlinks=False).st_mtime > LIFETIME_SECONDS + 60:
+            storage.remove_file(folder, name)
+    name = "launch-%s.html" % mount[1:9]
+    path = os.path.join(folder, name)
+    storage.write_file(path, '<!doctype html><html lang="en"><meta charset="utf-8">'
+                             '<meta http-equiv="refresh" content="0;url=%s"><title>Recortex</title>'
+                             '<p>Opening the private dashboard. If nothing happens, <a href="%s">open it here</a>.</p>'
+                             '</html>\n' % (address, address))
+    return path
 
 
 if __name__ == "__main__":
