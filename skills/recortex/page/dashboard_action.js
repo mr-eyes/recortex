@@ -9,7 +9,7 @@
   var busy = false, preview = null;
   var status = document.getElementById('status');
   var messages = {
-    unauthorized: 'This connection has expired. Open the private address printed by the running service.',
+    unauthorized: 'This connection has expired. Open the private address again from the terminal or the launch file that started the service. A stopped service needs a new start.',
     unavailable: 'The record could not be checked. No success is assumed. Check recent operations before trying again.',
     index_unavailable: 'There is no usable local record yet. Choose Refresh from GitHub to build it.',
     project_changed: 'The project configuration changed. Stop and restart the service.',

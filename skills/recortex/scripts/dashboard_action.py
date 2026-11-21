@@ -58,7 +58,7 @@ HTML = """<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Recortex task actions</title><link rel="stylesheet" href="action.css">
 <script src="action.js" defer></script><script src="stop.js" defer></script><main><h1>Task actions</h1>
-<p id="project">Connect using the private address printed in your terminal.</p>
+<p id="project">Connect using the private address from the terminal or the launch file that started the service.</p>
 <p><a id="back" href="snapshot#todo">Back to Work</a></p>
 <p>This page records your statement that one step is complete. It does not independently verify the work.
 The saved dashboard remains an offline snapshot.</p>

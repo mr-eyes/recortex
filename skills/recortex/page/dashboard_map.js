@@ -11,7 +11,7 @@
     return element;
   }
   const messages = {map_changed: 'The map changed. Read the current map and review a new preview.',
-    unauthorized: 'Open the private address printed by the running dashboard.',
+    unauthorized: 'Open the private address again from the terminal or the launch file that started the service. A stopped service needs a new start.',
     allowed_account_required: 'Sign in with an allowed project account. For an organization-owned repository, add your GitHub login beside the repository name in its trusted-repos entry.',
     account_changed: 'The active account changed. Start a new preview.',
     held: 'A publication hold blocks the edit.',
