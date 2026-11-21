@@ -65,6 +65,7 @@ import names  # noqa: E402
 import index  # noqa: E402
 import brief  # noqa: E402
 import storage  # noqa: E402
+import guidance
 import field_sheet  # noqa: E402
 import board_api  # noqa: E402
 import board_rules  # noqa: E402
@@ -84,10 +85,12 @@ STATUS_REASONS = {
 }
 NOTICE_REPO = r"[A-Za-z0-9][A-Za-z0-9_-]{0,38}/[A-Za-z0-9._-]{1,100}"
 NOTICE_READ = r"read (?:just now|[0-9]{1,6} (?:minutes?|hours|days) ago|at an unknown time)(?:; GitHub could not be read now)?"
+DASHBOARD_HINT = "Ask to open your project dashboard or type /recortex:dashboard."
 NOTICE_FORM = re.compile(
-    r"recortex: (?:on\. (?:Record %s, %s\.|The record was %s\.|The record(?: of %s)? is being read for the first time; "
+    r"recortex: (?:on\. (?:(?:Record %s, %s\.|The record was %s\.)(?: %s)?|The record(?: of %s)? is being read for the first time; "
     r"the brief follows with your next message\.)|off in this session: (?:%s)\. Run hooks\.py --doctor\.)"
-    % (NOTICE_REPO, NOTICE_READ, NOTICE_READ, NOTICE_REPO, "|".join(re.escape(words) for words in STATUS_REASONS.values())))
+    % (NOTICE_REPO, NOTICE_READ, NOTICE_READ, re.escape(DASHBOARD_HINT), NOTICE_REPO,
+       "|".join(re.escape(words) for words in STATUS_REASONS.values())))
 START_SOURCES = ("startup", "resume", "clear")   # a start after a compaction or a fork repeats inside one sitting
 HOOK_NAMES = {"session-start": "SessionStart", "subagent-start": "SubagentStart",
               "prompt-submit": "UserPromptSubmit", "pre-compact": "PreCompact"}
@@ -177,9 +180,8 @@ def when(synced, fresh):
     return age[:-4] + " ago" if age.endswith(" old") else "at an unknown time"
 
 
-def notice(status):
-    """The one fixed line shown at session start: words of this module, a repository name that passes valid_repo and
-    comes from a trusted project file, and an age worked out from a stamp of the UTC form. Nothing else."""
+def notice(status, source=None):
+    """The visible status line, including how to open the dashboard at startup when a trusted record is available."""
     repo = status.get("repo") if recortex.valid_repo(status.get("repo")) else ""
     if status.get("state") == "off":
         words = STATUS_REASONS.get(status.get("reason"), STATUS_REASONS["error"])
@@ -191,6 +193,9 @@ def notice(status):
         read = "read %s%s" % (when(status.get("synced_at"), status.get("fresh")),
                               "; GitHub could not be read now" if status.get("fresh") is False else "")
         named, bare = "recortex: on. Record %s, %s." % (repo, read), "recortex: on. The record was %s." % read
+        if source == "startup" and status.get("state") == "on" and repo:
+            named += " " + DASHBOARD_HINT
+            bare += " " + DASHBOARD_HINT
     return named if repo and len(named) <= 200 else bare
 
 
@@ -584,6 +589,8 @@ def produce(event, data, budget, config, repo, hub):
         if event == "session-start":
             # the line about the setup questions is made first, so that the brief's lists and resume block make room for it
             questions, held = setup_line(repo, config, record, session, brief.CAPS["session-start"] // 2)
+            orientation = (guidance.hint(repo), guidance.return_pointer(db, repo, record.allowed))
+            questions = "\n".join(filter(None, (*orientation, questions)))
             text = brief.session_payload(record, fresh, reserve=len(questions) + 1 if questions else 0)
             remember(repo, session, digest(record.key()), brief=True)
             text += "\n" + questions if questions else ""
@@ -606,7 +613,10 @@ def produce(event, data, budget, config, repo, hub):
         if entry.get("brief") is not True:
             # The session started without a brief (first build, or no SessionStart): give the full brief once,
             # also when the one-line reminder is switched off. Build the text first, then record that it was given.
-            text = brief.session_payload(record, None)
+            orientation = "\n".join(filter(None, [guidance.hint(repo), guidance.return_pointer(db, repo, record.allowed)]))
+            text = brief.session_payload(record, None, reserve=len(orientation) + 1 if orientation else 0)
+            if orientation:
+                text += "\n" + orientation
             entry.update(brief=True, key=key)
             entry.setdefault("start", entry["seen"])
             state[session] = entry
@@ -1125,7 +1135,7 @@ def main(argv=None):
         refresh_statusline()
     try:
         text = run(args.event, data, budget)
-        line = notice(LAST) if args.event == "session-start" and LAST.get("state") else ""
+        line = notice(LAST, data.get("source")) if args.event == "session-start" and LAST.get("state") else ""
     except Exception:  # noqa: BLE001 - hooks are silent on any failure
         return 0
     if line and data.get("source") in START_SOURCES and not notice_off():

@@ -17,6 +17,12 @@ Then start a new session. If `claude plugin list` shows `gh-issues-manager@mr-ey
 
 A copy of the plugin installed another way (a folder under `~/.claude/skills/` with hooks from `templates/settings-hook-snippet.json`, or a second plugin entry) stays as it is. Copy the new `skills/recortex` folder in, remove the old folder, and change the four hook commands to `$HOME/.claude/skills/recortex/scripts/`. Two copies enabled at once print two briefs, so disable or uninstall the other one.
 
+## Version 1.6.0
+
+In Claude Code, open the project dashboard with `/recortex:dashboard` or ask "open my dashboard". The existing `mind.py --open` command also works. Overview, Project Map, Work, and History are shared across projects. Start a hierarchy on an existing project with `/recortex:map`. The shared entries rebuild from the project hub. File selection and observer map maintenance each require a local choice. Projects with configured deliverables also have Outputs. Saved links to earlier views still open. To edit the map or record a completed task step from the browser, explicitly launch the local interactive dashboard with `dashboard_action.py --open`. Projects can opt into a task-time reminder of a relevant past decision. See [the dashboard](mind.md) and [the observer](observer.md).
+
+Existing observer approvals keep their level and limits. Both new modes start off. If you enable task-time reminders or map maintenance and later return to 1.5.1, first turn off each mode you enabled in that project's terminal with `observer.py advisory off --yes` or `observer.py map-mode off --yes`. Version 1.5.1 can then read the same approval.
+
 ## Version 1.5.1: nothing you want recorded is lost silently
 
 A moment that the observer kept off the record now waits for your answer. When the reviewer judges that a moment was kept off the record (you typed "don't post this", or a model misread you), the memory is no longer dropped: it is on the list of what waits, as a held memory with the options Post and Drop. When you release a hold in your own terminal (`observer.py release`), the moments it held are offered to the sort again, and the models are told which request you lifted; any other request not to post still holds. A message that holds a failure and the decision it led to now gives two memories, the decision linked to the failure.

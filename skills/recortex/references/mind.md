@@ -4,7 +4,17 @@
 
 The mind page is one local file that tells a project's memory in sentences: what was thought, tried, decided and learned, and how one memory led to the next. It is built from the local index alone and read by a person in a browser. It is not a list of issues, it never changes the record, and the session never reads it.
 
-## The command
+## Project Map
+
+Every dashboard has a **Project Map** tab next to **Overview**, including on a phone or in an empty project. Open it directly at `#project-map`. Expand a branch to see its children. Selecting its name shows its description, evidence, related branches, and recent changes. The search matches branch names and descriptions. Open a decision from the evidence list and use Back to return to the same branch. Branch addresses survive renaming and moving. The full nested outline also works without JavaScript.
+
+Start an empty map in chat with `/recortex:map`. In a local interactive dashboard, **Edit project map** previews the affected branches before you apply a correction. The standalone page shows the last synced and verified map. A manuscript appears as a branch only in projects that include it.
+
+## Open your dashboard
+
+In Claude Code, type `/recortex:dashboard` or say "open my dashboard". It builds the page from this project's local record and gives you its address. Manuscript projects with a reading view also get a direct manuscript link. When Claude Code runs on another machine, copy the printed HTML file privately to the device where you want to read it.
+
+To refresh the local record first and open the page from a terminal, run these scripts from the project folder.
 
 ```bash
 python3 scripts/index.py sync
@@ -40,25 +50,50 @@ Because the page now holds the record's figures, a private repository's page hol
 
 ## Where the file is
 
-`$XDG_CACHE_HOME/recortex/private/<owner>__<repo>/mind.html` (by default under `~/.cache`), beside the index: the folder has mode 0700, the file mode 0600, and it is written through a fresh temporary file and moved into place; a symlink or anything but a plain file of yours at that path is refused. The pictures of figures are kept in a `figures` folder beside it. One file per repository, replaced at each build. No hook builds it, reads it or mentions it, and no script reads it back. Older versions of the plugin ignore it.
+`$XDG_CACHE_HOME/recortex/private/<owner>__<repo>/mind.html` (by default under `~/.cache`), beside the index: the folder has mode 0700, the file mode 0600, and it is written through a fresh temporary file and moved into place; a symlink or anything but a plain file of yours at that path is refused. The pictures of figures are kept in a `figures` folder beside it. One file per repository, replaced at each build. The startup notice names the command. The page is built only when requested. Older versions of the plugin ignore it.
 
 The page of a private repository holds private text. Do not copy it to a shared or public place.
 
+## Browse one project
+
+Overview opens with the latest recorded status. Read the focus, next actions and holds, or follow the link to the conclusions that still stand. A summary can be refreshed automatically. Its date tells you when it was recorded. The sync and build dates describe the local snapshot.
+
+When a handoff names a numbered step in one task and a later record explicitly marks that same step done, Overview keeps the original instruction and shows **Completed since handoff** beneath it. Read the recorded outcome, expand its source in place, and see the first remaining step in that task. The dashboard uses the posting times and the step identity from the handoff. Ambiguous instructions keep their original wording.
+
+Work lists tasks and their supporting records. Open questions and limitations are available here too. In History, choose Recently recorded to catch up on additions or Event sequence to reconstruct what happened. An old event added today appears at different points in those two lists. Filters apply to the memories included in the snapshot. Open a memory for its evidence, follow a recorded replacement, and use Back to return.
+
+Outputs appears for configured deliverables. The current text links to its supporting topics. In projects with a manuscript, use **Current text and sources** and **Read the manuscript** to switch the content beneath the same Outputs navigation. Manuscript projects with a plan also have the reading and revision tools described below. Search memories and Recortex usage remain available from the sidebar.
+
+For an organization-owned record, a collaborator who edits the map needs their GitHub login in the repository's trusted authors on this machine. A personal repository already trusts its owner.
+
+## Record a completed task step
+
+To work interactively, run this command in the configured project folder using the installed script's full path.
+
+```bash
+python3 scripts/dashboard_action.py --open
+```
+
+The command opens a private local address for this project. Choose one unfinished step, enter what you completed, review the exact checkpoint, and confirm. The record identifies it as your completion report from the dashboard. A verified receipt links to the posted checkpoint. If updating the task list or rebuilding the snapshot fails afterwards, refresh the display. Use the operation history to check a pending receipt. When the existing observer is enabled at the Everything level, finishing the final step can make the task eligible for closure. Stop the local service with Ctrl-C.
+
 ## The ways in
 
-| Way in | Shows |
+These views remain available inside the project areas. Existing bookmarks open the corresponding view or individual memory.
+
+| Destination | What you can find |
 |---|---|
-| Where are we? | The last pause as a letter: its focus, what was meant to happen next and by whom, what waits for a yes; the memories since; the latest decision, result, failure and question, each with a link to its thread; the page's last lines in full |
-| What does the manuscript say? | The deliverable as it is now, part by part, in the order of the hub's "Deliverable sections" table (else the profile's order). Its name follows the profile: "the manuscript", "the thesis", "the report", "the proposal", "the release notes", "the documentation", and "What do we deliver?" for a custom profile or several profiles, with a group for each deliverable. Beside each part: where it came from, the day its text last changed, what was recorded in its thread after that change, and what is still open on it |
-| Read the manuscript | Only in a project that has a plan: the paper as a paper, on a sheet, with the plan and the versions beside the text ([The manuscript](#the-manuscript)). In a project with the one manuscript profile the row above is called "The plan and the text" |
-| How did we get here? | An outline of sections, threads under them and each thread's tasks. One thread at a time: what it is about, where it stands, then its story from the first memory to the latest, with the link words between memories ("so", "we tried it", "later that changed"). A pause is a divider; the memories written on one task fold into a group |
-| What is settled? | What holds the text up and none of the text: per section and topic, the decisions, findings and corrections that nothing recorded later replaces or sets aside, each with what it replaced, and links to its story and its text |
-| What did we learn the hard way? | Every failure, newest first, beside what it led to |
-| What is still open? | Open questions, untested ideas, failures nothing followed, what standing results do not show, what waits for a yes, work in progress |
-| What is there to do? | Each open task with its steps as a checked or open list. A step is checked only when a memory the record tells says it is done, and that memory is named beside it with a link; a box ticked by hand on GitHub is not believed. Then the tasks closed in the last 30 days, and the observer's acts of the last 7 days (what it did, the day, a link) |
-| Show me the whole mind | Two pictures: a tree of what we know (the project's question in the middle, its sections to the right and left, their topics, and on each topic up to six sentences of what we found, decided and still have open; every branch folds), and the threads over time (one line per thread in the order of the deliverable, a mark for each memory, curves for links, dotted lines for pauses, and a legend for every mark) |
-| Ask the mind | A search box that answers in sentences, and four ready questions |
-| What did recortex use? | The last entry of the side bar: the observer's background calls and the plugin's own subagents in tokens and calls, never in money. Today against each tier's caps, the last 7 and 30 days by tier and job, a bar for each of 30 days, the largest users of the week, what the hooks added to your sessions (estimated at 4 characters a token) and one line on what is not measured. It is drawn even when nothing has been counted, so `/recortex:usage` always has a place to point to. Built by `mind.py` from `usage.py`'s report; the page computes nothing |
+| Project Map | Browse the nested hierarchy, switch between the visual branch map and a compact outline, and open the evidence for a branch. |
+| Overview | The recorded focus, next actions, owners and holds. Open the original status or expand its summary. A missing or withheld status has its own explanation. |
+| Work → Tasks | Open tasks and steps. A completed step cites its checkpoint. Task history includes recently closed work. |
+| Work → Open questions and limits | Open questions, untested ideas, failures with no recorded follow-up, and limitations on current findings. |
+| History → Timeline | Additions by posting time or events by event time. Filter by topic, kind, state, words and date range. |
+| History → Current understanding | Standing decisions, findings and corrections with their replacements, supporting stories and topic text. |
+| History → Topic stories | Choose from all project topics, ordered by the latest included posting. Each story follows the work from its first record and links to any related output text. |
+| History → Lessons, Memory maps | See failures and their consequences, or explore links across threads. |
+| Outputs → Current text and sources | Current deliverable text in section order, with its origin, last change and related work. A topic can contribute to multiple deliverables. |
+| Outputs → Read the manuscript | A supported manuscript's text, plan and available versions. [Manuscript reading and revision tools](#the-manuscript) |
+| Search memories | Match words in the included project memories or use a preset question. |
+| Recortex usage | Recorded calls and tokens for the observer and the plugin's subagents. |
 
 "How to read this page" in the side bar opens a box that explains what a memory, a thread, a part and a pause are, and every kind and state. Every kind word and every state is a button that opens its own fixed explanation: the page never shows a state without saying what it means. The words are fixed wording of `mind.py`; no record text is in them.
 
@@ -98,7 +133,7 @@ For a project that has a plan (`.recortex.json` has `plans`, [planning.md](plann
 - **A part's status line** gains sentences: "4 planned parts belong here: 2 backed, 2 not backed yet."; "Last changed on October 21, 2026, by the plugin with your approval. See what changed."; and "You changed it by hand after that." when the body is not the text the newest change says it left.
 - **History**, a fold after each part that has changed: every version, newest first, with its day, how it came about in fixed words (written by the plugin without asking, with your approval, approved by you on GitHub, edited by you by hand, restored by you), the reason, and the names it carries. How to go back to a version is said once at the top, in fixed words: ask in the chat. The page changes nothing itself. With versions kept ([versions.md](versions.md)) each version also shows what changed, drawn on the page; with the writing mode off or not chosen, the fold lists only the days the body changed, from the edit history the index holds.
 - **What is still open?** gains three groups: planned claims nothing backs yet (with the experiment we thought of), planned claims a finding speaks against, and findings the plan does not use.
-- A finding that carries `checks=` or `against=` to a planned part says "This bore out a planned claim." or "This spoke against a planned claim." on its card; a change of the text is a card of its own ("We changed the text to say that ..."), with the hashes and the version it holds left out; the plan issue is the thread "The plan of the paper", first among the threads; and the map of what we know gets a branch "We plan to say (4)" under a section.
+- A finding that carries `checks=` or `against=` to a planned part says "This bore out a planned claim." or "This spoke against a planned claim." on its card; a change of the text is a card of its own ("We changed the text to say that ..."), with the hashes and the version it holds left out; the plan issue has its own story, "The plan of the paper"; and the map of what we know gets a branch "We plan to say (4)" under a section.
 
 With versions kept ([versions.md](versions.md)) the History fold also draws what changed in each version, and above the parts "Versions of the paper" lists the named versions with the author's words and what changed since the name before. The page links to no commit, branch or tag. A version's text is drawn only after its file's SHA-256 matched the "after" value of the told text change that names it; otherwise the entry says "The text of this version could not be checked, so it is not shown." The removed and added words of a difference are the page's `del` and `ins` elements, made by one function from the model's runs, as text.
 
@@ -106,7 +141,7 @@ The states of a part are the table in [issue-model.md](issue-model.md), "The pla
 
 ## The manuscript
 
-A project whose profiles include a shipped profile with a plan (today the manuscript profile) has a way in of its own, "Read the manuscript" (the profile's noun: "the thesis", "the report"), the third after "Where are we?" and the text view. It shows the paper as a paper: a sheet at most 1,060 pixels wide with the text in the deliverable's order and a quiet margin beside each part and each paragraph. It shows that profile's sections only, and its title is "The manuscript" with the project's name under it (no command sets a title, and the hub's title is not one). Every other project gets the page it had. The text view keeps the plan against the text, "What we plan to say here", "Versions of the paper", each part's status line and "Why it says this"; in its place of the print button it says "Read it as a paper". A part's History is drawn once, in the manuscript view: the text view's part says in one fixed line that the history is in "Read the manuscript" and links to that part's box (the link opens it). With no plan issue the view is the text with its figures, tables and sources and nothing else: no marks, slots, authorship or switch.
+A project whose profiles include a shipped profile with a plan (today the manuscript profile) has a view under Outputs, "Read the manuscript" (the profile's noun: "the thesis", "the report"), the third after "Where are we?" and the text view. It shows the paper as a paper: a sheet at most 1,060 pixels wide with the text in the deliverable's order and a quiet margin beside each part and each paragraph. It shows that profile's sections only, and its title is "The manuscript" with the project's name under it (no command sets a title, and the hub's title is not one). Every other project gets the page it had. The text view keeps the plan against the text, "What we plan to say here", "Versions of the paper", each part's status line and "Why it says this"; in its place of the print button it says "Read it as a paper". A part's History is drawn once, in the manuscript view: the text view's part says in one fixed line that the history is in "Read the manuscript" and links to that part's box (the link opens it). With no plan issue the view is the text with its figures, tables and sources and nothing else: no marks, slots, authorship or switch.
 
 - **The bar** stays at the top while the paper is read (a bar with no list of versions does not stay: it is read once). It holds the two ways to show it, a line that says which text is shown, the buttons "Previous change" and "Next change" (round arrows with those words as their titles at 1,180 pixels and below, and "Change 2 of 4" or "No later change" said after each jump), the way back to "The plan and the text" and "Print or save as PDF" (below 1,180 pixels the print button is under the title instead). With the script, the ways are a radio group: "Changes since", beside a list of versions, and "Clean copy"; choosing a version in the clean copy shows the changes. The page is built in "Changes since" with the previous version chosen; without the script it stays as built. The part a link or a key jumps to lands under the bar, and the side bar lists the sections, marks the one being read and scrolls on its own on a short window. "What the marks mean" is one wrapping row under the plan message.
 - **Versions** are numbered, 1 to N, one for each told text change with a kept commit (a restore counts), in time order. The list offers the ten most recent earlier versions, newest first, and the twenty newest of the older versions that carry a name (a fixed line says how many named ones were left out), each as "Version N · day", with "(previous)" on the one before the newest and the name in quotes when the record names it. A name is drawn only when it is one that `versions.py name` would accept. The current text is compared with the chosen version. With one kept version, with none, with the writing mode off, or when no part could be compared, the list is not drawn and one fixed line says why, in the line of the bar. A named version stays a label: the page never presumes that a version was sent anywhere.

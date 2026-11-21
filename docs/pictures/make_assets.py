@@ -43,7 +43,7 @@ def tick(x, y, done, p):
 
 LABEL = ("An optional observer follows each session at the level you choose, keeps notes and a to-do list with checkmarks, "
          "and asks you before anything it should not do alone. GitHub issues are the record. The cortex works from it: "
-         "a brief, the mind page, the finished text and a board.")
+         "a brief, the project dashboard, the finished text and a board.")
 
 def how(p):
     b = []
@@ -83,14 +83,15 @@ def how(p):
     # Recall: the cortex works from the record
     x, w = rcl
     b += [head(x, "RECALL", ": THE CORTEX", p)]
-    items = (("A brief", "at the start of every session"), ("The mind page", "the memory, told in sentences"),
+    items = (("A brief", "at the start of every session"), ("Project dashboard", "work, history and deliverables"),
              ("The finished text", "compiled from the topics"), ("A board", "kept current by the record"))
     for i, (name, sub) in enumerate(items):
         y = top + i * 50
         b += [box(x, y, w, 43, p, r=9), T(x + 14, y + 19, name, 14.5, weight=600, p=p), T(x + 14, y + 36, sub, 12, "quiet", p=p)]
     y = top + 199
-    b += [box(x, y, w, 55, p, r=9), T(x + 14, y + 19, "Five commands", 14.5, weight=600, p=p), T(x + 14, y + 35, "/recortex:record, :ask, :todo,", 12, "quiet", p=p),
-          T(x + 14, y + 48, ":status, :usage", 12, "quiet", p=p)]
+    b += [box(x, y, w, 62, p, r=9), T(x + 14, y + 19, "Project commands", 14.5, weight=600, p=p), T(x + 14, y + 32, "/recortex:record, :ask, :todo,", 11, "quiet", p=p),
+          T(x + 14, y + 45, ":status, :usage, :dashboard, :map,", 11, "quiet", p=p),
+          T(x + 14, y + 57, ":guide, :impact", 11, "quiet", p=p)]
     # arrow 3
     b += [arrow(rcl[0] + rcl[1] + 4, mid, act[0] - 4, mid, p)]
     # Act: the session

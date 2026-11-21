@@ -22,6 +22,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import guidance
 import index  # noqa: E402
 import observer_runtime as runtime  # noqa: E402
 import recortex  # noqa: E402
@@ -171,6 +172,9 @@ def main(argv=None):
     db = open_index(repo)
     try:
         say("Index: the local copy is %s." % index.age_text(index.get_meta(db, "synced_at")))
+        judgment = guidance.return_pointer(db, repo, allowed)
+        if judgment:
+            say(judgment)
         for part in (in_short(db), task_lines(db, allowed), text_lines(db, config, repo, allowed)):
             for line in part:
                 say(line)

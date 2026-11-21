@@ -212,13 +212,14 @@ def post_body(repo, issue, section, text, base, backup, dry_run):
     return code
 
 
-def render_task(repo, config, issue, report=None, expected=None, restore=False, dry_run=False):
+def render_task(repo, config, issue, report=None, expected=None, restore=False, dry_run=False, before_write=None):
     """Make the list under "## Plan" of task `issue` the one the memories compute, and say what happened. Returns a dict:
     ok (nothing is wrong), wrote (the body was replaced), reason (a fixed word: "written", "no change", "no steps",
     "no plan", "by hand", "changed", "failed"), backup (the file that holds the replaced body, or None).
 
     The live body is read now and passed on as the body the write expects, so that post_verified.py refuses a body that
-    changed meanwhile; `expected` is a body read earlier, which must still be the live one."""
+    changed meanwhile; `expected` is a body read earlier, which must still be the live one. An optional `before_write`
+    callback lets an interactive caller recheck its authority after the reads and before the write helper."""
     out = {"ok": True, "wrote": False, "reason": "no change", "backup": None}
     allowed = recortex.allowed_users(repo)
     report = report if report is not None else report_of(repo, allowed)
@@ -245,6 +246,8 @@ def render_task(repo, config, issue, report=None, expected=None, restore=False, 
     folder = scratch(repo)
     base = write(folder, unique("base-%d" % issue, ".md"), live)
     backup = os.path.join(folder, unique("render-%d" % issue, ".md"))
+    if before_write is not None:
+        before_write()
     code = post_body(repo, issue, "Plan", task_rules.plan_section(task["steps"]), base, backup, dry_run)
     if code != 0:
         return dict(out, ok=False, reason="failed")

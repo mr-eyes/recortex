@@ -76,6 +76,9 @@ SHARDS = [
         files("test_manuscript_plan.py"),                                                             # 165
     ]),
     ("page", [
+        files("test_dashboard_*.py"),
+        files("test_decision_*.py"),
+        files("test_project_map*.py"),
         files("test_manuscript_history.py"),                                                          # 70
         files("test_manuscript_paper.py"),                                                            # 50
         files("test_manuscript_page.py"),                                                             # 150

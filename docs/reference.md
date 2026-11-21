@@ -44,6 +44,7 @@ All are in `skills/recortex/scripts/`, use only the Python standard library and 
 | `hooks.py`, `run_hook.sh`, `session_start_hook.sh` | The four hooks; `hooks.py --print` shows their payloads | no |
 | `observer.py`, `observer_hooks.py`, `run_observer_hook.sh` | Experimental, off by default: sorting, drafting and review of the conversation, tasks and checkmarks, drafts of the paper's text for you to accept, task context, explicit holds and pending receipts; `enable --level`, `pending --waiting`, `log`, `undo`, `limits` | approved worker event comments, tasks and rendered copies only |
 | `setup.py`, `setup_questions.py` | `preflight` checks `gh` and Python before the first question; `detect` suggests deliverables and fields from file names; `apply` makes the setup from answers you confirmed; `fields` shows, sets and approves the field sheet; `questions` lists what an update added that you have not answered yet, and `answer` keeps your answer on this machine | `apply` |
+| `dashboard_action.py` | Launch the private interactive dashboard for this project. Use `--open` to open its local address. Preview and confirm a task step or a Project Map correction | confirmed checkpoint and derived task list, or a map entry on the hub |
 | `tasks.py` | Tasks and steps: `status`, `render` (the task list under `## Plan`), `close`, `reopen`, `open`, `add` (a to-do item), `mark` and `drop` (steps checked or dropped by your words) | yes |
 | `status.py` | Where the project stands from the local index alone: In short, open tasks, what is due in the text and what waits for a yes | no |
 | `usage.py` | `show`: what recortex used, in tokens and calls, never money | no |
@@ -51,11 +52,11 @@ All are in `skills/recortex/scripts/`, use only the Python standard library and 
 | `compile.py` | Writes the deliverable section by section in the hub's order, the figure, table and source lists, the full dated timeline of the project and a manifest; `--version NAME` compiles a named version of the paper | no |
 | `plan.py`, `write.py`, `own_paper.py`, `versions.py` | For a manuscript: the plan of the paper, the writing of its text in the mode you chose, your own paper (never changed without your words), and the versions of the text on a branch of the repository | yes, each under your mode |
 
-Every script that writes has `--dry-run`, which prints the exact `gh` commands and changes nothing.
+Command-line writers provide a dry run to inspect a change. The interactive dashboard previews the checkpoint or the affected map branches before confirmation.
 
 ## The commands
 
-Five commands for you to type, in the plugin's own namespace. Each tells the session to load the recortex skill first and to run a named script.
+Type these commands in Claude Code from your configured project.
 
 | Command | What it does |
 |---|---|
@@ -64,12 +65,16 @@ Five commands for you to type, in the plugin's own namespace. Each tells the ses
 | `/recortex:todo [add <text> \| done <n>]` | Shows the to-do list with its checkmarks, adds an item or checks one off |
 | `/recortex:status` | Where the project stands, the open tasks and their next steps, what is due in the text and what waits for your yes |
 | `/recortex:usage` | What recortex used, in tokens and calls |
+| `/recortex:map` | Browse or correct the project hierarchy and choose which local outlines can inform it |
+| `/recortex:guide` | Weigh a choice, challenge an assumption, or adjust handoffs |
+| `/recortex:impact` | Review work affected by a recorded change of decision |
+| `/recortex:dashboard` | Opens the project dashboard and gives you its address, with a direct manuscript link when available |
 
 `@agent-recortex:ask` starts the `ask` agent for a longer question. There is no bare `/record`: plugin commands carry the plugin's name.
 
 ## The mind page and the field sheet
 
-The mind page is built from the local index with `mind.py`; details are in [`references/mind.md`](../skills/recortex/references/mind.md).
+The dashboard opens on Overview. Project Map shows how ideas, components, and methods fit together. Expand a branch to read its evidence or switch to Outline. Work contains open tasks, History contains project events, and Outputs contains configured deliverables. Build the offline page from the local index with `mind.py`. To report a completed step or edit a map branch in the browser, launch `dashboard_action.py --open` from the configured project. Details are in [the dashboard reference](../skills/recortex/references/mind.md). To compare invented software, research, mixed manuscript, and sparse projects, use the [offline browser examples](../examples/dashboard/README.md).
 
 ```bash
 python3 skills/recortex/scripts/index.py sync

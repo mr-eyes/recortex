@@ -50,7 +50,7 @@ git clone https://github.com/recortex/recortex
 cp -r recortex/skills/recortex ~/.claude/skills/
 ```
 
-Use `<project>/.claude/skills/` in place of `~/.claude/skills/` to install it for one project only. The skill is then available as `/recortex`. The hook is optional in this mode; to add it, see [the hooks](reference.md#the-hooks-and-the-claudemd-snippet).
+Use `<project>/.claude/skills/` in place of `~/.claude/skills/` to install it for one project only. The skill is then available as `/recortex`. After setting up a trusted project, say "open my dashboard" to get its local address. The hook is optional in this mode; to add it, see [the hooks](reference.md#the-hooks-and-the-claudemd-snippet).
 
 ## Body updates from 1.1.0
 

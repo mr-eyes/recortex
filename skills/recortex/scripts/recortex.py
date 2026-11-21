@@ -649,6 +649,12 @@ def own_manuscript(config):
     return {"state": "none", "path": "", "brought": {}}
 
 
+def is_brought_section(config, issue, heading):
+    """Whether this record section belongs to a part imported from the author's paper."""
+    brought = own_manuscript(config)["brought"].get(issue, {})
+    return any(part.casefold() == heading.casefold() for part in brought)
+
+
 def record_zone(config):
     """The time zone the record states, a zones.Zone, or None. The statement is the project file's `timezone`, the one time
     convention of the tracker in words, which the hub repeats ("US Pacific time, written as 2026-03-04 14:10 PST");

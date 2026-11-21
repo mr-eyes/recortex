@@ -29,7 +29,7 @@ Told means posted by an allowed account and never edited by another. A mark on a
 | The session brief | One fixed line, "Tasks: 2 open, 7 of 12 steps done; next: step 4 of #14.", and inside the data frame at most 5 lines "- #14 step 4: (text)" |
 | The prompt reminder | A segment of integers, "; steps: 7 of 12 done", dropped first if the payload would pass 400 characters |
 | The status line | " · steps 7/12" after the age |
-| The mind page | "What is there to do?": each open task, its steps as a checked or open list, each done step with the plain line of the memory that marked it and a link; then the tasks closed in the last 30 days and the observer's acts of the last 7 days |
+| The mind page | Open Work for each open task, its steps as a checked or open list, each done step with the plain line of the memory that marked it and a link; then the tasks closed in the last 30 days and the observer's acts of the last 7 days |
 | The board | The Why mark gains the count, for example `In Progress 3 of 5 steps` |
 | `/recortex:todo` | The same list in the chat, from `tasks.py status` |
 

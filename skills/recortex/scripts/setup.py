@@ -105,6 +105,7 @@ import storage  # noqa: E402
 import field_sheet  # noqa: E402
 import board_api  # noqa: E402
 import setup_questions  # noqa: E402
+import project_map_sources  # noqa: E402
 import observer_runtime  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -440,6 +441,11 @@ def check_answers(answers):
     out["fields"], out["restricted"] = None, []
     if "fields" in answers:
         out["fields"], out["restricted"] = check_field_answers(answers["fields"])
+    if "map_files" in answers:
+        try:
+            out["map_files"] = project_map_sources.check_selection(answers["map_files"])
+        except ValueError as error:
+            raise AnswerError(str(error))
     return out
 
 
@@ -1447,6 +1453,15 @@ def settle_questions(answers, had_file, config, root, dry):
 def apply(answers, root, dry, drafts):
     if not dry:
         print(preflight())  # before anything is written; a dry run writes nothing and makes no such check
+    if "map_files" in answers:
+        paths = answers["map_files"]
+        if set(paths) != project_map_sources.tracked(root, paths):
+            sys.exit("error: every selected map source must be a tracked project document")
+        try:
+            for path in paths:
+                project_map_sources.inspect(root, path, contents=False)
+        except (OSError, ValueError) as error:
+            sys.exit("error: selected map source is unavailable: %s" % error)
     config_path = config_target(root)
     drafts_base = os.path.dirname(drafts) if outside(drafts, root) else root
     workflow = os.path.join(root, ".github", "workflows", names.WORKFLOW)
@@ -1591,6 +1606,14 @@ def apply(answers, root, dry, drafts):
               % (existing["board"]["owner"], existing["board"]["number"]))  # checked by check_existing
     elif answers["board"]:
         board_step(answers["board"], root, python, dry)
+    if "map_files" in answers:
+        if not dry:
+            try:
+                project_map_sources.approve(root, answers["repo"], answers["map_files"])
+            except (OSError, ValueError, storage.StorageError) as error:
+                sys.exit("error: could not save the selected map files: %s" % error)
+        print("%s for Project Map on this machine: %s" % ("would select" if dry else "selected",
+              ", ".join(answers["map_files"]) or "no files"))
     if answers["observer"]:
         observer_step(answers, root, python, dry)
     status_line_step(answers, dry)
@@ -1609,6 +1632,12 @@ def apply(answers, root, dry, drafts):
     if answers["catch_up"]:
         print("next: catch up on earlier work (references/catch-up.md), starting with catchup.py inventory%s"
               % (" --transcripts" if answers["read_transcripts"] else ""))
+    if not dry and recortex.allowed_users(answers["repo"]):
+        print('Your project dashboard is available. In Claude Code, ask "open my dashboard" in this project '
+              'or type /recortex:dashboard with the plugin installed.')
+        if "map_files" in answers:
+            print("Next: draft the Project Map from the project's goals, record, and selected outlines. "
+                  "Show the branches for review before saving them.")
     print("dry run: nothing was written" if dry else "setup applied")
     return 0
 
@@ -1848,6 +1877,32 @@ def observer_command(args):
     return 0
 
 
+def map_files_command(args):
+    root = os.path.abspath(recortex.project_root())
+    if args.select is None and not args.clear and not args.outline:
+        if args.yes:
+            sys.exit("error: choose files with --select or remove the selection with --clear")
+        print(json.dumps({"candidates": project_map_sources.candidates(root)}, indent=2))
+        return 0
+    config, repo, line = questions_project()
+    if config is None:
+        sys.exit("error: %s" % line)
+    if args.outline:
+        if args.yes:
+            sys.exit("error: --outline only reads the approved files")
+        print(json.dumps(project_map_sources.snapshot(root, repo), indent=2))
+        return 0
+    try:
+        paths = project_map_sources.check_selection(args.select or [])
+        if args.yes:
+            project_map_sources.approve(root, repo, paths)
+        print("%s the Project Map file selection: %s" % ("replaced" if args.yes else "would replace",
+                                                         ", ".join(paths) or "no files"))
+    except (OSError, ValueError, storage.StorageError) as error:
+        sys.exit("error: %s" % error)
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1882,6 +1937,12 @@ def main(argv=None):
     a.add_argument("--mode", required=True, choices=("review", "autonomous", "off"))
     a.add_argument("--yes", action="store_true", help="the user chose it in the conversation")
     sub.add_parser("preflight", help="check gh and Python before the first question (writes nothing)")
+    p = sub.add_parser("map-files", help="list or select local project documents for the Project Map")
+    choices = p.add_mutually_exclusive_group()
+    choices.add_argument("--select", metavar="PATH", action="append", help="tracked project document, repeat per file")
+    choices.add_argument("--clear", action="store_true", help="forget the selected files for this folder")
+    choices.add_argument("--outline", action="store_true", help="read headings from the approved files")
+    p.add_argument("--yes", action="store_true", help="save the user's confirmed selection on this machine")
     p = sub.add_parser("detect", help="suggest deliverables and fields from file and folder names (read-only, local)")
     p.add_argument("--root", help="project folder (default: the project root)")
     p.add_argument("--json", action="store_true")
@@ -1905,6 +1966,8 @@ def main(argv=None):
     a.add_argument("--fingerprint", required=True, help="the fingerprint that fields show printed (12 to 64 hex)")
     a.add_argument("--yes", action="store_true", help="the user read the sheet and approved it")
     args = parser.parse_args(argv)
+    if args.command == "map-files":
+        return map_files_command(args)
     if args.command == "preflight":
         print(preflight())
         return 0

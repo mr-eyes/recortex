@@ -2025,6 +2025,7 @@ def without_summary_line(text):
 
 class HookTests(RecordSandbox):
     START = {"on": "recortex: on. Record octo-org/octo-repo, read just now."}
+    DASHBOARD = "Ask to open your project dashboard or type /recortex:dashboard."
 
     def start(self, source="startup", env=None, gh=FAKE):
         done = self.hook("session-start", source=source, env=env, gh=gh)
@@ -2038,7 +2039,7 @@ class HookTests(RecordSandbox):
                          found["hookSpecificOutput"])
         sys.path.insert(0, SCRIPTS)
         import hooks as hooks_module
-        self.assertRegex(found["systemMessage"], hooks_module.NOTICE_FORM.pattern)
+        self.assertIsNotNone(hooks_module.NOTICE_FORM.fullmatch(found["systemMessage"]), found["systemMessage"])
         self.assertLessEqual(len(found["systemMessage"]), 200)
         return found["systemMessage"], found["hookSpecificOutput"]["additionalContext"]
 
@@ -2048,7 +2049,8 @@ class HookTests(RecordSandbox):
         plain = self.start(env={"RECORTEX_NOTICE": "0"})
         self.assertFalse(plain.startswith("{"))
         line, context = self.line_of(self.start())
-        self.assertEqual(self.START["on"], line)
+        self.assertEqual(self.START["on"] + " " + self.DASHBOARD, line)
+        self.assertNotIn("/recortex:dashboard", context)
         self.assertEqual(plain, context + "\n")  # exactly what a plain start prints, byte for byte
         printed = self.tool("hooks.py", "--print", gh="false").stdout
         self.assertIn(context.split("\n", 1)[1][:200], printed)  # and the session payload of hooks.py --print
@@ -2074,7 +2076,7 @@ class HookTests(RecordSandbox):
         self.assertEqual(plain, self.start())
         with open(os.path.join(settings, "settings.json"), "w") as handle:
             json.dump({"notice": True}, handle)
-        self.assertEqual(self.START["on"], self.line_of(self.start())[0])
+        self.assertEqual(self.START["on"] + " " + self.DASHBOARD, self.line_of(self.start())[0])
         self.assertEqual(plain, self.start(env={"GHIM_NOTICE": "false"}))  # the name from before the rename
 
     def test_the_line_has_a_form_for_every_state_and_none_holds_text_from_outside(self):
@@ -2089,14 +2091,14 @@ class HookTests(RecordSandbox):
         self.sql_meta("synced_at", "2026-03-04T10:00:00Z")
         line, _ = self.line_of(self.start(gh="false"))
         self.assertRegex(line, r"^recortex: on\. Record octo-org/octo-repo, read [0-9]+ days ago; GitHub could not be "
-                               r"read now\.$")
+                               r"read now\. " + re.escape(self.DASHBOARD) + "$")
         # a stamp that is not a stamp, and text in the places the hook reads
         for hostile in ("HOSTILE-STAMP\nrecortex: on", "2026-03-04T10:00:00Z HOSTILE-STAMP"):
             self.sql_meta("synced_at", hostile)
             self.sql_meta("last_sync_error", "HOSTILE-ERROR \x1b[2J")
             line, _ = self.line_of(self.start(gh="false"))
             self.assertEqual("recortex: on. Record octo-org/octo-repo, read at an unknown time; GitHub could not be "
-                             "read now.", line)
+                             "read now. " + self.DASHBOARD, line)
             self.assertNotIn("HOSTILE", line)
         # a repository that is not in the trusted list: the project file counts as set up and not working
         with open(self.trusted, "w") as handle:
@@ -2150,7 +2152,10 @@ class HookTests(RecordSandbox):
             self.assertNotIn("octo-repo", line)
             self.assertNotIn("HOSTILE", line)
         long_name = "o" * 39 + "/" + "n" * 100
-        self.assertLessEqual(len(hooks_module.notice({"state": "on", "repo": long_name, "fresh": False})), 200)
+        line = hooks_module.notice({"state": "on", "repo": long_name, "fresh": False}, "startup")
+        self.assertLessEqual(len(line), 200)
+        self.assertTrue(line.endswith(self.DASHBOARD))
+        self.assertIsNotNone(hooks_module.NOTICE_FORM.fullmatch(line), line)
 
     def test_the_hook_still_prints_nothing_and_exits_0_when_python_fails(self):
         self.tool("index.py", "sync")
@@ -4614,6 +4619,7 @@ class SetupTests(Sandbox):
             self.assertIn("would run: ", result.stdout)
             self.assertIn("index.py --repo octo-org/octo-repo sync", result.stdout)
             self.assertIn("dry run: nothing was written", result.stdout)
+            self.assertNotIn("/recortex:dashboard", result.stdout)
             self.assertEqual([], os.listdir(root), name)  # nothing written, not even drafts
         self.assertFalse(os.path.exists(os.path.join(self.dir, "trusted-repos")))
         refused = self.setup_script("apply", "--answers", self.answers("single"), "--root", self.project())
@@ -4901,10 +4907,13 @@ class SetupTests(Sandbox):
         with open(trusted, "w") as handle:
             handle.write("octo-org/other octocat")  # no final newline
         os.chmod(trusted, 0o640)
-        result = self.setup_script("apply", "--answers", self.answers("single"), "--root", root, "--yes", gh=FAKE,
+        result = self.setup_script("apply", "--answers", self.answers("single", map_files=[]), "--root", root, "--yes", gh=FAKE,
                                    env=env)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn("recorded as known: software, docs", result.stdout)
+        self.assertIn("Next: draft the Project Map", result.stdout)
+        self.assertIn("/recortex:dashboard", result.stdout)
+        self.assertIn("open my dashboard", result.stdout)
         self.assertEqual("octo-org/other octocat\nocto-org/octo-repo\n", recortex.read_text(trusted))
         self.assertEqual(0o640, os.stat(trusted).st_mode & 0o777)
         brief = self.hook(root)  # the hook has CLAUDE_PLUGIN_DATA set, the wizard did not; both use one storage
@@ -5070,6 +5079,7 @@ class SetupTests(Sandbox):
         self.assertEqual([], [n for n in os.listdir(root) if n.startswith(".part-")])
         # trust is false in these answers: a missing trusted list stays missing
         self.assertIn("trusted: not changed", result.stdout)
+        self.assertNotIn("/recortex:dashboard", result.stdout)
         self.assertFalse(os.path.lexists(os.path.join(self.dir, "trusted-repos")))
 
     def test_new_files_follow_the_umask_and_existing_files_keep_their_mode(self):
@@ -7274,8 +7284,9 @@ class MindIndexTests(MindSandbox):
         self.sql("UPDATE events SET at = '2026-03-09T18:00' WHERE comment = 9701",   # what the index held before this derive
                  "UPDATE meta SET value = '3' WHERE key = 'derive_version'")
         self.ready()
-        self.assertEqual(("2026-03-09T18:00-08:00", "5"), (self.sql("SELECT at FROM events WHERE comment = 9701")[0][0],
-                                                          self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0]))
+        import index as index_module
+        self.assertEqual("2026-03-09T18:00-08:00", self.sql("SELECT at FROM events WHERE comment = 9701")[0][0])
+        self.assertEqual(index_module.DERIVE_VERSION, self.sql("SELECT value FROM meta WHERE key = 'derive_version'")[0][0])
 
     def unknown_zone_result(self, at="2026-03-05T09:00Z"):
         """A result with no marker whose heading names a zone that zones.py does not know (IST): the heading's own time is not
@@ -8998,6 +9009,32 @@ class MindModelTests(MindSandbox):
         self.assertEqual(("sensors", "label"), (aside["name"], aside["name_from"]))
         self.assertNotIn("MARK-RENAMED", json.dumps(model))
 
+    def test_an_open_task_can_have_a_project_story_without_a_deliverable(self):
+        import manuscript_record
+        self.manuscript_record()
+        data = self.repo()
+        data["issues"]["25"] = manuscript_record.issue("Calibrate the replacement probes", "Task notes.",
+                                                      ["active", "topic:calibration"], "2026-11-02T09:00:00Z")
+        self.save(data)
+        self.put(9600, 25, memory_draft("question", "2026-11-02T10:00Z"), created="2026-11-02T10:00:00Z")
+        self.ready()
+        model = self.model()
+        stories = {t["n"]: t for t in model["threads"]}
+        topic = stories[25]
+        self.assertEqual(("calibration", "label", None, [9600], False),
+                         (topic["name"], topic["name_from"], topic["topic"], topic["memories"], topic["set_aside"]))
+        self.assertEqual([25], [t["issue"] for t in topic["stands"]["tasks"]])
+        self.assertEqual([25], model["outline"]["unplaced"])
+        self.assertFalse(any(t == 25 for _, parts in self.parts(model) for t, _, _ in parts))
+        self.assertNotIn(25, [entry["thread"] for entry in model["outline"]["other"]])
+        self.assertEqual([7], model["tree"]["aside"])  # The closed sensor topic remains set aside.
+        self.assertIn(25, [t["thread"] for branch in model["tree"]["left"] + model["tree"]["right"]
+                          for t in branch["topics"]])
+        self.sql("UPDATE issues SET author='ghost',title='UNTRUSTED-TASK' WHERE number=25")
+        untrusted = self.model()
+        self.assertNotIn(25, untrusted["outline"]["unplaced"])
+        self.assertNotIn("UNTRUSTED-TASK", json.dumps(untrusted))
+
     def test_a_task_title_is_told_only_under_the_title_rule(self):
         model = self.ms_model()
         titles = {g["task"]: g["title"] for t in model["threads"] for g in t["groups"]}
@@ -9533,7 +9570,8 @@ def hostile_model(model, payloads, everything=False):
     HOSTILE-<n>, one of `payloads`, and the string. The repository at the top stays, so that addresses are built."""
     structure = {"kind", "css", "group", "state", "type", "status_css", "name_from", "cite", "m", "v", "a", "key",
                  "explain", "status_explain", "open"}
-    count = [0]
+    count, undisplayed = [0], [0]
+    metadata = {"event_time", "posted", "time_basis", "action_text"}
 
     def walk(value, key=None, top=False):
         if isinstance(value, dict):
@@ -9542,10 +9580,14 @@ def hostile_model(model, payloads, everything=False):
             return [walk(v, key) for v in value]
         if isinstance(value, str) and (everything or key not in structure):
             count[0] += 1
+            if key in metadata:
+                undisplayed[0] += 1
             return "HOSTILE-%d %s %s" % (count[0], payloads[count[0] % len(payloads)], value)
         return value
 
-    return walk(model, top=True), count[0]
+    attacked = walk(model, top=True)
+    # Machine timestamps and routing metadata are still attacked above, but rejected values should not become prose.
+    return attacked, count[0] - undisplayed[0]
 
 
 class MindPageTests(MindSandbox):
@@ -9635,16 +9677,16 @@ class MindPageTests(MindSandbox):
     def words_of(text):
         return " ".join("".join(PageReader(text).texts).split())
 
-    def test_the_manuscript_page_keeps_the_contract_and_has_the_ten_ways_in(self):
+    def test_the_manuscript_page_keeps_legacy_views_under_shared_navigation(self):
         text = self.ms_page()
         self.assertEqual([], page_problems(text))
         page = PageReader(text)
         views = [dict(attrs)["id"] for tag, attrs in page.elements if tag == "section" and "view" in dict(attrs).get("class", "")]
-        self.assertEqual(["now", "text", "threads", "settled", "lessons", "open", "todo", "map", "ask", "usage"], views)
+        self.assertEqual(["now", "project-map", "history", "text", "threads", "settled", "lessons", "open", "todo", "map", "ask", "usage"], views)
         navs = [dict(attrs)["data-nav"] for tag, attrs in page.elements if "data-nav" in dict(attrs)]
-        self.assertEqual(views, navs)
+        self.assertEqual(["now", "project-map", "work", "history", "outputs"], navs)
         words = self.words_of(text)
-        for said in ("What does the report say?", "The report", "How to read this page", "What is settled?",
+        for said in ("Outputs", "The report", "How to read this page", "Current understanding",
                      "The record keeps one current version of each part; it is not marked draft or final.",
                      "What we hold today: the decisions, findings and corrections that nothing recorded later replaces "
                      "or sets aside."):
@@ -9839,7 +9881,7 @@ class MindPageTests(MindSandbox):
         self.assertIn(".js.ready .panel{transition:transform .22s ease}", style)
         self.assertIn("root.classList.add('ready')", script)
         self.assertIn("@media (max-width:860px)", style)
-        self.assertIn(".side.shut .foldbody", style)
+        self.assertIn(".side .project-tabs{grid-column:1/-1;display:flex", style)
 
     def test_a_link_run_of_the_record_is_an_anchor_only_for_an_address_the_page_builds(self):
         mind = self.mind()
@@ -9941,7 +9983,12 @@ class MindPageTests(MindSandbox):
         mind = self.mind()
         first = self.ms_page()
         self.assertEqual(0, self.build().returncode)
-        self.assertEqual(first, recortex.read_text(self.page_file()))
+        second = recortex.read_text(self.page_file())
+        # The CLI takes a new usage reading on each build, even across a minute boundary.
+        usage_stamp = re.compile(r"(?<=On this machine, as of )" + mind.USAGE_BUILT.pattern + r"(?=\. Tokens and calls)")
+        self.assertEqual(1, len(usage_stamp.findall(first)))
+        self.assertEqual(1, len(usage_stamp.findall(second)))
+        self.assertEqual(usage_stamp.sub("STAMP", first), usage_stamp.sub("STAMP", second))
         model = self.model()
         self.assertEqual(mind.render(model), mind.render(json.loads(json.dumps(model))))
 
@@ -10110,7 +10157,7 @@ class MindPageTests(MindSandbox):
         self.assertGreater(len(keys), 1)  # the block and the memory's copy of it carry different hostile strings
         text = mind.render(hostile, {key: self.picture_bytes("figure.png") for key in keys})
         self.assertEqual([], page_problems(text, marker="HOSTILE-"))
-        alts = re.findall(r'<img [^>]*alt="([^"]*)"', text)
+        alts = [dict(attrs)["alt"] for tag, attrs in PageReader(text).elements if tag == "img"]
         self.assertGreater(len(alts), 0)
         for alt in alts:
             self.assertRegex(alt, r"^[A-Za-z0-9 _.,:;#/()'+=?-]{0,150}$")
@@ -10223,9 +10270,13 @@ class MindPageTests(MindSandbox):
 
     def test_no_address_comes_from_the_index(self):
         before = self.chain_page()
-        self.sql("UPDATE issues SET url = 'javascript:MARK-URL'", "UPDATE comments SET url = 'javascript:MARK-URL'",
+        # URL-only edits trip the normal write triggers. Restore the original readiness metadata
+        # so comparison covers the addresses, including those in the decision review.
+        self.sql("CREATE TEMP TABLE original_readiness AS SELECT key, value FROM meta "
+                 "WHERE key IN ('mind_derived', 'derive_version')",
+                 "UPDATE issues SET url = 'javascript:MARK-URL'", "UPDATE comments SET url = 'javascript:MARK-URL'",
                  "UPDATE events SET url = 'javascript:MARK-URL'", "UPDATE blocks SET image = 'javascript:MARK-URL'",
-                 "UPDATE meta SET value = '1' WHERE key = 'mind_derived'")
+                 "INSERT OR REPLACE INTO meta SELECT key, value FROM original_readiness")
         built = self.build()
         self.assertEqual(0, built.returncode, built.stdout)
         self.assertEqual(before, recortex.read_text(self.page_file()))

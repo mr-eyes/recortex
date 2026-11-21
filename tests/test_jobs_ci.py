@@ -192,7 +192,7 @@ class ShardListTests(unittest.TestCase):
         shards are the same commands."""
         held = collections.Counter(identity(args) for _, commands in ci_shards.SHARDS for args in commands)
         lines = collections.Counter(identity(args) for args in contributing_commands())
-        self.assertEqual(19, sum(lines.values()))
+        self.assertIn(identity(ci_shards.files("test_dashboard_*.py")), lines)
         self.assertEqual(lines, held)
         self.assertEqual(set(), {key for key, count in held.items() if count != 1})
 
@@ -279,7 +279,7 @@ class ContributingCiTests(unittest.TestCase):
         text = read("CONTRIBUTING.md")
         paragraph = text.split("[CI](.github/workflows/tests.yml)", 1)[1].split("\n\n", 1)[0]
         for needed in ("tests/ci_shards.py", "python tests/ci_shards.py run", "python tests/ci_shards.py check",
-                       "tests/test_jobs_ci.py", "45 minutes", "seven shards", "the sixteen commands"):
+                       "tests/test_jobs_ci.py", "45 minutes", "seven shards", "the local batches"):
             self.assertIn(needed, paragraph, needed)
         for name, _ in ci_shards.SHARDS:
             self.assertIn("`%s`" % name, paragraph, name)

@@ -12,15 +12,16 @@ keeps findings, decisions, failures and deliverable text in GitHub issues.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works-dark.svg">
-  <img src="assets/how-it-works-light.svg" alt="An optional observer follows each session at the level you choose, keeps notes and a to-do list with checkmarks, and asks you before anything it should not do alone. GitHub issues are the record. The cortex works from it: a brief, the mind page, the finished text and a board.">
+  <img src="assets/how-it-works-light.svg" alt="An optional observer follows each session at the level you choose, keeps notes and a to-do list with checkmarks, and asks you before anything it should not do alone. GitHub issues are the record. The cortex works from it: a brief, the project dashboard, the finished text and a board.">
 </picture>
 
 ## What you get
 
 - A session that starts from the last recorded state: a short brief opens each session and subagent.
 - A record you can read on GitHub. One pinned hub, one issue per topic, and a dated memory for each result, decision, failure, idea and question.
-- The mind page. One private local page that tells the project in sentences: where things stand, how each thread got there, what went wrong, what is open.
-- The finished work, compiled. Topic bodies hold the deliverable's current text, so the paper or release notes are assembled from the issues.
+- Weigh options with `/recortex:guide`. Trace changed decisions with `/recortex:impact`.
+- Open `/recortex:dashboard` to resume work, trace decisions, and read deliverables offline. Use `/recortex:map` to browse and edit the project hierarchy.
+- Compile the current paper or release notes from topic bodies.
 - The paper's plan, text and versions. The session writes text in the mode you choose, never changes a paragraph you wrote, and keeps every version.
 - Helpers that know your field. A short field sheet tells every subagent what counts as proof and what must stay out of the record.
 - A board that keeps itself current. Sub-issues and a private Projects board follow the record.
@@ -40,11 +41,11 @@ You need Claude Code, the GitHub CLI `gh` (signed in) and Python 3.8 or newer.
 
 2. Open Claude Code in your project and say: "Set up the record for this project." Setup checks `gh` first and says what to run if it is missing or signed out. You answer a few multiple-choice questions, including whether to trust the repository (the plugin shows a session nothing from GitHub until you do), and confirm a summary. Nothing is written before that.
 
-3. Work. Memories are posted as things happen. Say "pause here" when you stop and "show me the mind of this project" to read it back.
+3. Say "open my dashboard" to browse the project. For a manuscript, choose Outputs → Read the manuscript. Say "pause here" to save a handoff.
 
 Months into a project, or coming from another tracker? See [Starting from existing work](docs/existing-work.md).
 
-Five commands: `/recortex:record`, `/recortex:ask`, `/recortex:todo`, `/recortex:status` and `/recortex:usage`. `@agent-recortex:ask` answers a longer question about the project's history, from the record only.
+Other commands include `/recortex:record`, `/recortex:ask`, `/recortex:todo`, `/recortex:status` and `/recortex:usage`. `@agent-recortex:ask` answers project history questions from the record.
 
 ## A short story
 
@@ -99,6 +100,7 @@ Optional, private, off unless chosen at setup. The record determines each card's
 | If you want to | Read |
 |---|---|
 | See how the issues are laid out | [How the record works](docs/how-it-works.md) |
+| Try three dashboards | [Offline examples](examples/dashboard/README.md) |
 | Test recovery and measure a fresh Claude session | [Continuity demo](examples/continuity/README.md) |
 | Install as a plain skill, trust a shared repository, upgrade | [Install and upgrade](docs/install.md) |
 | Start from months of work or an older tracker | [Starting from existing work](docs/existing-work.md) |

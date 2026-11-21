@@ -1,4 +1,4 @@
-"""The 1.5.0 docs say what the code does (1.5.0): the new reference is linked, the five commands are named where users
+"""The 1.5.0 docs say what the code does (1.5.0): the new reference is linked, the project commands are named where users
 look, the numbers and question templates in the docs are the ones in the code, the upgrade entry is above 1.4.0's, the
 README stays under its word cap, and the words the project bans are not in the files this release wrote. No network."""
 
@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(SKILL, "scripts"))
 import observer_publisher  # noqa: E402
 import observer_runtime  # noqa: E402
 
-NAMES = ("record", "ask", "todo", "status", "usage")
+NAMES = ("record", "ask", "todo", "status", "usage", "dashboard", "map", "guide", "impact")
 BANNED = ("compre" + "hensive", "ro" + "bust", "cru" + "cial")   # spelled in pieces: a test scans this file for them too
 
 
@@ -49,7 +49,7 @@ class LinkTests(unittest.TestCase):
 
 
 class CommandTests(unittest.TestCase):
-    def test_the_five_commands_and_the_agent_are_named_in_the_skill_the_reference_and_the_readme(self):
+    def test_the_project_commands_and_the_agent_are_named_in_the_skill_the_reference_and_the_readme(self):
         for path in (("skills", "recortex", "SKILL.md"), ("docs", "reference.md"), ("README.md",)):
             text = read(*path)
             for name in NAMES:
@@ -59,7 +59,7 @@ class CommandTests(unittest.TestCase):
     def test_no_doc_promises_a_bare_record_command(self):
         for path in (("README.md",), ("docs", "reference.md"), ("skills", "recortex", "SKILL.md")):
             text = read(*path).replace("bare `/record`", "")   # a page may say that there is none
-            self.assertEqual([], re.findall(r"(?<![:\w])/(?:record|ask|todo|status|usage)\b", text), path[-1])
+            self.assertEqual([], re.findall(r"(?<![:\w])/(?:record|ask|todo|status|usage|dashboard)\b", text), path[-1])
 
     def test_the_readme_stays_under_its_cap_and_has_the_new_words_once(self):
         text = read("README.md")
@@ -122,20 +122,20 @@ class NumbersTests(unittest.TestCase):
 
 
 class ContributingTests(unittest.TestCase):
-    def test_the_sixteenth_command_and_the_layout(self):
+    def test_the_local_job_and_dashboard_batches_are_documented(self):
         text = read("CONTRIBUTING.md")
         for part in ("[a-j]", "[l]", "[km-r]", "[s-z]"):   # the sixteenth command runs as four lines: together they pass five minutes
             self.assertIn("python3 -m unittest discover -s tests -p 'test_jobs_%s*.py'" % part, text)
-        self.assertIn("The sixteen commands", text)
-        self.assertNotIn("fifteen commands", text)
-        self.assertEqual(19, len(re.findall(r"^python3 -m unittest ", text.split("```bash", 1)[1].split("```", 1)[0], re.M)))
+        self.assertIn("python3 -m unittest discover -s tests -p 'test_dashboard_*.py'", text)
         self.assertIn("commands/", text)
         self.assertIn("SubagentStop", text)
 
-    def test_the_plugin_is_version_1_5_1_and_the_upgrade_entry_is_for_it(self):
+    def test_the_plugin_version_has_a_matching_upgrade_entry(self):
         import json
-        self.assertEqual("1.5.1", json.loads(read(".claude-plugin", "plugin.json"))["version"])
+        version = json.loads(read(".claude-plugin", "plugin.json"))["version"]
+        self.assertEqual("1.6.0", version)
         text = read("skills", "recortex", "references", "upgrading.md")
+        self.assertLess(text.index("## Version " + version), text.index("## Version 1.5.1"))
         self.assertLess(text.index("## Version 1.5.1"), text.index("## Version 1.5.0"))
         self.assertLess(text.index("## Version 1.5.0"), text.index("## Version 1.4.0"))
         self.assertNotIn("## Version 1.5.1", text.split("## Version 1.5.0", 1)[1])
@@ -221,7 +221,7 @@ class PictureTests(unittest.TestCase):
                           "Waits for your yes", "a held memory", "task to open or close", "paper's text"):
                 self.assertIn(words, text, (mode, words))
 
-    def test_the_five_commands_in_the_drawing_are_the_five_the_plugin_has(self):
+    def test_the_drawing_lists_the_plugin_commands(self):
         expected = "/recortex:" + NAMES[0] + "".join(", :" + name for name in NAMES[1:])
         for name in NAMES:
             self.assertTrue(os.path.isfile(os.path.join(ROOT, "commands", name + ".md")), name)
@@ -229,7 +229,7 @@ class PictureTests(unittest.TestCase):
             texts = self.texts(mode)
             first = [text for text in texts if text.startswith("/recortex:")]
             self.assertEqual(1, len(first), mode)
-            self.assertEqual(expected, first[0] + " " + texts[texts.index(first[0]) + 1], mode)
+            self.assertEqual(expected, " ".join(texts[texts.index(first[0]):texts.index(first[0]) + 3]), mode)
 
     def png_size(self, name):
         with open(os.path.join(ROOT, "assets", name), "rb") as handle:

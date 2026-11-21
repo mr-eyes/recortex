@@ -219,7 +219,8 @@ def register_with_observer(repo, config, issue, kind, comment_id):
               "--show-body; post it with --eventkey, or observer.py discard)" % (key, kind, issue, key))
 
 
-def main(argv=None):
+def main(argv=None, *, body_guard=None):
+    """A body_guard restricts an embedded caller to a body-only edit and rechecks its approval before sending."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("comment", "body"):
@@ -353,6 +354,9 @@ def main(argv=None):
     labels_command = None
     if follow and plan["checked"]:
         add, remove = plan["add"], plan["remove"]
+        if body_guard is not None and (add or remove):
+            print("not posted: the reviewed change authorized a body edit only. Refresh the target.")
+            return 1
         if add:
             have = {l["name"].lower() for l in json.loads(recortex.gh(
                 ["label", "list", "--repo", repo, "--json", "name", "--limit", "1000"]))}
@@ -409,6 +413,8 @@ def main(argv=None):
         sys.exit("error: --backup FILE is required so the replaced body is kept")
     if os.path.exists(args.backup):
         sys.exit("error: backup file exists and is not overwritten: %s" % args.backup)
+    if body_guard is not None:
+        body_guard()
     # There is still a race between this read and GitHub's write; do not claim an atomic compare-and-swap.
     if not body_still_matches(repo, args.issue, old, "the body was not replaced and no labels were changed"):
         return 1

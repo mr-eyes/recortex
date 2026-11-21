@@ -122,6 +122,32 @@ After a pass that posted something, and once a day, under the worker's lock, cod
 
 Steps 2 to 4 need the level Assistant or higher. A step that fails records its fixed reason and the rest go on. Once a day, before step 1 and in automatic mode only, code also takes away the manuscript keeper's old working folders from this machine's private folder for the project: a draft's folder and its approved copy go once the draft is applied, dropped, stale or refused, and any such folder goes 14 days after its last change, whatever the state of its draft (a draft that still waited is then stale, since its files are gone); a folder with no draft goes after 14 days, or at once when the keeper recorded a failed attempt after the folder was last written. Only folders named as the keeper names them are looked at, nothing is followed through a link, and a folder that holds anything but the user's own files is left alone and counted. This makes no act and no call; `jobs_last` in the store keeps the number removed. A box ticked or unticked by hand on GitHub is not believed: the next render would put it back, so code does not render that task, counts it, and the brief says so; the session then asks you whether to record it or put it back.
 
+## Optional task reminders
+
+From your own terminal in a project folder with an approved observer, choose how a relevant earlier decision is surfaced on a user prompt.
+
+```bash
+python3 scripts/observer.py advisory deliver --yes
+python3 scripts/observer.py advisory shadow --yes
+python3 scripts/observer.py advisory off --yes
+```
+
+Choose one mode. The default is `off`. In `deliver`, an eligible reminder gives the session pointers to the standing decision and the failure it explicitly cites. This requires a complete sync within the preceding 24 hours. The bounded local lookup runs without a model call. In `shadow`, Recortex keeps a local receipt for an eligible reminder and leaves it out of the prompt. Shadow receipts and delivered receipts are separate. Use `observer.py status` to inspect them. A delivery receipt counts a pointer passed to the session. A human reviewer assesses whether it reached the user and improved the decision. These modes leave the observer's publication level and the user's holds in force.
+
+### Review and quiet individual reminders
+
+In the interactive local dashboard, open Observer reminders to see the task or topic and the source comments behind each issued reminder. You can mute a reminder for that context and unmute it later. When a recognized Project Map branch supplied the evidence, the preference applies within that branch. A different task or an updated evidence record can bring its own reminder. Ordinary context and recorded facts stay available.
+
+You can also review the same preferences in your terminal:
+
+```bash
+python3 scripts/observer.py advisory list
+python3 scripts/observer.py advisory mute REMINDER_ID
+python3 scripts/observer.py advisory unmute REMINDER_ID
+```
+
+The history is private to this machine and project folder. It keeps the 100 most recent unmuted reminders and up to 100 explicit mutes. Each entry stores its timestamp, source identifiers and a reason category. Prompt text and quoted evidence stay out of this history. Shadow evaluation and delivery receipts from earlier builds have no reviewable entry.
+
 ## The manuscript keeper
 
 The owner's rule for the paper: text from the observer is a proposal for you to accept, never written on its own, and only when something notable changed. The keeper runs only when all of these hold: the project has a plan and a usable plan issue; this machine's writing mode is `review` or `autonomous` (off, not chosen or unreadable means nothing is drafted and no call is spent); the level is Assistant or Everything, in automatic mode with publication not paused; a strong model is set and its runtime check is valid; and something notable is due and stable.
@@ -132,7 +158,7 @@ The keeper runs `write.py start`, one strong call that drafts the whole body, a 
 
 ## What waits for your answer
 
-Four kinds of item wait for you. The session asks each as one multiple-choice question from a fixed template, with the options shown, and the quoted line as stored. A held memory is a change of an earlier memory's status that rests on neither your words nor the agent's message, or a memory the reviewer kept off the record (rejected as `withheld`: see "The user can also keep a session's moments off the record" below); the question of the second says so in fixed words after "It would change: ...", "(the reviewer kept it off the record, as you may have asked)". A steps memory of the second kind that would open a task is asked as a task to open. A title or a plain line is record or model text: it is shown to you in the dialog and never placed in a hook payload, which carries counts and short ids only.
+Four kinds of item wait for you. At a pause, the session explains the item that affects your next step. When you choose to act it asks one multiple-choice question from a fixed template, with the options shown, and the quoted line as stored. A held memory is a change of an earlier memory's status that rests on neither your words nor the agent's message, or a memory the reviewer kept off the record (rejected as `withheld`: see "The user can also keep a session's moments off the record" below); the question of the second says so in fixed words after "It would change: ...", "(the reviewer kept it off the record, as you may have asked)". A steps memory of the second kind that would open a task is asked as a task to open. A title or a plain line is record or model text: it is shown to you in the dialog and never placed in a hook payload, which carries counts and short ids only.
 
 | Item | Question | Options | Carried out by |
 |---|---|---|---|
@@ -143,7 +169,7 @@ Four kinds of item wait for you. The session asks each as one multiple-choice qu
 
 `observer.py pending --waiting [--json]` lists them with the templates filled in; the JSON form cleans the titles and lines as the text form does and carries the data header in its `data_header` field. Every answer that changes something needs a one-time grant: before the Bash call that carries it out (`act`, `later`, `discard`, `drafts apply`, `drafts later`, `drafts drop`, `post_verified.py comment --eventkey`), the hook looks in the main transcript for the question tool's own call naming that short id and quoting that line, and your recorded answer to it, with the label of that answer ("Open it", "Close it", "Post", "Approve", "Not now", "Drop it" or "Drop"). Only that gives a grant, kept in the private observer state for 10 minutes and consumed by the command; without it the command is refused, so a session cannot postpone or drop what waits for you on its own. An answer to another item's question, a question the session worded itself and an answer with another label give none. You may also run `later` and `discard` yourself in a terminal of your own. A tool result, a page or a subagent cannot give that answer.
 
-At session start the observer's context holds one fixed line when anything waits ("recortex observer: N items wait for the user's answer. Load the recortex skill first, run its observer.py pending --waiting, and ask each as one multiple-choice question from the template it prints. Do not offer them in prose."). A reminder follows at the next prompts while items wait and `pending --waiting` has not run in the session, at most 3 times a session and 3 prompts apart, from the second prompt. At the level Assistant the question about a task comes with the next prompt, not at a pause.
+At session start the observer reports how many items await judgment. A reminder follows from the second prompt, at most three times a session, three prompts apart, until the session checks the queue. When you are doing other work, the session can leave the queue for a natural pause. You can request the whole queue at any time.
 
 ## The acts log and undo
 
@@ -220,3 +246,13 @@ Defaults are 80 sort calls, 70 middle calls and 8 strong calls per project in a 
 The pending database lives under the private state directory, separate from the rebuildable index in the cache directory. It uses synchronous SQLite transactions, private permissions and checked paths. It must not be deleted as a cache repair. Corruption is reported; it is not silently reset. Reviewed excerpts of handled events become eligible for cleanup after seven days by default, configurable to a shorter interval; pending evidence is never silently expired. A finite worker checks cleanup daily while the plugin is active, including when capture is paused or the model runtime is unavailable. This is not a wall-clock retention daemon. Identity metadata, explicit holds and publication receipts remain, as do observation metadata (transcript paths, offsets and hashes), invocation times and hold quotes, all private with mode 0600. Native Claude transcript retention is managed by Claude, independently of this queue.
 
 After interruption, inspect `status` and `pending`, restore source availability where possible, and reconcile uncertain sends before retrying. A verified receipt establishes the stored comment matched the frozen draft at read-back; it does not establish that the underlying research claim is true. Local queued work still needs review and publication before another machine can recover it from GitHub.
+
+## Project Map maintenance
+
+The Project Map follows the project's ideas, components and methods across sessions. Its durable history is on the project hub. On an approved Assistant or Everything observer, run `observer.py map-mode shadow --yes` in your own terminal to try it in this folder. Read the private results with `observer.py map-proposals`. Each entry shows the proposed change, whether it qualified for automatic publication, links to cited records, and the dates and roles of the supporting messages. Structural proposals list each affected branch by ID with its title and parent before and after the operation. Shadow proposals stay local when you switch modes.
+
+Choose `observer.py map-mode automatic --yes` to allow maintenance in automatic observer mode. The observer considers recent eligible conversation, standing project memories, and headings in files approved during map setup. A separate reviewer checks the proposed operation. An unattended addition requires both typed user evidence and a matching trusted record. An unattended rename also requires typed evidence linking the old and new names. The two middle-tier calls share the existing daily call and token limits. No model runs for the map while its mode is off.
+
+Moves, splits, merges, deletions, restorations, and uncertain changes appear under `observer.py pending --waiting` for a decision. A deletion proposal preserves the children. A removed branch can be proposed for restoration only after new work. The proposal waits for the answer to its exact question. A changed branch requires a new preview. To stop maintenance, choose `observer.py map-mode off --yes`.
+
+When you return to a distinct branch, task context can bring back the standing records that branch cites. A stale snapshot or ambiguous branch name uses ordinary retrieval. Task-time suggestions follow the separate advisory setting.

@@ -1667,10 +1667,10 @@ class SetupQuestionDocsTests(unittest.TestCase):
             self.assertTrue(question.options[-1].answer == "later", question.id)
             self.assertTrue(setup_questions.ID.fullmatch(question.id))
 
-    def test_the_contributing_rule_and_the_last_command(self):
+    def test_the_setup_questions_batch_and_contributing_rule(self):
         text = self.read("CONTRIBUTING.md")
-        self.assertIn("python3 -m unittest discover -s tests -p test_setup_questions.py", text)
-        self.assertIn("The sixteen commands", text)
+        commands = text.split("```bash", 1)[1].split("```", 1)[0].splitlines()
+        self.assertEqual(1, commands.count("python3 -m unittest discover -s tests -p test_setup_questions.py"))
         self.assertIn("A new setup question", text)
 
     def test_the_upgrading_page_has_a_section_above_130(self):

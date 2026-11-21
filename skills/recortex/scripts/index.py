@@ -65,15 +65,18 @@ import time
 import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import decision_review  # noqa: E402
 import names  # noqa: E402
 import plan_rules  # noqa: E402
+import project_map  # noqa: E402
 import recortex  # noqa: E402
 import record_format  # noqa: E402
 import storage  # noqa: E402
 import task_rules  # noqa: E402
 
 FORMAT = "2"
-DERIVE_VERSION = "5"   # what derive makes of a comment (4: a heading's zone abbreviation becomes an offset; 5: the steps and marks tables); a stored index that differs is derived again, with no network
+DERIVE_VERSION = "7"   # shared review and map entries are outside the narrative
+LEDGER_MARKERS = (project_map.MARKER, decision_review.MARKER)
 OVERLAP = 60  # seconds read again at each incremental sync, so items stamped in the same second are not missed
 ISO_UTC = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")  # used with fullmatch
 IDENTITY = ("repo", "format", "mark")
@@ -372,16 +375,17 @@ def read_edit_pages(fetch, keys):
 
 
 def comment_histories_pending(db):
-    """The comments whose edit history is to be read: memories (by their markers) whose two times differ and whose
-    history is not stored as read for the comment's current updated_at. Comments are never read otherwise."""
+    """Read edit evidence for changed memories and every shared ledger entry, including same-second edits."""
     pending = []
     for row in db.execute("SELECT c.id, c.body, c.created_at, c.updated_at, c.author, r.node, r.stamp, r.complete "
                           "FROM comments c LEFT JOIN comment_edit_reads r ON r.comment = c.id "
                           "WHERE c.created_at IS NOT NULL AND c.updated_at IS NOT NULL "
-                          "AND c.updated_at != c.created_at ORDER BY c.id"):
+                          "AND (c.updated_at != c.created_at OR c.body LIKE ? OR c.body LIKE ?) ORDER BY c.id",
+                          tuple(marker + "%" for marker in LEDGER_MARKERS)):
         if row["complete"] in (1, 2) and row["stamp"] == row["updated_at"]:
             continue
-        if record_format.parse_event(row["body"] or "")["type"] not in record_format.MEMORY_TYPES:
+        if (not (row["body"] or "").startswith(LEDGER_MARKERS) and
+                record_format.parse_event(row["body"] or "")["type"] not in record_format.MEMORY_TYPES):
             continue
         pending.append(row)
     return pending
@@ -449,6 +453,11 @@ def read_comment_histories(db, repo, call, clock, timeline_cap, summary):
                 node = found.get("c%d" % cid)
                 if not isinstance(node, dict) or str(node.get("fullDatabaseId")) != str(cid):  # a BigInt, as a string
                     got[cid] = None  # not the comment that was asked for: not trusted
+                    continue
+                connection = node.get("userContentEdits") or {}
+                if ("lastEditedAt" not in node or not isinstance(connection.get("nodes"), list)
+                        or type((connection.get("pageInfo") or {}).get("hasNextPage")) is not bool):
+                    got[cid] = None
                     continue
                 last_edited.setdefault(cid, node.get("lastEditedAt"))
                 got[cid] = node.get("userContentEdits") or {}
@@ -521,8 +530,11 @@ def store_comment_page(db, rows, changed):
         if not match:
             continue
         updated = row.get("updated_at") or row.get("created_at")
-        old = db.execute("SELECT updated_at FROM comments WHERE id = ?", (int(row["id"]),)).fetchone()
-        if old and old["updated_at"] == updated:
+        body = (row.get("body") or "").replace("\r\n", "\n")
+        old = db.execute("SELECT updated_at, body FROM comments WHERE id = ?", (int(row["id"]),)).fetchone()
+        ledger_row = body.startswith(LEDGER_MARKERS)
+        if old and old["updated_at"] == updated and (old["body"] == body or
+                not (ledger_row or (old["body"] or "").startswith(LEDGER_MARKERS))):
             continue
         db.execute("INSERT OR REPLACE INTO comments(id, issue, author, body, created_at, updated_at, url) "
                    "VALUES (?,?,?,?,?,?,?)",
@@ -531,8 +543,10 @@ def store_comment_page(db, rows, changed):
                     row.get("html_url")))
         changed.add(int(row["id"]))
         node = row.get("node_id")
-        if (row.get("created_at") != updated and isinstance(node, str) and COMMENT_NODE.fullmatch(node)
-                and record_format.parse_event(row.get("body") or "")["type"] in record_format.MEMORY_TYPES):
+        if ledger_row:
+            db.execute("DELETE FROM comment_edit_reads WHERE comment = ?", (int(row["id"]),))
+        if (isinstance(node, str) and COMMENT_NODE.fullmatch(node) and (ledger_row or
+                (row.get("created_at") != updated and record_format.parse_event(body)["type"] in record_format.MEMORY_TYPES))):
             keep_node(db, int(row["id"]), node)  # the id to read its edit history by, kept for a comment that looks edited
 
 
@@ -1335,6 +1349,8 @@ def derive(db, issues=None, comments=None):
         for row in record_format.mentions(body):
             db.execute("INSERT INTO mentions VALUES (?,?,?,?,?)", (number, "body", row["target"], row["cited"], row["line"]))
     for comment in comment_rows:
+        if (comment["body"] or "").startswith(LEDGER_MARKERS):
+            continue
         event = record_format.parse_event(comment["body"] or "")
         at = record_format.event_at(event, comment["created_at"])
         db.execute("INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -2085,7 +2101,8 @@ def tasks(db, allowed, closed_days=None, now=None):
     is empty. Returns {"everyone", "todo" (the number of the standing "To do" task or None), "todo_extra" (other
     issues with that title), "tasks": [...]}. Each task, by issue number, is a dict: issue, title, title_told, state
     ("open" or "closed"), closed_at, todo (bool), steps (the assessed steps of task_rules.assess, each with by: None or
-    {"id", "kind", "plain", "url"} of the memory that marked it), counts (task_rules.counts), blocked, hand (True when
+    {"id", "kind", "plain", "url"} of the memory that marked it), counts (task_rules.counts), blocked, blocking_failure
+    (the newest unresolved failure marking this task blocked, as a comment id), hand (True when
     the list in the body was changed by hand: see task_rules.hand_changed), hand_steps (the steps whose box differs from
     the computed state, for a list changed by hand), listed (the body has a task list).
     Only open tasks are listed, and with `closed_days` also the tasks closed that many days ago or less."""
@@ -2131,6 +2148,7 @@ def tasks(db, allowed, closed_days=None, now=None):
         out.append({"issue": number, "title": issue["title"] if told else None, "title_told": told,
                     "state": "open" if opened else "closed", "closed_at": issue["closed_at"], "todo": number == todo,
                     "steps": assessed, "counts": task_rules.counts(assessed), "blocked": bool(failures) and opened,
+                    "blocking_failure": max(failures, key=lambda cid: (items[cid]["time"], cid)) if failures and opened else None,
                     "hand": opened and task_rules.hand_changed(issue["body"]),
                     "hand_steps": task_rules.box_differences(issue["body"], assessed)
                     if opened and task_rules.hand_changed(issue["body"]) else [],
